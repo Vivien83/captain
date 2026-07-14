@@ -7,6 +7,10 @@
 <p align="center"><b>El Agent OS autoalojado con disciplina de producción.</b></p>
 
 <p align="center">
+  <a href="https://captainagent.fr/"><b>captainagent.fr</b></a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Built%20in-Rust-B7410E?style=for-the-badge&logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows%20%C2%B7%20Docker-blue?style=for-the-badge" alt="Platforms">
