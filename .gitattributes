@@ -1,0 +1,31 @@
+# Public source archives intentionally contain the release-grade runtime and
+# current operator documentation only. Maintainer plans, the presentation site,
+# local integrations, and historical design material stay in the private repo.
+/.mcp.json export-ignore
+/AGENTS.md export-ignore
+/site export-ignore
+/site/** export-ignore
+/deploy/captain-site.caddy export-ignore
+/docs/CAPTAIN_CORE_EXCELLENCE_PLAN.md export-ignore
+/docs/CAPTAIN_LONG_FILE_EXCEPTIONS.md export-ignore
+/docs/CONSCIOUSNESS-FR.md export-ignore
+/docs/CONSCIOUSNESS.md export-ignore
+/docs/PREPUBLICATION_24H_PLAN.md export-ignore
+/docs/autonomy-audit.md export-ignore
+/docs/benchmarks export-ignore
+/docs/benchmarks/** export-ignore
+/docs/deployment/launch-site.md export-ignore
+/docs/desktop.md export-ignore
+/docs/excellence-roadmap.md export-ignore
+/docs/installation-excellence-roadmap.md export-ignore
+/docs/launch-roadmap.md export-ignore
+/docs/production-checklist.md export-ignore
+/docs/research export-ignore
+/docs/research/** export-ignore
+/docs/v3*.md export-ignore
+/scripts/build-launch-site.sh export-ignore
+/scripts/deploy-launch-site.sh export-ignore
+/scripts/hermes-vs-captain-benchmark.sh export-ignore
+/scripts/launch-site-audit.sh export-ignore
+/scripts/launch-site-browser-smoke.mjs export-ignore
+/skills/resawod.md export-ignore

@@ -1,0 +1,17 @@
+{
+  "name": "Captain Agent OS",
+  "short_name": "Captain",
+  "description": "Captain web terminal and config editor",
+  "start_url": "/terminal",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#BFFD00",
+  "icons": [
+    {
+      "src": "/assets/logo.png?rev=wordmark-2",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

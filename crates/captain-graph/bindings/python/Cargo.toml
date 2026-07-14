@@ -1,0 +1,14 @@
+[package]
+name = "hora-graph-python"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "hora_graph_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+hora-graph-core = { path = "../.." }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[workspace]

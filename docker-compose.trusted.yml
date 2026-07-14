@@ -1,0 +1,16 @@
+services:
+  captain:
+    environment:
+      - CAPTAIN_PROFILE=trusted
+      - CAPTAIN_HOST_SSH_HOST=host.docker.internal
+      - CAPTAIN_HOST_SSH_USER=${USER:-captain}
+      - CAPTAIN_HOST_SSH_KEY=/root/.ssh/captain_host
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - ${HOME}:/host/home:rw
+      - /tmp:/host/tmp:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.ssh/captain_host:/root/.ssh/captain_host:ro
+      - ${HOME}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

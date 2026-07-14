@@ -1,0 +1,54 @@
+[package]
+name = "captain-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core kernel for the Captain Agent OS"
+
+[dependencies]
+captain-types = { path = "../captain-types" }
+captain-memory = { path = "../captain-memory" }
+captain-runtime = { path = "../captain-runtime", default-features = false }
+captain-skills = { path = "../captain-skills" }
+captain-hands = { path = "../captain-hands" }
+captain-extensions = { path = "../captain-extensions" }
+captain-wire = { path = "../captain-wire" }
+captain-channels = { path = "../captain-channels" }
+hora-graph-core = { path = "../captain-graph" }
+tokio = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = "0.25"
+dashmap = { workspace = true }
+crossbeam = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+subtle = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+cron = "0.15"
+regex-lite = { workspace = true }
+zeroize = { workspace = true }
+rusqlite = { workspace = true }
+blake3 = { workspace = true }
+
+[features]
+default = ["local-embeddings"]
+local-embeddings = ["captain-runtime/local-embeddings"]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = { workspace = true }

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "hora-graph-core"
+version = "1.0.0"
+description = "Bio-inspired embedded knowledge graph engine — pure Rust, zero runtime deps"
+requires-python = ">=3.9,<3.14"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "Vivien Martin" }]
+readme = "README.md"
+keywords = ["knowledge-graph", "graph-database", "memory", "embedded", "vector-search"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/Vivien83/hora-graph-core"
+Repository = "https://github.com/Vivien83/hora-graph-core"
+Documentation = "https://github.com/Vivien83/hora-graph-core#python"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

@@ -1,0 +1,357 @@
+# Captain Agent OS - reference configuration
+# Copy to ~/.captain/config.toml and customize.
+#
+# This file exposes every major config.toml surface. For an exact machine-
+# generated dump of every non-optional field, run:
+#   captain config schema
+#
+# Optional Rust `Option<T>` fields are shown as commented examples because TOML
+# has no native null value. Secrets should stay in env vars or Captain's secret
+# store, never as raw keys in this file.
+
+home_dir = "~/.captain"
+data_dir = "~/.captain/data"
+log_level = "info"                         # trace | debug | info | warn | error
+api_listen = "127.0.0.1:50051"             # use 0.0.0.0:50051 for a direct VPS bind
+network_enabled = false
+api_key = ""                               # internal Captain API bearer token; setup generates it
+mode = "default"                           # stable | default | dev
+language = "en"                            # setup usually writes fr/en/etc.
+usage_footer = "full"                      # off | tokens | cost | full
+timezone = "UTC"                           # e.g. Europe/Paris
+max_cron_jobs = 500
+include = []                               # relative config fragments, deep-merged before this file
+users = []
+mcp_servers = []
+fallback_providers = []
+bindings = []
+stt_model = "whisper-small"
+pulse_interval_secs = 120
+dream_interval_hours = 6
+digest_min_interval_hours = 2
+digest_enabled = false
+
+# workspaces_dir = "~/.captain/workspaces"
+# workflows_dir = "~/.captain/workflows"
+
+[default_model]
+provider = "codex"                        # default: ChatGPT/Codex subscription via OAuth
+model = "gpt-5.5"
+api_key_env = ""                          # Codex OAuth uses ~/.codex/auth.json; run `captain login codex`
+# API-provider example:
+# provider = "anthropic"
+# model = "claude-sonnet-4-20250514"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+[surfaces]
+active = ["cli", "web", "telegram", "projects", "memory", "skills", "automation", "status"]
+frozen = ["hands", "a2a", "peers", "fleets", "desktop", "long-tail-channels", "roadmap-dashboard", "experimental-integrations"]
+
+[agent_loop]
+max_iterations = 90                        # raise to 180/240 for long analyses; clamped to 1..1000
+
+[memory]
+backend = "mempalace"                      # mempalace | graph
+# sqlite_path = "~/.captain/data/captain.db"
+embedding_model = "all-MiniLM-L6-v2"
+embedding_provider = ""                    # leave empty/omit for auto; set local/openai/ollama/etc. if pinned
+embedding_api_key_env = ""                 # optional env var override
+consolidation_threshold = 10000
+consolidation_interval_hours = 24
+decay_rate = 0.1
+
+[network]
+listen_addresses = ["/ip4/0.0.0.0/tcp/0"]
+bootstrap_peers = []
+mdns_enabled = true
+max_peers = 50
+shared_secret = ""                         # required when network_enabled = true
+
+[channels]
+silent_mode = false
+
+# [channels.telegram]
+# bot_token_env = "TELEGRAM_BOT_TOKEN"
+# allowed_users = []
+# default_chat_id = ""
+# default_agent = "captain"
+# poll_interval_secs = 1
+# streaming = true
+
+[assistant]
+display_name = "Captain"
+style = "balanced"                         # balanced | concise | professional | developer | friendly | classic
+onboarding_completed = false
+
+[web]
+search_provider = "auto"                   # auto | brave | tavily | perplexity | duckduckgo
+cache_ttl_minutes = 15
+
+[web.brave]
+api_key_env = "BRAVE_API_KEY"
+max_results = 5
+country = ""
+search_lang = ""
+freshness = ""
+
+[web.tavily]
+api_key_env = "TAVILY_API_KEY"
+search_depth = "basic"                     # basic | advanced
+max_results = 5
+include_answer = true
+
+[web.perplexity]
+api_key_env = "PERPLEXITY_API_KEY"
+model = "sonar"
+
+[web.fetch]
+max_chars = 50000
+max_response_bytes = 10485760
+timeout_secs = 30
+readability = true
+
+[web_terminal]
+enabled = true
+allow_raw_shell = false
+max_sessions = 4
+default_mode = "captain"                   # captain | shell
+
+[deployment]
+profile = "core"                           # core | vps | desktop | full-media
+public_url = ""                            # domain or HTTPS URL when configured
+https = true
+reverse_proxy = "caddy"
+
+[browser]
+headless = true
+viewport_width = 1280
+viewport_height = 720
+timeout_secs = 30
+idle_timeout_secs = 300
+max_sessions = 5
+# chromium_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+[extensions]
+auto_reconnect = true
+reconnect_max_attempts = 10
+reconnect_max_backoff_secs = 300
+health_check_interval_secs = 60
+
+[vault]
+enabled = true
+# path = "~/.captain/vault"
+
+[workspace]
+extra_paths = []
+
+[media]
+image_description = true
+audio_transcription = true
+audio_provider = "local-whisper"           # native whisper.cpp small by default after voice install
+audio_model = "whisper-small"
+video_description = false
+max_concurrency = 5
+# image_provider = "anthropic"
+
+[links]
+enabled = false
+max_links = 3
+max_content_bytes = 102400
+timeout_secs = 10
+
+[reload]
+mode = "hybrid"                            # off | restart | hot | hybrid
+debounce_ms = 500
+
+[webhook_triggers]
+enabled = false
+token_env = "CAPTAIN_WEBHOOK_TOKEN"
+max_payload_bytes = 65536
+rate_limit_per_minute = 30
+
+[outbound_webhooks]
+enabled = false
+timeout_secs = 10
+max_attempts = 3
+endpoints = []
+
+# [[outbound_webhooks.endpoints]]
+# name = "n8n"
+# url = "https://n8n.example.com/webhook/captain"
+# secret_env = "CAPTAIN_OUTBOUND_WEBHOOK_SECRET"
+# events = ["*"]
+# enabled = true
+
+[approval]
+require_approval = []
+allow_always = []
+timeout_secs = 60
+auto_approve_autonomous = true
+auto_approve = true
+
+[exec_policy]
+mode = "full"                              # deny | allowlist | full
+safe_bins = ["sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail", "wc", "date", "echo", "printf", "basename", "dirname", "pwd", "env"]
+allowed_commands = []
+# blocked_commands is omitted here so the hardened built-in blocklist stays active.
+timeout_secs = 30
+max_output_bytes = 102400
+no_output_timeout_secs = 30
+critical_mode = "open"                     # open | safe | paranoid
+
+[broadcast]
+strategy = "parallel"                      # parallel | sequential | first_success
+
+[broadcast.routes]
+# telegram = ["captain"]
+
+[auto_reply]
+enabled = false
+max_concurrent = 3
+timeout_secs = 120
+suppress_patterns = ["/stop", "/pause"]
+
+[canvas]
+enabled = false
+max_html_bytes = 524288
+allowed_tags = []
+
+[tts]
+enabled = true
+provider = "local-native"                  # local-native | openai | elevenlabs
+max_text_length = 4096
+timeout_secs = 30
+
+[tts.openai]
+voice = "alloy"
+model = "tts-1"
+format = "mp3"
+speed = 1.0
+
+[tts.elevenlabs]
+api_key_env = "ELEVENLABS_API_KEY"
+voice_id = "21m00Tcm4TlvDq8ikWAM"
+model_id = "eleven_monolingual_v1"
+stability = 0.5
+similarity_boost = 0.75
+
+[tts.local_native]
+preferred_engine = "kokoro"
+fallback_engine = "piper"
+language = "fr"
+
+[voice_call]
+enabled = true
+provider = "openai"
+model = "gpt-realtime-2"
+voice = "marin"
+# api_key_env = "OPENAI_API_KEY"
+enable_agent_tool = true
+auto_end_silence_secs = 90
+auto_end_inactive_secs = 180
+instructions = "Route substantive voice requests to Captain. Speak in the user's language."
+
+[docker]
+enabled = false
+image = "python:3.12-slim"
+container_prefix = "captain-sandbox"
+workdir = "/workspace"
+network = "none"
+memory_limit = "512m"
+cpu_limit = 1.0
+timeout_secs = 60
+read_only_root = true
+cap_add = []
+tmpfs = ["/tmp:size=64m"]
+pids_limit = 100
+mode = "off"                               # off | non_main | all
+scope = "session"                          # session | agent | shared
+reuse_cool_secs = 300
+idle_timeout_secs = 86400
+max_age_secs = 604800
+blocked_mounts = []
+
+[pairing]
+enabled = false
+max_devices = 10
+token_expiry_secs = 300
+push_provider = "none"                     # none | ntfy | gotify
+# ntfy_url = "https://ntfy.sh"
+# ntfy_topic = "captain"
+
+[auth_profiles]
+# openai = [{ name = "primary", api_key_env = "OPENAI_API_KEY", priority = 0 }]
+
+[thinking]
+budget_tokens = 10000
+stream_thinking = false
+
+[budget]
+max_hourly_usd = 0.0
+max_daily_usd = 0.0
+max_monthly_usd = 0.0
+alert_threshold = 0.8
+default_max_llm_tokens_per_hour = 0
+
+[provider_urls]
+# ollama = "http://localhost:11434/v1"
+
+[provider_api_keys]
+# nvidia = "NVIDIA_API_KEY"
+
+[oauth]
+# google_client_id = ""
+# github_client_id = ""
+# microsoft_client_id = ""
+# slack_client_id = ""
+
+[auth]
+enabled = false
+username = "admin"
+password_hash = ""
+session_ttl_hours = 72
+
+[a2a]
+enabled = false
+listen_path = "/a2a"
+external_agents = []
+
+[learning]
+enabled = true
+mode = "auto"                              # off | approval | auto
+autonomy_aggressiveness = 1.0              # clamped to 0.25..3.0
+reflection_model = "gpt-5.5"              # normalized against live/cache Codex model list when provider=codex
+fallback_models = []
+reflection_timeout_secs = 30
+rate_limit_per_project_per_day = 20
+rate_limit_global_per_day = 50
+retention_synced_days = 0
+retention_error_days = 30
+min_confidence = 0.0
+# reflection_provider = "openrouter"
+# reflection_api_key_env = "OPENROUTER_API_KEY"
+
+[checkpoints]
+enabled = true
+model = "gpt-5.5"                         # normalized against live/cache Codex model list when provider=codex
+inactivity_secs = 600                     # 10 min idle before checkpoint.md
+scan_interval_secs = 300                  # scan every 5 min
+per_summary_delay_secs = 10
+transcript_cap_chars = 8000
+emit_learning_review = true               # OBSERVE -> THINK -> PLAN -> BUILD -> EXECUTE -> VERIFY -> LEARN
+# provider = "openrouter"
+# api_key_env = "OPENROUTER_API_KEY"
+
+[skills]
+enabled = true
+mode = "approval"                          # off | approval | auto
+pattern_threshold = 5
+pattern_window_days = 7
+proposer_model = "gpt-5.5"                # normalized against live/cache Codex model list when provider=codex
+fallback_models = []
+reflection_timeout_secs = 30
+rate_limit_per_day = 3
+min_confidence = 0.7
+generated_dir = "skills/generated"
+# reflection_provider = "openrouter"
+# reflection_api_key_env = "OPENROUTER_API_KEY"

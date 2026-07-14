@@ -1,0 +1,74 @@
+[package]
+name = "captain-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent runtime and execution environment for Captain"
+
+[dependencies]
+captain-types = { path = "../captain-types" }
+captain-memory = { path = "../captain-memory" }
+captain-skills = { path = "../captain-skills" }
+captain-extensions = { path = "../captain-extensions" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+reqwest = { workspace = true }
+flate2 = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+tokio-stream = { workspace = true }
+wasmtime = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+zeroize = { workspace = true }
+dashmap = { workspace = true }
+dirs = { workspace = true }
+regex-lite = { workspace = true }
+regex = { workspace = true }
+ignore = { workspace = true }
+globset = { workspace = true }
+ssh-key = { workspace = true }
+russh = { workspace = true }
+russh-sftp = { workspace = true }
+mdns-sd = { workspace = true }
+rusqlite = { workspace = true }
+moka = { workspace = true }
+blake3 = { workspace = true }
+redb = { workspace = true }
+bincode = { workspace = true }
+redis = { workspace = true, optional = true }
+bb8 = { workspace = true, optional = true }
+bb8-redis = { workspace = true, optional = true }
+tokio-tungstenite = "0.24"
+shlex = "1"
+portable-pty = "0.9"
+ffmpeg-sidecar = { workspace = true }
+zip = { workspace = true }
+# `image` is used by `video::downscale_to_long_edge` (V.8a #184) to shrink
+# extracted frames before vision upload. Version matches what `fastembed`
+# already pulls transitively (0.25.x), so no extra build cost.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+tempfile = { workspace = true }
+fastembed = { version = "5", optional = true, default-features = false, features = [
+    "ort-load-dynamic",
+    "hf-hub-rustls-tls",
+] }
+
+[features]
+default = ["local-embeddings"]
+local-embeddings = ["dep:fastembed"]
+redis-cache = ["dep:redis", "dep:bb8", "dep:bb8-redis"]
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+wiremock = "0.6"

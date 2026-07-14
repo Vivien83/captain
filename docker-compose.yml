@@ -1,0 +1,30 @@
+services:
+  captain:
+    image: ghcr.io/vivien83/captain-agent-os:${CAPTAIN_IMAGE_TAG:-alpha}
+    build: .
+    container_name: captain
+    ports:
+      - "50051:50051"
+    volumes:
+      - captain-data:/root/.captain
+    environment:
+      # Captain's own default (127.0.0.1:50051, from KernelConfig::default)
+      # is loopback-only. Inside a container that binds only the container's
+      # own loopback, unreachable from the host through the published port
+      # even though the port mapping looks correct — it must listen on all
+      # interfaces for `ports:` publishing to actually reach it.
+      - CAPTAIN_LISTEN=0.0.0.0:50051
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+    restart: unless-stopped
+
+volumes:
+  captain-data:

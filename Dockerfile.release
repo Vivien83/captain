@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1
+
+# Assemble the published image from the exact Linux binaries already validated
+# by scripts/publish-release-local.sh. This avoids recompiling Captain under
+# QEMU and keeps GitHub Release and GHCR on one binary provenance path.
+FROM debian:bookworm-slim AS captain-binary
+
+ARG CAPTAIN_RELEASE_VERSION
+ARG TARGETARCH
+
+COPY dist/releases/${CAPTAIN_RELEASE_VERSION}/captain-x86_64-unknown-linux-gnu.tar.gz /tmp/bundles/
+COPY dist/releases/${CAPTAIN_RELEASE_VERSION}/captain-aarch64-unknown-linux-gnu.tar.gz /tmp/bundles/
+
+RUN set -eux; \
+    case "$TARGETARCH" in \
+        amd64) target=x86_64-unknown-linux-gnu ;; \
+        arm64) target=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported Docker architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /out; \
+    tar -xzf "/tmp/bundles/captain-$target.tar.gz" \
+        --strip-components=1 -C /out; \
+    test -x /out/captain; \
+    expected="${CAPTAIN_RELEASE_VERSION#v}"; \
+    /out/captain --version | grep -F "$expected"
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=captain-binary /out/captain /usr/local/bin/captain
+COPY --from=captain-binary /out/VERSION /usr/local/bin/VERSION
+COPY agents /opt/captain/agents
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+EXPOSE 50051
+ENV CAPTAIN_HOME=/root/.captain
+
+# The local publisher stages this exact, checksum-pinned FastEmbed snapshot.
+# Keeping model retrieval out of the Docker build makes release assembly
+# reproducible even when the upstream model CDN is temporarily unavailable.
+COPY dist/docker/fastembed-cache/ /root/.captain/.fastembed_cache/
+RUN cd /root/.captain/.fastembed_cache \
+    && sha256sum --check CAPTAIN-SHA256SUMS \
+    && captain embeddings install
+
+VOLUME /root/.captain
+WORKDIR /root
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["start"]

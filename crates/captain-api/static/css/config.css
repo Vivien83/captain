@@ -1,0 +1,660 @@
+html,
+body {
+  width: 100%;
+  height: 100%;
+}
+
+body.config-body * {
+  box-sizing: border-box;
+}
+
+body.config-body {
+  overflow: hidden;
+  background: #0a0a0a;
+  color: #f2f0eb;
+  font-family: Barlow, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+body.config-body ::selection {
+  background: #bffd00;
+  color: #0a0a0a;
+}
+
+body.config-body ::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+body.config-body ::-webkit-scrollbar-thumb {
+  background: #bffd00;
+}
+
+@keyframes clip-up {
+  from { clip-path: inset(100% 0 0 0); }
+  to { clip-path: inset(0); }
+}
+
+@keyframes clip-left {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0); }
+}
+
+@keyframes fade-rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: perspective(900px) rotateX(-8deg) translateY(14px); }
+  to { opacity: 1; transform: perspective(900px) rotateX(0) translateY(0); }
+}
+
+@keyframes dot-drift {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to { background-position: 44px 22px, 88px 44px, 0 0; }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.52; box-shadow: 0 0 8px currentColor; }
+  50% { opacity: 1; box-shadow: 0 0 18px currentColor; }
+}
+
+.config-shell {
+  position: relative;
+  display: grid;
+  grid-template-rows: 64px minmax(0, 1fr) 34px;
+  width: 100vw;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #0a0a0a;
+}
+
+.config-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, rgba(191, 253, 0, 0.18) 0 1px, transparent 1.25px),
+    radial-gradient(circle, rgba(242, 240, 235, 0.06) 0 1px, transparent 1.25px),
+    linear-gradient(180deg, rgba(191, 253, 0, 0.04), transparent 34%, transparent 70%, rgba(90, 180, 214, 0.035));
+  background-position: 0 0, 22px 22px, 0 0;
+  background-size: 44px 44px, 44px 44px, 100% 100%;
+  opacity: 0.34;
+  mask-image: linear-gradient(to bottom, transparent, black 16%, black 82%, transparent);
+  animation: dot-drift 28s linear infinite;
+}
+
+.config-topbar,
+.config-statusbar {
+  position: relative;
+  z-index: 1;
+  border-color: #161616;
+  background: rgba(7, 7, 7, 0.94);
+  backdrop-filter: blur(12px);
+}
+
+.config-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+  border-bottom: 1px solid #161616;
+  animation: clip-left 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.config-brand,
+.config-auth-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
+.config-title,
+.config-auth-title {
+  color: #f2f0eb;
+  font-family: Barlow, Inter, system-ui, sans-serif;
+  font-size: 21px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  animation: clip-up 0.58s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.config-title::after,
+.config-auth-title::after {
+  content: "";
+  display: block;
+  width: 28px;
+  height: 2px;
+  margin-top: 5px;
+  background: #bffd00;
+}
+
+.config-auth-subtitle,
+.config-path {
+  max-width: min(58vw, 540px);
+  margin-top: 4px;
+  overflow: hidden;
+  color: #333;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  letter-spacing: 0;
+  animation: fade-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+}
+
+.config-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.config-actions button,
+.config-reference-head button {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #161616;
+  border-radius: 0;
+  background: #0a0a0a;
+  color: #888;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.config-actions button:hover,
+.config-reference-head button:hover {
+  border-color: #2a2a2a;
+  background: #0d0d0d;
+  color: #f2f0eb;
+  transform: translateY(-1px);
+}
+
+.config-actions button.primary {
+  border-color: #1a1a00;
+  background: #bffd00;
+  color: #0a0a0a;
+}
+
+.config-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.config-workbench {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) minmax(300px, 34vw);
+  min-width: 0;
+  min-height: 0;
+  border-bottom: 1px solid #161616;
+  animation: panel-in 0.62s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+}
+
+.config-sidebar,
+.config-reference {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid #161616;
+  background: rgba(10, 10, 10, 0.96);
+}
+
+.config-sidebar {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 14px;
+}
+
+.config-reference {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-right: 0;
+  border-left: 1px solid #161616;
+}
+
+.config-search {
+  display: grid;
+  gap: 7px;
+  color: #555;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.config-search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #161616;
+  border-radius: 0;
+  outline: 0;
+  background: #070707;
+  color: #f2f0eb;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.config-search input:focus {
+  border-color: #bffd00;
+}
+
+.config-meter {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  border: 1px solid #161616;
+  background: #161616;
+}
+
+.config-meter div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  background: #0a0a0a;
+  transition: background 0.18s ease;
+}
+
+.config-meter div:hover {
+  background: #0d0d0d;
+}
+
+.config-meter-label,
+.config-kicker {
+  color: #555;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.config-meter strong {
+  color: #f2f0eb;
+  font-family: "Barlow Condensed", Barlow, Inter, system-ui, sans-serif;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.config-sections {
+  min-height: 0;
+  overflow: auto;
+}
+
+.config-section-button {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  margin: 0 0 4px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #888;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.config-section-button:hover {
+  border-color: #161616;
+  background: #0d0d0d;
+  color: #bffd00;
+  transform: translateX(2px);
+}
+
+.config-note {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border-left: 2px solid #bffd00;
+  background: #0d0d0d;
+  color: #555;
+  font-size: 12px;
+  line-height: 1.4;
+  background:
+    radial-gradient(circle at 100% 0, rgba(191, 253, 0, 0.05), transparent 32%),
+    #0d0d0d;
+}
+
+.config-note strong {
+  color: #f2f0eb;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.config-editor-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(191, 253, 0, 0.035), transparent 36%),
+    rgba(7, 7, 7, 0.94);
+}
+
+.config-editor-head,
+.config-reference-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.config-reference-head {
+  margin: 0;
+  padding: 14px;
+  border-bottom: 1px solid #161616;
+  background: #0c0c0c;
+}
+
+.config-editor-head h1,
+.config-reference-head h2 {
+  margin: 3px 0 0;
+  color: #f2f0eb;
+  font-family: "Barlow Condensed", Barlow, Inter, system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.config-reference-head h2 {
+  font-size: 18px;
+}
+
+.config-pill {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid rgba(132, 232, 176, 0.22);
+  background: rgba(132, 232, 176, 0.08);
+  color: #84e8b0;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.config-pill.dirty {
+  border-color: rgba(245, 200, 66, 0.26);
+  background: rgba(245, 200, 66, 0.08);
+  color: #f5c842;
+}
+
+#config-editor,
+.config-template {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #161616;
+  border-radius: 0;
+  outline: 0;
+  background: #050505;
+  color: #f2f0eb;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+  resize: none;
+  white-space: pre;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+#config-editor:focus {
+  border-color: #bffd00;
+}
+
+.config-template {
+  border: 0;
+  color: #888;
+}
+
+.config-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 14px max(0px, env(safe-area-inset-bottom));
+  border-top: 1px solid #161616;
+  color: #555;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  animation: clip-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+}
+
+.config-statusbar a {
+  color: #888;
+  text-decoration: none;
+}
+
+.config-statusbar a:hover {
+  color: #bffd00;
+}
+
+.config-spacer {
+  flex: 1 1 auto;
+}
+
+.config-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: #f5c842;
+  box-shadow: 0 0 10px currentColor;
+  color: #f5c842;
+  animation: pulse-soft 1.8s ease-in-out infinite;
+}
+
+.config-dot.ok {
+  background: #84e8b0;
+  color: #84e8b0;
+}
+
+.config-dot.error {
+  background: #ff6b6b;
+  color: #ff6b6b;
+}
+
+.config-auth[hidden],
+.config-auth-fields[hidden] {
+  display: none;
+}
+
+.config-auth {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(10, 10, 10, 0.82);
+  backdrop-filter: blur(12px);
+}
+
+.config-auth-card {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 390px);
+  padding: 24px;
+  border: 1px solid #161616;
+  background:
+    radial-gradient(circle at 100% 0, rgba(191, 253, 0, 0.055), transparent 32%),
+    #0c0c0c;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.44);
+  animation: panel-in 0.56s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.config-auth-help {
+  color: #888;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.config-auth-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.config-auth-fields input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid #161616;
+  border-radius: 0;
+  outline: 0;
+  background: #070707;
+  color: #f2f0eb;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.config-auth-fields input:focus {
+  border-color: #bffd00;
+}
+
+.config-auth-fields button {
+  height: 42px;
+  border: 1px solid #1a1a00;
+  border-radius: 0;
+  background: #bffd00;
+  color: #0a0a0a;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.config-auth-fields button:hover {
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-grid,
+  .config-topbar,
+  .config-statusbar,
+  .config-title,
+  .config-auth-title,
+  .config-auth-subtitle,
+  .config-path,
+  .config-workbench,
+  .config-dot,
+  .config-auth-card {
+    animation: none;
+  }
+
+  .config-actions button,
+  .config-reference-head button,
+  .config-section-button,
+  .config-auth-fields button,
+  .config-auth-fields input,
+  .config-search input,
+  #config-editor,
+  .config-template {
+    transition: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .config-shell {
+    grid-template-rows: auto minmax(0, 1fr) 38px;
+  }
+
+  .config-topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .config-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .config-actions button {
+    width: 100%;
+  }
+
+  .config-workbench {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) minmax(220px, 34vh);
+  }
+
+  .config-sidebar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    padding: 10px;
+  }
+
+  .config-meter,
+  .config-note {
+    display: none;
+  }
+
+  .config-sections {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+  }
+
+  .config-section-button {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .config-reference {
+    border-top: 1px solid #161616;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .config-title,
+  .config-auth-title {
+    font-size: 18px;
+  }
+
+  .config-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .config-editor-pane,
+  .config-reference-head,
+  .config-sidebar {
+    padding: 10px;
+  }
+
+  .config-editor-head h1 {
+    font-size: 18px;
+  }
+}

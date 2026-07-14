@@ -1,0 +1,33 @@
+# Gitleaks allowlist: every historical finding was audited on 2026-07-07
+# (31 findings, all test fixtures / documentation placeholders — no real
+# credential has ever been committed). This file keeps future scans clean
+# so a single new finding is an actual signal.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Audited test fixtures and documentation placeholders"
+paths = [
+  # PII/secret-detection code and its fixtures — they exist to match secrets.
+  '''crates/captain-runtime/src/pii_filter\.rs''',
+  '''crates/captain-runtime/src/memory_policy\.rs''',
+  '''crates/captain-runtime/src/llm_errors\.rs''',
+  # Test-only throwaway SSH keys (labelled test-q6-throwaway inside the key).
+  '''crates/captain-runtime/src/ssh_exec\.rs''',
+  '''crates/captain-runtime/src/ssh_sftp\.rs''',
+  # Test fixtures across runtime/cli.
+  '''crates/captain-runtime/src/tool_runner/tests/.*\.rs''',
+  '''crates/captain-runtime/src/integrations/.*\.rs''',
+  '''crates/captain-runtime/src/drivers/mod\.rs''',
+  '''crates/captain-runtime/src/tool_runner\.rs''',
+  '''crates/captain-cli/src/main\.rs''',
+  '''crates/captain-cli/src/tests\.rs''',
+  '''crates/captain-cli/src/commands/init\.rs''',
+  '''crates/captain-cli/tests/secret_prompt_noninteractive\.rs''',
+  # Vendored minified JS (false positives on identifier names).
+  '''crates/captain-api/static/vendor/.*''',
+  # Documentation examples with obvious placeholder tokens.
+  '''docs/channel-adapters\.md''',
+  '''docs/troubleshooting\.md''',
+]

@@ -1,0 +1,54 @@
+{
+  "name": "hora-graph-core",
+  "version": "1.0.0",
+  "description": "Bio-inspired embedded knowledge graph engine — Node.js binding via napi-rs",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Vivien83/hora-graph-core",
+    "directory": "bindings/node"
+  },
+  "homepage": "https://github.com/Vivien83/hora-graph-core#nodejs",
+  "keywords": [
+    "knowledge-graph",
+    "graph-database",
+    "memory",
+    "embedded",
+    "vector-search",
+    "rust",
+    "napi-rs"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "napi": {
+    "name": "hora-graph-core",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "x86_64-unknown-linux-musl",
+        "armv7-unknown-linux-gnueabihf"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node --test __test__/index.test.mjs",
+    "artifacts": "napi artifacts"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2"
+  }
+}

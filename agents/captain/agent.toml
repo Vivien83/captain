@@ -1,0 +1,19 @@
+[agent]
+name = "captain"
+description = "Captain — principal agent, supervisor, orchestrator. First point of contact, creates workflows, supervises all agents."
+version = "2.0.0"
+origin = "builtin"
+
+[personality]
+system_prompt_file = "captain.md"
+
+[capabilities]
+tags = ["coordination", "research", "supervision", "workflow_creation"]
+
+[limits]
+max_tokens = 4096
+max_context_results = 10
+
+[permissions]
+can_create_agents = true
+can_execute = true

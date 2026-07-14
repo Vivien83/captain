@@ -1,0 +1,127 @@
+<main class="terminal-shell">
+  <div class="terminal-grid" aria-hidden="true"></div>
+
+  <section id="auth-panel" class="terminal-auth" aria-live="polite">
+    <form id="auth-form" class="terminal-auth-card">
+      <div class="terminal-auth-brand">
+        <img class="terminal-brand-mark terminal-auth-mark" src="/assets/logo.png?rev=wordmark-2" alt="">
+        <div>
+          <div class="terminal-auth-title">Captain</div>
+          <div class="terminal-auth-subtitle">Web access</div>
+        </div>
+      </div>
+      <div id="auth-help" class="terminal-auth-help">Checking secure access...</div>
+      <div id="session-fields" class="terminal-auth-fields" hidden>
+        <input id="auth-username" type="text" autocomplete="username" placeholder="Username" aria-label="Username">
+        <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
+        <button id="session-login" type="submit">Sign in</button>
+      </div>
+    </form>
+  </section>
+
+  <header class="terminal-topbar">
+    <div class="terminal-brand">
+      <img class="terminal-brand-mark" src="/assets/logo.png?rev=wordmark-2" alt="">
+      <div>
+        <div class="terminal-title">Captain</div>
+        <div class="terminal-subtitle">Web Chat</div>
+      </div>
+    </div>
+
+    <label class="terminal-session-label">
+      <span>Session</span>
+      <input id="session-id" class="terminal-session" type="text" value="" placeholder="auto" list="session-options" spellcheck="false" autocomplete="off" aria-label="Chat session id">
+      <datalist id="session-options"></datalist>
+    </label>
+
+    <div class="terminal-actions">
+      <button id="new-session" type="button" class="terminal-action compact terminal-action-icon" title="New session" aria-label="Create a new session">+</button>
+      <button id="sessions-toggle" type="button" class="terminal-action compact" aria-expanded="true" aria-controls="session-drawer">Sessions</button>
+      <button id="command-toggle" type="button" class="terminal-action compact" aria-expanded="false" aria-controls="command-bar">Command</button>
+      <button id="activity-toggle" type="button" class="terminal-action compact" aria-expanded="true" aria-controls="activity-rail">Activity</button>
+      <button id="attachment-button" type="button" class="terminal-action compact">File</button>
+      <input id="attachment-input" class="terminal-file-input" type="file" multiple hidden>
+      <button id="call-toggle" type="button" class="terminal-action compact terminal-call-talk" aria-pressed="false" title="Hold to talk, release to mute">Hold</button>
+      <button id="call-end" type="button" class="terminal-action compact danger terminal-call-end" title="End voice call" hidden>End</button>
+      <button id="connect" type="button" class="terminal-action primary">Connect</button>
+      <button id="terminate" type="button" class="terminal-action danger" disabled>Terminate</button>
+    </div>
+  </header>
+
+  <section id="command-bar" class="terminal-commandbar" hidden>
+    <div class="terminal-command-kicker">Command Palette</div>
+    <input id="command-input" type="text" spellcheck="false" autocomplete="off" placeholder="/help, /model, ask Captain..." aria-label="Command palette input">
+    <div class="terminal-command-actions">
+      <button type="button" data-command="/help">/help</button>
+      <button type="button" data-command="/status">/status</button>
+      <button type="button" data-command="/model">/model</button>
+      <button type="button" data-command="/config">/config</button>
+      <button type="button" data-command="Resume this session in one concise paragraph.">Summarize</button>
+    </div>
+  </section>
+
+  <section class="terminal-workbench" aria-label="Captain web TUI">
+    <aside id="session-drawer" class="terminal-session-drawer" aria-label="Sessions">
+      <div class="terminal-panel-head">
+        <div>
+          <div class="terminal-panel-kicker">Sessions</div>
+          <div class="terminal-panel-title">Shared tabs</div>
+        </div>
+        <button id="refresh-sessions" type="button" class="terminal-icon-button" title="Refresh sessions">↻</button>
+      </div>
+      <div id="session-list" class="terminal-session-list" aria-live="polite"></div>
+    </aside>
+
+    <section class="terminal-stage" aria-label="Captain web chat terminal">
+      <div class="terminal-frame">
+        <div id="terminal-placeholder" class="terminal-placeholder">Opening Captain chat...</div>
+        <div id="terminal"></div>
+        <section id="voice-transcript" class="terminal-voice-transcript" aria-live="polite" hidden>
+          <div class="terminal-voice-head">
+            <span>Voice</span>
+            <button id="voice-transcript-clear" type="button" aria-label="Clear voice transcript">×</button>
+          </div>
+          <div id="voice-transcript-list" class="terminal-voice-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <aside id="activity-rail" class="terminal-activity-rail" aria-label="Live activity">
+      <div class="terminal-panel-head">
+        <div>
+          <div class="terminal-panel-kicker">Live</div>
+          <div class="terminal-panel-title">Activity</div>
+        </div>
+        <span id="activity-count" class="terminal-count">0</span>
+      </div>
+      <div class="terminal-rail-metrics">
+        <div><span>Tokens</span><strong id="metric-tokens">0</strong></div>
+        <div><span>Cost</span><strong id="metric-cost">$0</strong></div>
+        <div><span>Calls</span><strong id="metric-calls">0</strong></div>
+      </div>
+      <div id="browser-preview" class="terminal-browser-preview" hidden>
+        <div class="terminal-browser-top">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="terminal-browser-body">
+          <div class="terminal-browser-label">Browser rail</div>
+          <div id="browser-preview-text">Waiting for browser activity</div>
+        </div>
+      </div>
+      <div id="activity-list" class="terminal-activity-list" aria-live="polite"></div>
+    </aside>
+  </section>
+
+  <footer class="terminal-statusbar">
+    <span id="status-dot" class="terminal-dot"></span>
+    <span id="status-text" class="terminal-status-text">checking access</span>
+    <span class="terminal-spacer"></span>
+    <span id="replay-chip" class="terminal-chip muted">live replay</span>
+    <span id="call-meter" class="terminal-call-meter" aria-label="Live microphone spectrum" hidden>
+      <canvas id="call-spectrum" width="132" height="22"></canvas>
+    </span>
+    <span id="call-status" class="terminal-call-status" hidden></span>
+    <span id="call-chip" class="terminal-chip">chat + call</span>
+    <a class="terminal-link" href="/">← Control</a>
+  </footer>
+</main>

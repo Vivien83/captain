@@ -1,0 +1,218 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/captain-types",
+    "crates/captain-memory",
+    "crates/captain-runtime",
+    "crates/captain-wire",
+    "crates/captain-api",
+    "crates/captain-kernel",
+    "crates/captain-cli",
+    "crates/captain-channels",
+    "crates/captain-skills",
+    "crates/captain-desktop",
+    "crates/captain-hands",
+    "crates/captain-extensions",
+    "crates/captain-graph",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/Vivien83/captain"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# Filesystem events (HR.1 — config hot-reload watcher)
+notify-debouncer-mini = { version = "0.4", default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# R.3.1 — preserve comments + format when patching config.toml in place
+toml_edit = "0.22"
+rmp-serde = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Concurrency
+dashmap = "6"
+crossbeam = "0.8"
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+
+# IDs
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled", "serde_json"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+
+# HTTP client (for LLM drivers)
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "gzip", "deflate", "brotli"] }
+flate2 = "1"
+
+# Async trait
+async-trait = "0.1"
+
+# Base64
+base64 = "0.22"
+
+# Bytes
+bytes = "1"
+
+# Futures
+futures = "0.3"
+
+# WebSocket client (for Discord/Slack gateway)
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+url = "2"
+
+# WASM sandbox
+wasmtime = "46"
+
+# HTTP server (for API daemon)
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "compression-br"] }
+
+# Home directory resolution
+dirs = "6"
+
+# YAML parsing
+serde_yaml = "0.9"
+
+# JSON5 parsing
+json5 = "0.4"
+
+# Directory walking
+walkdir = "2"
+
+# Security
+sha2 = "0.10"
+sha1 = "0.10"
+aes = "0.8"
+cbc = "0.1"
+hmac = "0.12"
+hex = "0.4"
+subtle = "2"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+
+# Rate limiting
+governor = "0.8"
+
+# Interactive CLI
+ratatui = "0.29"
+unicode-width = "0.1.14"
+colored = "3"
+
+# Encryption
+aes-gcm = "0.10"
+argon2 = "0.5"
+
+# HTML entity decoding
+html-escape = "0.2"
+
+# Lightweight regex
+regex-lite = "0.1"
+
+# Q.1 — full regex (multiline, lookahead) for tool_grep
+regex = "1"
+# Q.1 — gitignore-aware filesystem walking (BurntSushi, ripgrep core)
+ignore = "0.4"
+# Q.1/Q.2 — glob patterns (BurntSushi, ripgrep core)
+globset = "0.4"
+
+# R.1.1 — pure-Rust mDNS service discovery (no async runtime dep)
+mdns-sd = { version = "0.19", default-features = false, features = ["async"] }
+
+# Q.6 — SSH private key parsing + fingerprinting
+ssh-key = { version = "0.6", default-features = false, features = ["alloc", "ed25519", "rsa", "p256", "encryption"] }
+
+# Q.7/Q.8 — pure-Rust SSH client (tokio-native). `russh-keys` was merged
+# into `russh::keys` as of 0.5x — no separate dependency needed anymore.
+russh = "0.62"
+russh-sftp = "2"
+
+# In-memory async cache with TTL and capacity eviction (v3.10)
+moka = { version = "0.12", features = ["future"] }
+
+# Fast content hashing for cache keys (V.8g) — BLAKE3 is the fastest option
+# in pure Rust, deterministic, fixed 32-byte output.
+blake3 = "1"
+
+# Persistent embedded cache (v3.10b) — WAL + ACID, survives daemon restart
+redb = "2"
+bincode = { version = "1.3", features = ["i128"] }
+
+# Distributed cache backend (v3.10d, optional feature `redis-cache`)
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "aio"] }
+bb8 = "0.8"
+bb8-redis = "0.17"
+
+# Socket options (SO_REUSEADDR)
+socket2 = "0.5"
+
+# Zip archive extraction
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Email (SMTP + IMAP)
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
+# imap 2.x pulls a transitive imap-proto v0.10.2 that triggers a future-incompat
+# `trailing semicolon in macro` warning. The summary is muted via
+# `.cargo/config.toml [future-incompat-report] frequency = "never"`. Migration to
+# imap 3.0 is parked until the crate exits alpha — the 3.0.0-alpha.* line is a
+# full async rewrite (imap-next + imap-codec + imap-types) that would require
+# rewriting most of `crates/captain-channels/src/email.rs` (~627 LOC, sync).
+imap = "2"
+# Native TLS is only used by the IMAP rail. Keep OpenSSL vendored so Linux
+# release bundles build reproducibly without host/container libssl-dev.
+native-tls = { version = "0.2", features = ["vendored"] }
+mailparse = "0.16"
+
+# OpenSSL (vendored = statically compiled, no runtime libssl dependency on Linux)
+openssl = { version = "0.10", features = ["vendored"] }
+openssl-sys = { version = "0.9", features = ["vendored"] }
+
+# V.1 — FFmpeg sidecar wrapper for video frame extraction (#184).
+# Default features include `download_ffmpeg` → auto-download the binary
+# cross-platform (macOS Intel/M1, Linux x86_64/ARM, Windows). MSRV 1.79
+# (compatible with our toolchain even though workspace.rust-version = 1.75).
+ffmpeg-sidecar = "2.5.1"
+
+# Testing
+tokio-test = "0.4"
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
+
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 8
+opt-level = 2
+strip = false

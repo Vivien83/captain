@@ -1,0 +1,44 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# Node bindings
+node_modules/
+bindings/node/*.node
+bindings/node/dist/
+
+# Python bindings
+__pycache__/
+*.egg-info/
+.venv/
+dist/
+
+# WASM
+bindings/wasm/pkg/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# HORA
+.hora/
+
+# Build artifacts (bindings)
+bindings/node/package-lock.json
+bindings/python/hora_graph_core/*.so
+bindings/python/hora_graph_core/*.dylib*
+*.dSYM/

@@ -1,0 +1,39 @@
+[Unit]
+Description=Captain Agent OS Daemon
+Documentation=https://github.com/Vivien83/captain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=captain
+Group=captain
+ExecStart=/usr/local/bin/captain start
+Restart=on-failure
+RestartForceExitStatus=75
+RestartSec=5
+TimeoutStopSec=30
+
+# Environment
+EnvironmentFile=-/etc/captain/env
+WorkingDirectory=/var/lib/captain
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/captain
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=false
+RestrictRealtime=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

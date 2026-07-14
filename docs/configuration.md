@@ -1,0 +1,1984 @@
+# Captain Configuration Reference
+
+Complete reference for `config.toml`, covering every configurable field in the Captain Agent OS.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Minimal Configuration](#minimal-configuration)
+- [Full Example](#full-example)
+- [Section Reference](#section-reference)
+  - [Top-Level Fields](#top-level-fields)
+  - [\[default\_model\]](#default_model)
+  - [\[agent\_loop\]](#agent_loop)
+  - [\[surfaces\]](#surfaces)
+  - [\[memory\]](#memory)
+  - [\[network\]](#network)
+  - [\[web\]](#web)
+  - [Runtime Feature Sections](#runtime-feature-sections)
+  - [\[channels\]](#channels)
+  - [\[\[mcp\_servers\]\]](#mcp_servers)
+  - [\[a2a\]](#a2a)
+  - [\[\[fallback\_providers\]\]](#fallback_providers)
+  - [\[\[users\]\]](#users)
+  - [Channel Overrides](#channel-overrides)
+- [Environment Variables](#environment-variables)
+- [Validation](#validation)
+
+---
+
+## Overview
+
+Captain reads its configuration from a single TOML file:
+
+```
+~/.captain/config.toml
+```
+
+On Windows, `~` resolves to `C:\Users\<username>`. If the home directory cannot be determined, the system temp directory is used as a fallback.
+
+**Key behaviors:**
+
+- Every struct in the configuration uses `#[serde(default)]`, which means **all fields are optional**. Omitted fields receive their documented default values.
+- Channel sections (`[channels.telegram]`, `[channels.discord]`, etc.) are `Option<T>` -- when absent, the channel adapter is **disabled**. Including the section header (even empty) enables the adapter with defaults.
+- Secrets are **never stored in config.toml** directly. Instead, fields like `api_key_env` and `bot_token_env` hold the **name** of an environment variable that contains the actual secret. This prevents accidental exposure in version control.
+- Sensitive fields (`api_key`, `shared_secret`) are automatically redacted in debug output and logs.
+
+---
+
+## Minimal Configuration
+
+Captain is optimized for the Codex subscription path. With no config file at all, Captain uses the Codex provider with `gpt-5.5`; authentication is OAuth-based, not API-key-based:
+
+```toml
+# ~/.captain/config.toml
+# First run: `captain login codex`
+
+[default_model]
+provider = "codex"
+model = "gpt-5.5"
+api_key_env = ""
+```
+
+For an API-key provider such as Anthropic, switch the provider and point `api_key_env` at the env var containing the key:
+
+```toml
+[default_model]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+api_key_env = "ANTHROPIC_API_KEY"
+```
+
+For a local Ollama instance with no API key:
+
+```toml
+[default_model]
+provider = "ollama"
+model = "llama3.2:latest"
+base_url = "http://localhost:11434"
+api_key_env = ""
+```
+
+---
+
+## Full Example
+
+This is a curated working example. For the exact generated default file for the current binary, run `captain config schema`; for the maintained starter file, see `captain.toml.example`.
+
+```toml
+# ============================================================
+# Captain Agent OS -- Complete Configuration Reference
+# ============================================================
+
+# --- Top-level fields ---
+home_dir = "~/.captain"             # Captain home directory
+data_dir = "~/.captain/data"        # SQLite databases and data files
+log_level = "info"                   # trace | debug | info | warn | error
+api_listen = "127.0.0.1:50051"      # HTTP/WS API bind address
+network_enabled = false              # Enable OFP peer-to-peer network
+api_key = ""                         # API Bearer token (empty = unauthenticated)
+mode = "default"                     # stable | default | dev
+language = "en"                      # Locale for CLI/messages
+usage_footer = "full"                # off | tokens | cost | full
+timezone = "Europe/Paris"            # Default scheduling timezone
+max_cron_jobs = 500
+stt_model = "whisper-small"
+
+# --- Default LLM Provider ---
+[default_model]
+provider = "codex"
+model = "gpt-5.5"
+api_key_env = ""                         # Codex OAuth, run `captain login codex`
+# API provider example: provider="anthropic", model="claude-sonnet-4-20250514", api_key_env="ANTHROPIC_API_KEY"
+
+# --- Runtime guardrail ---
+[agent_loop]
+max_iterations = 90                   # Raise to 180/240 for long analyses
+
+# --- Product surfaces ---
+[surfaces]
+active = ["cli", "web", "telegram", "projects", "memory", "skills", "automation", "status"]
+frozen = ["hands", "a2a", "peers", "fleets", "desktop", "long-tail-channels", "roadmap-dashboard", "experimental-integrations"]
+
+# --- Fallback Providers ---
+[[fallback_providers]]
+provider = "ollama"
+model = "llama3.2:latest"
+api_key_env = ""
+# base_url = "http://localhost:11434"  # Uses catalog default if omitted
+
+[[fallback_providers]]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
+
+# --- Memory ---
+[memory]
+backend = "mempalace"                 # mempalace | graph
+# sqlite_path = "~/.captain/data/captain.db"  # Auto-resolved if omitted
+embedding_model = "all-MiniLM-L6-v2"
+consolidation_threshold = 10000
+consolidation_interval_hours = 24
+decay_rate = 0.1
+
+# --- Assistant identity ---
+[assistant]
+display_name = "Captain"
+style = "balanced"
+onboarding_completed = true
+
+# --- Network (OFP Wire Protocol) ---
+[network]
+listen_addresses = ["/ip4/0.0.0.0/tcp/0"]
+bootstrap_peers = []
+mdns_enabled = true
+max_peers = 50
+shared_secret = ""                   # Required when network_enabled = true
+
+# --- Web Tools ---
+[web]
+search_provider = "auto"             # auto | brave | tavily | perplexity | duckduckgo
+cache_ttl_minutes = 15
+
+[web.brave]
+api_key_env = "BRAVE_API_KEY"
+max_results = 5
+country = ""
+search_lang = ""
+freshness = ""
+
+[web.tavily]
+api_key_env = "TAVILY_API_KEY"
+search_depth = "basic"               # basic | advanced
+max_results = 5
+include_answer = true
+
+[web.perplexity]
+api_key_env = "PERPLEXITY_API_KEY"
+model = "sonar"
+
+[web.fetch]
+max_chars = 50000
+max_response_bytes = 10485760        # 10 MB
+timeout_secs = 30
+readability = true
+
+# --- Web terminal / deployment ---
+[web_terminal]
+enabled = true
+allow_raw_shell = false
+max_sessions = 4
+default_mode = "captain"
+
+[deployment]
+profile = "vps"                      # core | vps | desktop | full-media
+public_url = "https://captain.example.com"
+https = true
+reverse_proxy = "caddy"
+
+[auth]
+enabled = true
+username = "admin"
+password_hash = ""
+session_ttl_hours = 168
+
+# --- Native voice / media ---
+[media]
+image_description = true
+audio_transcription = true
+audio_provider = "local-whisper"
+audio_model = "whisper-small"
+video_description = false
+max_concurrency = 5
+
+[tts]
+enabled = true
+provider = "local-native"
+max_text_length = 4096
+timeout_secs = 30
+
+[tts.local_native]
+preferred_engine = "kokoro"
+fallback_engine = "piper"
+language = "fr"
+
+# --- Learning / generated skills ---
+[learning]
+enabled = true
+mode = "auto"
+autonomy_aggressiveness = 1.0
+reflection_model = "gpt-5.3-codex-spark"
+fallback_models = ["gpt-5.3-codex"]
+reflection_timeout_secs = 30
+rate_limit_per_project_per_day = 20
+rate_limit_global_per_day = 50
+retention_synced_days = 0
+retention_error_days = 30
+min_confidence = 0.0
+
+[checkpoints]
+enabled = true
+model = "gpt-5.3-codex-spark"
+inactivity_secs = 600
+scan_interval_secs = 300
+per_summary_delay_secs = 10
+transcript_cap_chars = 8000
+emit_learning_review = true
+
+[skills]
+enabled = true
+mode = "approval"
+pattern_threshold = 5
+pattern_window_days = 7
+proposer_model = "gpt-5.3-codex-spark"
+fallback_models = ["gpt-5.3-codex"]
+reflection_timeout_secs = 30
+rate_limit_per_day = 3
+min_confidence = 0.7
+generated_dir = "skills/generated"
+
+# --- MCP Servers ---
+[[mcp_servers]]
+name = "filesystem"
+timeout_secs = 30
+env = []
+[mcp_servers.transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+[[mcp_servers]]
+name = "remote-tools"
+timeout_secs = 60
+env = ["REMOTE_API_KEY"]
+[mcp_servers.transport]
+type = "sse"
+url = "https://mcp.example.com/events"
+
+# --- A2A Protocol ---
+[a2a]
+enabled = false
+listen_path = "/a2a"
+
+[[a2a.external_agents]]
+name = "research-agent"
+url = "https://agent.example.com/.well-known/agent.json"
+
+# --- RBAC Users ---
+[[users]]
+name = "Alice"
+role = "owner"                       # owner | admin | user | viewer
+api_key_hash = ""
+[users.channel_bindings]
+telegram = "123456"
+discord = "987654321"
+
+[[users]]
+name = "Bob"
+role = "user"
+[users.channel_bindings]
+slack = "U0123ABCDEF"
+
+# --- Channel Adapters ---
+# Active Hermes-level channels are Telegram, Discord, Signal, and Email.
+# Non-core adapters are compatibility/frozen unless explicitly reopened.
+
+[channels.telegram]
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+allowed_users = []
+# default_agent = "assistant"
+poll_interval_secs = 1
+
+[channels.discord]
+bot_token_env = "DISCORD_BOT_TOKEN"
+allowed_guilds = []
+intents = 33280
+
+[channels.slack]
+app_token_env = "SLACK_APP_TOKEN"
+bot_token_env = "SLACK_BOT_TOKEN"
+allowed_channels = []
+```
+
+---
+
+## Section Reference
+
+### Top-Level Fields
+
+These fields sit at the root of `config.toml` (not inside any `[section]`).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `home_dir` | path | `~/.captain` | Captain home directory. Stores config, agents, skills. |
+| `data_dir` | path | `~/.captain/data` | Directory for SQLite databases and persistent data. |
+| `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. |
+| `api_listen` | string | `"127.0.0.1:50051"` | Bind address for the HTTP/WebSocket/SSE API server. |
+| `network_enabled` | bool | `false` | Enable the OFP peer-to-peer network layer. |
+| `api_key` | string | `""` (empty) | API authentication key. When set, all endpoints except `/api/health` require `Authorization: Bearer <key>`. Empty means unauthenticated (local development only). |
+| `mode` | string | `"default"` | Kernel operating mode. See below. |
+| `language` | string | `"en"` | Language/locale code for CLI output and system messages. |
+| `usage_footer` | string | `"full"` | Controls usage info appended to responses. See below. |
+| `timezone` | string | auto-detected or `"UTC"` | Default IANA timezone used by scheduling when a cron/job has no explicit timezone. |
+| `max_cron_jobs` | usize | `500` | Maximum total scheduled cron jobs across all agents. |
+| `include` | list of strings | `[]` | Relative TOML fragments to load and deep-merge before the root config. Absolute paths and `..` are rejected. |
+| `stt_model` | string | `"whisper-small"` | Global speech-to-text model hint used by setup and voice tooling. |
+| `pulse_interval_secs` | u64 | `120` | Background pulse interval. |
+| `dream_interval_hours` | u64 | `6` | Background retrospective/dream interval. |
+| `digest_min_interval_hours` | u64 | `2` | Minimum delay between digest messages. |
+| `digest_enabled` | bool | `false` | Enable scheduled digest messages. |
+| `workspaces_dir` | path or null | `null` | Optional root for project workspaces. When omitted, Captain uses `{home_dir}/workspaces`. |
+| `workflows_dir` | path or null | `null` | Optional directory for workflow JSON autoload. When omitted, Captain uses `{home_dir}/workflows`; an empty string disables autoload. |
+| `users` | array | `[]` | RBAC users. Prefer `[[users]]` entries for real config. |
+| `mcp_servers` | array | `[]` | MCP server entries. Prefer `[[mcp_servers]]` entries for real config. |
+| `fallback_providers` | array | `[]` | Fallback LLM provider chain. Prefer `[[fallback_providers]]` entries for real config. |
+| `bindings` | array | `[]` | Multi-account agent routing bindings. Prefer `[[bindings]]` entries for real config. |
+| `surfaces` | table | active core defaults | Product surface gates. Frozen surfaces stay compiled but are hidden from active discovery by default. |
+
+**`mode` values:**
+
+| Value | Behavior |
+|-------|----------|
+| `stable` | Conservative: no auto-updates, pinned models, frozen skill registry. Uses `FallbackDriver`. |
+| `default` | Balanced: standard operation. |
+| `dev` | Developer: experimental features enabled. |
+
+**`usage_footer` values:**
+
+| Value | Behavior |
+|-------|----------|
+| `off` | No usage information shown. |
+| `tokens` | Show token counts only. |
+| `cost` | Show estimated cost only. |
+| `full` | Show both token counts and estimated cost (default). |
+
+---
+
+### `[default_model]`
+
+Configures the primary LLM provider used when agents do not specify their own model.
+
+```toml
+[default_model]
+provider = "codex"
+model = "gpt-5.5"
+api_key_env = ""
+# base_url = "https://api.anthropic.com" # only for API providers/proxies
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `"codex"` | Provider name. Supported: `codex`, `anthropic`, `gemini`, `openai`, `groq`, `openrouter`, `deepseek`, `together`, `mistral`, `fireworks`, `ollama`, `vllm`, `lmstudio`, `perplexity`, `cohere`, `ai21`, `cerebras`, `sambanova`, `huggingface`, `xai`, `replicate`. |
+| `model` | string | `"gpt-5.5"` | Model identifier. For Codex subscription mode use `gpt-5.5` or another Codex catalog slug. Aliases like `codex`, `codex-5.5`, `sonnet`, `haiku`, `gpt-4o`, `gemini-flash` are resolved by the model catalog. |
+| `api_key_env` | string | `""` | Name of the environment variable holding an API key. Codex OAuth keeps this empty and reads `~/.codex/auth.json`; API providers should set it, for example `ANTHROPIC_API_KEY`. |
+| `base_url` | string or null | `null` | Override the API base URL. Useful for proxies or self-hosted endpoints. When `null`, the provider's default URL from the model catalog is used. |
+
+---
+
+### `[agent_loop]`
+
+Global runtime guardrails for a normal Captain turn. This is the setting to tune when long analyses stop with `Max iterations exceeded`.
+
+```toml
+[agent_loop]
+max_iterations = 90
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_iterations` | u32 | `90` | Maximum LLM/tool iterations before Captain stops the current turn to avoid infinite loops. Raise to `180` or `240` for heavy analysis installs. Runtime clamps values to `1..1000`. Per-agent autonomous `max_iterations` still takes precedence. |
+
+---
+
+### `[surfaces]`
+
+Product surface gates for the Captain Core Excellence refactor. These gates are a clarity layer: they keep the model focused on the active Hermes-level core while frozen surfaces remain compiled for compatibility and explicit recovery.
+
+```toml
+[surfaces]
+active = ["cli", "web", "telegram", "projects", "memory", "skills", "automation", "status"]
+frozen = ["hands", "a2a", "peers", "fleets", "desktop", "long-tail-channels", "roadmap-dashboard", "experimental-integrations"]
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `active` | list | core surfaces | Surfaces allowed to guide the default user experience and active tool discovery. |
+| `frozen` | list | secondary/experimental surfaces | Surfaces kept out of active discovery by default. They are not deleted from the binary. |
+
+---
+
+### `[memory]`
+
+Configures the SQLite-backed memory substrate, including vector embeddings and memory decay.
+
+```toml
+[memory]
+# sqlite_path = "/custom/path/captain.db"
+backend = "mempalace"
+embedding_model = "all-MiniLM-L6-v2"
+consolidation_threshold = 10000
+consolidation_interval_hours = 24
+decay_rate = 0.1
+# embedding_provider = "openai"
+# embedding_api_key_env = "OPENAI_API_KEY"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backend` | string | `"mempalace"` | Backend for `memory_store` / `memory_recall`: `mempalace` or `graph`. |
+| `sqlite_path` | path or null | `null` | Explicit path to the SQLite database file. When `null`, defaults to `{data_dir}/captain.db`. |
+| `embedding_model` | string | `"all-MiniLM-L6-v2"` | Model name used for generating vector embeddings for semantic memory search. |
+| `embedding_provider` | string or null | `null` | Optional embedding provider override, for example `local`, `openai`, or `ollama`. When unset, Captain probes configured providers and falls back to native local FastEmbed/ONNX if available. |
+| `embedding_api_key_env` | string or null | `null` | Optional env var override for embedding provider credentials. |
+| `consolidation_threshold` | u64 | `10000` | Number of stored memories before automatic consolidation is triggered to merge and prune old entries. |
+| `consolidation_interval_hours` | u64 | `24` | Periodic memory consolidation interval. `0` disables scheduled consolidation. |
+| `decay_rate` | f32 | `0.1` | Memory confidence decay rate. `0.0` = no decay (memories never fade), `1.0` = aggressive decay. Values between 0.0 and 1.0. |
+
+Native local embeddings use FastEmbed plus ONNX Runtime. The installer runs
+`captain embeddings install` by default and stores the runtime under
+`~/.captain/native/onnxruntime`; set `CAPTAIN_EMBEDDINGS_INSTALL=0` only for
+minimal installs that accept text-search fallback.
+
+---
+
+### `[network]`
+
+Configures the OFP (Captain Protocol) peer-to-peer networking layer with HMAC-SHA256 mutual authentication.
+
+```toml
+[network]
+listen_addresses = ["/ip4/0.0.0.0/tcp/0"]
+bootstrap_peers = []
+mdns_enabled = true
+max_peers = 50
+shared_secret = "my-cluster-secret"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `listen_addresses` | list of strings | `["/ip4/0.0.0.0/tcp/0"]` | libp2p multiaddresses to listen on. Port `0` means auto-assign. |
+| `bootstrap_peers` | list of strings | `[]` | Multiaddresses of bootstrap peers for DHT discovery. |
+| `mdns_enabled` | bool | `true` | Enable mDNS for automatic local network peer discovery. |
+| `max_peers` | u32 | `50` | Maximum number of simultaneously connected peers. |
+| `shared_secret` | string | `""` (empty) | Pre-shared secret for OFP HMAC-SHA256 mutual authentication. **Required** when `network_enabled = true`. Both sides must use the same secret. Redacted in logs. |
+
+---
+
+### `[web]`
+
+Configures web search and web fetch capabilities used by agent tools.
+
+```toml
+[web]
+search_provider = "auto"
+cache_ttl_minutes = 15
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `search_provider` | string | `"auto"` | Which search engine to use. See values below. |
+| `cache_ttl_minutes` | u64 | `15` | Cache duration for search/fetch results in minutes. `0` = caching disabled. |
+
+**`search_provider` values:**
+
+| Value | Description |
+|-------|-------------|
+| `auto` | Cascading fallback: tries Tavily, then Brave, then Perplexity, then DuckDuckGo, based on which API keys are available. |
+| `brave` | Brave Search API. Requires `BRAVE_API_KEY`. |
+| `tavily` | Tavily AI-native search. Requires `TAVILY_API_KEY`. |
+| `perplexity` | Perplexity AI search. Requires `PERPLEXITY_API_KEY`. |
+| `duckduckgo` | DuckDuckGo HTML scraping. No API key needed. |
+
+#### `[web.brave]`
+
+```toml
+[web.brave]
+api_key_env = "BRAVE_API_KEY"
+max_results = 5
+country = ""
+search_lang = ""
+freshness = ""
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"BRAVE_API_KEY"` | Environment variable name holding the Brave Search API key. |
+| `max_results` | usize | `5` | Maximum number of search results to return. |
+| `country` | string | `""` | Country code for localized results (e.g., `"US"`, `"GB"`). Empty = no filter. |
+| `search_lang` | string | `""` | Language code (e.g., `"en"`, `"fr"`). Empty = no filter. |
+| `freshness` | string | `""` | Freshness filter. `"pd"` = past day, `"pw"` = past week, `"pm"` = past month. Empty = no filter. |
+
+#### `[web.tavily]`
+
+```toml
+[web.tavily]
+api_key_env = "TAVILY_API_KEY"
+search_depth = "basic"
+max_results = 5
+include_answer = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"TAVILY_API_KEY"` | Environment variable name holding the Tavily API key. |
+| `search_depth` | string | `"basic"` | Search depth: `"basic"` for fast results, `"advanced"` for deeper analysis. |
+| `max_results` | usize | `5` | Maximum number of search results to return. |
+| `include_answer` | bool | `true` | Whether to include Tavily's AI-generated answer summary in results. |
+
+#### `[web.perplexity]`
+
+```toml
+[web.perplexity]
+api_key_env = "PERPLEXITY_API_KEY"
+model = "sonar"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"PERPLEXITY_API_KEY"` | Environment variable name holding the Perplexity API key. |
+| `model` | string | `"sonar"` | Perplexity model to use for search queries. |
+
+#### `[web.fetch]`
+
+```toml
+[web.fetch]
+max_chars = 50000
+max_response_bytes = 10485760
+timeout_secs = 30
+readability = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_chars` | usize | `50000` | Maximum characters returned in fetched content. Content exceeding this is truncated. |
+| `max_response_bytes` | usize | `10485760` (10 MB) | Maximum HTTP response body size in bytes. |
+| `timeout_secs` | u64 | `30` | HTTP request timeout in seconds. |
+| `readability` | bool | `true` | Enable HTML-to-Markdown readability extraction. When true, fetched HTML is converted to clean Markdown. |
+
+---
+
+## Runtime Feature Sections
+
+These sections are part of `config.toml` and must stay documented whenever the runtime surface evolves. They are intentionally grouped here because they affect user-facing behavior across CLI, web, Telegram, projects, and autonomous execution.
+
+### `[assistant]`
+
+Visible assistant identity and answer style. The principal agent slug remains `captain`; `display_name` is only the user-facing name.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `display_name` | string | `"Captain"` | Public assistant name shown and injected in prompts. |
+| `style` | string | `"balanced"` | Response style, commonly `balanced`, `concise`, `professional`, `developer`, `friendly`, `classic`. |
+| `onboarding_completed` | bool | `false` | First-run setup completion marker. |
+
+### `[web_terminal]`
+
+Embedded browser terminal and PTY session settings.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Serve `/terminal` and its PTY websocket. |
+| `allow_raw_shell` | bool | `false` | Enable raw shell mode in the web terminal. Use with care on public VPS installs. |
+| `max_sessions` | usize | `4` | Maximum concurrent terminal sessions. |
+| `default_mode` | string | `"captain"` | Initial terminal mode. `captain` opens the Captain TUI; `shell` opens raw shell when allowed. |
+
+### `[deployment]`
+
+Install/deployment metadata captured by setup and used by status/UI.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `profile` | string | `"core"` | Install profile: `core`, `vps`, `desktop`, `full-media`. |
+| `public_url` | string | `""` | Public URL/domain used for web links. Empty means local/direct address. |
+| `https` | bool | `true` | Whether public links should assume HTTPS. |
+| `reverse_proxy` | string | `"caddy"` | Preferred reverse proxy metadata. |
+
+### `[browser]`
+
+Browser automation defaults.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `headless` | bool | `true` | Run browser automation headlessly. |
+| `viewport_width` | u32 | `1280` | Default viewport width. |
+| `viewport_height` | u32 | `720` | Default viewport height. |
+| `timeout_secs` | u64 | `30` | Browser operation timeout. |
+| `idle_timeout_secs` | u64 | `300` | Idle browser session timeout. |
+| `max_sessions` | usize | `5` | Maximum browser sessions. |
+| `chromium_path` | string or null | `null` | Optional explicit Chromium/Chrome binary path. |
+
+### `[extensions]`
+
+Extension/MCP health behavior.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto_reconnect` | bool | `true` | Reconnect dropped extensions automatically. |
+| `reconnect_max_attempts` | u32 | `10` | Maximum reconnect attempts. |
+| `reconnect_max_backoff_secs` | u64 | `300` | Maximum reconnect backoff. |
+| `health_check_interval_secs` | u64 | `60` | Extension health polling interval. |
+
+### `[vault]`
+
+Credential vault settings.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable the local credential vault. |
+| `path` | path or null | `null` | Optional vault path override. |
+
+### `[workspace]`
+
+Extra filesystem access for the principal Captain agent.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `extra_paths` | list of paths | `[]` | Absolute paths explicitly authorized via `workspace_add`. Subagents keep their own sandbox. |
+
+### `[media]`
+
+Media understanding. Native installs configure local Whisper automatically; API providers can still be pinned explicitly.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `image_description` | bool | `true` | Enable image understanding. |
+| `audio_transcription` | bool | `true` | Enable speech-to-text. |
+| `video_description` | bool | `false` | Enable video description. Expensive; off by default. |
+| `max_concurrency` | usize | `5` | Concurrent media processing limit, clamped by runtime to `1..8`. |
+| `image_provider` | string or null | `null` | Optional image provider pin, e.g. `anthropic`, `openai`, `gemini`. |
+| `audio_provider` | string or null | `null` | Optional STT provider pin: `local-whisper`, `parakeet-mlx`, `groq`, `openai`, `elevenlabs`. |
+| `audio_model` | string or null | `null` | Optional STT model override. Native default is `whisper-small`; Groq default is `whisper-large-v3-turbo`; OpenAI default is `whisper-1`; ElevenLabs default is `scribe_v2`. |
+
+### `[links]`
+
+Automatic link understanding.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Automatically fetch/analyze links found in messages. |
+| `max_links` | usize | `3` | Maximum links to process per message. |
+| `max_content_bytes` | usize | `102400` | Maximum bytes fetched per link. |
+| `timeout_secs` | u64 | `10` | Per-link fetch timeout. |
+
+### `[reload]`
+
+Config file watching and reload strategy.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"hybrid"` | `off`, `restart`, `hot`, or `hybrid`. Hybrid hot-reloads safe sections and flags restart-required changes. |
+| `debounce_ms` | u64 | `500` | File watcher debounce window. |
+
+### `[webhook_triggers]`
+
+Inbound webhooks for external systems such as n8n. This section is optional; when present with `enabled=false`, endpoints remain inactive.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable `/hooks/wake` and `/hooks/agent`. |
+| `token_env` | string | `"CAPTAIN_WEBHOOK_TOKEN"` | Env var containing the bearer token. Required when enabled; token should be at least 32 chars. |
+| `max_payload_bytes` | usize | `65536` | Maximum inbound webhook payload size. |
+| `rate_limit_per_minute` | u32 | `30` | Per-IP rate limit. |
+
+### `[outbound_webhooks]`
+
+Native outbound lifecycle webhooks. These are emitted by Captain itself, not only by model tool calls.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable outbound webhook dispatch. |
+| `timeout_secs` | u64 | `10` | Per-endpoint delivery timeout. |
+| `max_attempts` | u8 | `3` | Delivery attempts per event. |
+| `endpoints` | array | `[]` | Inline endpoint list, or use `[[outbound_webhooks.endpoints]]`. |
+
+Endpoint fields: `name`, `url`, `secret_env`, `events`, `enabled`. `events = ["*"]` subscribes to all lifecycle events.
+
+### `[approval]`
+
+Human approval policy.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `require_approval` | list or bool | `[]` | Tools that require approval. Boolean shorthand is accepted: `true` means default shell approval set, `false` means none. |
+| `allow_always` | list | `[]` | Tools permanently approved by config or by the “approve always” UI action. |
+| `timeout_secs` | u64 | `60` | Approval timeout, valid range `10..=300`. |
+| `auto_approve_autonomous` | bool | `true` | Auto-approve in autonomous mode. |
+| `auto_approve` | bool | `true` | Compatibility alias that clears required approvals at boot when true. |
+
+### `[exec_policy]`
+
+Shell execution safety policy.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"full"` | `deny`, `allowlist`, or `full`. |
+| `safe_bins` | list | common POSIX read utilities | Commands allowed in restricted contexts. |
+| `allowed_commands` | list | `[]` | Explicit allowlist used when `mode="allowlist"`. |
+| `blocked_commands` | list | hardened destructive-command list | Commands blocked in `full` mode. Omit this key to keep Captain's built-in blocklist. |
+| `timeout_secs` | u64 | `30` | Absolute execution timeout. |
+| `max_output_bytes` | usize | `102400` | Maximum captured stdout/stderr. |
+| `no_output_timeout_secs` | u64 | `30` | Kill processes that produce no output for this duration. |
+| `critical_mode` | string | `"open"` | `open`, `safe`, or `paranoid` high-risk action behavior. |
+
+### `[broadcast]`, `[auto_reply]`, `[canvas]`
+
+| Section | Field | Default | Description |
+|---------|-------|---------|-------------|
+| `[broadcast]` | `strategy` | `"parallel"` | Broadcast route strategy. |
+| `[broadcast.routes]` | arbitrary channel routes | `{}` | Route names to channel/agent lists. |
+| `[auto_reply]` | `enabled` | `false` | Enable background auto-reply engine. |
+| `[auto_reply]` | `max_concurrent` | `3` | Concurrent auto replies. |
+| `[auto_reply]` | `timeout_secs` | `120` | Auto-reply timeout. |
+| `[auto_reply]` | `suppress_patterns` | `["/stop", "/pause"]` | Message patterns that suppress auto replies. |
+| `[canvas]` | `enabled` | `false` | Enable A2UI/canvas rendering. |
+| `[canvas]` | `max_html_bytes` | `524288` | Maximum rendered HTML size. |
+| `[canvas]` | `allowed_tags` | `[]` | Optional HTML tag allowlist. |
+
+### `[tts]`
+
+Text-to-speech. The native path is `local-native` and uses Kokoro first, then Piper fallback by default.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable TTS. Setup may turn this on when native voice is installed. |
+| `provider` | string or null | `null` | `local-native`, `openai`, or `elevenlabs`. When null, Captain auto-detects available providers. |
+| `max_text_length` | usize | `4096` | Max text length per TTS call. |
+| `timeout_secs` | u64 | `30` | Per-TTS request timeout. |
+
+`[tts.openai]`: `voice`, `model`, `format`, `speed`.
+
+`[tts.elevenlabs]`: `api_key_env`, `voice_id`, `model_id`, `stability`, `similarity_boost`.
+
+`[tts.local_native]`: `preferred_engine` (`kokoro` or `piper`), `fallback_engine` (`piper`, `kokoro`, or `none`), `language`.
+
+### `[voice_call]`
+
+Live browser voice calls through realtime audio.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable browser WebRTC calls. |
+| `provider` | string | `"openai"` | Realtime provider. |
+| `model` | string | `"gpt-realtime-2"` | Realtime model. |
+| `voice` | string | `"marin"` | Realtime output voice. |
+| `api_key_env` | string or null | `null` | Optional API key env override. |
+| `enable_agent_tool` | bool | `true` | Route substantive user turns to the Captain agent. |
+| `auto_end_silence_secs` | u64 | `90` | Auto-end after microphone silence. `0` disables. |
+| `auto_end_inactive_secs` | u64 | `180` | Auto-end after no sound/runtime activity. `0` disables. |
+| `instructions` | string | built-in Captain routing prompt | System instructions for the realtime voice model. |
+
+### `[docker]`
+
+Container sandbox configuration.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Docker sandbox support. |
+| `image` | string | `"python:3.12-slim"` | Sandbox image. |
+| `container_prefix` | string | `"captain-sandbox"` | Container name prefix. |
+| `workdir` | string | `"/workspace"` | Container working directory. |
+| `network` | string | `"none"` | Docker network mode. |
+| `memory_limit` | string | `"512m"` | Container memory limit. |
+| `cpu_limit` | f64 | `1.0` | CPU quota. |
+| `timeout_secs` | u64 | `60` | Sandbox execution timeout. |
+| `read_only_root` | bool | `true` | Run with read-only root filesystem. |
+| `cap_add` | list | `[]` | Extra Linux capabilities. |
+| `tmpfs` | list | `["/tmp:size=64m"]` | Tmpfs mounts. |
+| `pids_limit` | u32 | `100` | Process limit. |
+| `mode` | string | `"off"` | `off`, `non_main`, or `all`. |
+| `scope` | string | `"session"` | `session`, `agent`, or `shared`. |
+| `reuse_cool_secs` | u64 | `300` | Cooldown before reusing a released container. |
+| `idle_timeout_secs` | u64 | `86400` | Destroy inactive containers after this duration. |
+| `max_age_secs` | u64 | `604800` | Forced container max lifetime. |
+| `blocked_mounts` | list | `[]` | Paths that must never be bind-mounted. |
+
+### `[pairing]`
+
+Device pairing.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable pairing. |
+| `max_devices` | usize | `10` | Maximum paired devices. |
+| `token_expiry_secs` | u64 | `300` | Pairing token TTL. |
+| `push_provider` | string | `"none"` | `none`, `ntfy`, or `gotify`. |
+| `ntfy_url` | string or null | `null` | ntfy server URL when used. |
+| `ntfy_topic` | string or null | `null` | ntfy topic when used. |
+
+### Provider/Auth Tables
+
+| Section | Description |
+|---------|-------------|
+| `[auth_profiles]` | Provider key rotation profiles. Example: `openai = [{ name = "primary", api_key_env = "OPENAI_API_KEY", priority = 0 }]`. |
+| `[provider_urls]` | Provider base URL overrides, e.g. `ollama = "http://localhost:11434/v1"`. |
+| `[provider_api_keys]` | Provider-to-env-var overrides, e.g. `nvidia = "NVIDIA_API_KEY"`. |
+| `[oauth]` | PKCE client ID overrides: `google_client_id`, `github_client_id`, `microsoft_client_id`, `slack_client_id`. |
+| `[auth]` | Web login: `enabled`, `username`, `password_hash`, `session_ttl_hours`. |
+| `[budget]` | Global cost/token limits: `max_hourly_usd`, `max_daily_usd`, `max_monthly_usd`, `alert_threshold`, `default_max_llm_tokens_per_hour`. |
+| `[thinking]` | Optional thinking config: `budget_tokens`, `stream_thinking`. |
+
+### `[learning]`
+
+Auto-learning pipeline.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Master switch. |
+| `mode` | string | `"auto"` | `off`, `approval`, or `auto`. |
+| `autonomy_aggressiveness` | f32 | `1.0` | Learning aggressiveness coefficient, clamped to `0.25..3.0`. |
+| `reflection_model` | string | `"gpt-5.3-codex-spark"` | Primary reflection model. With provider `codex`, Captain normalizes this against the live Codex model list/cache and falls back to available static Codex defaults. |
+| `fallback_models` | list | `["gpt-5.3-codex"]` | Reflection fallback models, normalized through the same provider-specific path. |
+| `reflection_provider` | string or null | `null` | Optional provider override. `null` means use `default_model.provider`, which is Codex by default. |
+| `reflection_api_key_env` | string or null | `null` | Optional env var override for reflection credentials. |
+| `reflection_timeout_secs` | u64 | `30` | Reflection call timeout. |
+| `rate_limit_per_project_per_day` | u32 | `20` | Per-project learning commit limit. |
+| `rate_limit_global_per_day` | u32 | `50` | Global learning commit limit. |
+| `retention_synced_days` | u32 | `0` | Synced learning retention. `0` = permanent. |
+| `retention_error_days` | u32 | `30` | Error row retention. |
+| `min_confidence` | f32 | `0.0` | Confidence threshold/ranking input. |
+
+### `[checkpoints]`
+
+Session checkpoint summarizer. It creates compact `checkpoint.md` files after inactivity so cross-session recall works without replaying raw transcripts. When `emit_learning_review=true`, every new checkpoint also emits the OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN review into the learning pipeline.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable the background checkpoint summarizer. |
+| `provider` | string or null | `null` | Optional provider override. `null` means use `default_model.provider`, Codex by default. |
+| `model` | string | `"gpt-5.3-codex-spark"` | Checkpoint summary model. With provider `codex`, Captain normalizes this through the live Codex model list/cache and falls back to available static Codex defaults. |
+| `api_key_env` | string or null | `null` | Optional env var override for non-OAuth providers. |
+| `inactivity_secs` | u64 | `600` | Session idle time before checkpointing. |
+| `scan_interval_secs` | u64 | `300` | Background scan interval. |
+| `per_summary_delay_secs` | u64 | `10` | Throttle between summaries in the same pass. |
+| `transcript_cap_chars` | usize | `8000` | Maximum transcript characters sent to the summarizer. |
+| `emit_learning_review` | bool | `true` | Emit the staged learning review after writing a checkpoint. |
+
+### `[skills]`
+
+Skill synthesizer pipeline.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Master switch. |
+| `mode` | string | `"approval"` | `off`, `approval`, or `auto`. |
+| `pattern_threshold` | u32 | `5` | Repeated occurrences before calling the judge. |
+| `pattern_window_days` | u32 | `7` | Detection window. |
+| `proposer_model` | string | `"gpt-5.3-codex-spark"` | Primary skill proposal model. With provider `codex`, Captain normalizes this against the live Codex model list/cache and falls back to available static Codex defaults. |
+| `fallback_models` | list | `["gpt-5.3-codex"]` | Proposal fallback models, normalized through the same provider-specific path. |
+| `reflection_timeout_secs` | u64 | `30` | Proposal call timeout. |
+| `rate_limit_per_day` | u32 | `3` | Accepted/generated skill proposal limit per day. |
+| `min_confidence` | f32 | `0.7` | Minimum proposal confidence. |
+| `generated_dir` | string | `"skills/generated"` | Generated skills directory, relative to `home_dir` unless absolute. |
+| `reflection_provider` | string or null | `null` | Optional provider override. |
+| `reflection_api_key_env` | string or null | `null` | Optional env var override. |
+
+---
+
+### `[channels]`
+
+Compiled channel adapters are configured under `[channels.<name>]`. The active core setup surface is Telegram, Discord, Signal, and Email; other channel sections are kept as compatibility/frozen configuration until the core is Hermes-level. Each channel is `Option<T>` -- omitting the section disables the adapter entirely. Including the section header (even empty) enables that config section, but frozen non-core channels are not started by the normal bridge policy.
+
+Every channel config includes a `default_agent` field (optional agent name to route messages to) and an `overrides` sub-table (see [Channel Overrides](#channel-overrides)).
+
+#### `[channels.telegram]`
+
+```toml
+[channels.telegram]
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+allowed_users = []
+# default_agent = "assistant"
+poll_interval_secs = 1
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"TELEGRAM_BOT_TOKEN"` | Env var holding the Telegram Bot API token. |
+| `allowed_users` | list of i64 | `[]` | Telegram user IDs allowed to interact. Empty = deny all; use `["*"]` only for intentional open access. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+| `poll_interval_secs` | u64 | `1` | Long-polling interval in seconds. |
+
+#### `[channels.discord]`
+
+```toml
+[channels.discord]
+bot_token_env = "DISCORD_BOT_TOKEN"
+allowed_guilds = []
+# default_agent = "assistant"
+intents = 33280
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"DISCORD_BOT_TOKEN"` | Env var holding the Discord bot token. |
+| `allowed_guilds` | list of u64 | `[]` | Guild (server) IDs allowed. Empty = allow all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+| `intents` | u64 | `33280` | Gateway intents bitmask. Default = `GUILD_MESSAGES \| MESSAGE_CONTENT`. |
+
+#### `[channels.slack]`
+
+```toml
+[channels.slack]
+app_token_env = "SLACK_APP_TOKEN"
+bot_token_env = "SLACK_BOT_TOKEN"
+allowed_channels = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app_token_env` | string | `"SLACK_APP_TOKEN"` | Env var holding the Slack app-level token (`xapp-`) for Socket Mode. |
+| `bot_token_env` | string | `"SLACK_BOT_TOKEN"` | Env var holding the Slack bot token (`xoxb-`) for REST API. |
+| `allowed_channels` | list of strings | `[]` | Channel IDs allowed. Empty = allow all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.whatsapp]`
+
+```toml
+[channels.whatsapp]
+access_token_env = "WHATSAPP_ACCESS_TOKEN"
+verify_token_env = "WHATSAPP_VERIFY_TOKEN"
+phone_number_id = ""
+webhook_port = 8443
+allowed_users = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `access_token_env` | string | `"WHATSAPP_ACCESS_TOKEN"` | Env var holding the WhatsApp Cloud API access token. |
+| `verify_token_env` | string | `"WHATSAPP_VERIFY_TOKEN"` | Env var holding the webhook verification token. |
+| `phone_number_id` | string | `""` | WhatsApp Business phone number ID. |
+| `webhook_port` | u16 | `8443` | Port to listen for incoming webhook callbacks. |
+| `allowed_users` | list of strings | `[]` | Phone numbers allowed if WhatsApp is explicitly started outside the frozen core policy. Empty = deny all; use `["*"]` only for intentional open access. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.signal]`
+
+```toml
+[channels.signal]
+api_url = "http://localhost:8080"
+phone_number = ""
+allowed_users = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_url` | string | `"http://localhost:8080"` | URL of the signal-cli REST API. |
+| `phone_number` | string | `""` | Registered phone number for the bot. |
+| `allowed_users` | list of strings | `[]` | Allowed phone numbers. Empty = deny all; use `["*"]` only for intentional open access. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.matrix]`
+
+```toml
+[channels.matrix]
+homeserver_url = "https://matrix.org"
+user_id = "@captain:matrix.org"
+access_token_env = "MATRIX_ACCESS_TOKEN"
+allowed_rooms = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `homeserver_url` | string | `"https://matrix.org"` | Matrix homeserver URL. |
+| `user_id` | string | `""` | Bot user ID (e.g., `"@captain:matrix.org"`). |
+| `access_token_env` | string | `"MATRIX_ACCESS_TOKEN"` | Env var holding the Matrix access token. |
+| `allowed_rooms` | list of strings | `[]` | Room IDs to listen in. Empty = all joined rooms. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.email]`
+
+```toml
+[channels.email]
+imap_host = "imap.gmail.com"
+imap_port = 993
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+username = "bot@example.com"
+password_env = "EMAIL_PASSWORD"
+poll_interval_secs = 30
+folders = ["INBOX"]
+allowed_senders = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `imap_host` | string | `""` | IMAP server hostname. |
+| `imap_port` | u16 | `993` | IMAP server port (993 for TLS). |
+| `smtp_host` | string | `""` | SMTP server hostname. |
+| `smtp_port` | u16 | `587` | SMTP server port (587 for STARTTLS). |
+| `username` | string | `""` | Email address for both IMAP and SMTP. |
+| `password_env` | string | `"EMAIL_PASSWORD"` | Env var holding the email password or app password. |
+| `poll_interval_secs` | u64 | `30` | IMAP polling interval in seconds. |
+| `folders` | list of strings | `["INBOX"]` | IMAP folders to monitor. |
+| `allowed_senders` | list of strings | `[]` | Only process emails from these senders/domains. Empty = deny all; use `["*"]` only for intentional open access. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.teams]`
+
+```toml
+[channels.teams]
+app_id = ""
+app_password_env = "TEAMS_APP_PASSWORD"
+webhook_port = 3978
+allowed_tenants = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app_id` | string | `""` | Azure Bot App ID. |
+| `app_password_env` | string | `"TEAMS_APP_PASSWORD"` | Env var holding the Azure Bot Framework app password. |
+| `webhook_port` | u16 | `3978` | Port for the Bot Framework incoming webhook. |
+| `allowed_tenants` | list of strings | `[]` | Azure AD tenant IDs allowed. Empty = allow all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.mattermost]`
+
+```toml
+[channels.mattermost]
+server_url = "https://mattermost.example.com"
+token_env = "MATTERMOST_TOKEN"
+allowed_channels = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_url` | string | `""` | Mattermost server URL. |
+| `token_env` | string | `"MATTERMOST_TOKEN"` | Env var holding the Mattermost bot token. |
+| `allowed_channels` | list of strings | `[]` | Channel IDs to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.irc]`
+
+```toml
+[channels.irc]
+server = "irc.libera.chat"
+port = 6667
+nick = "captain"
+# password_env = "IRC_PASSWORD"
+channels = ["#captain"]
+use_tls = false
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server` | string | `"irc.libera.chat"` | IRC server hostname. |
+| `port` | u16 | `6667` | IRC server port. |
+| `nick` | string | `"captain"` | Bot nickname. |
+| `password_env` | string or null | `null` | Env var holding the server password (optional). |
+| `channels` | list of strings | `[]` | IRC channels to join (e.g., `["#captain", "#general"]`). |
+| `use_tls` | bool | `false` | Use TLS for the connection. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.google_chat]`
+
+```toml
+[channels.google_chat]
+service_account_env = "GOOGLE_CHAT_SERVICE_ACCOUNT"
+space_ids = []
+webhook_port = 8444
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `service_account_env` | string | `"GOOGLE_CHAT_SERVICE_ACCOUNT"` | Env var holding the service account JSON key. |
+| `space_ids` | list of strings | `[]` | Google Chat space IDs to listen in. |
+| `webhook_port` | u16 | `8444` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.twitch]`
+
+```toml
+[channels.twitch]
+oauth_token_env = "TWITCH_OAUTH_TOKEN"
+channels = ["mychannel"]
+nick = "captain"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `oauth_token_env` | string | `"TWITCH_OAUTH_TOKEN"` | Env var holding the Twitch OAuth token. |
+| `channels` | list of strings | `[]` | Twitch channels to join (without `#` prefix). |
+| `nick` | string | `"captain"` | Bot nickname in Twitch chat. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.rocketchat]`
+
+```toml
+[channels.rocketchat]
+server_url = "https://rocketchat.example.com"
+token_env = "ROCKETCHAT_TOKEN"
+user_id = ""
+allowed_channels = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_url` | string | `""` | Rocket.Chat server URL. |
+| `token_env` | string | `"ROCKETCHAT_TOKEN"` | Env var holding the Rocket.Chat auth token. |
+| `user_id` | string | `""` | Bot user ID. |
+| `allowed_channels` | list of strings | `[]` | Channel IDs to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.zulip]`
+
+```toml
+[channels.zulip]
+server_url = "https://zulip.example.com"
+bot_email = "bot@zulip.example.com"
+api_key_env = "ZULIP_API_KEY"
+streams = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_url` | string | `""` | Zulip server URL. |
+| `bot_email` | string | `""` | Bot email address registered in Zulip. |
+| `api_key_env` | string | `"ZULIP_API_KEY"` | Env var holding the Zulip API key. |
+| `streams` | list of strings | `[]` | Stream names to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.xmpp]`
+
+```toml
+[channels.xmpp]
+jid = "bot@jabber.org"
+password_env = "XMPP_PASSWORD"
+server = ""
+port = 5222
+rooms = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `jid` | string | `""` | XMPP JID (e.g., `"bot@jabber.org"`). |
+| `password_env` | string | `"XMPP_PASSWORD"` | Env var holding the XMPP password. |
+| `server` | string | `""` | XMPP server hostname. Defaults to the JID domain if empty. |
+| `port` | u16 | `5222` | XMPP server port. |
+| `rooms` | list of strings | `[]` | MUC (multi-user chat) rooms to join. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.line]`
+
+```toml
+[channels.line]
+channel_secret_env = "LINE_CHANNEL_SECRET"
+access_token_env = "LINE_CHANNEL_ACCESS_TOKEN"
+webhook_port = 8450
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `channel_secret_env` | string | `"LINE_CHANNEL_SECRET"` | Env var holding the LINE channel secret. |
+| `access_token_env` | string | `"LINE_CHANNEL_ACCESS_TOKEN"` | Env var holding the LINE channel access token. |
+| `webhook_port` | u16 | `8450` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.viber]`
+
+```toml
+[channels.viber]
+auth_token_env = "VIBER_AUTH_TOKEN"
+webhook_url = ""
+webhook_port = 8451
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auth_token_env` | string | `"VIBER_AUTH_TOKEN"` | Env var holding the Viber Bot auth token. |
+| `webhook_url` | string | `""` | Public URL for the Viber webhook endpoint. |
+| `webhook_port` | u16 | `8451` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.messenger]`
+
+```toml
+[channels.messenger]
+page_token_env = "MESSENGER_PAGE_TOKEN"
+verify_token_env = "MESSENGER_VERIFY_TOKEN"
+webhook_port = 8452
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `page_token_env` | string | `"MESSENGER_PAGE_TOKEN"` | Env var holding the Facebook page access token. |
+| `verify_token_env` | string | `"MESSENGER_VERIFY_TOKEN"` | Env var holding the webhook verify token. |
+| `webhook_port` | u16 | `8452` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.reddit]`
+
+```toml
+[channels.reddit]
+client_id = ""
+client_secret_env = "REDDIT_CLIENT_SECRET"
+username = ""
+password_env = "REDDIT_PASSWORD"
+subreddits = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `client_id` | string | `""` | Reddit app client ID. |
+| `client_secret_env` | string | `"REDDIT_CLIENT_SECRET"` | Env var holding the Reddit client secret. |
+| `username` | string | `""` | Reddit bot username. |
+| `password_env` | string | `"REDDIT_PASSWORD"` | Env var holding the Reddit bot password. |
+| `subreddits` | list of strings | `[]` | Subreddit names to monitor. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.mastodon]`
+
+```toml
+[channels.mastodon]
+instance_url = "https://mastodon.social"
+access_token_env = "MASTODON_ACCESS_TOKEN"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `instance_url` | string | `""` | Mastodon instance URL (e.g., `"https://mastodon.social"`). |
+| `access_token_env` | string | `"MASTODON_ACCESS_TOKEN"` | Env var holding the Mastodon access token. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.bluesky]`
+
+```toml
+[channels.bluesky]
+identifier = "mybot.bsky.social"
+app_password_env = "BLUESKY_APP_PASSWORD"
+service_url = "https://bsky.social"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `identifier` | string | `""` | Bluesky handle or DID. |
+| `app_password_env` | string | `"BLUESKY_APP_PASSWORD"` | Env var holding the Bluesky app password. |
+| `service_url` | string | `"https://bsky.social"` | PDS (Personal Data Server) URL. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.feishu]`
+
+```toml
+[channels.feishu]
+app_id = ""
+app_secret_env = "FEISHU_APP_SECRET"
+webhook_port = 8453
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app_id` | string | `""` | Feishu/Lark app ID. |
+| `app_secret_env` | string | `"FEISHU_APP_SECRET"` | Env var holding the Feishu app secret. |
+| `webhook_port` | u16 | `8453` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.revolt]`
+
+```toml
+[channels.revolt]
+bot_token_env = "REVOLT_BOT_TOKEN"
+api_url = "https://api.revolt.chat"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"REVOLT_BOT_TOKEN"` | Env var holding the Revolt bot token. |
+| `api_url` | string | `"https://api.revolt.chat"` | Revolt API base URL. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.nextcloud]`
+
+```toml
+[channels.nextcloud]
+server_url = "https://nextcloud.example.com"
+token_env = "NEXTCLOUD_TOKEN"
+allowed_rooms = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_url` | string | `""` | Nextcloud server URL. |
+| `token_env` | string | `"NEXTCLOUD_TOKEN"` | Env var holding the Nextcloud Talk auth token. |
+| `allowed_rooms` | list of strings | `[]` | Room tokens to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.guilded]`
+
+```toml
+[channels.guilded]
+bot_token_env = "GUILDED_BOT_TOKEN"
+server_ids = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"GUILDED_BOT_TOKEN"` | Env var holding the Guilded bot token. |
+| `server_ids` | list of strings | `[]` | Server IDs to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.keybase]`
+
+```toml
+[channels.keybase]
+username = ""
+paperkey_env = "KEYBASE_PAPERKEY"
+allowed_teams = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `username` | string | `""` | Keybase username. |
+| `paperkey_env` | string | `"KEYBASE_PAPERKEY"` | Env var holding the Keybase paper key. |
+| `allowed_teams` | list of strings | `[]` | Team names to listen in. Empty = all DMs. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.threema]`
+
+```toml
+[channels.threema]
+threema_id = ""
+secret_env = "THREEMA_SECRET"
+webhook_port = 8454
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `threema_id` | string | `""` | Threema Gateway ID. |
+| `secret_env` | string | `"THREEMA_SECRET"` | Env var holding the Threema API secret. |
+| `webhook_port` | u16 | `8454` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.nostr]`
+
+```toml
+[channels.nostr]
+private_key_env = "NOSTR_PRIVATE_KEY"
+relays = ["wss://relay.damus.io"]
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `private_key_env` | string | `"NOSTR_PRIVATE_KEY"` | Env var holding the Nostr private key (nsec or hex format). |
+| `relays` | list of strings | `["wss://relay.damus.io"]` | Nostr relay WebSocket URLs to connect to. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.webex]`
+
+```toml
+[channels.webex]
+bot_token_env = "WEBEX_BOT_TOKEN"
+allowed_rooms = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"WEBEX_BOT_TOKEN"` | Env var holding the Webex bot token. |
+| `allowed_rooms` | list of strings | `[]` | Room IDs to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.pumble]`
+
+```toml
+[channels.pumble]
+bot_token_env = "PUMBLE_BOT_TOKEN"
+webhook_port = 8455
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"PUMBLE_BOT_TOKEN"` | Env var holding the Pumble bot token. |
+| `webhook_port` | u16 | `8455` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.flock]`
+
+```toml
+[channels.flock]
+bot_token_env = "FLOCK_BOT_TOKEN"
+webhook_port = 8456
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bot_token_env` | string | `"FLOCK_BOT_TOKEN"` | Env var holding the Flock bot token. |
+| `webhook_port` | u16 | `8456` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.twist]`
+
+```toml
+[channels.twist]
+token_env = "TWIST_TOKEN"
+workspace_id = ""
+allowed_channels = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token_env` | string | `"TWIST_TOKEN"` | Env var holding the Twist API token. |
+| `workspace_id` | string | `""` | Twist workspace ID. |
+| `allowed_channels` | list of strings | `[]` | Channel IDs to listen in. Empty = all. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.mumble]`
+
+```toml
+[channels.mumble]
+host = "mumble.example.com"
+port = 64738
+username = "captain"
+password_env = "MUMBLE_PASSWORD"
+channel = ""
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | `""` | Mumble server hostname. |
+| `port` | u16 | `64738` | Mumble server port. |
+| `username` | string | `"captain"` | Bot username in Mumble. |
+| `password_env` | string | `"MUMBLE_PASSWORD"` | Env var holding the Mumble server password. |
+| `channel` | string | `""` | Mumble channel to join. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.dingtalk]`
+
+```toml
+[channels.dingtalk]
+access_token_env = "DINGTALK_ACCESS_TOKEN"
+secret_env = "DINGTALK_SECRET"
+webhook_port = 8457
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `access_token_env` | string | `"DINGTALK_ACCESS_TOKEN"` | Env var holding the DingTalk webhook access token. |
+| `secret_env` | string | `"DINGTALK_SECRET"` | Env var holding the DingTalk signing secret. |
+| `webhook_port` | u16 | `8457` | Port for the incoming webhook. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.discourse]`
+
+```toml
+[channels.discourse]
+base_url = "https://forum.example.com"
+api_key_env = "DISCOURSE_API_KEY"
+api_username = "system"
+categories = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_url` | string | `""` | Discourse forum base URL. |
+| `api_key_env` | string | `"DISCOURSE_API_KEY"` | Env var holding the Discourse API key. |
+| `api_username` | string | `"system"` | Discourse API username. |
+| `categories` | list of strings | `[]` | Category slugs to monitor. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.gitter]`
+
+```toml
+[channels.gitter]
+token_env = "GITTER_TOKEN"
+room_id = ""
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token_env` | string | `"GITTER_TOKEN"` | Env var holding the Gitter auth token. |
+| `room_id` | string | `""` | Gitter room ID to listen in. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.ntfy]`
+
+```toml
+[channels.ntfy]
+server_url = "https://ntfy.sh"
+topic = "my-agent-topic"
+token_env = "NTFY_TOKEN"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_url` | string | `"https://ntfy.sh"` | ntfy server URL. Can be self-hosted. |
+| `topic` | string | `""` | Topic to subscribe/publish to. |
+| `token_env` | string | `"NTFY_TOKEN"` | Env var holding the auth token. Optional for public topics. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.gotify]`
+
+```toml
+[channels.gotify]
+server_url = "https://gotify.example.com"
+app_token_env = "GOTIFY_APP_TOKEN"
+client_token_env = "GOTIFY_CLIENT_TOKEN"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_url` | string | `""` | Gotify server URL. |
+| `app_token_env` | string | `"GOTIFY_APP_TOKEN"` | Env var holding the Gotify app token (for sending messages). |
+| `client_token_env` | string | `"GOTIFY_CLIENT_TOKEN"` | Env var holding the Gotify client token (for receiving messages via WebSocket). |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.webhook]`
+
+```toml
+[channels.webhook]
+secret_env = "WEBHOOK_SECRET"
+listen_port = 8460
+# callback_url = "https://example.com/webhook"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `secret_env` | string | `"WEBHOOK_SECRET"` | Env var holding the HMAC signing secret for verifying incoming webhooks. |
+| `listen_port` | u16 | `8460` | Port to listen for incoming webhook requests. |
+| `callback_url` | string or null | `null` | URL to POST outgoing messages to. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+#### `[channels.linkedin]`
+
+```toml
+[channels.linkedin]
+access_token_env = "LINKEDIN_ACCESS_TOKEN"
+organization_id = ""
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `access_token_env` | string | `"LINKEDIN_ACCESS_TOKEN"` | Env var holding the LinkedIn OAuth2 access token. |
+| `organization_id` | string | `""` | LinkedIn organization ID for messaging. |
+| `default_agent` | string or null | `null` | Agent name to route messages to. |
+
+---
+
+### `[[mcp_servers]]`
+
+MCP (Model Context Protocol) server connections provide external tool integration. Each entry is a separate `[[mcp_servers]]` array element.
+
+```toml
+[[mcp_servers]]
+name = "filesystem"
+timeout_secs = 30
+env = []
+
+[mcp_servers.transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/docs"]
+```
+
+```toml
+[[mcp_servers]]
+name = "remote-api"
+timeout_secs = 60
+auth_token_env = "REMOTE_MCP_API_KEY"
+env = []
+
+[mcp_servers.transport]
+type = "sse"
+url = "https://mcp.example.com/sse"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | *required* | Display name for this MCP server. Tools are namespaced as `mcp_{name}_{tool}`. |
+| `timeout_secs` | u64 | `30` | Request timeout in seconds. |
+| `env` | list of strings | `[]` | Environment variable names to pass through to the subprocess (stdio transport only). |
+| `auth_token_env` | string or null | `null` | Optional env var whose value is sent as `Authorization: Bearer ...` for SSE transports. |
+
+**Transport variants** (tagged union on `type`):
+
+| `type` | Fields | Description |
+|--------|--------|-------------|
+| `stdio` | `command` (string), `args` (list of strings, default `[]`) | Spawn a subprocess, communicate via JSON-RPC over stdin/stdout. |
+| `sse` | `url` (string) | Connect to an HTTP Server-Sent Events endpoint. |
+
+---
+
+### `[a2a]`
+
+Agent-to-Agent protocol configuration, enabling inter-agent communication across Captain instances.
+
+```toml
+[a2a]
+enabled = true
+listen_path = "/a2a"
+
+[[a2a.external_agents]]
+name = "research-agent"
+url = "https://agent.example.com/.well-known/agent.json"
+
+[[a2a.external_agents]]
+name = "code-reviewer"
+url = "https://reviewer.example.com/.well-known/agent.json"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Whether A2A protocol is enabled. |
+| `listen_path` | string | `"/a2a"` | URL path prefix for A2A endpoints. |
+| `external_agents` | list of objects | `[]` | External A2A agents to discover and interact with. |
+
+**`external_agents` entries:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Display name for the external agent. |
+| `url` | string | Agent card endpoint URL (typically `/.well-known/agent.json`). |
+
+---
+
+### `[[fallback_providers]]`
+
+Fallback provider chain. When the primary LLM provider (`[default_model]`) fails, these are tried in order.
+
+```toml
+[[fallback_providers]]
+provider = "ollama"
+model = "llama3.2:latest"
+api_key_env = ""
+# base_url = "http://localhost:11434"
+
+[[fallback_providers]]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `""` | Provider name (e.g., `"ollama"`, `"groq"`, `"openai"`). |
+| `model` | string | `""` | Model identifier for this provider. |
+| `api_key_env` | string | `""` | Env var name for the API key. Empty for local providers (ollama, vllm, lmstudio). |
+| `base_url` | string or null | `null` | Base URL override. Uses catalog default if null. |
+
+---
+
+### `[[users]]`
+
+RBAC multi-user configuration. Users can be assigned roles and bound to channel platform identities.
+
+```toml
+[[users]]
+name = "Alice"
+role = "owner"
+api_key_hash = "sha256_hash_of_api_key"
+
+[users.channel_bindings]
+telegram = "123456"
+discord = "987654321"
+slack = "U0ABCDEFG"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | *required* | User display name. |
+| `role` | string | `"user"` | User role in the RBAC hierarchy. |
+| `channel_bindings` | map of string to string | `{}` | Maps channel platform names to platform-specific user IDs, binding this user identity across channels. |
+| `api_key_hash` | string or null | `null` | SHA256 hash of the user's personal API key for authenticated API access. |
+
+**Role hierarchy** (highest to lowest privilege):
+
+| Role | Description |
+|------|-------------|
+| `owner` | Full administrative access. Can manage all agents, users, and configuration. |
+| `admin` | Can manage agents and most settings. Cannot modify owner accounts. |
+| `user` | Can interact with agents. Limited management capabilities. |
+| `viewer` | Read-only access. Can view agent responses but cannot send messages. |
+
+---
+
+### Channel Overrides
+
+Every channel adapter supports an `[channels.<name>.overrides]` sub-table that customizes agent behavior per-channel.
+
+```toml
+[channels.telegram.overrides]
+model = "gpt-5.3-codex-spark"
+system_prompt = "You are a concise Telegram assistant."
+dm_policy = "respond"
+group_policy = "mention_only"
+rate_limit_per_user = 10
+threading = true
+output_format = "telegram_html"
+usage_footer = "tokens"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `model` | string or null | `null` | Model override for this channel. Uses the agent's default model when null. |
+| `system_prompt` | string or null | `null` | System prompt override for this channel. |
+| `dm_policy` | string | `"respond"` | How the bot handles direct messages. See below. |
+| `group_policy` | string | `"mention_only"` | How the bot handles group messages. See below. |
+| `rate_limit_per_user` | u32 | `0` | Maximum messages per user per minute. `0` = unlimited. |
+| `threading` | bool | `false` | Enable thread replies (where supported by the platform). |
+| `output_format` | string or null | `null` | Override output formatting. See below. |
+| `usage_footer` | string or null | `null` | Override usage footer mode for this channel. Values: `off`, `tokens`, `cost`, `full`. |
+
+**`dm_policy` values:**
+
+| Value | Description |
+|-------|-------------|
+| `respond` | Respond to all direct messages (default). |
+| `allowed_only` | Only respond to DMs from users in the allowed list. |
+| `ignore` | Ignore all direct messages. |
+
+**`group_policy` values:**
+
+| Value | Description |
+|-------|-------------|
+| `all` | Respond to all messages in group chats. |
+| `mention_only` | Only respond when the bot is @mentioned (default). |
+| `commands_only` | Only respond to slash commands. |
+| `ignore` | Ignore all group messages. |
+
+**`output_format` values:**
+
+| Value | Description |
+|-------|-------------|
+| `markdown` | Standard Markdown (default). |
+| `telegram_html` | Telegram HTML subset (`<b>`, `<i>`, `<code>`, etc.). |
+| `slack_mrkdwn` | Slack mrkdwn format (`*bold*`, `_italic_`, `` `code` ``). |
+| `plain_text` | No formatting markup. |
+
+---
+
+## Environment Variables
+
+Complete table of all environment variables referenced by the configuration. None of these are read by the config file itself -- they are read at runtime by the kernel and channel adapters.
+
+### LLM Provider Keys
+
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | `[default_model]` | Anthropic API key (Claude models). |
+| `GEMINI_API_KEY` | Gemini driver | Google Gemini API key. Alias: `GOOGLE_API_KEY`. |
+| `OPENAI_API_KEY` | OpenAI-compat driver | OpenAI API key. |
+| `GROQ_API_KEY` | Groq provider | Groq API key (fast Llama inference). |
+| `DEEPSEEK_API_KEY` | DeepSeek provider | DeepSeek API key. |
+| `PERPLEXITY_API_KEY` | Perplexity provider / web search | Perplexity API key. |
+| `OPENROUTER_API_KEY` | OpenRouter provider | OpenRouter API key. |
+| `TOGETHER_API_KEY` | Together AI provider | Together AI API key. |
+| `MISTRAL_API_KEY` | Mistral provider | Mistral AI API key. |
+| `FIREWORKS_API_KEY` | Fireworks provider | Fireworks AI API key. |
+| `COHERE_API_KEY` | Cohere provider | Cohere API key. |
+| `AI21_API_KEY` | AI21 provider | AI21 Labs API key. |
+| `CEREBRAS_API_KEY` | Cerebras provider | Cerebras API key. |
+| `SAMBANOVA_API_KEY` | SambaNova provider | SambaNova API key. |
+| `HUGGINGFACE_API_KEY` | Hugging Face provider | Hugging Face Inference API key. |
+| `XAI_API_KEY` | xAI provider | xAI (Grok) API key. |
+| `REPLICATE_API_KEY` | Replicate provider | Replicate API key. |
+
+### Web Search Keys
+
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `BRAVE_API_KEY` | `[web.brave]` | Brave Search API key. |
+| `TAVILY_API_KEY` | `[web.tavily]` | Tavily Search API key. |
+| `PERPLEXITY_API_KEY` | `[web.perplexity]` | Perplexity Search API key (shared with LLM provider). |
+
+### Voice and Media Keys
+
+Native STT/TTS (`local-whisper` + `local-native`) does not require an API key. These variables are only needed when an API-backed provider is selected.
+
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | `[tts]`, `[voice_call]`, `[media]` | OpenAI TTS, realtime voice calls, or OpenAI Whisper when explicitly selected. |
+| `ELEVENLABS_API_KEY` | `[tts.elevenlabs]`, `[media]` | ElevenLabs TTS and speech-to-text when explicitly selected. |
+| `GROQ_API_KEY` | `[media]` | Groq Whisper STT when `media.audio_provider = "groq"`. |
+
+### Channel Tokens
+
+| Variable | Channel | Description |
+|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Telegram | Bot API token from @BotFather. |
+| `DISCORD_BOT_TOKEN` | Discord | Discord bot token. |
+| `SLACK_APP_TOKEN` | Slack | Slack app-level token (`xapp-`) for Socket Mode. |
+| `SLACK_BOT_TOKEN` | Slack | Slack bot token (`xoxb-`) for REST API. |
+| `WHATSAPP_ACCESS_TOKEN` | WhatsApp | WhatsApp Cloud API access token. |
+| `WHATSAPP_VERIFY_TOKEN` | WhatsApp | Webhook verification token. |
+| `MATRIX_ACCESS_TOKEN` | Matrix | Matrix homeserver access token. |
+| `EMAIL_PASSWORD` | Email | Email account password or app password. |
+| `TEAMS_APP_PASSWORD` | Teams | Azure Bot Framework app password. |
+| `MATTERMOST_TOKEN` | Mattermost | Mattermost bot token. |
+| `TWITCH_OAUTH_TOKEN` | Twitch | Twitch OAuth token. |
+| `ROCKETCHAT_TOKEN` | Rocket.Chat | Rocket.Chat auth token. |
+| `ZULIP_API_KEY` | Zulip | Zulip bot API key. |
+| `XMPP_PASSWORD` | XMPP | XMPP account password. |
+| `GOOGLE_CHAT_SERVICE_ACCOUNT` | Google Chat | Service account JSON key. |
+| `LINE_CHANNEL_SECRET` | LINE | LINE channel secret. |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE | LINE channel access token. |
+| `VIBER_AUTH_TOKEN` | Viber | Viber Bot auth token. |
+| `MESSENGER_PAGE_TOKEN` | Messenger | Facebook page access token. |
+| `MESSENGER_VERIFY_TOKEN` | Messenger | Webhook verification token. |
+| `REDDIT_CLIENT_SECRET` | Reddit | Reddit app client secret. |
+| `REDDIT_PASSWORD` | Reddit | Reddit bot account password. |
+| `MASTODON_ACCESS_TOKEN` | Mastodon | Mastodon access token. |
+| `BLUESKY_APP_PASSWORD` | Bluesky | Bluesky app password. |
+| `FEISHU_APP_SECRET` | Feishu | Feishu/Lark app secret. |
+| `REVOLT_BOT_TOKEN` | Revolt | Revolt bot token. |
+| `NEXTCLOUD_TOKEN` | Nextcloud | Nextcloud Talk auth token. |
+| `GUILDED_BOT_TOKEN` | Guilded | Guilded bot token. |
+| `KEYBASE_PAPERKEY` | Keybase | Keybase paper key. |
+| `THREEMA_SECRET` | Threema | Threema Gateway API secret. |
+| `NOSTR_PRIVATE_KEY` | Nostr | Nostr private key (nsec or hex). |
+| `WEBEX_BOT_TOKEN` | Webex | Webex bot token. |
+| `PUMBLE_BOT_TOKEN` | Pumble | Pumble bot token. |
+| `FLOCK_BOT_TOKEN` | Flock | Flock bot token. |
+| `TWIST_TOKEN` | Twist | Twist API token. |
+| `MUMBLE_PASSWORD` | Mumble | Mumble server password. |
+| `DINGTALK_ACCESS_TOKEN` | DingTalk | DingTalk webhook access token. |
+| `DINGTALK_SECRET` | DingTalk | DingTalk signing secret. |
+| `DISCOURSE_API_KEY` | Discourse | Discourse API key. |
+| `GITTER_TOKEN` | Gitter | Gitter auth token. |
+| `NTFY_TOKEN` | ntfy | ntfy auth token (optional for public topics). |
+| `GOTIFY_APP_TOKEN` | Gotify | Gotify app token (sending). |
+| `GOTIFY_CLIENT_TOKEN` | Gotify | Gotify client token (receiving). |
+| `WEBHOOK_SECRET` | Webhook | HMAC signing secret for webhook verification. |
+| `LINKEDIN_ACCESS_TOKEN` | LinkedIn | LinkedIn OAuth2 access token. |
+
+### Native Webhook / Runtime Tokens
+
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `CAPTAIN_WEBHOOK_TOKEN` | `[webhook_triggers]` | Bearer token accepted by inbound `/hooks/*` endpoints. |
+| `CAPTAIN_OUTBOUND_WEBHOOK_SECRET` | `[outbound_webhooks]` | Example env var for signing outbound lifecycle webhook deliveries. Actual name is configurable per endpoint with `secret_env`. |
+
+---
+
+## Validation
+
+`KernelConfig::validate()` runs at boot time and returns a list of **warnings** (non-fatal). The kernel still starts, but logs each warning.
+
+### What is validated
+
+For every **enabled channel** (i.e., its config section is present in the TOML), the validator checks that the corresponding environment variable(s) are set and non-empty:
+
+| Channel | Env vars checked |
+|---------|-----------------|
+| Telegram | `bot_token_env` |
+| Discord | `bot_token_env` |
+| Slack | `app_token_env`, `bot_token_env` (both checked) |
+| WhatsApp | `access_token_env` |
+| Matrix | `access_token_env` |
+| Email | `password_env` |
+| Teams | `app_password_env` |
+| Mattermost | `token_env` |
+| Zulip | `api_key_env` |
+| Twitch | `oauth_token_env` |
+| Rocket.Chat | `token_env` |
+| Google Chat | `service_account_env` |
+| XMPP | `password_env` |
+| LINE | `access_token_env` |
+| Viber | `auth_token_env` |
+| Messenger | `page_token_env` |
+| Reddit | `client_secret_env` |
+| Mastodon | `access_token_env` |
+| Bluesky | `app_password_env` |
+| Feishu | `app_secret_env` |
+| Revolt | `bot_token_env` |
+| Nextcloud | `token_env` |
+| Guilded | `bot_token_env` |
+| Keybase | `paperkey_env` |
+| Threema | `secret_env` |
+| Nostr | `private_key_env` |
+| Webex | `bot_token_env` |
+| Pumble | `bot_token_env` |
+| Flock | `bot_token_env` |
+| Twist | `token_env` |
+| Mumble | `password_env` |
+| DingTalk | `access_token_env` |
+| Discourse | `api_key_env` |
+| Gitter | `token_env` |
+| ntfy | `token_env` (only if `token_env` is non-empty; public topics are OK without auth) |
+| Gotify | `app_token_env` |
+| Webhook | `secret_env` |
+| LinkedIn | `access_token_env` |
+
+For **web search providers**, the validator checks:
+
+| Provider | Env var checked |
+|----------|----------------|
+| `brave` | `web.brave.api_key_env` |
+| `tavily` | `web.tavily.api_key_env` |
+| `perplexity` | `web.perplexity.api_key_env` |
+| `duckduckgo` | (no check -- no API key needed) |
+| `auto` | (no check -- cascading fallback handles missing keys) |
+
+### What is NOT validated
+
+- The `api_key_env` in `[default_model]` is not checked by `validate()`. Missing LLM keys cause errors at runtime when the driver is first used.
+- The `shared_secret` in `[network]` is not validated against `network_enabled`. If networking is enabled with an empty secret, authentication will fail at connection time.
+- MCP server configurations are not validated at config load time. Connection errors surface during the background MCP connect phase.
+- Agent manifests have their own separate validation.
+
+---
+
+## Related Configuration
+
+Some subsystems have their own configuration that is not part of `config.toml` but is worth noting:
+
+### Session Compaction (runtime)
+
+Configured internally via `CompactionConfig` (not currently exposed in `config.toml`):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `threshold` | `80` | Compact when session message count exceeds this. |
+| `keep_recent` | `20` | Number of recent messages preserved verbatim after compaction. |
+| `max_summary_tokens` | `1024` | Maximum tokens for the LLM summary of compacted messages. |
+
+### WASM Sandbox (runtime)
+
+Configured internally via `SandboxConfig` (not currently exposed in `config.toml`):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `fuel_limit` | `1000000` | Maximum CPU instruction budget. `0` = unlimited. |
+| `max_memory_bytes` | `16777216` (16 MB) | Maximum WASM linear memory. |
+| `timeout_secs` | `null` (30s fallback) | Wall-clock timeout for epoch-based interruption. |
+
+### Model Routing (per-agent manifest)
+
+Configured in agent manifests via `ModelRoutingConfig`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `simple_model` | provider-specific | Model for simple queries. For Codex, Captain builds routing from the live/cache Codex catalogue. |
+| `medium_model` | provider-specific | Model for medium-complexity queries. For Codex, Captain builds routing from the live/cache Codex catalogue. |
+| `complex_model` | provider-specific | Model for complex queries. For Codex, this tracks the selected Codex model. |
+| `simple_threshold` | `100` | Token count below which a query is classified as simple. |
+| `complex_threshold` | `500` | Token count above which a query is classified as complex. |
+
+### Autonomous Guardrails (per-agent manifest)
+
+Configured in agent manifests via `AutonomousConfig`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `quiet_hours` | `null` | Cron expression for quiet hours (agent pauses during this window). |
+| `max_iterations` | `50` | Maximum tool-use iterations per invocation. |
+| `max_restarts` | `10` | Maximum automatic restarts before permanent stop. |
+| `heartbeat_interval_secs` | `30` | Seconds between heartbeat health checks. |
+| `heartbeat_channel` | `null` | Channel to send heartbeat status to (e.g., `"telegram"`). |

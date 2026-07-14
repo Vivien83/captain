@@ -1,0 +1,63 @@
+use crate::routes::{self, AppState};
+use axum::Router;
+use std::sync::Arc;
+
+pub(crate) fn mount_capability_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route(
+            "/api/agents/{id}/update",
+            axum::routing::put(routes::update_agent),
+        )
+        .route("/api/security", axum::routing::get(routes::security_status))
+        .route("/api/models", axum::routing::get(routes::list_models))
+        .route(
+            "/api/models/updates",
+            axum::routing::get(routes::list_model_updates),
+        )
+        .route(
+            "/api/models/updates/decision",
+            axum::routing::post(routes::decide_model_update),
+        )
+        .route(
+            "/api/models/aliases",
+            axum::routing::get(routes::list_aliases),
+        )
+        .route(
+            "/api/models/custom",
+            axum::routing::post(routes::add_custom_model),
+        )
+        .route(
+            "/api/models/custom/{*id}",
+            axum::routing::delete(routes::remove_custom_model),
+        )
+        .route(
+            "/api/models/pricing/{*id}",
+            axum::routing::patch(routes::update_model_pricing),
+        )
+        .route("/api/models/{*id}", axum::routing::get(routes::get_model))
+        .route("/api/providers", axum::routing::get(routes::list_providers))
+        .route(
+            "/api/providers/github-copilot/oauth/start",
+            axum::routing::post(routes::copilot_oauth_start),
+        )
+        .route(
+            "/api/providers/github-copilot/oauth/poll/{poll_id}",
+            axum::routing::get(routes::copilot_oauth_poll),
+        )
+        .route(
+            "/api/providers/{name}/key",
+            axum::routing::post(routes::set_provider_key).delete(routes::delete_provider_key),
+        )
+        .route(
+            "/api/providers/{name}/test",
+            axum::routing::post(routes::test_provider),
+        )
+        .route(
+            "/api/providers/{name}/url",
+            axum::routing::put(routes::set_provider_url),
+        )
+        .route(
+            "/api/skills/create",
+            axum::routing::post(routes::create_skill),
+        )
+}

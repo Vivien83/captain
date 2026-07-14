@@ -1,0 +1,87 @@
+<main class="config-shell">
+  <div class="config-grid" aria-hidden="true"></div>
+
+  <section id="auth-panel" class="config-auth" aria-live="polite">
+    <form id="auth-form" class="config-auth-card">
+      <div class="config-auth-brand">
+        <div>
+          <div class="config-auth-title">Captain</div>
+          <div class="config-auth-subtitle">Config access</div>
+        </div>
+      </div>
+      <div id="auth-help" class="config-auth-help">Checking secure access...</div>
+      <div id="session-fields" class="config-auth-fields" hidden>
+        <input id="auth-username" type="text" autocomplete="username" placeholder="Username" aria-label="Username">
+        <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
+        <button id="session-login" type="submit">Sign in</button>
+      </div>
+    </form>
+  </section>
+
+  <header class="config-topbar">
+    <div class="config-brand">
+      <div>
+        <div class="config-title">Captain</div>
+        <div id="config-path" class="config-path">config.toml</div>
+      </div>
+    </div>
+    <div class="config-actions">
+      <button id="reload" type="button">Reload</button>
+      <button id="validate" type="button">Validate</button>
+      <button id="save" type="button" class="primary" disabled>Save</button>
+    </div>
+  </header>
+
+  <section class="config-workbench">
+    <aside class="config-sidebar">
+      <label class="config-search">
+        <span>Search</span>
+        <input id="config-search" type="search" autocomplete="off" spellcheck="false" placeholder="provider, auth, telegram...">
+      </label>
+      <div class="config-meter">
+        <div>
+          <span class="config-meter-label">Lines</span>
+          <strong id="line-count">0</strong>
+        </div>
+        <div>
+          <span class="config-meter-label">Chars</span>
+          <strong id="char-count">0</strong>
+        </div>
+      </div>
+      <nav id="section-list" class="config-sections" aria-label="Config sections"></nav>
+      <div class="config-note">
+        <strong>Source of truth</strong>
+        <span>Every save writes config.toml, snapshots the previous version, validates TOML, then reloads hot settings.</span>
+      </div>
+    </aside>
+
+    <section class="config-editor-pane">
+      <div class="config-editor-head">
+        <div>
+          <span class="config-kicker">Current file</span>
+          <h1>Editable TOML</h1>
+        </div>
+        <span id="dirty-pill" class="config-pill">clean</span>
+      </div>
+      <textarea id="config-editor" spellcheck="false" autocomplete="off" aria-label="Captain config.toml"></textarea>
+    </section>
+
+    <aside class="config-reference">
+      <div class="config-reference-head">
+        <div>
+          <span class="config-kicker">Reference</span>
+          <h2>Full template</h2>
+        </div>
+        <button id="insert-template" type="button">Use template</button>
+      </div>
+      <pre id="config-template" class="config-template"></pre>
+    </aside>
+  </section>
+
+  <footer class="config-statusbar">
+    <span id="status-dot" class="config-dot"></span>
+    <span id="status-text">checking access</span>
+    <span class="config-spacer"></span>
+    <a href="/">← Control</a>
+  </footer>
+</main>

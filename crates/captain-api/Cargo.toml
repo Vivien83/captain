@@ -1,0 +1,53 @@
+[package]
+name = "captain-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTTP/WebSocket API server for the Captain Agent OS daemon"
+
+[dependencies]
+captain-types = { path = "../captain-types" }
+captain-kernel = { path = "../captain-kernel", default-features = false }
+captain-runtime = { path = "../captain-runtime", default-features = false }
+captain-memory = { path = "../captain-memory" }
+captain-channels = { path = "../captain-channels" }
+captain-wire = { path = "../captain-wire" }
+captain-skills = { path = "../captain-skills" }
+captain-hands = { path = "../captain-hands" }
+captain-extensions = { path = "../captain-extensions" }
+dashmap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+governor = { workspace = true }
+tokio-stream = { workspace = true }
+subtle = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+hex = { workspace = true }
+socket2 = { workspace = true }
+reqwest = { workspace = true }
+
+[features]
+default = ["local-embeddings"]
+local-embeddings = [
+    "captain-kernel/local-embeddings",
+    "captain-runtime/local-embeddings",
+]
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+wiremock = "0.6"

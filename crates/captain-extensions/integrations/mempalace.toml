@@ -1,0 +1,23 @@
+id = "mempalace"
+name = "MemPalace"
+description = "Local-first agent memory system — hierarchical palace (wings/rooms/drawers), temporal knowledge graph, semantic search via ChromaDB"
+category = "memory"
+icon = "🏛️"
+tags = ["memory", "knowledge-graph", "embeddings", "semantic-search", "local"]
+
+[transport]
+type = "stdio"
+command = "python3"
+args = ["-m", "mempalace.mcp_server"]
+
+[health_check]
+interval_secs = 120
+unhealthy_threshold = 3
+
+setup_instructions = """
+1. Install mempalace: pip install mempalace
+2. Initialize a palace: mempalace init ~/
+3. The MCP server exposes 19 tools (search, add_drawer, kg_query, etc.)
+4. No API key needed for this local stdio mode — 100% local (ChromaDB + SQLite).
+5. If MemPalace is ever exposed as a remote SSE MCP server, protect it with a bearer token and configure Captain's [[mcp_servers]] entry with auth_token_env pointing to a vault/env key. Do not expose an unauthenticated remote memory endpoint.
+"""

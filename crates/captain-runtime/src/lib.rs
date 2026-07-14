@@ -1,0 +1,227 @@
+//! Agent runtime and execution environment.
+//!
+//! Manages the agent execution loop, LLM driver abstraction,
+//! tool execution, and WASM sandboxing for untrusted skill/plugin code.
+
+/// Default User-Agent header sent with all outgoing HTTP requests.
+/// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
+pub const USER_AGENT: &str = "captain/0.3.48";
+
+pub mod a2a;
+pub mod active_project;
+pub mod agent_loop;
+pub(crate) mod agent_loop_ask_user;
+pub(crate) mod agent_loop_budget;
+pub(crate) mod agent_loop_codex_request;
+pub(crate) mod agent_loop_completion;
+pub(crate) mod agent_loop_context;
+pub(crate) mod agent_loop_control;
+#[cfg(test)]
+mod agent_loop_empty_response_tests;
+pub(crate) mod agent_loop_end_turn;
+pub(crate) mod agent_loop_finish;
+pub(crate) mod agent_loop_guard;
+pub(crate) mod agent_loop_hooks;
+pub(crate) mod agent_loop_interjections;
+pub(crate) mod agent_loop_iteration;
+#[cfg(test)]
+mod agent_loop_iteration_tests;
+pub(crate) mod agent_loop_limits;
+pub(crate) mod agent_loop_memory;
+pub(crate) mod agent_loop_messages;
+pub(crate) mod agent_loop_phase;
+pub(crate) mod agent_loop_policy;
+pub(crate) mod agent_loop_prompt;
+pub(crate) mod agent_loop_quota;
+pub(crate) mod agent_loop_request;
+pub(crate) mod agent_loop_result;
+pub(crate) mod agent_loop_retry;
+pub(crate) mod agent_loop_stream_events;
+#[cfg(test)]
+mod agent_loop_text_tool_call_recovery_tests;
+pub(crate) mod agent_loop_tool_execution;
+#[cfg(test)]
+mod agent_loop_tool_execution_tests;
+pub(crate) mod agent_loop_tool_finish;
+pub(crate) mod agent_loop_tool_flow;
+pub(crate) mod agent_loop_tool_record;
+pub(crate) mod agent_loop_tool_recovery;
+pub(crate) mod agent_loop_tool_results;
+pub(crate) mod agent_loop_tool_runtime;
+pub(crate) mod agent_loop_tool_trace;
+pub(crate) mod agent_loop_tool_turn;
+pub(crate) mod agent_loop_turn;
+pub(crate) mod agent_loop_usage;
+pub mod apply_patch;
+pub mod audit;
+pub mod auth_cooldown;
+pub mod browser;
+pub mod cache;
+pub mod captain_docs;
+pub(crate) mod captain_docs_catalog;
+#[cfg(test)]
+mod captain_docs_tests;
+pub mod codex_oauth;
+pub mod cognitive_router;
+pub mod command_lane;
+pub(crate) mod compaction_boundary;
+pub mod compaction_handoff;
+pub mod compactor;
+pub(crate) mod compactor_context;
+pub(crate) mod compactor_summarization;
+#[cfg(test)]
+mod compactor_summarization_tests;
+#[cfg(test)]
+mod compactor_tests;
+pub mod context_budget;
+pub(crate) mod context_budget_compaction;
+#[cfg(test)]
+mod context_budget_dynamic_tests;
+pub mod context_overflow;
+pub mod copilot_oauth;
+pub mod core_tools;
+pub mod critical_patterns;
+pub mod docker_sandbox;
+pub mod document_tools;
+pub mod drivers;
+pub mod edit_strategies;
+pub mod embedding;
+pub mod env_sandbox;
+pub mod goal_loop;
+pub mod goal_reflection;
+pub mod graceful_shutdown;
+pub mod hooks;
+pub mod host_functions;
+pub(crate) mod image_fal;
+pub mod image_gen;
+pub mod integrations;
+pub mod kernel_handle;
+pub mod learning_bus;
+pub mod link_understanding;
+pub mod llm_cache;
+pub mod llm_driver;
+pub mod llm_errors;
+pub mod loop_guard;
+pub(crate) mod loop_guard_patterns;
+pub mod mcp;
+pub mod mcp_server;
+pub(crate) mod media_audio;
+pub mod media_cache;
+pub(crate) mod media_local_stt;
+pub mod media_understanding;
+pub(crate) mod media_vision;
+pub mod memory_committer;
+pub mod memory_policy;
+pub mod memory_retractions;
+pub mod memory_writer;
+pub mod model_catalog;
+mod model_catalog_aliases;
+mod model_catalog_codex;
+mod model_catalog_codex_auth;
+mod model_catalog_models_ai21;
+mod model_catalog_models_anthropic;
+mod model_catalog_models_azure_openai;
+mod model_catalog_models_bedrock;
+mod model_catalog_models_cerebras;
+mod model_catalog_models_chutes;
+mod model_catalog_models_claude_code;
+mod model_catalog_models_codex;
+mod model_catalog_models_cohere;
+mod model_catalog_models_deepseek;
+mod model_catalog_models_fireworks;
+mod model_catalog_models_gemini;
+mod model_catalog_models_github_copilot;
+mod model_catalog_models_groq;
+mod model_catalog_models_huggingface;
+mod model_catalog_models_kimi_coding;
+mod model_catalog_models_lmstudio;
+mod model_catalog_models_minimax;
+mod model_catalog_models_mistral;
+mod model_catalog_models_moonshot;
+mod model_catalog_models_nvidia;
+mod model_catalog_models_ollama;
+mod model_catalog_models_openai;
+mod model_catalog_models_openrouter;
+#[cfg(test)]
+mod model_catalog_models_openrouter_tests;
+mod model_catalog_models_perplexity;
+mod model_catalog_models_qianfan;
+mod model_catalog_models_qwen;
+mod model_catalog_models_qwen_code;
+mod model_catalog_models_replicate;
+mod model_catalog_models_sambanova;
+mod model_catalog_models_together;
+mod model_catalog_models_venice;
+mod model_catalog_models_vllm;
+mod model_catalog_models_volcengine;
+mod model_catalog_models_xai;
+mod model_catalog_models_zai_coding;
+mod model_catalog_models_zhipu;
+mod model_catalog_models_zhipu_coding;
+#[cfg(test)]
+mod model_catalog_provider_contract_tests;
+mod model_catalog_providers;
+#[cfg(test)]
+mod model_catalog_tests;
+pub mod model_switch_pending;
+pub mod native_embeddings;
+pub mod native_voice;
+pub mod outcome_detector;
+pub mod pattern_detector;
+pub mod peer_discovery;
+pub mod pii_filter;
+pub mod process_manager;
+pub(crate) mod process_registry;
+pub mod project_memory;
+pub mod project_rules;
+pub mod prompt_builder;
+pub mod prompt_sanitizer;
+pub mod proposal_policy;
+pub mod provider_health;
+pub mod pty_session;
+pub mod python_runtime;
+pub mod reflection_job;
+#[cfg(test)]
+mod reflection_job_tests;
+pub mod reply_directives;
+pub mod retry;
+pub mod retry_transformer;
+pub mod routing;
+pub mod sandbox;
+pub mod session_repair;
+pub mod session_summarizer;
+pub(crate) mod session_summarizer_recall;
+#[cfg(test)]
+mod session_summarizer_tests;
+pub mod shell_bleed;
+pub mod skill_diff;
+pub mod skill_execute;
+pub mod skill_proposer;
+pub mod skill_writer;
+pub mod ssh_exec;
+pub mod ssh_known_hosts;
+pub mod ssh_sftp;
+pub mod ssh_vault;
+pub mod str_utils;
+pub mod subprocess_sandbox;
+pub(crate) mod subprocess_tree_kill;
+pub mod surface_gates;
+pub mod task_checkpoint;
+pub(crate) mod text_tool_call_recovery;
+pub mod think_filter;
+pub mod tool_cache;
+pub mod tool_groups;
+pub mod tool_output_pruning;
+pub mod tool_parallelism;
+pub mod tool_policy;
+pub mod tool_runner;
+pub mod tool_runs;
+pub mod tools;
+pub mod tts;
+pub mod video;
+pub mod web_cache;
+pub mod web_content;
+pub mod web_fetch;
+pub mod web_search;
+pub mod workspace_context;
+pub mod workspace_sandbox;

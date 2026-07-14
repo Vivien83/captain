@@ -1,0 +1,62 @@
+[package]
+name = "hora-graph-core"
+version = "1.0.0"
+edition = "2021"
+description = "Bio-inspired embedded knowledge graph engine — pure Rust, zero runtime deps"
+license = "MIT OR Apache-2.0"
+rust-version = "1.70"
+repository = "https://github.com/Vivien83/hora-graph-core"
+homepage = "https://github.com/Vivien83/hora-graph-core"
+keywords = ["knowledge-graph", "graph-database", "memory", "embedded", "vector-search"]
+categories = ["database", "data-structures", "science"]
+readme = "README.md"
+documentation = "https://docs.rs/hora-graph-core"
+exclude = [
+  "benches/",
+  "bindings/",
+  "docs/",
+  "tests/",
+  ".github/",
+  ".hora/",
+  "target/",
+]
+
+[features]
+default = ["embedded"]
+embedded = []
+sqlite = ["dep:rusqlite"]
+postgres = ["dep:postgres"]
+wasm = ["dep:js-sys"]
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+postgres = { version = "0.19", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "crud"
+harness = false
+
+[[bench]]
+name = "traversal"
+harness = false
+
+[[bench]]
+name = "vector_search"
+harness = false
+
+[[bench]]
+name = "bm25"
+harness = false
+
+[[bench]]
+name = "hybrid_search"
+harness = false
+
+[[bench]]
+name = "storage_backends"
+harness = false

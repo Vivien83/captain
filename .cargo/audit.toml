@@ -1,0 +1,54 @@
+# Ignored advisories — all are transitive dependencies we cannot upgrade directly.
+#
+# time 0.3.45: pinned by mac-notification-sys (tauri dependency), awaiting upstream fix
+# GTK3/glib/pango/etc: tauri uses gtk-rs GTK3 bindings which are unmaintained
+# paste, proc-macro-error, fxhash: unmaintained transitive deps
+# lexical-core: unmaintained, pulled by tauri dep chain
+# serde_cbor: unmaintained, pulled by tao (tauri)
+# cocoa/cocoa-foundation: unmaintained, pulled by tauri/tao
+# rand RUSTSEC-2026-0097: runtime rand versions are updated to patched
+# 0.8.6/0.9.4. The remaining rand 0.7.3 path is Tauri build-time
+# selectors -> phf_codegen 0.8 -> phf_generator 0.8, whose generator uses
+# SmallRng::seed_from_u64 rather than thread_rng/rand::rng. Remove this ignore
+# when Tauri/kuchikiki/selectors no longer pull phf_generator 0.8.
+# quick-xml RUSTSEC-2026-0194/0195 (DoS: quadratic runtime / unbounded
+# namespace-decl allocation): two separate transitive pins, both from
+# Tauri's own dependency chain, not ours — 0.37.5 via
+# tauri-winrt-notification -> notify-rust -> tauri-plugin-notification,
+# 0.38.4 via plist -> tauri (+ several tauri-plugin-* crates). Neither is
+# reachable via a direct `cargo update -p quick-xml`; fixing requires
+# Tauri/plist/notify-rust to bump their own quick-xml requirement past
+# 0.41. Both are DoS-only against XML/plist parsing of local
+# (non-network-attacker-controlled) desktop-app inputs, not RCE.
+# rsa RUSTSEC-2023-0071 (Marvin Attack: timing side-channel key recovery):
+# no fixed version exists upstream as of this writing ("No fixed upgrade
+# is available!" per the advisory itself).
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0194",  # quick-xml DoS — transitive via Tauri (tauri-winrt-notification, plist)
+    "RUSTSEC-2026-0195",  # quick-xml DoS — transitive via Tauri (tauri-winrt-notification, plist)
+    "RUSTSEC-2023-0071",  # rsa Marvin Attack timing side-channel — no fixed version available upstream
+    "RUSTSEC-2026-0009",  # time DoS — pinned by mac-notification-sys
+    "RUSTSEC-2024-0370",  # proc-macro-error unmaintained
+    "RUSTSEC-2024-0411",  # gtk-rs GTK3 unmaintained (gdk-pixbuf)
+    "RUSTSEC-2024-0412",  # gtk-rs GTK3 unmaintained (gdk)
+    "RUSTSEC-2024-0413",  # gtk-rs GTK3 unmaintained (atk)
+    "RUSTSEC-2024-0414",  # gtk-rs GTK3 unmaintained (pango)
+    "RUSTSEC-2024-0415",  # gtk-rs GTK3 unmaintained (gio)
+    "RUSTSEC-2024-0416",  # gtk-rs GTK3 unmaintained (atk-sys)
+    "RUSTSEC-2024-0417",  # gtk-rs GTK3 unmaintained (gdk-pixbuf-sys)
+    "RUSTSEC-2024-0418",  # gtk-rs GTK3 unmaintained (gdk-sys)
+    "RUSTSEC-2024-0419",  # gtk-rs GTK3 unmaintained (gtk3-macros)
+    "RUSTSEC-2024-0420",  # gtk-rs GTK3 unmaintained (pango-sys)
+    "RUSTSEC-2024-0429",  # gtk-rs GTK3 unmaintained (gtk-sys)
+    "RUSTSEC-2024-0436",  # paste unmaintained
+    "RUSTSEC-2025-0057",  # fxhash unmaintained
+    "RUSTSEC-2025-0075",  # glib unmaintained
+    "RUSTSEC-2025-0080",  # cocoa unmaintained
+    "RUSTSEC-2025-0081",  # cocoa-foundation unmaintained
+    "RUSTSEC-2025-0098",  # lexical-core unmaintained
+    "RUSTSEC-2025-0100",  # gio-sys unmaintained
+    "RUSTSEC-2026-0002",  # serde_cbor unmaintained
+    "RUSTSEC-2023-0086",  # lexopt unmaintained (if present)
+    "RUSTSEC-2026-0097",  # rand ThreadRng custom logger unsoundness — remaining exposure is Tauri build-time phf_generator 0.8 only
+]

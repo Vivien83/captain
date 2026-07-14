@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  # Local release-readiness is the certification source of truth. Keep this
+  # expensive three-OS matrix available only as an explicit maintainer fallback
+  # so normal pushes and pull requests do not consume Actions minutes.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ── Rust library crates (all 3 platforms) ──────────────────────────────────
+  check:
+    name: Check / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: check-${{ matrix.os }}
+      - name: Install Tauri system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - run: cargo check --workspace
+
+  test:
+    name: Test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      # `cargo test --workspace` builds a separate debug binary per crate
+      # plus every integration test file (this workspace has 15+ crates,
+      # wasmtime, and Tauri) — that alone has exceeded the ubuntu runner's
+      # ~14GB default free space ("No space left on device" mid-build).
+      # Clearing preinstalled SDKs this workflow never uses reclaims
+      # several GB before the build starts.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.os }}
+      - name: Install Tauri system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      # Tests that need a display (Tauri) are skipped in headless CI via cfg
+      - name: Test (Unix)
+        if: runner.os != 'Windows'
+        run: cargo test --workspace
+      # Windows ships its own onnxruntime.dll in System32 (used by Windows
+      # ML) that `ort`'s dynamic loader (local-embeddings' ort-load-dynamic
+      # feature — see captain-runtime/Cargo.toml) finds before any bundled
+      # one. It's an incompatible version (1.17.1 vs the >=1.23.x this ort
+      # release needs), and unlike on macOS/Linux this doesn't gracefully
+      # degrade — it hard-panics, which poisons a shared std::sync::Mutex
+      # inside `ort` and cascades into every other test that touches the
+      # same lazily-initialized embeddings client. `local-embeddings` is
+      # this workspace's only default feature (all three crates that
+      # declare it: captain-api, captain-cli, captain-runtime), so
+      # dropping default features here is a clean, total workaround for
+      # this one platform rather than a partial feature list to maintain.
+      # Production Windows builds are unaffected — this only changes what
+      # the *test* binary links, and `captain embeddings install` still
+      # provisions a compatible dylib for real installs.
+      - name: Test (Windows, local-embeddings disabled — see comment)
+        if: runner.os == 'Windows'
+        run: cargo test --workspace --no-default-features
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - run: cargo clippy --workspace -- -D warnings
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - run: cargo audit
+
+  # ── Secrets scanning (prevent accidental credential commits) ──────────────
+  secrets:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install trufflehog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+      - name: Scan for secrets
+        run: |
+          trufflehog filesystem . \
+            --no-update \
+            --fail \
+            --only-verified \
+            --exclude-paths=<(echo -e "target/\n.git/\nCargo.lock")
+
+  # ── Installer smoke test (verify repository install scripts) ───────────────
+  install-smoke:
+    name: Install Script Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Syntax-check shell installer
+        run: bash -n scripts/install.sh
+      - name: Syntax-check PowerShell installer
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/install.ps1",
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
