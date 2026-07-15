@@ -30,4 +30,17 @@ if ! has_key; then
     echo "  $generated_key"
 fi
 
+case "${CAPTAIN_MEMPALACE_INSTALL:-1}" in
+    0|false|FALSE|no|NO|n|N)
+        echo "Warning: managed MemPalace check explicitly skipped; semantic memory is degraded." >&2
+        ;;
+    *)
+        if ! captain memory doctor --json >/dev/null 2>&1; then
+            echo "Managed MemPalace is missing or degraded; repairing it before Captain starts." >&2
+            captain memory install --force
+            captain memory doctor --json >/dev/null
+        fi
+        ;;
+esac
+
 exec captain "$@"

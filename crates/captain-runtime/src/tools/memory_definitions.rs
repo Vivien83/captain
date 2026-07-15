@@ -91,7 +91,7 @@ fn memory_context_batch_tool_definition() -> ToolDefinition {
 fn memory_save_tool_definition() -> ToolDefinition {
     tool_definition(
         "memory_save",
-        "[MÉMOIRE LONG-TERME] Enregistre un fait, une compétence, une leçon apprise ou une préférence dans la mémoire persistante (MemPalace). À utiliser SPONTANÉMENT — sans que l'utilisateur ne le demande — quand tu détectes : (1) une INFO durable sur l'utilisateur ou son contexte (préférences, contacts, configuration récurrente), (2) une préférence de style/réponse (room user_preferences, ex predicate prefers_response_style), (3) une COMPÉTENCE acquise (un workflow qui a marché), (4) une ERREUR/RÉUSSITE qui mérite d'être retenue pour ne pas la répéter ou la reproduire, (5) une SOLUTION à un problème précis (commande, snippet, contournement). 4 PARAMS REQUIS : `subject` (entité, ex 'user', 'project:captain'), `predicate` (relation, ex 'prefers', 'requires'), `object` (la valeur, ≤1000 chars), `category` (UN DE : info | skill | error_success | solution | other — pas autre chose). Le filtre PII rejette automatiquement les credentials, emails, téléphones, IBAN, tokens. Le 🧠 apparaîtra dans le canal d'origine. Ne pas utiliser pour des données éphémères (état temporaire d'une tâche) — utiliser memory_store à la place. EXEMPLE : memory_save({\"subject\":\"user\",\"predicate\":\"prefers_response_style\",\"object\":\"réponses courtes en français\",\"category\":\"info\",\"room\":\"user_preferences\"}). EXEMPLE 2 : memory_save({\"subject\":\"deployment\",\"predicate\":\"requires\",\"object\":\"migrate avant build sinon schema cassé\",\"category\":\"skill\"}).",
+        "[MÉMOIRE LONG-TERME] Enregistre un fait, une compétence, une leçon apprise ou une préférence dans le journal persistant Captain, puis le synchronise vers MemPalace. À utiliser SPONTANÉMENT — sans que l'utilisateur ne le demande — quand tu détectes : (1) une INFO durable sur l'utilisateur ou son contexte (préférences, contacts, configuration récurrente), (2) une préférence de style/réponse (room user_preferences, ex predicate prefers_response_style), (3) une COMPÉTENCE acquise (un workflow qui a marché), (4) une ERREUR/RÉUSSITE qui mérite d'être retenue, (5) une SOLUTION à un problème précis. CORRECTION OBLIGATOIRE : si un fait existant devient faux, retrouve d'abord son ancien triplet exact, appelle memory_forget sur cet ancien triplet et attends son résultat, puis seulement appelle memory_save avec la nouvelle valeur. Ne sauvegarde jamais la valeur de remplacement avant la rétraction. 4 PARAMS REQUIS : `subject`, `predicate`, `object` (≤1000 chars), `category` (info | skill | error_success | solution | other). Le filtre PII rejette credentials, emails, téléphones, IBAN et tokens. Le 🧠 apparaîtra dans le canal d'origine. Ne pas utiliser pour l'état temporaire d'une tâche. EXEMPLE : memory_save({\"subject\":\"user\",\"predicate\":\"prefers_response_style\",\"object\":\"réponses courtes en français\",\"category\":\"info\",\"room\":\"user_preferences\"}). EXEMPLE 2 : memory_save({\"subject\":\"deployment\",\"predicate\":\"requires\",\"object\":\"migrate avant build sinon schema cassé\",\"category\":\"skill\"}).",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -115,7 +115,7 @@ fn memory_save_tool_definition() -> ToolDefinition {
 fn memory_forget_tool_definition() -> ToolDefinition {
     tool_definition(
         "memory_forget",
-        "[MÉMOIRE — RETRACTATION] Supprime des faits incorrects ou obsolètes que tu (ou le job de reflection) avais stockés via memory_save / write_through. À utiliser SPONTANÉMENT — sans qu'on te le demande — quand l'utilisateur dit 'tu te trompes', 'oublie ça', 'corrige ce que tu sais sur X', 'ce n'est plus vrai'. Au moins UN des trois filtres (subject / predicate / object) doit être fourni — sans filtre la fonction retourne 0 sans rien supprimer (anti-wipe). Les filtres acceptent les wildcards SQL LIKE (% = n'importe quoi). Le DELETE est combiné en AND : les trois filtres doivent matcher pour qu'une ligne tombe. En plus du DELETE, Captain pose un garde-fou de rétraction: les anciennes traces archivées (checkpoints, journaux, snapshots .md, graph summary) restent dans le passé mais ne doivent plus être injectées comme contexte actif si elles matchent le terme oublié. Les résumés actifs mutables comme canonical_sessions.compacted_summary sont aussi nettoyés quand le kernel le supporte. EXEMPLE : memory_forget({\"subject\":\"user\",\"predicate\":\"prefers\"}) supprime les préférences utilisateur ciblées. EXEMPLE 2 : memory_forget({\"object\":\"%ancienne_valeur%\"}) supprime tout fait mentionnant cette valeur. Retourne le nombre de lignes supprimées, active_context_suppressed=true et active_context_sanitized avec les résumés nettoyés.",
+        "[MÉMOIRE — RÉTRACTATION DURABLE] Rend inactifs les faits incorrects ou obsolètes stockés via memory_save/write_through, conserve leur audit local et journalise une invalidation MemPalace rejouable après panne ou redémarrage. À utiliser SPONTANÉMENT quand l'utilisateur dit 'tu te trompes', 'oublie ça', 'corrige ce que tu sais sur X' ou 'ce n'est plus vrai'. Pour une correction, retrouve l'ancien triplet exact, appelle memory_forget et attends son résultat avant memory_save de la nouvelle valeur. Au moins UN filtre subject/predicate/object est requis (anti-wipe). Les filtres sont combinés en AND et acceptent `%`; préfère les trois valeurs exactes afin d'éviter une rétraction trop large. Les anciennes traces archivées restent auditées mais sont exclues du contexte actif; les résumés actifs sont assainis. Un triplet exact absent du journal local déclenche aussi une invalidation durable pour les données MemPalace héritées. Le résultat distingue `retracted`, `invalidations_queued`, `remote_synced`, `remote_pending` et `remote_failed`; `remote_pending` est sûr et sera repris automatiquement. EXEMPLE : memory_forget({\"subject\":\"user\",\"predicate\":\"prefers_response_style\",\"object\":\"réponses longues en anglais\"}).",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -222,7 +222,8 @@ mod tests {
         );
         assert_contains(&save.description, "SPONTANÉMENT");
         assert_contains(&save.description, "Le filtre PII");
-        assert_contains(&save.description, "utiliser memory_store à la place");
+        assert_contains(&save.description, "CORRECTION OBLIGATOIRE");
+        assert_contains(&save.description, "memory_forget");
         assert_contains(
             property(save, "object")["description"]
                 .as_str()
@@ -247,8 +248,9 @@ mod tests {
         assert!(property(forget, "predicate").is_object());
         assert!(property(forget, "object").is_object());
         assert_contains(&forget.description, "anti-wipe");
-        assert_contains(&forget.description, "active_context_suppressed=true");
-        assert_contains(&forget.description, "canonical_sessions.compacted_summary");
+        assert_contains(&forget.description, "audit local");
+        assert_contains(&forget.description, "invalidations_queued");
+        assert_contains(&forget.description, "remote_pending");
     }
 
     fn tool<'a>(tools: &'a [ToolDefinition], name: &str) -> &'a ToolDefinition {

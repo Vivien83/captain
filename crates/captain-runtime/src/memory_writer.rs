@@ -6,22 +6,24 @@
 //!
 //! - Local persistence **always** succeeds (except IO). The caller gets
 //!   `Ok(id)` regardless of MemPalace availability.
-//! - MemPalace is attempted synchronously; success flips the row to
-//!   `synced`, failure to `pending` (or `error` after 3 attempts).
-//! - A background worker replays `pending` rows on a timer or when an
-//!   MCP reconnect event fires.
+//! - MemPalace is attempted synchronously; protocol-level success flips the
+//!   row to `synced`, while transport or tool failure enters durable backoff.
+//! - A background worker replays both `pending` and degraded `error` rows.
+//! - One backend outage cannot consume the retry budget of an entire batch.
 //!
 //! The sender is abstracted behind `MemPalaceSender` so the orchestrator
 //! is trivially mockable in unit tests without spinning up an MCP
 //! subprocess.
 
 use async_trait::async_trait;
-use captain_memory::memory_writer::{self, MemoryWrite, NewMemoryWrite, SyncStatus};
+use captain_memory::memory_writer::{
+    self, MemoryOperation, MemoryWrite, NewMemoryWrite, SyncStatus,
+};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::mcp::McpConnection;
 
@@ -46,22 +48,43 @@ impl<'a> MemPalaceSender for McpMemPalaceSender<'a> {
             .find(|c| c.name() == "mempalace")
             .ok_or("mempalace MCP server not connected")?;
 
-        // MemPalace `kg_add` accepts only the bare (subject, predicate,
-        // object) triple. The wing/room taxonomy lives in the local
-        // `memory_writes` audit row — server-side routing is a separate
-        // concern (and passing wing/room here returned -32000 Internal
-        // tool error).
+        // MemPalace KG operations accept only the bare triple. The wing/room
+        // taxonomy lives in Captain's local journal.
         let input = serde_json::json!({
             "subject": row.subject,
             "predicate": row.predicate,
             "object": row.object,
         });
-        let tool_name = "mcp_mempalace_mempalace_kg_add";
-        conn.call_tool(tool_name, &input)
+        let tool_name = match row.operation {
+            MemoryOperation::Add => "mcp_mempalace_mempalace_kg_add",
+            MemoryOperation::Invalidate => "mcp_mempalace_mempalace_kg_invalidate",
+        };
+        let response = conn
+            .call_tool(tool_name, &input)
             .await
-            .map(|_| ())
-            .map_err(|e| format!("{tool_name} failed: {e}"))
+            .map_err(|e| format!("{tool_name} failed: {e}"))?;
+        validate_mempalace_response(tool_name, &response)
     }
+}
+
+fn validate_mempalace_response(tool_name: &str, response: &str) -> Result<(), String> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{tool_name} returned an empty response"));
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return Ok(());
+    };
+    if value.get("success").and_then(serde_json::Value::as_bool) == Some(false)
+        || value.get("error").is_some_and(|error| !error.is_null())
+    {
+        let detail = value
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("MemPalace rejected the operation");
+        return Err(format!("{tool_name} rejected operation: {detail}"));
+    }
+    Ok(())
 }
 
 /// Core write-through entry point.
@@ -80,28 +103,63 @@ pub async fn write_through(
         memory_writer::append(&guard, record).map_err(|e| format!("sqlite append: {e}"))?
     };
 
-    // Step 2 — attempt MemPalace (best-effort)
-    let sync_result = match sender {
-        Some(s) => s.send(&row).await,
-        None => Err("no mempalace sender".to_string()),
-    };
-
-    // Step 3 — update status
-    {
-        let guard = conn.lock().map_err(|e| format!("sqlite poisoned: {e}"))?;
-        match &sync_result {
-            Ok(()) => {
-                memory_writer::mark_synced(&guard, &row.id)
-                    .map_err(|e| format!("sqlite mark_synced: {e}"))?;
-            }
-            Err(e) => {
-                memory_writer::mark_error(&guard, &row.id, e)
-                    .map_err(|e| format!("sqlite mark_error: {e}"))?;
-            }
-        }
-    }
+    sync_existing_write(Arc::clone(&conn), sender, &row).await?;
 
     Ok(row.id)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncAttemptReport {
+    pub attempted: bool,
+    pub status: SyncStatus,
+    pub error: Option<String>,
+}
+
+/// Attempt one already-journaled operation and persist the outcome. This is
+/// used for invalidations created atomically by `memory_forget` as well as
+/// normal add rows.
+pub async fn sync_existing_write(
+    conn: Arc<Mutex<Connection>>,
+    sender: Option<&dyn MemPalaceSender>,
+    row: &MemoryWrite,
+) -> Result<SyncAttemptReport, String> {
+    let Some(sender) = sender else {
+        let guard = conn.lock().map_err(|e| format!("sqlite poisoned: {e}"))?;
+        memory_writer::mark_deferred(&guard, &row.id, "mempalace sender not ready")
+            .map_err(|e| format!("sqlite mark_deferred: {e}"))?;
+        return Ok(SyncAttemptReport {
+            attempted: false,
+            status: if row.sync_status == SyncStatus::Error {
+                SyncStatus::Error
+            } else {
+                SyncStatus::Pending
+            },
+            error: None,
+        });
+    };
+
+    match sender.send(row).await {
+        Ok(()) => {
+            let guard = conn.lock().map_err(|e| format!("sqlite poisoned: {e}"))?;
+            memory_writer::mark_synced(&guard, &row.id)
+                .map_err(|e| format!("sqlite mark_synced: {e}"))?;
+            Ok(SyncAttemptReport {
+                attempted: true,
+                status: SyncStatus::Synced,
+                error: None,
+            })
+        }
+        Err(error) => {
+            let guard = conn.lock().map_err(|e| format!("sqlite poisoned: {e}"))?;
+            let status = memory_writer::mark_error(&guard, &row.id, &error)
+                .map_err(|e| format!("sqlite mark_error: {e}"))?;
+            Ok(SyncAttemptReport {
+                attempted: true,
+                status,
+                error: Some(error),
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -110,43 +168,40 @@ pub struct ResyncReport {
     pub synced: usize,
     pub still_pending: usize,
     pub errored_out: usize,
+    pub deferred: usize,
 }
 
-/// Retry every pending row (up to `batch_limit`). Called by the
-/// background worker on tick and on MCP reconnect.
+/// Retry due pending/degraded rows (up to `batch_limit`). After one failure,
+/// the batch stops: a backend-wide outage must not age every queued fact at
+/// once. Durable per-row backoff makes later ticks spread probes safely.
 pub async fn resync_pending(
     conn: Arc<Mutex<Connection>>,
     sender: Option<&dyn MemPalaceSender>,
     batch_limit: usize,
 ) -> Result<ResyncReport, String> {
-    let pending = {
+    let retryable = {
         let guard = conn.lock().map_err(|e| format!("sqlite poisoned: {e}"))?;
-        memory_writer::list_pending(&guard, batch_limit)
-            .map_err(|e| format!("sqlite list_pending: {e}"))?
+        memory_writer::list_retryable(&guard, memory_writer::now_ms(), batch_limit)
+            .map_err(|e| format!("sqlite list_retryable: {e}"))?
     };
 
-    let mut report = ResyncReport {
-        attempted: pending.len(),
-        ..Default::default()
+    let mut report = ResyncReport::default();
+    let Some(sender) = sender else {
+        report.deferred = retryable.len();
+        return Ok(report);
     };
 
-    for row in pending {
-        let res = match sender {
-            Some(s) => s.send(&row).await,
-            None => Err("no mempalace sender".to_string()),
-        };
-        let guard = conn.lock().map_err(|e| format!("sqlite poisoned: {e}"))?;
-        match res {
-            Ok(()) => {
-                if memory_writer::mark_synced(&guard, &row.id).is_ok() {
-                    report.synced += 1;
-                }
-            }
-            Err(e) => match memory_writer::mark_error(&guard, &row.id, &e) {
-                Ok(SyncStatus::Error) => report.errored_out += 1,
-                Ok(_) => report.still_pending += 1,
-                Err(err) => debug!(row_id = %row.id, %err, "mark_error failed"),
-            },
+    for row in &retryable {
+        let outcome = sync_existing_write(Arc::clone(&conn), Some(sender), row).await?;
+        report.attempted += usize::from(outcome.attempted);
+        match outcome.status {
+            SyncStatus::Synced => report.synced += 1,
+            SyncStatus::Pending => report.still_pending += 1,
+            SyncStatus::Error => report.errored_out += 1,
+        }
+        if outcome.error.is_some() {
+            report.deferred = retryable.len().saturating_sub(report.attempted);
+            break;
         }
     }
 
@@ -156,14 +211,15 @@ pub async fn resync_pending(
             synced = report.synced,
             still_pending = report.still_pending,
             errored = report.errored_out,
+            deferred = report.deferred,
             "memory_writer resync tick"
         );
     }
     Ok(report)
 }
 
-/// Spawn the background resync worker. It ticks every 30 seconds and
-/// also runs an error-row GC pass once an hour.
+/// Spawn the background resync worker. It ticks every 30 seconds. Degraded
+/// rows are never garbage-collected: they remain durable and recoverable.
 ///
 /// The worker is fire-and-forget: it never panics, never blocks the
 /// kernel, and silently drops if SQLite or MCP disappears.
@@ -174,29 +230,14 @@ pub fn spawn_resync_worker(
     tokio::spawn(async move {
         let tick = Duration::from_secs(30);
         let mut interval = tokio::time::interval(tick);
-        let mut tick_count: u64 = 0;
-
         loop {
             interval.tick().await;
-            tick_count = tick_count.wrapping_add(1);
 
             let sender = McpMemPalaceSender {
                 mcp_conns: &mcp_conns,
             };
-            if let Err(e) = resync_pending(Arc::clone(&conn), Some(&sender), 100).await {
+            if let Err(e) = resync_pending(Arc::clone(&conn), Some(&sender), 250).await {
                 warn!(error = %e, "resync_pending failed");
-            }
-
-            // GC error rows older than 30d, once per ~hour (120 ticks × 30s)
-            if tick_count.is_multiple_of(120) {
-                let thirty_days_ms: i64 = 30 * 24 * 60 * 60 * 1000;
-                if let Ok(guard) = conn.lock() {
-                    match memory_writer::cleanup_errors(&guard, thirty_days_ms) {
-                        Ok(n) if n > 0 => info!(removed = n, "memory_writes cleanup"),
-                        Ok(_) => {}
-                        Err(e) => warn!(error = %e, "memory_writes cleanup failed"),
-                    }
-                }
             }
         }
     })
@@ -228,6 +269,16 @@ mod tests {
             room: None,
             source: "unit_test".into(),
         }
+    }
+
+    fn make_all_retryable(db: &Arc<Mutex<Connection>>) {
+        db.lock()
+            .unwrap()
+            .execute(
+                "UPDATE memory_writes SET next_retry_at = 0 WHERE sync_status != 'synced'",
+                [],
+            )
+            .unwrap();
     }
 
     struct OkSender {
@@ -266,7 +317,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_through_no_sender_returns_ok_and_marks_pending() {
+    async fn write_through_no_sender_returns_ok_without_spending_attempt() {
         let db = fresh_db();
         let id = write_through(Arc::clone(&db), None, sample())
             .await
@@ -274,7 +325,7 @@ mod tests {
         let guard = db.lock().unwrap();
         let row = store::get(&guard, &id).unwrap().unwrap();
         assert_eq!(row.sync_status, SyncStatus::Pending);
-        assert_eq!(row.sync_attempts, 1); // one failed send attempt counted
+        assert_eq!(row.sync_attempts, 0);
         assert!(row.last_error.is_some());
     }
 
@@ -317,6 +368,7 @@ mod tests {
                 .await
                 .unwrap();
         }
+        make_all_retryable(&db);
         {
             let guard = db.lock().unwrap();
             assert_eq!(
@@ -355,10 +407,12 @@ mod tests {
             .await
             .unwrap();
         // 2nd resync pass: attempts=2, still pending
+        make_all_retryable(&db);
         resync_pending(Arc::clone(&db), Some(&FailSender), 100)
             .await
             .unwrap();
         // 3rd resync pass: attempts=3, transitions to error
+        make_all_retryable(&db);
         let report = resync_pending(Arc::clone(&db), Some(&FailSender), 100)
             .await
             .unwrap();
@@ -371,11 +425,37 @@ mod tests {
             assert_eq!(row.sync_attempts, 3);
         }
 
-        // 4th resync: error rows excluded, nothing to attempt
+        // Error is degraded, not dead: after backoff it remains retryable.
+        make_all_retryable(&db);
         let report4 = resync_pending(Arc::clone(&db), Some(&FailSender), 100)
             .await
             .unwrap();
-        assert_eq!(report4.attempted, 0);
+        assert_eq!(report4.attempted, 1);
+        assert_eq!(report4.errored_out, 1);
+        let guard = db.lock().unwrap();
+        assert_eq!(store::get(&guard, &id).unwrap().unwrap().sync_attempts, 4);
+    }
+
+    #[tokio::test]
+    async fn missing_sender_does_not_hide_degraded_row() {
+        let db = fresh_db();
+        let row = store::append(&db.lock().unwrap(), sample()).unwrap();
+        {
+            let guard = db.lock().unwrap();
+            for _ in 0..3 {
+                store::mark_error(&guard, &row.id, "backend offline").unwrap();
+            }
+        }
+        let degraded = store::get(&db.lock().unwrap(), &row.id).unwrap().unwrap();
+        let outcome = sync_existing_write(Arc::clone(&db), None, &degraded)
+            .await
+            .unwrap();
+        assert!(!outcome.attempted);
+        assert_eq!(outcome.status, SyncStatus::Error);
+        let persisted = store::get(&db.lock().unwrap(), &row.id).unwrap().unwrap();
+        assert_eq!(persisted.sync_status, SyncStatus::Error);
+        assert_eq!(persisted.sync_attempts, 3);
+        assert_eq!(persisted.last_error.as_deref(), Some("backend offline"));
     }
 
     #[tokio::test]
@@ -391,6 +471,7 @@ mod tests {
             .await
             .unwrap();
         // resync → 2nd attempt succeeds
+        make_all_retryable(&db);
         let report = resync_pending(Arc::clone(&db), Some(&sender), 100)
             .await
             .unwrap();
@@ -433,5 +514,39 @@ mod tests {
         let got = captured.lock().unwrap().clone().unwrap();
         assert_eq!(got.0.as_deref(), Some("learnings"));
         assert_eq!(got.1.as_deref(), Some("general"));
+    }
+
+    #[tokio::test]
+    async fn backend_outage_stops_batch_after_one_probe() {
+        let db = fresh_db();
+        for _ in 0..5 {
+            store::append(&db.lock().unwrap(), sample()).unwrap();
+        }
+        let report = resync_pending(Arc::clone(&db), Some(&FailSender), 100)
+            .await
+            .unwrap();
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.still_pending, 1);
+        assert_eq!(report.deferred, 4);
+
+        let guard = db.lock().unwrap();
+        let rows = store::list_pending(&guard, 100).unwrap();
+        assert_eq!(rows.iter().filter(|row| row.sync_attempts == 1).count(), 1);
+        assert_eq!(rows.iter().filter(|row| row.sync_attempts == 0).count(), 4);
+    }
+
+    #[test]
+    fn mempalace_functional_error_is_not_treated_as_success() {
+        let err = validate_mempalace_response(
+            "mcp_mempalace_mempalace_kg_add",
+            r#"{"success":false,"error":"predicate invalid"}"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("predicate invalid"));
+        assert!(validate_mempalace_response(
+            "mcp_mempalace_mempalace_kg_add",
+            r#"{"success":true,"triple_id":"abc"}"#,
+        )
+        .is_ok());
     }
 }

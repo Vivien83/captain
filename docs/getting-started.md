@@ -35,20 +35,20 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.2` explicitly.
+below pins `v0.1.0-alpha.3` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.2 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.3 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.2 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.3 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=captain.example.com \
     bash
@@ -61,8 +61,8 @@ domain/HTTPS wiring where the host supports it.
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.2"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.3"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -84,8 +84,8 @@ For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.2 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.3 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \

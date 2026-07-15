@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 22;
+const SCHEMA_VERSION: u32 = 23;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -97,6 +97,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 22 {
         migrate_v22(conn)?;
+    }
+
+    if current_version < 23 {
+        migrate_v23(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -523,11 +527,12 @@ fn migrate_v13(conn: &Connection) -> Result<(), rusqlite::Error> {
 ///
 /// Captures every memory write (from `memory_store` tool, `mirror_to_mempalace`,
 /// or the future LearningCommitter) so it can be replayed to MemPalace if
-/// that backend is momentarily down. Local SQLite is never the source of
-/// truth — it is the crash-resistant buffer.
+/// that backend is momentarily down. Migration 23 promotes this table into
+/// Captain's durable continuity journal while MemPalace remains the semantic
+/// index derived from it.
 ///
 /// `sync_status`: 'pending' (awaiting MemPalace), 'synced' (confirmed),
-/// 'error' (exceeded max retries, kept for 30d for audit).
+/// 'error' (degraded after repeated failures; migration 23 keeps it retryable).
 fn migrate_v14(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(
         "
@@ -792,6 +797,52 @@ fn migrate_v22(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 23: Make the local memory journal durably retryable.
+///
+/// MemPalace is the semantic index, while `memory_writes` is Captain's local
+/// continuity journal. Retry metadata must therefore survive restarts and an
+/// exhausted retry budget must never make a fact disappear permanently.
+/// `operation` and `retracted_at` prepare the same journal for durable
+/// invalidations without changing existing add rows.
+fn migrate_v23(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "memory_writes", "operation") {
+        conn.execute(
+            "ALTER TABLE memory_writes ADD COLUMN operation TEXT NOT NULL DEFAULT 'add'",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_writes", "last_attempt_at") {
+        conn.execute(
+            "ALTER TABLE memory_writes ADD COLUMN last_attempt_at INTEGER",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_writes", "next_retry_at") {
+        conn.execute(
+            "ALTER TABLE memory_writes ADD COLUMN next_retry_at INTEGER",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_writes", "retracted_at") {
+        conn.execute(
+            "ALTER TABLE memory_writes ADD COLUMN retracted_at INTEGER",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_memory_writes_retry
+            ON memory_writes(sync_status, next_retry_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_memory_writes_active
+            ON memory_writes(retracted_at, created_at);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (23, datetime('now'), 'Add durable retry metadata to memory_writes');
+        ",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,5 +885,51 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap(); // Should not error
+    }
+
+    #[test]
+    fn v23_upgrades_existing_memory_journal_without_losing_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                description TEXT
+            );
+            CREATE TABLE memory_writes (
+                id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                wing TEXT,
+                room TEXT,
+                source TEXT NOT NULL,
+                sync_status TEXT NOT NULL DEFAULT 'pending',
+                sync_attempts INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                synced_at INTEGER,
+                last_error TEXT
+            );
+            INSERT INTO memory_writes
+                (id, subject, predicate, object, source, created_at)
+                VALUES ('legacy', 'user', 'prefers', 'concise', 'test', 1);
+            PRAGMA user_version = 22;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(column_exists(&conn, "memory_writes", "operation"));
+        assert!(column_exists(&conn, "memory_writes", "next_retry_at"));
+        assert!(column_exists(&conn, "memory_writes", "retracted_at"));
+        let (count, operation): (i64, String) = conn
+            .query_row(
+                "SELECT COUNT(*), operation FROM memory_writes WHERE id = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(operation, "add");
+        assert_eq!(get_schema_version(&conn), 23);
     }
 }

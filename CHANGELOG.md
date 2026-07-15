@@ -8,6 +8,44 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 No public changes are queued yet.
 
+## [0.1.0-alpha.3] - 2026-07-15
+
+Early-access release focused on a self-contained semantic-memory runtime and
+durable memory continuity through backend outages and restarts.
+
+### Added
+
+- Official host and container installs now provision an isolated,
+  Captain-managed MemPalace 3.5.0 runtime with pinned uv 0.11.28, CPython
+  3.13.14, and a frozen checksum-bound dependency lock. No system Python,
+  manual `pip install`, secondary model provider, or API key is required.
+- Daemon/Web, direct CLI, TUI, and Captain MCP boot paths now share the same
+  fail-closed MemPalace readiness and transactional repair preflight.
+- Accepted memory additions and invalidations now enter a durable local
+  continuity journal before MemPalace synchronization. Local recall therefore
+  remains available during a semantic-index outage.
+
+### Fixed
+
+- Daemon boot now performs a live palace and semantic-search probe, repairs a
+  missing, corrupt, cross-platform, or insecure managed runtime before kernel
+  startup, and fails closed when the configured MemPalace backend cannot be
+  made production-ready.
+- Managed runtime upgrades use an interprocess lock, immutable generations,
+  atomic activation, owner-only memory paths, process-tree timeouts, and a
+  bounded active-plus-rollback retention policy. A failed repair preserves the
+  active runtime and user palace.
+- The core MemPalace MCP bridge launches through the exact Captain executable
+  that booted the kernel instead of resolving a potentially older binary from
+  `PATH`; explicit operator MCP overrides still take precedence.
+- Degraded memory operations are never age-deleted or dropped after a retry
+  cap. Restart-safe exponential backoff, bounded batches, and first-failure
+  isolation keep them recoverable without hammering an unavailable backend.
+- `memory_forget` preserves audit history and journals idempotent MemPalace
+  invalidations. Correction guidance now enforces retract-old, then save-new.
+- Doctor and learning metrics report memory backlog age, next retry, attempt
+  count, and bounded last error instead of presenting unsynced memory as healthy.
+
 ## [0.1.0-alpha.2] - 2026-07-14
 
 Follow-up early-access release focused on native visual inspection and a
@@ -93,6 +131,7 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.1

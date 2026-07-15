@@ -50,6 +50,27 @@ impl CaptainKernel {
             .map_err(|e| format!("Memory KV recall failed: {e}"))
     }
 
+    pub(super) fn handle_memory_retractions(&self) -> Vec<MemoryRetraction> {
+        let persisted = captain_runtime::memory_retractions::load_retractions(
+            self.handle_memory_kv_recall(
+                captain_runtime::memory_retractions::MEMORY_RETRACTIONS_KEY,
+            )
+            .ok()
+            .flatten(),
+        );
+        let conn = self.memory.usage_conn();
+        let Ok(guard) = conn.lock() else {
+            return persisted;
+        };
+        let Ok(rows) = captain_memory::memory_writer::list_recent_retracted(
+            &guard,
+            captain_runtime::memory_retractions::MAX_RETRACTIONS,
+        ) else {
+            return persisted;
+        };
+        captain_runtime::memory_retractions::merge_journal_retractions(persisted, &rows)
+    }
+
     pub(super) fn handle_memory_sanitize_active_context(
         &self,
         retractions: &[MemoryRetraction],

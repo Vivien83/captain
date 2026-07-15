@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.2}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.3}"
 CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
@@ -15,8 +15,11 @@ RUN_SMOKE=1
 RUN_PACKAGE=0
 SMOKE_MODE="core"
 PUBLIC_EXPORT_TMP=""
+SMOKE_TMP=""
+SMOKE_PID=""
 
 cleanup() {
+    stop_candidate_smoke_daemon
     if [ -n "$PUBLIC_EXPORT_TMP" ] && [ -d "$PUBLIC_EXPORT_TMP" ]; then
         rm -rf -- "$PUBLIC_EXPORT_TMP"
     fi
@@ -39,6 +42,8 @@ Options:
 Environment:
   CAPTAIN_RELEASE_CHANGELOG_VERSION  Expected runtime changelog entry
   CAPTAIN_RELEASE_CARGO_PROFILE      Cargo test profile: release (default) or dev
+  CAPTAIN_RELEASE_SMOKE_PORT         Optional isolated candidate smoke port
+  CAPTAIN_RELEASE_SMOKE_READY_TIMEOUT Candidate startup timeout (default: 180)
   CAPTAIN_VERSION                    Version used by package-release.sh
 EOF
 }
@@ -109,6 +114,79 @@ run_cargo_test() {
     else
         run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo test "$@"
     fi
+}
+
+release_target_root() {
+    local configured="${CARGO_TARGET_DIR:-target}"
+    case "$configured" in
+        /*) printf '%s\n' "$configured" ;;
+        *) printf '%s/%s\n' "$ROOT_DIR" "$configured" ;;
+    esac
+}
+
+release_candidate_bin() {
+    printf '%s/release/captain\n' "$(release_target_root)"
+}
+
+stop_candidate_smoke_daemon() {
+    if [ -n "${SMOKE_PID:-}" ] && kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
+        kill "$SMOKE_PID" >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do
+            if ! kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.2
+        done
+        if kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
+            kill -KILL "$SMOKE_PID" >/dev/null 2>&1 || true
+        fi
+        wait "$SMOKE_PID" 2>/dev/null || true
+    fi
+    SMOKE_PID=""
+    if [ -n "${SMOKE_TMP:-}" ] && [ -d "$SMOKE_TMP" ]; then
+        rm -rf -- "$SMOKE_TMP"
+    fi
+    SMOKE_TMP=""
+}
+
+start_candidate_smoke_daemon() {
+    local candidate_bin="$1"
+    local port="$2"
+    local home_dir="$SMOKE_TMP/home"
+    local config="$home_dir/config.toml"
+    local log="$SMOKE_TMP/daemon.log"
+
+    if curl -sS --connect-timeout 1 --max-time 2 \
+        "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+        fail "isolated candidate smoke port is already in use: $port"
+    fi
+
+    mkdir -p "$home_dir/data"
+    cat >"$config" <<EOF
+home_dir = "$home_dir"
+data_dir = "$home_dir/data"
+log_level = "info"
+api_listen = "127.0.0.1:$port"
+network_enabled = false
+api_key = ""
+mode = "stable"
+language = "en"
+
+[default_model]
+provider = "codex"
+model = "gpt-5.5"
+api_key_env = ""
+
+[memory]
+backend = "mempalace"
+
+[approval]
+require_approval = []
+EOF
+
+    CAPTAIN_MEMPALACE_INSTALL=1 CAPTAIN_HOME="$home_dir" \
+        "$candidate_bin" start --config "$config" --yolo >"$log" 2>&1 &
+    SMOKE_PID="$!"
 }
 
 check_worktree() {
@@ -216,16 +294,44 @@ run_tests() {
 }
 
 run_smoke() {
-    step "live daemon smoke"
-    if ! command -v captain >/dev/null 2>&1; then
-        fail "captain command is not available"
+    step "isolated candidate daemon smoke"
+    local candidate_bin
+    local actual_version
+    local health
+    local expected_version="captain $EXPECTED_CHANGELOG"
+    local port="${CAPTAIN_RELEASE_SMOKE_PORT:-$((52000 + ($$ % 1000)))}"
+    local ready_timeout="${CAPTAIN_RELEASE_SMOKE_READY_TIMEOUT:-180}"
+    local base="http://127.0.0.1:$port"
+
+    candidate_bin="$(release_candidate_bin)"
+    [ -x "$candidate_bin" ] || fail "release candidate is not executable: $candidate_bin"
+    actual_version="$("$candidate_bin" --version)" \
+        || fail "release candidate version command failed: $candidate_bin"
+    [ "$actual_version" = "$expected_version" ] \
+        || fail "release candidate version mismatch: expected '$expected_version', got '$actual_version'"
+
+    SMOKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/captain-release-smoke.XXXXXX")
+    start_candidate_smoke_daemon "$candidate_bin" "$port"
+
+    if ! CAPTAIN_API="$base" \
+        CAPTAIN_HOME="$SMOKE_TMP/home" \
+        CAPTAIN_SMOKE_WORKDIR="$SMOKE_TMP/artifacts" \
+        CAPTAIN_SMOKE_READY_TIMEOUT="$ready_timeout" \
+        CAPTAIN_SMOKE_STRICT_RELEASE=1 \
+        CAPTAIN_SMOKE_CHANGELOG_VERSION="$EXPECTED_CHANGELOG" \
+            "$ROOT_DIR/scripts/excellence-smoke.sh" "--$SMOKE_MODE" \
+                --expected-changelog "$EXPECTED_CHANGELOG"; then
+        tail -80 "$SMOKE_TMP/daemon.log" >&2 || true
+        fail "isolated release candidate smoke failed"
     fi
-    if ! captain status >/dev/null 2>&1; then
-        fail "captain daemon is not running; start it before release smoke"
-    fi
-    CAPTAIN_SMOKE_STRICT_RELEASE=1 \
-    CAPTAIN_SMOKE_CHANGELOG_VERSION="$EXPECTED_CHANGELOG" \
-        "$ROOT_DIR/scripts/excellence-smoke.sh" "--$SMOKE_MODE" --expected-changelog "$EXPECTED_CHANGELOG"
+
+    health="$(curl -sS --max-time 10 "$base/api/health")" \
+        || fail "isolated release candidate health could not be read"
+    printf '%s' "$health" | jq -e --arg version "$EXPECTED_CHANGELOG" \
+        '.status == "ok" and .version == $version' >/dev/null \
+        || fail "isolated release candidate health version mismatch"
+    echo "candidate version verified: $EXPECTED_CHANGELOG"
+    stop_candidate_smoke_daemon
 }
 
 package_release() {
@@ -239,6 +345,8 @@ need_cmd cargo
 need_cmd grep
 need_cmd cargo-audit
 need_cmd mktemp
+need_cmd curl
+need_cmd jq
 
 case "$CARGO_PROFILE" in
     dev|release) ;;

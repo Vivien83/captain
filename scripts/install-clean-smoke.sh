@@ -97,8 +97,26 @@ export CAPTAIN_RUN_DOCTOR=0
 bash "$INSTALL_SCRIPT"
 
 "$CAPTAIN_INSTALL_DIR/captain" --version >/dev/null
+"$CAPTAIN_INSTALL_DIR/captain" memory status --json > "$TMP/mempalace-status.json"
+"$CAPTAIN_INSTALL_DIR/captain" memory doctor --json > "$TMP/mempalace-doctor.json"
 test -s "$CAPTAIN_HOME/config.toml"
 test -s "$CAPTAIN_HOME/USER.md"
+grep -Fq '"ready": true' "$TMP/mempalace-status.json"
+grep -Fq '"ok": true' "$TMP/mempalace-doctor.json"
+MEMPALACE_BIN=$(sed -n 's/^[[:space:]]*"mempalace_binary": "\([^"]*\)",*$/\1/p' "$TMP/mempalace-status.json")
+MEMPALACE_MCP_BIN=$(sed -n 's/^[[:space:]]*"mcp_binary": "\([^"]*\)",*$/\1/p' "$TMP/mempalace-status.json")
+MEMPALACE_PYTHON_BIN=$(sed -n 's/^[[:space:]]*"python_binary": "\([^"]*\)",*$/\1/p' "$TMP/mempalace-status.json")
+test -n "$MEMPALACE_BIN"
+test -n "$MEMPALACE_MCP_BIN"
+test -n "$MEMPALACE_PYTHON_BIN"
+test -x "$MEMPALACE_BIN"
+test -x "$MEMPALACE_MCP_BIN"
+test -x "$MEMPALACE_PYTHON_BIN"
+"$MEMPALACE_PYTHON_BIN" --version > "$TMP/mempalace-python-version.txt"
+grep -Fxq 'Python 3.13.14' "$TMP/mempalace-python-version.txt"
+test -s "$CAPTAIN_HOME/native/mempalace/install.json"
+test -s "$CAPTAIN_HOME/integrations.toml"
+grep -Fq 'id = "mempalace"' "$CAPTAIN_HOME/integrations.toml"
 
 grep -Fq 'provider = "groq"' "$CAPTAIN_HOME/config.toml"
 grep -Fq 'model = "llama-3.3-70b-versatile"' "$CAPTAIN_HOME/config.toml"

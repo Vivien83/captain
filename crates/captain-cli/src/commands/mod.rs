@@ -26,6 +26,7 @@ pub(crate) mod integrations;
 mod log_events;
 pub(crate) mod logs;
 pub(crate) mod memory;
+pub(crate) mod memory_native;
 pub(crate) mod message;
 mod model_state;
 pub(crate) mod models;

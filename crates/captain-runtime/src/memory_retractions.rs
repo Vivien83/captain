@@ -89,15 +89,34 @@ pub fn retractions_to_value(items: &[MemoryRetraction]) -> Value {
     })
 }
 
+pub fn merge_journal_retractions(
+    mut existing: Vec<MemoryRetraction>,
+    rows_newest_first: &[captain_memory::memory_writer::MemoryWrite],
+) -> Vec<MemoryRetraction> {
+    for row in rows_newest_first.iter().rev() {
+        if let Some(retraction) = MemoryRetraction::from_filters(
+            Some(&row.subject),
+            Some(&row.predicate),
+            Some(&row.object),
+        ) {
+            existing = append_retraction(existing, retraction);
+        }
+    }
+    existing
+}
+
 pub fn text_matches_any(text: &str, retractions: &[MemoryRetraction]) -> bool {
     if retractions.is_empty() || text.trim().is_empty() {
         return false;
     }
     let haystack = text.to_lowercase();
-    retractions
-        .iter()
-        .flat_map(|r| r.terms.iter())
-        .any(|term| !term.is_empty() && haystack.contains(term))
+    retractions.iter().any(|retraction| {
+        !retraction.terms.is_empty()
+            && retraction
+                .terms
+                .iter()
+                .all(|term| !term.is_empty() && haystack.contains(term))
+    })
 }
 
 pub fn filter_retracted_lines(text: &str, retractions: &[MemoryRetraction]) -> Option<String> {
@@ -191,6 +210,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_memory::memory_writer::{MemoryOperation, MemoryWrite, SyncStatus};
 
     #[test]
     fn retraction_uses_specific_object_term_first() {
@@ -217,5 +237,51 @@ mod tests {
     #[test]
     fn generic_subject_only_does_not_create_global_suppression() {
         assert!(MemoryRetraction::from_filters(Some("user"), None, None).is_none());
+    }
+
+    #[test]
+    fn multi_term_retraction_requires_the_specific_combination() {
+        let retraction = MemoryRetraction::from_filters(
+            Some("user"),
+            Some("prefers_response_style"),
+            Some("long answers in English"),
+        )
+        .unwrap();
+        assert!(text_matches_any(
+            "user prefers_response_style long answers in English",
+            std::slice::from_ref(&retraction)
+        ));
+        assert!(!text_matches_any(
+            "user prefers_response_style short answers in French",
+            &[retraction]
+        ));
+    }
+
+    #[test]
+    fn journal_rows_rebuild_missing_retraction_guard() {
+        let rows = vec![MemoryWrite {
+            id: "write-1".into(),
+            operation: MemoryOperation::Add,
+            subject: "user".into(),
+            predicate: "prefers_response_style".into(),
+            object: "long answers in English".into(),
+            wing: None,
+            room: None,
+            source: "memory_save:info".into(),
+            sync_status: SyncStatus::Synced,
+            sync_attempts: 0,
+            created_at: 1,
+            synced_at: Some(2),
+            last_error: None,
+            last_attempt_at: Some(2),
+            next_retry_at: None,
+            retracted_at: Some(3),
+        }];
+        let merged = merge_journal_retractions(Vec::new(), &rows);
+        assert_eq!(merged.len(), 1);
+        assert!(text_matches_any(
+            "user prefers_response_style long answers in English",
+            &merged
+        ));
     }
 }

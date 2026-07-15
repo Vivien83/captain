@@ -135,7 +135,8 @@ pub struct LearningConfig {
     pub rate_limit_global_per_day: u32,
     /// Retention in days for `synced` rows. 0 = permanent.
     pub retention_synced_days: u32,
-    /// Retention in days for `error` rows before GC.
+    /// Deprecated compatibility field. Degraded memory rows are retained and
+    /// retried permanently; non-zero values are ignored.
     pub retention_error_days: u32,
     /// Minimum confidence threshold on memory candidates; lower values
     /// are rejected before commit.
@@ -177,7 +178,7 @@ impl Default for LearningConfig {
             rate_limit_per_project_per_day: 20,
             rate_limit_global_per_day: 50,
             retention_synced_days: 0,
-            retention_error_days: 30,
+            retention_error_days: 0,
             // Phase N.3: filtre dur retire. Le LLM decide lui-meme si un
             // candidat merite d'etre memorise via son prompt systeme. Le
             // champ confidence reste utilise pour ranking, pas pour gating.
@@ -234,6 +235,7 @@ mod tests {
 
         assert!((cfg.autonomy_aggressiveness - 1.0).abs() < f32::EPSILON);
         assert!((cfg.effective_autonomy_aggressiveness() - 1.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.retention_error_days, 0);
     }
 
     #[test]

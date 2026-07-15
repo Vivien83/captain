@@ -51,6 +51,7 @@ CONTRACT_DOCS=(
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
   docs/releases/v0.1.0-alpha.1.md
 )
@@ -282,9 +283,9 @@ require_contains "README points to DOC2" docs/README.md "Docs Status (DOC2)"
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.2"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.2/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.3/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -300,9 +301,10 @@ require_contains "English README documents proactive Codex discovery" README.md 
 require_contains "French README documents proactive Codex discovery" README.fr.md "une actualisation horaire signale les nouveaux modèles"
 require_contains "Spanish README documents proactive Codex discovery" README.es.md "una actualización cada hora muestra los modelos nuevos"
 require_contains "Chinese README documents proactive Codex discovery" README.zh.md "每小时刷新一次目录"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.2"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.2] - 2026-07-14"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.3"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.3] - 2026-07-15"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
+require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
 require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"
 require_not_contains "runtime changelog has no stale 07-12b candidate claim" docs/captain-tools/runtime-changelog.md 'aligned candidate is `0.1.0-dev.2026-07-12b`'
@@ -328,6 +330,14 @@ require_contains "runtime validates active-model image support" crates/captain-k
 require_contains "runtime discloses no hidden image delegation" crates/captain-kernel/src/capability_routing.rs "did not send the image to another agent or provider"
 require_not_contains "runtime has no automatic Vision-agent manifest" crates/captain-kernel/src/capability_routing.rs "build_vision_agent_manifest"
 require_not_contains "runtime has no hidden image spawn path" crates/captain-kernel/src/capability_routing.rs "SpawnAndDelegate"
+require_contains "memory docs pin every active local boot preflight" docs/captain-tools/memory.md "Every active local kernel entrypoint"
+require_contains "daemon boot checks managed memory" crates/captain-cli/src/commands/daemon.rs "ensure_native_mempalace_for_config"
+require_contains "direct CLI boot checks managed memory" crates/captain-cli/src/cli_runtime.rs "prepare_kernel_config"
+require_contains "TUI boot checks managed memory" crates/captain-cli/src/tui/event.rs "prepare_kernel_config"
+require_contains "Captain MCP boot checks managed memory" crates/captain-cli/src/mcp.rs "prepare_kernel_config"
+require_contains "host installer provisions managed memory" scripts/install.sh '"$INSTALL_DIR/captain" memory install'
+require_contains "Windows installer provisions managed memory" scripts/install.ps1 '& $installedExe memory install'
+require_contains "container boot repairs managed memory" docker-entrypoint.sh "captain memory install --force"
 require_contains "Control declares the Captain favicon" crates/captain-api/src/webchat.rs 'every_web_surface_declares_the_captain_favicon'
 require_contains "favicon endpoint serves embedded Captain PNG" crates/captain-api/src/webchat.rs 'favicon_endpoint_serves_the_embedded_captain_png'
 require_contains "API documents Codex update inspection" docs/api-reference.md "GET /api/models/updates"

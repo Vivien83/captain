@@ -2,7 +2,9 @@ use captain_extensions::health::{HealthMonitor, HealthMonitorConfig};
 use captain_extensions::registry::IntegrationRegistry;
 use captain_hands::registry::HandRegistry;
 use captain_skills::registry::SkillRegistry;
-use captain_types::config::{KernelConfig, KernelMode, McpServerConfigEntry};
+use captain_types::config::{
+    KernelConfig, KernelMode, McpServerConfigEntry, McpTransportEntry, MemoryBackend,
+};
 use tracing::{info, warn};
 
 pub(super) struct BootRegistries {
@@ -17,10 +19,10 @@ pub(super) fn build_boot_registries(config: &KernelConfig) -> BootRegistries {
     let skill_registry = build_skill_registry(config);
     let hand_registry = build_hand_registry(config);
     let extension_registry = build_extension_registry(config);
-    let all_mcp_servers = merge_extension_mcp_configs(
-        config.mcp_servers.clone(),
-        extension_registry.to_mcp_configs(),
-    );
+    let mut manual_and_core_servers = config.mcp_servers.clone();
+    ensure_core_mempalace_config(config, &mut manual_and_core_servers);
+    let all_mcp_servers =
+        merge_extension_mcp_configs(manual_and_core_servers, extension_registry.to_mcp_configs());
     let extension_health = build_extension_health(config);
 
     for inst in extension_registry.to_mcp_configs() {
@@ -34,6 +36,27 @@ pub(super) fn build_boot_registries(config: &KernelConfig) -> BootRegistries {
         extension_health,
         all_mcp_servers,
     }
+}
+
+fn ensure_core_mempalace_config(config: &KernelConfig, servers: &mut Vec<McpServerConfigEntry>) {
+    if config.memory.backend != MemoryBackend::Mempalace
+        || servers.iter().any(|server| server.name == "mempalace")
+    {
+        return;
+    }
+    let command = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "captain".to_string());
+    servers.push(McpServerConfigEntry {
+        name: "mempalace".to_string(),
+        transport: McpTransportEntry::Stdio {
+            command,
+            args: vec!["memory".to_string(), "mcp-serve".to_string()],
+        },
+        timeout_secs: 60,
+        env: vec!["CAPTAIN_HOME".to_string()],
+        auth_token_env: None,
+    });
 }
 
 fn build_skill_registry(config: &KernelConfig) -> SkillRegistry {
@@ -144,6 +167,62 @@ mod tests {
         assert_eq!(server_names(&merged), vec!["github", "linear"]);
         assert_eq!(stdio_command(&merged[0]), "manual-github");
         assert_eq!(stdio_command(&merged[1]), "extension-linear");
+    }
+
+    #[test]
+    fn mempalace_backend_gets_managed_core_server_without_manual_setup() {
+        let config = KernelConfig::default();
+        let mut servers = Vec::new();
+
+        ensure_core_mempalace_config(&config, &mut servers);
+
+        assert_eq!(server_names(&servers), vec!["mempalace"]);
+        assert_eq!(
+            match &servers[0].transport {
+                McpTransportEntry::Stdio { args, .. } => args.as_slice(),
+                _ => panic!("expected stdio"),
+            },
+            ["memory", "mcp-serve"]
+        );
+    }
+
+    #[test]
+    fn graph_backend_does_not_start_managed_mempalace() {
+        let mut config = KernelConfig::default();
+        config.memory.backend = MemoryBackend::Graph;
+        let mut servers = Vec::new();
+
+        ensure_core_mempalace_config(&config, &mut servers);
+
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn explicit_mempalace_server_wins_over_managed_default() {
+        let config = KernelConfig::default();
+        let mut servers = vec![stdio_server("mempalace", "custom-mempalace")];
+
+        ensure_core_mempalace_config(&config, &mut servers);
+
+        assert_eq!(servers.len(), 1);
+        assert_eq!(stdio_command(&servers[0]), "custom-mempalace");
+    }
+
+    #[test]
+    fn managed_core_mempalace_wins_over_bundled_path_lookup() {
+        let config = KernelConfig::default();
+        let mut manual_and_core = Vec::new();
+        ensure_core_mempalace_config(&config, &mut manual_and_core);
+        let expected_command = stdio_command(&manual_and_core[0]).to_string();
+
+        let merged = merge_extension_mcp_configs(
+            manual_and_core,
+            vec![stdio_server("mempalace", "captain-from-path")],
+        );
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(stdio_command(&merged[0]), expected_command);
+        assert_ne!(stdio_command(&merged[0]), "captain-from-path");
     }
 
     fn stdio_server(name: &str, command: &str) -> McpServerConfigEntry {

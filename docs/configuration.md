@@ -235,7 +235,7 @@ reflection_timeout_secs = 30
 rate_limit_per_project_per_day = 20
 rate_limit_global_per_day = 50
 retention_synced_days = 0
-retention_error_days = 30
+retention_error_days = 0       # compatibility field; degraded rows remain retryable
 min_confidence = 0.0
 
 [checkpoints]
@@ -455,6 +455,19 @@ decay_rate = 0.1
 | `consolidation_threshold` | u64 | `10000` | Number of stored memories before automatic consolidation is triggered to merge and prune old entries. |
 | `consolidation_interval_hours` | u64 | `24` | Periodic memory consolidation interval. `0` disables scheduled consolidation. |
 | `decay_rate` | f32 | `0.1` | Memory confidence decay rate. `0.0` = no decay (memories never fade), `1.0` = aggressive decay. Values between 0.0 and 1.0. |
+
+With the default `mempalace` backend, Captain owns the complete local runtime:
+uv 0.11.28, CPython 3.13.14, MemPalace 3.5.0, and a checksum-bound frozen
+dependency lock. Official installers provision it, and every active local kernel
+entrypoint (`captain start`, direct CLI, TUI, and Captain's MCP server) verifies
+or repairs it before boot; no system Python or MemPalace `pip install` is needed.
+Use `captain memory status`, `captain memory doctor`, and
+`captain memory install --force` for operational checks and repair. The doctor
+checks exact versions, private permissions, palace access, and a real semantic
+query. Repairs switch immutable generations atomically and retain at most the
+active generation plus one rollback. An explicit
+`CAPTAIN_MEMPALACE_INSTALL=0` permits degraded startup, but is not suitable for
+production use with `backend = "mempalace"`.
 
 Native local embeddings use FastEmbed plus ONNX Runtime. The installer runs
 `captain embeddings install` by default and stores the runtime under
@@ -856,7 +869,7 @@ Auto-learning pipeline.
 | `rate_limit_per_project_per_day` | u32 | `20` | Per-project learning commit limit. |
 | `rate_limit_global_per_day` | u32 | `50` | Global learning commit limit. |
 | `retention_synced_days` | u32 | `0` | Synced learning retention. `0` = permanent. |
-| `retention_error_days` | u32 | `30` | Error row retention. |
+| `retention_error_days` | u32 | `0` | Deprecated compatibility field. Non-zero values are ignored; degraded rows remain durable and retryable. |
 | `min_confidence` | f32 | `0.0` | Confidence threshold/ranking input. |
 
 ### `[checkpoints]`

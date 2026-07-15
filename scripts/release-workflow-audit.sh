@@ -13,6 +13,7 @@ LOCAL_PUBLISHER="$ROOT_DIR/scripts/publish-release-local.sh"
 LOCAL_DOCKERFILE="$ROOT_DIR/Dockerfile.release"
 DOCKER_EMBEDDING_CACHE="$ROOT_DIR/scripts/prepare-docker-embedding-cache.sh"
 RELEASE_READINESS="$ROOT_DIR/scripts/release-readiness.sh"
+EXCELLENCE_SMOKE="$ROOT_DIR/scripts/excellence-smoke.sh"
 CROSS_CONFIG="$ROOT_DIR/Cross.toml"
 PASS=0
 
@@ -130,9 +131,14 @@ require_file_literal "local publisher validates bundle versions" "$LOCAL_PUBLISH
 require_file_literal "local publisher validates Windows PE" "$LOCAL_PUBLISHER" 'Windows bundle does not contain a PE executable'
 require_file_literal "local publisher stages deterministic embeddings" "$LOCAL_PUBLISHER" 'scripts/prepare-docker-embedding-cache.sh'
 require_file_literal "cross propagates compile-time version" "$CROSS_CONFIG" 'passthrough = ["CAPTAIN_BUILD_VERSION"]'
+require_file_literal "ARM Cross bounds the primary Ubuntu Ports probe" "$CROSS_CONFIG" 'curl -fsS --connect-timeout 5 --max-time 15 http://ports.ubuntu.com'
+require_file_literal "ARM Cross has a registered Ubuntu Ports fallback" "$CROSS_CONFIG" 'http://mirrors.ocf.berkeley.edu/ubuntu-ports'
+require_file_literal "x86 Cross skips the irrelevant Ubuntu ports mirror" "$CROSS_CONFIG" 'rm -f /etc/apt/sources.list.d/ports.list'
 require_file_literal "local packager executes embedded versions" "$RELEASE_ALL" 'embedded binary version mismatch'
 require_file_literal "local packager emulates Linux ARM64" "$RELEASE_ALL" 'qemu-aarch64-static'
 require_file_literal "local packager forwards custom output roots" "$RELEASE_ALL" 'CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"'
+require_file_literal "local packager honors the shared Cargo target root" "$RELEASE_ALL" 'TARGET_ROOT="${CARGO_TARGET_DIR:-target}"'
+require_file_literal "local packager resolves the host binary from the shared target root" "$RELEASE_ALL" 'echo "$TARGET_ROOT/release/captain"'
 require_file_literal "macOS bundle signing fails closed" "$PACKAGE_RELEASE" 'failed to verify $PLATFORM release signature'
 require_file_literal "Windows preflight requires LLVM" "$RELEASE_ALL" 'command -v llvm-ar'
 require_file_literal "Windows preflight requires NASM" "$RELEASE_ALL" 'command -v nasm'
@@ -148,11 +154,18 @@ require_file_literal "embedding cache output stays ignored" "$ROOT_DIR/.gitignor
 require_file_literal "release readiness defaults to release Cargo" "$RELEASE_READINESS" 'CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"'
 require_file_literal "release readiness versions release-profile tests" "$RELEASE_READINESS" 'run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo test --release "$@"'
 require_file_literal "release readiness rejects unknown Cargo profiles" "$RELEASE_READINESS" 'CAPTAIN_RELEASE_CARGO_PROFILE must be dev or release'
+require_file_literal "release readiness resolves the built candidate" "$RELEASE_READINESS" 'release_candidate_bin'
+require_file_literal "release readiness isolates the candidate home" "$RELEASE_READINESS" 'captain-release-smoke.XXXXXX'
+require_file_literal "release readiness provisions native MemPalace" "$RELEASE_READINESS" 'CAPTAIN_MEMPALACE_INSTALL=1 CAPTAIN_HOME="$home_dir"'
+require_file_literal "release readiness verifies candidate HTTP version" "$RELEASE_READINESS" 'isolated release candidate health version mismatch'
+require_file_literal "release smoke keeps header arguments nonempty on Bash 3.2" "$EXCELLENCE_SMOKE" 'AUTH_HEADER_ARGS=(-H "Accept: application/json")'
+require_file_literal "release smoke preserves absolute artifact roots" "$EXCELLENCE_SMOKE" '/*) doc_path="$WORKDIR/excellence-smoke.md"'
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
 require_shell_syntax "$RELEASE_ALL"
 require_shell_syntax "$LOCAL_PUBLISHER"
 require_shell_syntax "$DOCKER_EMBEDDING_CACHE"
 require_shell_syntax "$RELEASE_READINESS"
+require_shell_syntax "$EXCELLENCE_SMOKE"
 CAPTAIN_RELEASE_POLICY_TEST=1 "$LOCAL_PUBLISHER" >/dev/null
 pass "local release channel policy"
 

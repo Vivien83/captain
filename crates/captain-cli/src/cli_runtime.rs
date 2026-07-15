@@ -174,7 +174,18 @@ pub(crate) fn boot_kernel_error(e: &captain_kernel::error::KernelError) {
 }
 
 pub(crate) fn boot_kernel(config: Option<PathBuf>) -> CaptainKernel {
-    match CaptainKernel::boot(config.as_deref()) {
+    let kernel_config =
+        match crate::commands::memory_native::prepare_kernel_config(config.as_deref()) {
+            Ok(config) => config,
+            Err(error) => {
+                ui::error_with_fix(
+                    &format!("Managed MemPalace is not production-ready: {error}"),
+                    "Run `captain memory doctor`, then `captain memory install --force`.",
+                );
+                std::process::exit(1);
+            }
+        };
+    match CaptainKernel::boot_with_config(kernel_config) {
         Ok(k) => k,
         Err(e) => {
             boot_kernel_error(&e);

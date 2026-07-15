@@ -49,6 +49,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
+| [0.1.0-alpha.3 release notes](releases/v0.1.0-alpha.3.md) | Managed MemPalace, durable memory recovery, and alpha limitations |
 | [0.1.0-alpha.2 release notes](releases/v0.1.0-alpha.2.md) | Native visual inspection, browser identity, and alpha limitations |
 | [0.1.0-alpha.1 release notes](releases/v0.1.0-alpha.1.md) | Public early-access scope and known limitations |
 | [Release Readiness](../scripts/release-readiness.sh) | Executable current release gate for docs, tests, build, and live smoke |

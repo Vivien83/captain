@@ -9,14 +9,14 @@ fn memory_forget_in_tool_registry() {
         .iter()
         .find(|t| t.name == "memory_forget")
         .expect("memory_forget tool must exist");
-    assert!(def.description.contains("RETRACTATION"));
+    assert!(def.description.contains("RÉTRACTATION DURABLE"));
     assert!(def.description.contains("SPONTANÉMENT"));
 }
 
 #[tokio::test]
 async fn memory_forget_rejects_empty_filter_set() {
     let kh: Arc<dyn KernelHandle> = Arc::new(MemSaveStubKernel);
-    let res = tool_memory_forget(&serde_json::json!({}), Some(&kh)).await;
+    let res = tool_memory_forget(&serde_json::json!({}), None, Some(&kh)).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().contains("at least subject"));
 }
@@ -104,18 +104,32 @@ async fn memory_forget_records_active_context_suppression() {
     let dyn_kh: Arc<dyn KernelHandle> = kh.clone();
     let res = tool_memory_forget(
         &serde_json::json!({"object":"%ancienne_valeur%"}),
+        None,
         Some(&dyn_kh),
     )
     .await
     .unwrap();
     let payload: serde_json::Value = serde_json::from_str(&res).unwrap();
     assert_eq!(payload["removed"], 1);
+    assert_eq!(payload["invalidations_queued"], 1);
+    assert_eq!(payload["remote_pending"], 1);
     assert_eq!(payload["active_context_suppressed"], true);
 
     let stored = kh.kv.lock().unwrap().clone();
     let retractions = crate::memory_retractions::load_retractions(stored);
     assert_eq!(retractions.len(), 1);
     assert_eq!(retractions[0].terms, vec!["ancienne", "valeur"]);
+
+    let conn = kh.conn.lock().unwrap();
+    let audit = captain_memory::memory_writer::list_recent(&conn, None, 10).unwrap();
+    assert_eq!(audit.len(), 2);
+    assert!(audit.iter().any(|row| {
+        row.operation == captain_memory::memory_writer::MemoryOperation::Invalidate
+    }));
+    assert!(audit.iter().any(|row| {
+        row.operation == captain_memory::memory_writer::MemoryOperation::Add
+            && row.retracted_at.is_some()
+    }));
 }
 
 #[test]

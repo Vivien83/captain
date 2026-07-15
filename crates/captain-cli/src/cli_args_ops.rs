@@ -370,6 +370,30 @@ pub(crate) enum SecurityCommands {
 
 #[derive(Subcommand)]
 pub(crate) enum MemoryCommands {
+    /// Show managed MemPalace runtime and palace readiness.
+    Status {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install or repair Captain's managed MemPalace runtime.
+    Install {
+        /// Return success even when provisioning is incomplete.
+        #[arg(long)]
+        best_effort: bool,
+        /// Reinstall pinned runtime components.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Diagnose the managed MemPalace runtime.
+    Doctor {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Internal stdio bridge used by Captain's bundled MCP configuration.
+    #[command(hide = true)]
+    McpServe,
     /// List KV pairs for an agent.
     List {
         /// Agent name or ID.

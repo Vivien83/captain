@@ -103,9 +103,9 @@ impl DedupChecker for NoopDedupChecker {
 }
 
 /// SQLite-backed dedup checker against the local write-through memory
-/// audit log. MemPalace remains canonical, but this catches the common
-/// case: Captain is about to store the same `(subject, predicate,
-/// object)` it already queued or committed locally.
+/// journal. This catches the common case where Captain is about to store the
+/// same `(subject, predicate, object)` it already accepted locally, including
+/// rows currently degraded while MemPalace recovers.
 pub struct SqliteMemoryDedupChecker {
     conn: Arc<Mutex<Connection>>,
 }
@@ -132,7 +132,7 @@ impl DedupChecker for SqliteMemoryDedupChecker {
             .prepare(
                 "SELECT subject, predicate, object
                  FROM memory_writes
-                 WHERE sync_status != 'error'
+                 WHERE retracted_at IS NULL AND operation = 'add'
                  ORDER BY created_at DESC, id DESC
                  LIMIT 500",
             )

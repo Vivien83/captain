@@ -40,7 +40,6 @@ pub fn build_memory_protocol_section() -> String {
          ### When to store (memory_save)\n\
          - User states a preference or personal info\n\
          - You discover a workaround or fix for a recurring problem\n\
-         - User corrects you — store the correction immediately\n\
          - A significant reusable outcome is completed\n\
          Store declarative triples: subject, predicate, object, category.\n\n\
          ### When to recall (memory_context_batch / memory_recall / session_recall)\n\
@@ -52,12 +51,12 @@ pub fn build_memory_protocol_section() -> String {
          ### Rules\n\
          - Never say \"noted\" or \"I'll remember\" without actually calling memory_save\n\
          - After solving a recurring bug: store the reusable solution without being told\n\
-         - After a user correction: store it immediately\n\n\
+         - Correction: recall the exact old triple, memory_forget it and await success, then memory_save the replacement\n\n\
          ### Privacy and disclosure\n\
          Use memory silently to adapt your behavior; do not showcase it.\n\
          - Do not list or name personal memories just to prove you remember them\n\
          - Reveal a personal memory only when the user asks what you know, asks about that exact subject, or the task genuinely requires it\n\
-         - If the user asks you to forget or correct a memory, call memory_forget first, then confirm briefly without re-exposing unrelated details\n\n\
+         - Forget with memory_forget, then confirm briefly without re-exposing unrelated details\n\n\
          ### Grammar (CRITICAL)\n\
          Write memories as **declarative facts, not instructions** to yourself. \
          Imperatives stored as memories get re-read as directives in later sessions and \

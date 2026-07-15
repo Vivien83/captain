@@ -70,6 +70,10 @@ ENV CAPTAIN_HOME=/root/.captain
 # copies them into a fresh named volume on first mount.
 RUN captain embeddings install
 
+# Provision the same managed, frozen MemPalace runtime as host installers.
+RUN captain memory install \
+    && captain memory doctor --json >/dev/null
+
 # Persistent data volume
 VOLUME /root/.captain
 

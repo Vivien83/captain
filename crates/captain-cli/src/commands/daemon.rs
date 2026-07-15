@@ -4,6 +4,8 @@ use captain_kernel::CaptainKernel;
 
 use crate::{boot_kernel_error, cli_captain_home, daemon_client, find_daemon, ui};
 
+use super::memory_native::NativeMempalaceStartOutcome;
+
 pub(crate) fn cmd_start(config: Option<PathBuf>, yolo: bool) {
     if let Some(base) = find_daemon() {
         ui::error_with_fix(
@@ -22,6 +24,30 @@ pub(crate) fn cmd_start(config: Option<PathBuf>, yolo: bool) {
     rt.block_on(async {
         let mut kernel_config = captain_kernel::config::load_config(config.as_deref());
         set_daemon_working_directory(&kernel_config.home_dir);
+        std::env::set_var("CAPTAIN_HOME", &kernel_config.home_dir);
+        let memory_is_required = kernel_config.memory.backend
+            == captain_types::config::MemoryBackend::Mempalace;
+        let memory_was_ready = captain_runtime::native_mempalace::status().ready;
+        if memory_is_required && !memory_was_ready {
+            ui::hint("Managed MemPalace is missing or degraded; checking it before boot.");
+        }
+        match super::memory_native::ensure_native_mempalace_for_config(&kernel_config) {
+            Ok(NativeMempalaceStartOutcome::Repaired) => {
+                ui::success("Managed MemPalace was repaired and verified");
+            }
+            Ok(NativeMempalaceStartOutcome::Ready | NativeMempalaceStartOutcome::NotRequired) => {}
+            Ok(NativeMempalaceStartOutcome::Disabled) => ui::warn_with_fix(
+                "Managed MemPalace installation was explicitly disabled; semantic memory is degraded.",
+                "Unset CAPTAIN_MEMPALACE_INSTALL or run `captain memory install` before production use.",
+            ),
+            Err(error) => {
+                ui::error_with_fix(
+                    &format!("Managed MemPalace is not production-ready: {error}"),
+                    "Run `captain memory doctor`, then `captain memory install --force`.",
+                );
+                std::process::exit(1);
+            }
+        }
         if yolo {
             kernel_config.approval.auto_approve = true;
             kernel_config.approval.apply_shorthands();

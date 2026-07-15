@@ -65,8 +65,10 @@ fn test_memory_section_prevents_personal_memory_showcase() {
         "memory section must forbid memory showcase behaviour"
     );
     assert!(
-        section.contains("memory_forget first"),
-        "memory section must teach correction/forget handling"
+        section.contains("recall the exact old triple")
+            && section.contains("await success")
+            && section.contains("then memory_save"),
+        "memory section must teach ordered correction handling"
     );
 }
 

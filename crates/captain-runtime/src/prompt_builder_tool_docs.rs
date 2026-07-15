@@ -18,8 +18,8 @@ SKIP: directory listings (file_list/glob) or huge generated outputs better summa
 
     ToolDoc { name: "memory_save", doc: "\
 WHEN: store a structured durable fact after the user confirms or clearly states it.
-WHY: writes through the graph-backed long-term memory with category semantics.
-SKIP: speculative inferences, temporary task notes, or facts that should replace old memory (forget first)."
+WHY: commits first to Captain's durable local journal, then synchronizes the MemPalace semantic index.
+SKIP: speculative inferences, temporary task notes, or replacements whose exact old triple has not been retracted with memory_forget first."
     },
 
     ToolDoc { name: "memory_recall", doc: "\
@@ -36,8 +36,8 @@ SKIP: single exact durable fact where memory_recall is enough, or current-turn f
 
     ToolDoc { name: "memory_forget", doc: "\
 WHEN: user corrects a stored fact, says to forget something, or memory is clearly obsolete.
-WHY: autonomy requires retraction; wrong memory is worse than no memory.
-SKIP: broad wipes. Provide at least one tight subject, predicate, or object filter."
+WHY: preserves the audit trail, removes the fact from active context, and queues a durable MemPalace invalidation.
+SKIP: broad wipes. Prefer the exact old subject/predicate/object; after success, save a replacement only when the user supplied one."
     },
 
     ToolDoc { name: "project_list", doc: "\

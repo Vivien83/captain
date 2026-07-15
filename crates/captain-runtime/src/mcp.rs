@@ -471,6 +471,12 @@ impl McpConnection {
         if let Ok(path) = std::env::var("PATH") {
             cmd.env("PATH", path);
         }
+        // Captain-managed MCP bridges need the same data root as the daemon.
+        // This is a path, not a credential, and is safe to pass to every
+        // sandboxed MCP subprocess.
+        if let Ok(home) = std::env::var("CAPTAIN_HOME") {
+            cmd.env("CAPTAIN_HOME", home);
+        }
         // On Windows, npm/node need APPDATA, USERPROFILE, LOCALAPPDATA, and SystemRoot
         if cfg!(windows) {
             for var in &[

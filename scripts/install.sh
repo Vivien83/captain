@@ -29,6 +29,7 @@
 #   CAPTAIN_PUBLIC_URL / CAPTAIN_DOMAIN — optional VPS HTTPS URL/domain
 #   CAPTAIN_WEB_TERMINAL_SHELL — 1/true/yes to expose raw shell mode in /terminal
 #   CAPTAIN_EMBEDDINGS_INSTALL — 0/false/no to skip native local embeddings runtime install
+#   CAPTAIN_MEMPALACE_INSTALL — 0/false/no to skip managed MemPalace (default: install)
 #   CAPTAIN_VOICE_INSTALL — 1/true/yes to install native STT/TTS voice pack (default: full-media only)
 #   CAPTAIN_RUN_DOCTOR   — 1/true/yes to run `captain doctor --full`
 
@@ -132,6 +133,13 @@ should_install_voice() {
 
 should_install_embeddings() {
     case "${CAPTAIN_EMBEDDINGS_INSTALL:-1}" in
+        0|false|FALSE|no|NO|n|N) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+should_install_mempalace() {
+    case "${CAPTAIN_MEMPALACE_INSTALL:-1}" in
         0|false|FALSE|no|NO|n|N) return 1 ;;
         *) return 0 ;;
     esac
@@ -1078,6 +1086,22 @@ install() {
     install_linux_service
 
     run_initial_setup
+
+    if should_install_mempalace; then
+        echo ""
+        echo "  Installing managed MemPalace memory runtime (no API key or system Python)..."
+        if ! "$INSTALL_DIR/captain" memory install; then
+            fail "Managed MemPalace installation failed. Captain keeps local durable memory, but the selected semantic backend is not production-ready. Retry: captain memory install --force"
+        fi
+        if ! "$INSTALL_DIR/captain" memory doctor --json >/dev/null; then
+            fail "Managed MemPalace installed but failed its live semantic probe. Retry: captain memory install --force"
+        fi
+        echo "  Managed MemPalace runtime checked."
+    else
+        echo ""
+        echo "  Warning: managed MemPalace installation explicitly skipped."
+        echo "  Captain will retain durable local memory but report the semantic backend as degraded."
+    fi
 
     if should_install_embeddings; then
         echo ""

@@ -42,7 +42,7 @@ pub(crate) async fn dispatch_memory_tool(
         }
         "memory_save" => tool_memory_save(input, mcp_connections, kernel).await,
         "workspace_add" => tool_workspace_add(input, kernel).await,
-        "memory_forget" => tool_memory_forget(input, kernel).await,
+        "memory_forget" => tool_memory_forget(input, mcp_connections, kernel).await,
         "session_recall" => tool_session_recall(input).await,
         "session_tool_call_summary" => {
             tool_session_tool_call_summary(input, kernel, caller_agent_id).await

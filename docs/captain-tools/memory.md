@@ -33,9 +33,9 @@ must not be treated as facts.
 | `strict_memory_filter` | no | Default true. Disable only for explicit forensic inspection. |
 | `stop_on_error` | no | Default false. |
 
-Captain has one primary long-term memory write path, backed by MemPalace:
+Captain has one primary long-term memory write path, indexed by MemPalace:
 
-- **Long-term declarative facts** — `memory_save` writes a `(subject, predicate, object, category)` triple through the local `memory_writes` queue into MemPalace, broadcasts a 🧠 event, and survives across sessions. This is the **default** memory tool whenever the user states a durable fact.
+- **Long-term declarative facts** — `memory_save` first commits a `(subject, predicate, object, category)` triple to the local `memory_writes` continuity journal, then synchronizes the MemPalace semantic index. Local recall remains available while that index is down. The write broadcasts a 🧠 event and survives sessions, crashes, and restarts. This is the **default** memory tool whenever the user states a durable fact.
 - **Legacy key-value store** — `memory_store` is kept for old skills and temporary coordination state. It is not the default path for durable user/project knowledge.
 
 Prompt continuity contract: Captain injects a compact persistent memory capsule
@@ -58,6 +58,15 @@ Captain-native declarative learning. Use **spontaneously** when the user states 
 | `category` | yes | One of `info`, `skill`, `error_success`, `solution`, `other` (case-sensitive). |
 
 Side effect: a `MemoryStored` event is broadcast on the kernel bus → 🧠 notice surfaces in the active chat (Telegram, TUI, API/SSE, …) so the user sees the fact landed. Captain does not need to guess the `channel` field during a live turn: the runtime propagates the current origin channel to `memory_save` automatically.
+The tool receipt distinguishes `index=sync` from
+`local=durable · index=pending/retry-auto` or
+`index=degraded/retry-auto`; Captain must not claim remote synchronization
+when only the durable local commit has completed.
+
+Correction ordering is strict and dependency-aware: retrieve the exact old
+triple, call `memory_forget` and wait for its result, then call `memory_save`
+with the replacement. Never add the replacement first. This keeps local active
+context and the remote semantic index coherent throughout the correction.
 
 ### `memory_recall`
 
@@ -80,7 +89,7 @@ Legacy KV write. Treat as scratch/compatibility — entries may survive across s
 
 ### `memory_forget`
 
-Retraction tool — removes facts a previous `memory_save` (or the reflection pipeline) wrote. Use **spontaneously** when the user says "tu te trompes", "oublie ça", "ce n'est plus vrai", "corrige ce que tu sais sur X".
+Durable retraction tool — makes facts written by `memory_save` or reflection inactive while preserving their audit rows. It atomically queues a MemPalace `kg_invalidate` operation for every matched fact. Use **spontaneously** when the user says "tu te trompes", "oublie ça", "ce n'est plus vrai", or "corrige ce que tu sais sur X".
 
 | Field | Required | Notes |
 |---|---|---|
@@ -88,22 +97,78 @@ Retraction tool — removes facts a previous `memory_save` (or the reflection pi
 | `predicate` | at least one | SQL `LIKE` pattern (`has_dog`, `works_%`). |
 | `object` | at least one | SQL `LIKE` pattern (`%ancienne_valeur%`, `remote%`). |
 
-The three filters are combined in **AND** — every supplied filter must match for a row to fall. With **no filter at all**, the call returns `0` and deletes nothing (anti-wipe guard).
+The three filters are combined in **AND**. Prefer the exact old subject,
+predicate, and object for corrections; `%` is available for deliberate broad
+retractions. With **no filter at all**, the call fails before changing anything
+(anti-wipe guard).
 
-`memory_forget` also records an active retraction guard. Archived history is not rewritten: checkpoints, journals and historical mirrors remain the past. But any prompt-injected context or `memory_recall` result that still contains the forgotten term is filtered before the model sees it, so an old snapshot or MemPalace diary hit cannot reintroduce the fact as current truth. Mutable active summaries, such as `canonical_sessions.compacted_summary`, are sanitized immediately when the kernel supports it.
+`memory_forget` also records a precise active retraction guard. Archived history is not rewritten: checkpoints, journals, historical mirrors, and the original `memory_writes` row remain auditable. Active local recall excludes the row immediately. Any stale prompt or MemPalace diary hit matching the old fact is filtered, and mutable active summaries such as `canonical_sessions.compacted_summary` are sanitized when the kernel supports it. A fully exact legacy triple absent from the local journal still receives a durable MemPalace invalidation.
+On restart, Captain rebuilds missing active guards from retracted journal rows,
+closing the crash window between the atomic journal mutation and its auxiliary
+KV snapshot.
 
-Returns the row count deleted, `active_context_suppressed=true` when that guard was recorded, and `active_context_sanitized` with counts for mutable active summaries that were updated or cleared.
+Returns `retracted`, `invalidations_queued`, `remote_synced`, `remote_pending`,
+and `remote_failed`, plus `active_context_suppressed` and
+`active_context_sanitized`. `remote_pending` is not data loss: the operation is
+in the local journal and the background worker will replay it.
 
 ## Sandbox
 
-- **MemPalace SSOT** — `memory_save`, `memory_recall` and `memory_forget` are the long-term memory contract. Writes first land in the local `memory_writes` table under Captain's data directory, then sync to MemPalace best-effort/asynchronously.
-- **Active memory vs archive** — MemPalace/long-term graph is the canonical
-  memory. Active prompt markdown such as `SOUL.md`, `AGENTS.md`, `STYLE.md` and
+- **Managed native runtime** — MemPalace is a core dependency when
+  `memory.backend = "mempalace"`. Official host installers and the published
+  container provision it before first use. Every active local kernel entrypoint
+  (`captain start`, direct CLI, TUI, and Captain's MCP server) then runs the same
+  preflight before boot; users do not install a Python package manually. Captain
+  pins uv 0.11.28, CPython 3.13.14,
+  MemPalace 3.5.0, and every Python artifact through the embedded frozen
+  `uv.lock`. The managed runtime lives under
+  `$CAPTAIN_HOME/native/mempalace`; memory data remains separate under
+  `$CAPTAIN_HOME/data/mempalace` (or an existing `~/.mempalace`, preserved in
+  place on default-home upgrades). No system Python or provider API key is
+  required.
+- **Fail-closed readiness** — `captain memory status --json` exposes runtime,
+  palace, platform, private-permission, generation, and pin state. `captain
+  memory doctor` verifies the exact executable, opens the palace, and performs
+  a real semantic search; it exits non-zero when any layer is degraded.
+  `captain memory install --force` repairs it. Every active local kernel
+  entrypoint performs the same live readiness check and automatic repair before
+  boot, including a statically present runtime whose executable, model, palace,
+  or permissions are broken. If repair fails, that surface does not claim production readiness.
+  Setting
+  `CAPTAIN_MEMPALACE_INSTALL=0` is an explicit degraded-mode opt-out, not a
+  successful production install.
+- **Crash-safe repair** — installs hold an interprocess lock and build a new,
+  immutable runtime generation. Captain validates the exact Python and
+  MemPalace versions, palace storage, and a real semantic search before an
+  atomic metadata switch. Failed or interrupted generations never replace the
+  active one. Runtime and memory roots are owner-only on Unix; managed metadata
+  is mode `0600`. Captain retains only the active generation and one rollback
+  generation, so repeated repairs cannot grow disk use without bound. Managed
+  command timeouts terminate the complete process tree. Status distinguishes
+  compatible, stale, and genuinely incomplete generations.
+- **Version-coherent bridge** — the core MemPalace MCP bridge is launched
+  through the exact Captain executable that booted the kernel, never an
+  unrelated `captain` found earlier on `PATH`. An operator-defined MCP server
+  named `mempalace` remains an explicit override.
+- **Durable continuity and semantic index** — `memory_save`, `memory_recall`,
+  and `memory_forget` are the long-term memory contract. The local
+  `memory_writes` journal under Captain's data directory is the durable record
+  of accepted add/invalidate operations. MemPalace is the semantic index
+  derived from that journal. Pending and degraded `error` rows remain active
+  for local recall and retry with persisted exponential backoff; they are never
+  age-deleted automatically.
+- **Outage isolation** — a resync tick processes at most 250 due operations and
+  stops after the first backend failure, so one outage cannot consume the
+  retry budget of the whole queue. `error` means observable degradation after
+  repeated failures, not terminal loss. `captain doctor` and
+  `/api/learning/metrics` expose backlog age, next retry, maximum attempts, and
+  the bounded last error.
+- **Active memory vs archive** — active prompt markdown such as `SOUL.md`, `AGENTS.md`, `STYLE.md` and
   global `~/.captain/USER.md` is context, not independent memory truth.
   Checkpoints and journals are archival history; do not delete them just to
-  forget a fact. Use `memory_forget`, which retracts the canonical fact and
-  prevents stale archived lines from being injected as active context or
-  returned through `memory_recall`.
+  forget a fact. Use `memory_forget`, which retracts the active local fact,
+  journals the MemPalace invalidation, and prevents stale archived lines from
+  returning through active context or `memory_recall`.
 - **MemPalace exposure** — the bundled MemPalace integration is local stdio and needs no API key. If a user exposes MemPalace as a remote MCP/SSE endpoint, require a bearer token on the server and set the MCP `auth_token_env` field to a vault-backed env var; never publish an unauthenticated memory endpoint.
 - **Workspace memory markdown is retired** — workspace `MEMORY.md`,
   `USER.md`, `BOOTSTRAP.md` and `PLAYBOOK.md` are legacy migration artifacts,
@@ -129,10 +194,10 @@ Returns the row count deleted, `active_context_suppressed=true` when that guard 
   facts from those candidates; run a narrower `memory_recall` or set
   `strict_memory_filter=false` only when explicitly auditing noisy memory.
 - `memory_recall` results are not a permission to disclose. Quote the minimum relevant detail, and keep unrelated personal facts out of the answer.
-- `memory_forget` requires at least one filter — calling it with `{}` returns `removed: 0` instead of wiping the store. Use SQL `LIKE` wildcards (`%`) deliberately; `%` alone matches everything in that field.
+- `memory_forget` requires at least one filter — calling it with `{}` returns an error before any mutation. Use SQL `LIKE` wildcard `%` deliberately; `%` alone matches everything in that field. Exact triples are the production path for corrections.
 - `memory_store` values larger than ~512 KB are stored anyway but slow `memory_recall` proportionally. For large blobs use `file_write` and store the path.
 - The 🧠 channel notice from `memory_save` is automatic for live routed turns. Headless/programmatic tool calls without an origin channel still broadcast on the kernel bus, but external adapters cannot infer a private chat target.
-- Deletion is permanent — there is no `memory_undo`. The reflection pipeline will not re-create a fact you just forgot unless the user states it again.
+- Retraction preserves the original audit row but removes it from active recall. Re-assert a fact only when the user states it again; do not resurrect it from archival history.
 
 ## Exemples
 
@@ -151,18 +216,20 @@ Returns the row count deleted, `active_context_suppressed=true` when that guard 
    → matching MemPalace/local memory context
 ```
 
-### Golden path — retract a wrong fact
+### Golden path — correct a wrong fact
 
 ```
-memory_forget({"subject":"user","predicate":"prefers","object":"%ancienne_valeur%"})
-→ {"status":"ok","removed":1,"active_context_suppressed":true,"active_context_sanitized":{"status":"ok","canonical_summaries_updated":1,"canonical_summaries_cleared":0}}
+1. memory_forget({"subject":"user","predicate":"prefers_response_style","object":"long answers in English"})
+   → {"status":"ok","retracted":1,"invalidations_queued":1,"remote_synced":1,"remote_pending":0,"active_context_suppressed":true}
+2. memory_save({"subject":"user","predicate":"prefers_response_style","object":"short answers in French","category":"info"})
+   → "🧠 mémorisé · user/prefers_response_style (info)"
 ```
 
 ### Error case — empty filter set is refused
 
 ```
 memory_forget({})
-→ Err("memory_forget refuses to delete with no filter — provide at least subject, predicate or object").
+→ Err("memory_forget refuses to retract with no filter — provide at least subject, predicate or object").
 ```
 
-The anti-wipe guard is the contract: a hallucinated empty call cannot drop the entire MemPalace.
+The anti-wipe guard is the contract: a hallucinated empty call cannot retract the journal or the MemPalace index.

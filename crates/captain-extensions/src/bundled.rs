@@ -143,8 +143,8 @@ mod tests {
             match &t.transport {
                 crate::McpTransportTemplate::Stdio { command, args } => {
                     assert!(
-                        command == "npx" || command == "python3",
-                        "{} should use npx or python3, got {}",
+                        command == "npx" || command == "captain",
+                        "{} should use npx or a Captain-managed bridge, got {}",
                         id,
                         command
                     );
@@ -154,6 +154,22 @@ mod tests {
                     panic!("{} unexpectedly uses SSE transport", id);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn mempalace_uses_captain_managed_bridge() {
+        let (_, content) = bundled_integrations()
+            .into_iter()
+            .find(|(id, _)| *id == "mempalace")
+            .unwrap();
+        let template: IntegrationTemplate = toml::from_str(content).unwrap();
+        match template.transport {
+            crate::McpTransportTemplate::Stdio { command, args } => {
+                assert_eq!(command, "captain");
+                assert_eq!(args, vec!["memory", "mcp-serve"]);
+            }
+            _ => panic!("managed MemPalace must use stdio"),
         }
     }
 

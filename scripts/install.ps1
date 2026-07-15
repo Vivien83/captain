@@ -13,6 +13,7 @@
 #   $env:CAPTAIN_PROFILE = core | vps | desktop | full-media (default: core)
 #   $env:CAPTAIN_SETUP = ask | 1 | 0 (default: ask)
 #   $env:CAPTAIN_SETUP_QUICK = 1 to run non-interactive setup from env vars
+#   $env:CAPTAIN_MEMPALACE_INSTALL = 0 to explicitly skip managed MemPalace
 
 $ErrorActionPreference = 'Stop'
 
@@ -39,6 +40,11 @@ function Fail-CaptainInstall {
 function Test-Yes {
     param([string]$Value)
     return $Value -match '^(1|true|yes|y)$'
+}
+
+function Test-No {
+    param([string]$Value)
+    return $Value -match '^(0|false|no|n)$'
 }
 
 function Run-InitialSetup {
@@ -273,6 +279,25 @@ function Install-Captain {
     Write-Host "  Captain installed successfully! ($versionOutput)" -ForegroundColor Green
 
     Run-InitialSetup $installedExe
+
+    if (Test-No $env:CAPTAIN_MEMPALACE_INSTALL) {
+        Write-Host ""
+        Write-Host "  Warning: managed MemPalace installation explicitly skipped." -ForegroundColor Yellow
+        Write-Host "  Durable local memory remains available, but semantic memory is degraded." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host ""
+        Write-Host "  Installing managed MemPalace memory runtime..." -ForegroundColor Cyan
+        & $installedExe memory install
+        if ($LASTEXITCODE -ne 0) {
+            Fail-CaptainInstall "Managed MemPalace installation failed. Retry: captain memory install --force"
+        }
+        & $installedExe memory doctor --json | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Fail-CaptainInstall "Managed MemPalace installed but failed its live semantic probe. Retry: captain memory install --force"
+        }
+        Write-Host "  Managed MemPalace runtime checked." -ForegroundColor Green
+    }
 
     Write-Host ""
     Write-Host "  Get started:" -ForegroundColor Cyan

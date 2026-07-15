@@ -145,7 +145,18 @@ fn create_backend(config: Option<std::path::PathBuf>) -> McpBackend {
     }
 
     // Fall back to in-process kernel
-    let kernel = match CaptainKernel::boot(config.as_deref()) {
+    let kernel_config = match crate::commands::memory_native::prepare_kernel_config(
+        config.as_deref(),
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!(
+                "Managed MemPalace is not production-ready for MCP: {error}. Run `captain memory doctor`, then `captain memory install --force`."
+            );
+            std::process::exit(1);
+        }
+    };
+    let kernel = match CaptainKernel::boot_with_config(kernel_config) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("Failed to boot kernel for MCP: {e}");

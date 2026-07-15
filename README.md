@@ -40,7 +40,7 @@ app, Telegram, or Discord.
 <tr><td width="220"><b>One binary, one daemon</b></td><td>A compiled Rust core orchestrates agents, tools, memory, channels, schedules, and approvals. Starts in seconds, idles light, survives reboots as a native service (launchd/systemd), and updates itself — ask it to in chat, approve, done.</td></tr>
 <tr><td><b>Durable work</b></td><td>Projects, goals, checkpoints, workflows, and detached tool runs are persisted. After a restart, incomplete detached work becomes inspectable as <code>interrupted</code> instead of disappearing or being replayed blindly.</td></tr>
 <tr><td><b>Real execution, guarded</b></td><td>Shell, files, SSH, browser automation, web research, code execution, documents, and media. Sensitive calls use approvals; critical shell patterns are blocked; budgets limit tokens, cost, and tool-call rate. Independent read-only tools may run concurrently, while dependent or side-effecting work remains ordered.</td></tr>
-<tr><td><b>Memory that follows the conversation</b></td><td>Session recall, durable user facts, project state, MemPalace, a knowledge graph, and optional local ONNX embeddings provide bounded context without dumping raw history into every turn.</td></tr>
+<tr><td><b>Memory that follows the conversation</b></td><td>Session recall, durable user facts, project state, a knowledge graph, and optional local ONNX embeddings provide bounded context without dumping raw history into every turn. Accepted facts enter a local continuity journal first, remain available during a MemPalace outage, and resynchronize automatically with bounded backoff.</td></tr>
 <tr><td><b>Any model, no lock-in</b></td><td>Codex through your ChatGPT subscription, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter, and local models through Ollama. Captain discovers the live catalog and configured credentials instead of relying on fixed provider or model counts. For Codex, an hourly refresh surfaces newly listed models in Control and, when configured, Telegram; Captain never switches without your explicit decision and session strategy.</td></tr>
 <tr><td><b>Six operational hubs</b></td><td>Chat, Projects, Automation, Learning, Capabilities, and Status are the shared primary surface in the TUI and Control web app. Automation groups Workflows, Triggers, Crons, Approvals, and Webhooks.</td></tr>
 <tr><td><b>Agents as services</b></td><td>Each agent can receive authenticated external ingress and emit signed HTTP callbacks. Captain provisions ingress automatically and reports the exact external callback URL still required before egress can be ready.</td></tr>
@@ -52,15 +52,15 @@ app, Telegram, or Discord.
 ## Quick Install
 
 Current public early-access prerelease:
-[v0.1.0-alpha.2](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.2).
-Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2`;
+[v0.1.0-alpha.3](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3).
+Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.2 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.3 bash
 ```
 
 The official repository, release assets, checksums, and container image are
@@ -70,6 +70,14 @@ The installer downloads a prebuilt, checksum-verified bundle for your
 platform (no compilation, no toolchain), verifies the CLI end to end, and
 runs a guided setup that **finishes with Captain actually running** as a
 background service.
+
+The same install provisions Captain's managed memory runtime before daemon
+boot: uv 0.11.28, isolated CPython 3.13.14, MemPalace 3.5.0, and a frozen
+checksum-bound dependency lock. No system Python, manual `pip install`, or
+secondary API key is required. `captain memory doctor` verifies it live;
+startup repairs a missing, corrupt, or insecure runtime and verifies a real
+semantic read before boot. If repair fails, Captain does not report a
+production-ready daemon without semantic memory.
 
 Release assets cover `aarch64` and `x86_64` for macOS and Linux, plus an
 `x86_64-pc-windows-msvc` CLI zip. Every archive has a SHA-256 file and a
@@ -86,8 +94,8 @@ Unix installers.
 ```bash
 export ANTHROPIC_API_KEY=...       # or any supported provider key
 export TELEGRAM_BOT_TOKEN=...      # optional — see below
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.2 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.3 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 The `vps` profile installs a systemd service, starts it, and validates
@@ -104,8 +112,8 @@ installs everything (binary, systemd service) without starting the daemon
 yet, so the readiness check below doesn't run before you've logged in:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.2 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.3 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # prints a URL + code — open it on your phone, no local browser needed
 systemctl start captain    # non-root install: systemctl --user start captain
@@ -122,12 +130,15 @@ docker run -d --name captain --restart unless-stopped \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3
 ```
 
 First boot generates the daemon API key and persists it — along with all
 state — in a named volume that survives image updates. The local embeddings
-runtime is provisioned in the image.
+and managed MemPalace runtimes are provisioned in the image. The entrypoint
+runs the live semantic doctor on every boot and repairs a missing, corrupt, or
+insecure runtime before the daemon starts, including when a bind mount hides
+the image's seeded state.
 
 For a source build or one of the host-access profiles, clone the repository
 and use the Compose files. The base Compose service is also tagged with the
@@ -227,7 +238,7 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Headless installs, reverse proxy, HTTPS |
 | [MCP & A2A](docs/mcp-a2a.md) | External tool servers, agent-to-agent |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and their fixes |
-| [0.1.0-alpha.2 Release Notes](docs/releases/v0.1.0-alpha.2.md) | Early-access scope and known limitations |
+| [0.1.0-alpha.3 Release Notes](docs/releases/v0.1.0-alpha.3.md) | Managed MemPalace, durable memory recovery, and alpha limitations |
 | [Docs Status (DOC2)](docs/DOCS_STATUS.md) | Current contracts, frozen surfaces, and historical documents |
 
 ---

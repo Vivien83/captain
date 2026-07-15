@@ -112,8 +112,8 @@ pub const SSH_FAMILY_TOOLS: &[&str] =
 
 /// D.6 — Tools that belong to the `memory` family. Audit prose lives in
 /// `docs/captain-tools/memory.md`. Captain-native declarative save vs
-/// key-value store, plus retraction; the SSOT/MemPalace contract is
-/// pinned next to each.
+/// key-value store, plus durable retraction; the local continuity journal and
+/// MemPalace semantic-index contract are pinned next to each.
 pub const MEMORY_FAMILY_TOOLS: &[&str] = &[
     "memory_context_batch",
     "memory_save",

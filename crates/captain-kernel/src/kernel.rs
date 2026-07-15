@@ -374,8 +374,9 @@ RÈGLES:\n\
 - Ne traite pas PLAYBOOK.md comme une source canonique pour t'auto-auditer,\n\
   comparer Captain à un autre agent ou choisir un outil : c'est un support\n\
   legacy de workspace. Utilise l'état live, captain_docs et capability_search.\n\n\
-MÉMOIRE (3 outils, 3 usages) — pattern Captain:\n\
-- memory_save(subject, predicate, object, category) = ÉCRIS un fait durable.\n\
+MÉMOIRE (4 outils, usages distincts) — pattern Captain:\n\
+- memory_save(subject, predicate, object, category) = JOURNALISE un fait durable\n\
+  localement puis synchronise son index MemPalace.\n\
   Appelle-le SPONTANÉMENT — sans qu'on te le demande — dès que tu détectes :\n\
   (1) une info user qui ressortira plus tard (préférence, contact, contexte),\n\
   (2) un fait durable découvert pendant un workflow (endpoint, commande, convention, quirk d'outil),\n\
@@ -394,15 +395,18 @@ MÉMOIRE (3 outils, 3 usages) — pattern Captain:\n\
   Ne liste jamais des détails personnels juste pour prouver que tu te\n\
   souviens. Ne révèle un souvenir personnel que si l'utilisateur le demande\n\
   explicitement, parle de ce sujet précis, ou si la tâche l'exige vraiment.\n\
-- memory_forget(subject?, predicate?, object?) = SUPPRIME un fait que\n\
-  tu avais stocké à tort. Appelle-le SPONTANÉMENT quand l'utilisateur\n\
+- memory_forget(subject?, predicate?, object?) = RÉTRACTE durablement un fait\n\
+  stocké à tort, conserve son audit et journalise l'invalidation MemPalace.\n\
+  Appelle-le SPONTANÉMENT quand l'utilisateur\n\
   dit 'oublie ça', 'tu te trompes', 'corrige ce que tu sais sur X',\n\
   'ce n'est plus vrai'. Au moins UN filtre requis (anti-wipe). Les\n\
   filtres acceptent les wildcards SQL LIKE (% = n'importe quoi).\n\
-  EXEMPLE : memory_forget({object:'%ancienne_valeur%'}) supprime tout fait\n\
-  mentionnant cette valeur. Ne demande pas confirmation : agis, le user\n\
-  voit le nombre de lignes supprimées en retour. Appelle memory_forget\n\
-  d'abord, puis confirme brièvement sans réexposer de détails inutiles.\n\
+  Pour une correction, rappelle d'abord l'ancien triplet exact, appelle\n\
+  memory_forget sur ce triplet et attends son résultat, puis appelle\n\
+  memory_save avec la nouvelle valeur. Ne sauvegarde jamais le remplacement\n\
+  avant la rétraction. Un remote_pending est sûr : le worker le rejouera.\n\
+  Ne demande pas confirmation : agis, puis confirme brièvement sans réexposer\n\
+  de détails inutiles.\n\
 - Filet de sécurité : un job background (Haiku) scanne aussi les tours\n\
   et capture ce que tu as oublié. C'est un FILET, pas un substitut.\n\
 - Pour LIRE la mémoire structurée : mempalace_kg_query, mempalace_search,\n\
@@ -609,15 +613,7 @@ impl CaptainKernel {
     fn memory_retractions_for_prompt(
         &self,
     ) -> Vec<captain_runtime::memory_retractions::MemoryRetraction> {
-        captain_runtime::memory_retractions::load_retractions(
-            self.memory
-                .structured_get(
-                    shared_memory_agent_id(),
-                    captain_runtime::memory_retractions::MEMORY_RETRACTIONS_KEY,
-                )
-                .ok()
-                .flatten(),
-        )
+        self.handle_memory_retractions()
     }
 
     fn runtime_update_notice(&self) -> Option<String> {
@@ -1406,6 +1402,10 @@ impl KernelHandle for CaptainKernel {
 
     fn memory_kv_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
         self.handle_memory_kv_recall(key)
+    }
+
+    fn memory_retractions(&self) -> Vec<captain_runtime::memory_retractions::MemoryRetraction> {
+        self.handle_memory_retractions()
     }
 
     fn memory_sanitize_active_context(

@@ -751,7 +751,19 @@ pub fn spawn_kernel_boot(config: Option<std::path::PathBuf>, tx: mpsc::Sender<Ap
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
 
-        match CaptainKernel::boot(config.as_deref()) {
+        let kernel_config = match crate::commands::memory_native::prepare_kernel_config(
+            config.as_deref(),
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                let _ = tx.send(AppEvent::KernelError(format!(
+                    "Managed MemPalace is not production-ready: {error}. Run `captain memory doctor`, then `captain memory install --force`."
+                )));
+                return;
+            }
+        };
+
+        match CaptainKernel::boot_with_config(kernel_config) {
             Ok(k) => {
                 let k = Arc::new(k);
                 k.set_self_handle();

@@ -38,6 +38,22 @@ fn parse_limit(params: &HashMap<String, String>, default: usize, cap: usize) -> 
         .min(cap)
 }
 
+fn memory_writes_metrics(journal: &memory_writer::JournalHealth) -> serde_json::Value {
+    serde_json::json!({
+        "total": journal.total,
+        "synced": journal.synced,
+        "pending": journal.pending,
+        "error": journal.error,
+        "retracted": journal.retracted,
+        "oldest_unsynced_at": journal.oldest_unsynced_at,
+        "next_retry_at": journal.next_retry_at,
+        "max_sync_attempts": journal.max_sync_attempts,
+        "last_sync_error": journal.last_sync_error,
+        "continuity": "local_journal_available",
+        "recovery": if journal.error > 0 || journal.pending > 0 { "automatic_retry_active" } else { "in_sync" },
+    })
+}
+
 pub async fn list_committed(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
@@ -122,26 +138,55 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Ok(g) => g,
         Err(e) => return server_error(format!("sqlite poisoned: {e}")),
     };
-    let total_synced =
-        memory_writer::count_by_status(&guard, memory_writer::SyncStatus::Synced).unwrap_or(0);
-    let total_pending =
-        memory_writer::count_by_status(&guard, memory_writer::SyncStatus::Pending).unwrap_or(0);
-    let total_error =
-        memory_writer::count_by_status(&guard, memory_writer::SyncStatus::Error).unwrap_or(0);
+    let journal = match memory_writer::journal_health(&guard) {
+        Ok(health) => health,
+        Err(error) => return server_error(format!("memory journal health failed: {error}")),
+    };
     let review_pending = learning_review::list_pending(&guard, 10_000)
         .map(|v| v.len() as i64)
         .unwrap_or(0);
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "memory_writes": {
-                "synced": total_synced,
-                "pending": total_pending,
-                "error": total_error,
-            },
+            "memory_writes": memory_writes_metrics(&journal),
             "review_queue_pending": review_pending,
             "learning_mode": format!("{:?}", state.kernel.config.learning.mode).to_lowercase(),
             "learning_enabled": state.kernel.config.learning.enabled,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_metrics_expose_durable_recovery_state() {
+        let payload = memory_writes_metrics(&memory_writer::JournalHealth {
+            total: 12,
+            synced: 9,
+            pending: 2,
+            error: 1,
+            retracted: 3,
+            oldest_unsynced_at: Some(1_000),
+            next_retry_at: Some(2_000),
+            max_sync_attempts: 7,
+            last_sync_error: Some("backend offline".into()),
+        });
+        assert_eq!(payload["continuity"], "local_journal_available");
+        assert_eq!(payload["recovery"], "automatic_retry_active");
+        assert_eq!(payload["retracted"], 3);
+        assert_eq!(payload["max_sync_attempts"], 7);
+        assert_eq!(payload["last_sync_error"], "backend offline");
+    }
+
+    #[test]
+    fn memory_metrics_report_in_sync_only_with_empty_backlog() {
+        let payload = memory_writes_metrics(&memory_writer::JournalHealth {
+            total: 4,
+            synced: 4,
+            ..Default::default()
+        });
+        assert_eq!(payload["recovery"], "in_sync");
+    }
 }

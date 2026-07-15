@@ -1,6 +1,6 @@
 //! Compact always-on memory capsule for prompt injection.
 //!
-//! `memory_writes` remains the audit/replay queue for MemPalace. This module
+//! `memory_writes` is the durable audit/continuity journal behind MemPalace. This module
 //! derives a short, deterministic, declarative view from that queue so the
 //! runtime can provide Captain-native continuity without dumping raw memory or
 //! procedural recipes into every prompt.
@@ -21,7 +21,7 @@ pub fn build_from_writes(
     max_items: usize,
     max_chars: usize,
 ) -> Result<Option<String>, rusqlite::Error> {
-    let rows = memory_writer::list_recent(conn, None, max_items.saturating_mul(4).max(max_items))?;
+    let rows = memory_writer::list_recent_active(conn, max_items.saturating_mul(4).max(max_items))?;
     Ok(build_from_rows(&rows, max_items, max_chars))
 }
 
@@ -34,7 +34,10 @@ pub fn build_from_rows(rows: &[MemoryWrite], max_items: usize, max_chars: usize)
         if lines.len() >= max_items {
             break;
         }
-        if !matches!(row.sync_status, SyncStatus::Pending | SyncStatus::Synced) {
+        if !matches!(
+            row.sync_status,
+            SyncStatus::Pending | SyncStatus::Synced | SyncStatus::Error
+        ) {
             continue;
         }
         if looks_procedural_or_imperative(&row.object) {
@@ -120,6 +123,7 @@ mod tests {
     fn row(subject: &str, predicate: &str, object: &str) -> MemoryWrite {
         MemoryWrite {
             id: uuid::Uuid::new_v4().to_string(),
+            operation: crate::memory_writer::MemoryOperation::Add,
             subject: subject.into(),
             predicate: predicate.into(),
             object: object.into(),
@@ -131,6 +135,9 @@ mod tests {
             created_at: 1,
             synced_at: Some(2),
             last_error: None,
+            last_attempt_at: None,
+            next_retry_at: None,
+            retracted_at: None,
         }
     }
 
@@ -160,5 +167,15 @@ mod tests {
         ];
         let capsule = build_from_rows(&rows, 10, 500).unwrap();
         assert_eq!(capsule.lines().count(), 1);
+    }
+
+    #[test]
+    fn capsule_keeps_degraded_local_fact_while_backend_recovers() {
+        let mut degraded = row("user", "prefers", "concise answers");
+        degraded.sync_status = SyncStatus::Error;
+        degraded.sync_attempts = 7;
+        degraded.last_error = Some("backend unavailable".into());
+        let capsule = build_from_rows(&[degraded], 10, 500).unwrap();
+        assert!(capsule.contains("user prefers concise answers"));
     }
 }

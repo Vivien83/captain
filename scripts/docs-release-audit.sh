@@ -25,6 +25,7 @@ DOC_FILES=(
   docs/channel-adapters.md
   docs/configuration.md
   docs/captain-tools/channel.md
+  docs/captain-tools/memory.md
   docs/captain-tools/skill.md
   docs/captain-tools/runtime-changelog.md
   docs/INDEX.md
@@ -33,6 +34,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
   docs/releases/v0.1.0-alpha.1.md
 )
@@ -144,23 +146,23 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.2"
+  "### 0.1.0-alpha.3"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.2'
+  '0.1.0-alpha.3'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.2'
+  '0.1.0-alpha.3'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.2] - 2026-07-14'
+  '## [0.1.0-alpha.3] - 2026-07-15'
 require_contains \
   "reviewed alpha notes exist" \
-  docs/releases/v0.1.0-alpha.2.md \
-  '# Captain 0.1.0-alpha.2'
+  docs/releases/v0.1.0-alpha.3.md \
+  '# Captain 0.1.0-alpha.3'
 require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
@@ -181,11 +183,11 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the public prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.2/install.sh'
+    'releases/download/v0.1.0-alpha.3/install.sh'
   require_contains \
     "$readme pins the immutable alpha image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
@@ -203,6 +205,18 @@ require_contains \
   "runtime changelog documents deterministic Docker embeddings" \
   docs/captain-tools/runtime-changelog.md \
   'checksum-pinned FastEmbed snapshot'
+require_contains \
+  "memory docs pin managed runtime versions" \
+  docs/captain-tools/memory.md \
+  'uv 0.11.28, CPython 3.13.14'
+require_contains \
+  "memory docs pin all active local boot paths" \
+  docs/captain-tools/memory.md \
+  'Every active local kernel entrypoint'
+require_contains \
+  "memory docs pin fail-closed production readiness" \
+  docs/captain-tools/memory.md \
+  'does not claim production readiness'
 require_contains \
   "runtime changelog documents manual-only release fallback" \
   docs/captain-tools/runtime-changelog.md \

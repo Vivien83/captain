@@ -379,7 +379,7 @@ fn compact_memory_writes_result(
     let query_terms = memory_context_tokens(query);
     let scan_limit = (max_items * 12).clamp(max_items, 120);
     let rows = match conn.lock() {
-        Ok(guard) => captain_memory::memory_writer::list_recent(&guard, None, scan_limit),
+        Ok(guard) => captain_memory::memory_writer::list_recent_active(&guard, scan_limit),
         Err(error) => {
             return Some(serde_json::json!({
                 "success": false,

@@ -16,7 +16,7 @@ CAPTAIN_SMOKE_LLM="${CAPTAIN_SMOKE_LLM:-0}"
 CAPTAIN_SMOKE_TTS="${CAPTAIN_SMOKE_TTS:-0}"
 CAPTAIN_SMOKE_SSH_ALIAS="${CAPTAIN_SMOKE_SSH_ALIAS:-}"
 CAPTAIN_SMOKE_STRICT_RELEASE="${CAPTAIN_SMOKE_STRICT_RELEASE:-0}"
-EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.2}"
+EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.3}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -116,7 +116,10 @@ done
 PASS=0
 FAIL=0
 WARN=0
-AUTH_HEADER_ARGS=()
+# Bash 3.2 treats an empty array expansion as an unbound variable under
+# `set -u`. Keep one harmless header so unauthenticated isolated smokes remain
+# portable across the supported macOS shells.
+AUTH_HEADER_ARGS=(-H "Accept: application/json")
 
 color() {
   if [ -t 1 ]; then
@@ -201,7 +204,7 @@ toml_auth_int() {
 
 load_auth_header() {
   if [ -n "${CAPTAIN_API_KEY:-}" ]; then
-    AUTH_HEADER_ARGS=(-H "Authorization: Bearer $CAPTAIN_API_KEY")
+    AUTH_HEADER_ARGS=(-H "Accept: application/json" -H "Authorization: Bearer $CAPTAIN_API_KEY")
     return 0
   fi
 
@@ -234,7 +237,7 @@ load_auth_header() {
   payload="$username:$expiry"
   signature="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" -hex | awk '{print $2}')"
   token="$(printf '%s:%s' "$payload" "$signature" | base64 | tr -d '\n')"
-  AUTH_HEADER_ARGS=(-H "Authorization: Bearer $token")
+  AUTH_HEADER_ARGS=(-H "Accept: application/json" -H "Authorization: Bearer $token")
 }
 
 finish() {
@@ -446,7 +449,10 @@ assert_jq_true "$web_text" '.fetched[0].url == "https://example.com"' "web batch
 assert_jq_true "$web_text" '.fetched[0].success == true' "web batch fetch succeeded"
 
 title "7/8 Document pipeline"
-doc_path="$(pwd)/$WORKDIR/excellence-smoke.md"
+case "$WORKDIR" in
+  /*) doc_path="$WORKDIR/excellence-smoke.md" ;;
+  *) doc_path="$(pwd)/$WORKDIR/excellence-smoke.md" ;;
+esac
 doc_args=$(jq -nc --arg path "$doc_path" '{
   document: {
     format: "markdown",

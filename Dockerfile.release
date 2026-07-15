@@ -50,6 +50,11 @@ RUN cd /root/.captain/.fastembed_cache \
     && sha256sum --check CAPTAIN-SHA256SUMS \
     && captain embeddings install
 
+# Memory is a core runtime dependency. The installer uses a pinned uv binary,
+# a frozen cross-platform lockfile, and an isolated managed Python runtime.
+RUN captain memory install \
+    && captain memory doctor --json >/dev/null
+
 VOLUME /root/.captain
 WORKDIR /root
 ENTRYPOINT ["docker-entrypoint.sh"]

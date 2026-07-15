@@ -26,6 +26,51 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.3 — Native MemPalace and durable memory continuity
+
+Agent-facing changes:
+
+- MemPalace is a managed core dependency when the configured memory backend is
+  `mempalace`. Official installers and containers provision pinned uv 0.11.28,
+  isolated CPython 3.13.14, MemPalace 3.5.0, and the frozen dependency graph
+  without requiring system Python or another provider key. Daemon/Web, direct
+  CLI, TUI, and Captain MCP boot paths all run the same verified repair
+  preflight before starting an in-process kernel.
+- `captain memory doctor` now verifies exact versions, platform, owner-only
+  paths, palace access, and an actual semantic search. Daemon boot repairs a
+  missing or broken runtime before kernel startup and refuses production
+  readiness if that repair fails. `CAPTAIN_MEMPALACE_INSTALL=0` is an explicit
+  degraded-mode opt-out.
+- Repairs are serialized and transactional. They activate an immutable
+  generation only after validation, preserve the user palace on failure,
+  retain one rollback generation, and terminate timed-out subprocess trees.
+- The managed MCP bridge always uses the same Captain executable as the
+  running kernel. A manually configured MCP server named `mempalace` is still
+  treated as an intentional operator override.
+- Captain's local `memory_writes` database is now the durable continuity
+  journal for accepted add and invalidate operations; MemPalace is its
+  semantic index. A MemPalace outage cannot remove a fact from local recall.
+- Failed operations use restart-safe exponential backoff. Degraded `error`
+  rows remain retryable and are never age-deleted. Each resync tick stops after
+  the first backend failure so one outage does not exhaust the entire queue.
+- `memory_forget` preserves the original audit row and queues a durable
+  `kg_invalidate`. Corrections must retract the exact old triple first and save
+  the replacement only after that result. Exact legacy triples absent from the
+  local journal are also invalidated durably.
+- `captain doctor` and learning metrics expose pending/error counts, oldest
+  backlog age, next retry, maximum attempts, and the bounded last sync error.
+
+How to answer the user:
+
+- Do not ask the user to install MemPalace or Python manually. Run `captain
+  memory doctor`; if it fails, run `captain memory install --force` and report
+  the exact failing probe. A daemon running with the explicit opt-out is
+  degraded, not fully production-ready.
+- If `memory_save` reports `index=pending/retry-auto` or `index=degraded`, or
+  `memory_forget` reports `remote_pending`, explain that the local operation is
+  safe and automatic recovery is active. Do not claim MemPalace is synchronized
+  until the backlog returns to zero.
+
 ### 0.1.0-alpha.2 — Native visual inspection on the active conversation model
 
 Agent-facing changes:

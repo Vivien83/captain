@@ -30,6 +30,10 @@ dirs = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+fs2 = { workspace = true }
 captain-runtime = { path = "../captain-runtime", default-features = false }
 uuid = { workspace = true }
 chrono = { workspace = true }

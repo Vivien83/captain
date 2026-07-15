@@ -520,6 +520,12 @@ fn dispatch_security_command(sub: SecurityCommands) {
 
 fn dispatch_memory_command(sub: MemoryCommands) {
     match sub {
+        MemoryCommands::Status { json } => super::memory_native::cmd_memory_native_status(json),
+        MemoryCommands::Install { best_effort, force } => {
+            super::memory_native::cmd_memory_native_install(best_effort, force)
+        }
+        MemoryCommands::Doctor { json } => super::memory_native::cmd_memory_native_doctor(json),
+        MemoryCommands::McpServe => super::memory_native::cmd_memory_mcp_serve(),
         MemoryCommands::List { agent, json } => super::memory::cmd_memory_list(&agent, json),
         MemoryCommands::Get { agent, key, json } => {
             super::memory::cmd_memory_get(&agent, &key, json)

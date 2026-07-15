@@ -18,6 +18,7 @@
 #   CAPTAIN_VERSION          — release version (default: 0.1.0-dev.<timestamp>)
 #   CAPTAIN_RELEASE_TARGETS  — space-separated subset of targets to build
 #   CAPTAIN_DIST_DIR         — output root (default: dist/releases)
+#   CARGO_TARGET_DIR         — shared Cargo output root (default: target)
 #
 # Output: dist/releases/$VERSION/captain-<target>.tar.gz (+ .sha256,
 # manifests, install scripts) and dist/releases/latest.txt — the exact layout
@@ -32,6 +33,7 @@ cd "$ROOT_DIR"
 VERSION="${CAPTAIN_VERSION:-0.1.0-dev.$(date +%Y%m%d%H%M%S)}"
 TARGETS="${CAPTAIN_RELEASE_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc}"
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+TARGET_ROOT="${CARGO_TARGET_DIR:-target}"
 
 fail() {
     echo "  Error: $*" >&2
@@ -86,12 +88,12 @@ build_target() {
     case "$target" in
         "$HOST_TARGET")
             CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli
-            echo "target/release/captain"
+            echo "$TARGET_ROOT/release/captain"
             ;;
         *-apple-darwin)
             rustup target add "$target" >/dev/null
             CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli --target "$target"
-            echo "target/$target/release/captain"
+            echo "$TARGET_ROOT/$target/release/captain"
             ;;
         *-unknown-linux-gnu)
             # Thin LTO for cross builds: the workspace release profile
@@ -104,17 +106,17 @@ build_target() {
             # cross-contaminates both caches (host build scripts linked
             # against the container's glibc, and vice versa).
             CAPTAIN_BUILD_VERSION="$VERSION" \
-            CARGO_TARGET_DIR="target/cross-$target" \
+            CARGO_TARGET_DIR="$TARGET_ROOT/cross-$target" \
             CARGO_PROFILE_RELEASE_LTO=thin \
             CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8 \
                 cross build --release -p captain-cli --target "$target"
-            echo "target/cross-$target/$target/release/captain"
+            echo "$TARGET_ROOT/cross-$target/$target/release/captain"
             ;;
         *-pc-windows-msvc)
             CAPTAIN_BUILD_VERSION="$VERSION" \
-            CARGO_TARGET_DIR="target/xwin-$target" \
+            CARGO_TARGET_DIR="$TARGET_ROOT/xwin-$target" \
                 cargo xwin build --release --target "$target" -p captain-cli --bin captain
-            echo "target/xwin-$target/$target/release/captain.exe"
+            echo "$TARGET_ROOT/xwin-$target/$target/release/captain.exe"
             ;;
         *)
             fail "Unsupported target: $target"
@@ -237,6 +239,7 @@ refresh_aggregate_manifest() {
 echo "  Captain multi-target release"
 echo "  Version: $VERSION"
 echo "  Targets: $TARGETS"
+echo "  Target root: $TARGET_ROOT"
 
 for target in $TARGETS; do
     bin_path="$(build_target "$target" | tail -1)"
