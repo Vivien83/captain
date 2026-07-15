@@ -19,11 +19,14 @@ pub async fn logo_svg() -> impl IntoResponse {
     )
 }
 
-/// GET /favicon.ico — Captain's web app intentionally has no visible favicon.
+/// GET /favicon.ico — Serve the embedded Captain emblem for legacy clients.
 pub async fn favicon_ico() -> impl IntoResponse {
     (
-        [(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate")],
-        StatusCode::NO_CONTENT,
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LOGO_PNG,
     )
 }
 
@@ -77,7 +80,8 @@ const APP_HTML: &str = concat!(
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
     "<title>Captain</title>\n",
     "<link rel=\"manifest\" href=\"/manifest.json\">\n",
-    "<link rel=\"icon\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
+    "<link rel=\"icon\" type=\"image/png\" sizes=\"1254x1254\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
+    "<link rel=\"apple-touch-icon\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
     "<style>\n",
     include_str!("../static/css/theme.css"),
     "\n",
@@ -158,7 +162,13 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod control_app_asset_tests {
-    use super::{embedded_app_asset, APP_HTML, LOGO_PNG, MANIFEST_JSON, TERMINAL_HTML};
+    use super::{
+        embedded_app_asset, favicon_ico, APP_HTML, CONFIG_HTML, LOGO_PNG, MANIFEST_JSON,
+        TERMINAL_HTML,
+    };
+    use axum::body::to_bytes;
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
 
     #[test]
     fn six_hub_control_assets_are_embedded() {
@@ -203,6 +213,35 @@ mod control_app_asset_tests {
                 "{path} must use the current wordmark revision"
             );
         }
+    }
+
+    #[test]
+    fn every_web_surface_declares_the_captain_favicon() {
+        let favicon = "<link rel=\"icon\" type=\"image/png\" sizes=\"1254x1254\" href=\"/assets/logo.png?rev=wordmark-2\">";
+        let touch_icon = "<link rel=\"apple-touch-icon\" href=\"/assets/logo.png?rev=wordmark-2\">";
+
+        for (surface, html) in [
+            ("control", APP_HTML),
+            ("terminal", TERMINAL_HTML),
+            ("config", CONFIG_HTML),
+        ] {
+            assert!(html.contains(favicon), "{surface} favicon is not Captain");
+            assert!(
+                html.contains(touch_icon),
+                "{surface} touch icon is not Captain"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn favicon_endpoint_serves_the_embedded_captain_png() {
+        let response = favicon_ico().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+        let body = to_bytes(response.into_body(), LOGO_PNG.len() + 1)
+            .await
+            .expect("favicon body should be readable");
+        assert_eq!(body.as_ref(), LOGO_PNG);
     }
 
     #[test]
@@ -292,6 +331,8 @@ const TERMINAL_HTML: &str = concat!(
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
     "<title>Captain Terminal</title>\n",
     "<link rel=\"manifest\" href=\"/manifest.json\">\n",
+    "<link rel=\"icon\" type=\"image/png\" sizes=\"1254x1254\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
+    "<link rel=\"apple-touch-icon\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
     "<style>\n",
     include_str!("../static/css/theme.css"),
     "\n",
@@ -323,6 +364,8 @@ const CONFIG_HTML: &str = concat!(
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
     "<title>Captain Config</title>\n",
     "<link rel=\"manifest\" href=\"/manifest.json\">\n",
+    "<link rel=\"icon\" type=\"image/png\" sizes=\"1254x1254\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
+    "<link rel=\"apple-touch-icon\" href=\"/assets/logo.png?rev=wordmark-2\">\n",
     "<style>\n",
     include_str!("../static/css/theme.css"),
     "\n",

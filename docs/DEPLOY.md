@@ -2,7 +2,7 @@
 
 Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
 container image. The current public release is the prerelease
-`v0.1.0-alpha.1`; pin it explicitly because GitHub's `/releases/latest`
+`v0.1.0-alpha.2`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 
 ## Host Install
@@ -10,8 +10,8 @@ endpoint excludes prereleases.
 macOS, Linux, or a Linux VPS:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.1/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.1 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.2 CAPTAIN_PROFILE=desktop bash
 ```
 
 Use `CAPTAIN_PROFILE=vps` for a service-oriented server install. The installer
@@ -29,14 +29,14 @@ approving first launch.
 The immutable image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2
 
 docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2
 ```
 
 The moving prerelease channel is `ghcr.io/vivien83/captain-agent-os:alpha`.
@@ -62,8 +62,8 @@ docker compose up -d --build
 To consume the published image without rebuilding:
 
 ```bash
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.1 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.1 docker compose up -d --no-build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.2 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.2 docker compose up -d --no-build
 ```
 
 The optional `personal`, `trusted`, and `yolo` overlays progressively grant
@@ -103,7 +103,7 @@ reviewing the target version. Container installs should pull the desired
 immutable tag and recreate the container:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2
 docker rm -f captain
 # Re-run the same docker run command; captain-data preserves state.
 ```

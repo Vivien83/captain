@@ -15,6 +15,9 @@ Runs the tranche gate:
   git diff --check
   git diff --cached --check
 
+Environment:
+  CAPTAIN_GATE_CARGO_PROFILE  Cargo profile for check/test: dev (default) or release.
+
 Examples:
   scripts/gate.sh --check captain-kernel --check captain-api \
     --test captain-kernel kernel_streaming_runtime \
@@ -90,11 +93,24 @@ run() {
   "$@"
 }
 
+cargo_profile="${CAPTAIN_GATE_CARGO_PROFILE:-dev}"
+case "$cargo_profile" in
+  dev|release) ;;
+  *)
+    echo "CAPTAIN_GATE_CARGO_PROFILE must be dev or release" >&2
+    exit 2
+    ;;
+esac
+
 run cargo fmt --all --check
 
 if [[ ${#checks[@]} -gt 0 ]]; then
   for package in "${checks[@]}"; do
-    run cargo check -p "$package"
+    if [[ "$cargo_profile" == "release" ]]; then
+      run cargo check --release -p "$package"
+    else
+      run cargo check -p "$package"
+    fi
   done
 fi
 
@@ -102,7 +118,11 @@ if [[ ${#tests[@]} -gt 0 ]]; then
   for spec in "${tests[@]}"; do
     package="${spec%%$'\t'*}"
     filter="${spec#*$'\t'}"
-    run cargo test -p "$package" "$filter"
+    if [[ "$cargo_profile" == "release" ]]; then
+      run cargo test --release -p "$package" "$filter"
+    else
+      run cargo test -p "$package" "$filter"
+    fi
   done
 fi
 

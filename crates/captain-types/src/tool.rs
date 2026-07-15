@@ -1,5 +1,6 @@
 //! Tool definition and result types.
 
+use crate::message::ContentBlock;
 use serde::{Deserialize, Serialize};
 
 /// Definition of a tool that an agent can use.
@@ -33,6 +34,14 @@ pub struct ToolResult {
     pub content: String,
     /// Whether the tool execution resulted in an error.
     pub is_error: bool,
+    /// Request-only multimodal content produced by the tool.
+    ///
+    /// These blocks are delivered to the active model with this result but
+    /// are deliberately excluded from serialization and durable sessions.
+    /// This keeps screenshots available to the current reasoning turn
+    /// without storing large base64 payloads in the conversation database.
+    #[serde(skip)]
+    pub transient_content: Vec<ContentBlock>,
 }
 
 /// Normalize a JSON Schema for cross-provider compatibility.
@@ -281,6 +290,24 @@ fn try_flatten_any_of(any_of: &serde_json::Value) -> Option<Vec<(String, serde_j
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_result_transient_content_is_never_serialized() {
+        let result = ToolResult {
+            tool_use_id: "call-1".to_string(),
+            content: "metadata".to_string(),
+            is_error: false,
+            transient_content: vec![ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                data: "secret-base64-pixels".to_string(),
+            }],
+        };
+
+        let encoded = serde_json::to_value(&result).unwrap();
+
+        assert!(encoded.get("transient_content").is_none());
+        assert!(!encoded.to_string().contains("secret-base64-pixels"));
+    }
 
     #[test]
     fn test_tool_definition_serialization() {

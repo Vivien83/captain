@@ -104,5 +104,6 @@ fn blocked_web_fetch(tool_use_id: &str, reason: &str) -> ToolResult {
             &crate::retry_transformer::RetryTransform::None,
         ),
         is_error: true,
+        transient_content: Vec::new(),
     }
 }

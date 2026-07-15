@@ -5,7 +5,7 @@ use captain_skills::registry::SkillRegistry;
 use captain_types::config::{DockerSandboxConfig, ExecPolicy};
 use captain_types::tool::ToolResult;
 
-use crate::browser::BrowserManager;
+use crate::browser::{BrowserManager, BrowserToolResult};
 use crate::kernel_handle::KernelHandle;
 use crate::mcp;
 use crate::media_understanding::MediaEngine;
@@ -47,6 +47,7 @@ pub(super) struct ToolDispatchRequest<'a> {
 pub(super) enum ToolDispatchOutcome {
     Blocked(ToolResult),
     Dispatched(Result<String, String>),
+    Browser(Result<BrowserToolResult, String>),
 }
 
 pub(super) async fn dispatch_tool(request: ToolDispatchRequest<'_>) -> ToolDispatchOutcome {
@@ -530,7 +531,7 @@ async fn dispatch_process_extension_tool(
 async fn dispatch_browser_canvas_tool(
     request: &ToolDispatchRequest<'_>,
 ) -> Option<ToolDispatchOutcome> {
-    let result = match request.tool_name {
+    match request.tool_name {
         "browser_batch"
         | "browser_navigate"
         | "browser_click"
@@ -548,20 +549,18 @@ async fn dispatch_browser_canvas_tool(
         | "browser_status"
         | "browser_network_log"
         | "browser_observe"
-        | "browser_diagnostics" => {
+        | "browser_diagnostics" => Some(ToolDispatchOutcome::Browser(
             dispatch_browser_tool(
                 request.tool_name,
                 request.input,
                 request.browser_ctx,
                 request.caller_agent_id,
             )
-            .await
-        }
-        "canvas_present" => {
-            dispatch_canvas_tool(request.tool_name, request.input, request.workspace_root).await
-        }
-        _ => return None,
-    };
-
-    Some(ToolDispatchOutcome::Dispatched(result))
+            .await,
+        )),
+        "canvas_present" => Some(ToolDispatchOutcome::Dispatched(
+            dispatch_canvas_tool(request.tool_name, request.input, request.workspace_root).await,
+        )),
+        _ => None,
+    }
 }

@@ -91,9 +91,24 @@ Run `browser_observe` after hover if you need the newly revealed controls.
 
 ### `browser_screenshot`
 
-PNG capture of the active page, saved to Captain's upload store and returned as `image_urls`. Use this to **verify visually** (CAPTCHA, layout regression, screenshot for the user). For text extraction prefer `browser_read_page`.
+PNG capture of the active page, saved to Captain's upload store and returned as
+`image_urls`. Add a non-empty `prompt` when the current conversation model must
+inspect the pixels (CAPTCHA detection, layout regression, visible overlap, or
+visual polish). Captain attaches the PNG directly to that same active model;
+it does not call a separate Vision agent, switch provider, or require another
+provider API key.
 
-No parameters.
+| Field | Required | Notes |
+|---|---|---|
+| `prompt` | no | Visual question for the active model, maximum 2,000 characters. Omit only for capture/share without analysis. |
+
+Without `prompt`, the call is capture-only: the upload URL is returned but the
+pixels are not injected into the model context, so Captain must not claim that
+it visually verified the page. For text extraction prefer `browser_read_page`.
+
+The `screenshot` action inside `browser_batch` follows the same contract and
+accepts the same optional `prompt`. Browser batch steps remain sequential; a
+later step can depend on an earlier navigation or interaction.
 
 ### `browser_read_page`
 
@@ -206,7 +221,11 @@ Use this when the user wants a snapshot of their actual UI, not the page Captain
 ## Limites
 
 - One session per agent. Multiple `browser_navigate` calls **replace the active page** instead of opening tabs.
-- `browser_screenshot` stores a PNG and returns an upload URL. Large viewports (4K+) still create heavy artifacts — narrow with `browser_scroll` to a region first if you only need a slice.
+- `browser_screenshot` stores a PNG and returns an upload URL. With `prompt`,
+  the PNG is attached transiently to the current model turn and is deliberately
+  omitted from durable session serialization; the upload URL remains available
+  for display. Large viewports (4K+) still create heavy artifacts -- narrow with
+  `browser_scroll` to a region first if you only need a slice.
 - `browser_read_page` strips scripts and inline styles; dynamic widgets that hide content via CSS may appear absent. Use `browser_run_js` to reach the live DOM.
 - `browser_wait` polls the selector — it will not detect an element that disappears and reappears between polls.
 - `browser_run_js` results larger than 5 MB are truncated; serialize a slice (`.slice(0, 1000)`) before stringifying when scraping big DOMs.
@@ -263,3 +282,24 @@ browser_navigate({"url": "file:///etc/passwd"})
 ```
 
 This rejection happens before Chrome is told about the URL — there is no DevTools log entry, no network attempt.
+
+### Visual verification with the active model
+
+```
+browser_screenshot({
+  "prompt": "Check whether any heading, tab, or command overflows the mobile viewport."
+})
+→ {
+  "screenshot": true,
+  "image_urls": ["/api/uploads/<id>"],
+  "visual_analysis": {
+    "status": "attached_to_active_model",
+    "analysis_pending": true,
+    "transport": "native_multimodal"
+  }
+}
+```
+
+The tool result and PNG are adjacent in the active model request. The model
+must inspect the image before answering the prompt; the metadata itself is not
+visual evidence.

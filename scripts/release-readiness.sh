@@ -7,7 +7,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.1}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.2}"
+CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
 RUN_SMOKE=1
@@ -37,6 +38,7 @@ Options:
 
 Environment:
   CAPTAIN_RELEASE_CHANGELOG_VERSION  Expected runtime changelog entry
+  CAPTAIN_RELEASE_CARGO_PROFILE      Cargo test profile: release (default) or dev
   CAPTAIN_VERSION                    Version used by package-release.sh
 EOF
 }
@@ -99,6 +101,14 @@ need_cmd() {
 run() {
     step "$*"
     "$@"
+}
+
+run_cargo_test() {
+    if [ "$CARGO_PROFILE" = "release" ]; then
+        run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo test --release "$@"
+    else
+        run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo test "$@"
+    fi
 }
 
 check_worktree() {
@@ -198,10 +208,10 @@ public_source_audit() {
 run_tests() {
     run cargo fmt -- --check
     run "$ROOT_DIR/scripts/captain-graph-bindings-check.sh"
-    run cargo test -p captain-runtime
-    run cargo test -p captain-kernel
-    run cargo test -p captain-api
-    run cargo test -p captain-cli
+    run_cargo_test -p captain-runtime
+    run_cargo_test -p captain-kernel
+    run_cargo_test -p captain-api
+    run_cargo_test -p captain-cli
     run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo build --release -p captain-cli
 }
 
@@ -229,6 +239,11 @@ need_cmd cargo
 need_cmd grep
 need_cmd cargo-audit
 need_cmd mktemp
+
+case "$CARGO_PROFILE" in
+    dev|release) ;;
+    *) fail "CAPTAIN_RELEASE_CARGO_PROFILE must be dev or release" ;;
+esac
 
 check_worktree
 check_changelog

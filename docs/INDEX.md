@@ -22,6 +22,7 @@ Use this index to find the right document quickly.
 | [Deployment](DEPLOY.md) | Deployment guidance for local machines and VPS hosts |
 | [GitHub + VPS Install](deployment/github-vps-install.md) | Pinned public prerelease install and service setup |
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS considerations |
+| [0.1.0-alpha.2 Release Notes](releases/v0.1.0-alpha.2.md) | Native visual inspection, browser identity, and alpha limitations |
 | [0.1.0-alpha.1 Release Notes](releases/v0.1.0-alpha.1.md) | Early-access scope, install paths, and known limitations |
 
 ## Product Surfaces

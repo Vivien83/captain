@@ -548,6 +548,7 @@ mod tests {
             tool_use_id: "tool-use".into(),
             content: content.into(),
             is_error,
+            transient_content: Vec::new(),
         }
     }
 

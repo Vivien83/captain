@@ -133,8 +133,16 @@ enum InputItem {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum InputContent {
-    InputText { text: String },
-    OutputText { text: String },
+    InputText {
+        text: String,
+    },
+    OutputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+        detail: &'static str,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -229,6 +237,17 @@ fn build_payload(req: &CompletionRequest, stream: bool) -> CodexRequest<'_> {
                                 kind: "function_call_output",
                                 call_id: tool_use_id.clone(),
                                 output: content.clone(),
+                            });
+                        }
+                        ContentBlock::Image { media_type, data }
+                            if matches!(msg.role, Role::User) =>
+                        {
+                            input.push(InputItem::Message {
+                                role,
+                                content: vec![InputContent::InputImage {
+                                    image_url: format!("data:{media_type};base64,{data}"),
+                                    detail: "auto",
+                                }],
                             });
                         }
                         ContentBlock::Thinking {
@@ -1127,6 +1146,43 @@ mod tests {
         let encoded = serde_json::to_value(build_payload(&req, true)).unwrap();
         assert_eq!(encoded.get("tool_choice"), Some(&json!("required")));
         assert_eq!(encoded["tools"][0]["type"], "function");
+    }
+
+    #[test]
+    fn build_payload_sends_images_to_the_active_codex_model() {
+        let req = CompletionRequest {
+            model: "gpt-5.5".into(),
+            messages: vec![Message::user_with_blocks(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "browser-call".into(),
+                    tool_name: "browser_screenshot".into(),
+                    content: r#"{"visual_analysis":{"prompt":"Check overlap"}}"#.into(),
+                    is_error: false,
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".into(),
+                    data: "cG5n".into(),
+                },
+            ])],
+            tools: vec![],
+            max_tokens: 1024,
+            temperature: 0.7,
+            system: None,
+            thinking: None,
+            tool_choice: None,
+            cache_hints: crate::llm_driver::CacheHints::default(),
+        };
+
+        let encoded = serde_json::to_value(build_payload(&req, true)).unwrap();
+        assert_eq!(encoded["input"][0]["type"], "function_call_output");
+        assert_eq!(encoded["input"][0]["call_id"], "browser-call");
+        assert_eq!(encoded["input"][1]["role"], "user");
+        assert_eq!(encoded["input"][1]["content"][0]["type"], "input_image");
+        assert_eq!(
+            encoded["input"][1]["content"][0]["image_url"],
+            "data:image/png;base64,cG5n"
+        );
+        assert_eq!(encoded["input"][1]["content"][0]["detail"], "auto");
     }
 
     #[test]

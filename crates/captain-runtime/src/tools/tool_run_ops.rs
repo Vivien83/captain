@@ -293,11 +293,13 @@ fn tool_result_from_result(tool_use_id: &str, result: Result<String, String>) ->
             tool_use_id: tool_use_id.to_string(),
             content,
             is_error: false,
+            transient_content: Vec::new(),
         },
         Err(error) => ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: error,
             is_error: true,
+            transient_content: Vec::new(),
         },
     }
 }

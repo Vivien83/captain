@@ -55,6 +55,7 @@ pub(crate) async fn cached_tool_result(
                 tool_use_id: tool_use_id.to_string(),
                 content: cached.output,
                 is_error: cached.is_error,
+                transient_content: Vec::new(),
             })
         }
         _ => None,
@@ -166,6 +167,7 @@ fn denied_tool_result(tool_use_id: &str, tool_name: &str, message: &str) -> Tool
             &crate::retry_transformer::RetryTransform::None,
         ),
         is_error: true,
+        transient_content: Vec::new(),
     }
 }
 

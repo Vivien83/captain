@@ -51,12 +51,20 @@ pub(crate) fn append_tool_result_turn(
     append_tool_error_guidance(tool_result_blocks);
     append_approval_denial_guidance(tool_result_blocks);
 
-    let tool_results_msg = Message {
+    let request_tool_results_msg = Message {
         role: Role::User,
         content: MessageContent::Blocks(tool_result_blocks.clone()),
     };
-    session.messages.push(tool_results_msg.clone());
-    messages.push(tool_results_msg);
+    let persisted_blocks = tool_result_blocks
+        .iter()
+        .filter(|block| !matches!(block, ContentBlock::Image { .. }))
+        .cloned()
+        .collect();
+    session.messages.push(Message {
+        role: Role::User,
+        content: MessageContent::Blocks(persisted_blocks),
+    });
+    messages.push(request_tool_results_msg);
 }
 
 pub(crate) async fn interim_save_tool_turn(
@@ -125,6 +133,7 @@ mod tests {
             tool_use_id: "tool-1".to_string(),
             content,
             is_error,
+            transient_content: Vec::new(),
         }
     }
 
@@ -205,6 +214,30 @@ mod tests {
         assert_eq!(request_messages.last().unwrap().role, Role::User);
         assert_eq!(blocks(session.messages.last().unwrap()).len(), 1);
         assert_eq!(blocks(request_messages.last().unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn transient_tool_images_reach_the_request_but_not_the_durable_session() {
+        let mut tool_result_blocks = vec![
+            tool_result("screenshot metadata", false),
+            ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                data: "cG5n".to_string(),
+            },
+        ];
+        let mut session = test_session(Vec::new());
+        let mut request_messages = Vec::new();
+
+        append_tool_result_turn(&mut tool_result_blocks, &mut session, &mut request_messages);
+
+        assert_eq!(blocks(session.messages.last().unwrap()).len(), 1);
+        assert!(!blocks(session.messages.last().unwrap())
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Image { .. })));
+        assert_eq!(blocks(request_messages.last().unwrap()).len(), 2);
+        assert!(blocks(request_messages.last().unwrap())
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Image { .. })));
     }
 
     #[test]

@@ -11,6 +11,7 @@
 //! - No subprocess bridge, no env leakage, no Python code execution
 
 use captain_types::config::BrowserConfig;
+use captain_types::message::ContentBlock;
 use dashmap::DashMap;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -31,6 +32,7 @@ mod browser_keys;
 mod browser_launch;
 mod browser_observe;
 mod browser_profile;
+mod browser_visual;
 
 use browser_batch::{parse_browser_batch_op, BrowserBatchOp};
 use browser_events::{
@@ -42,6 +44,7 @@ use browser_observe::observe_page_js;
 use browser_profile::{
     reclaim_captain_profile_lock, user_data_dir_for_agent, user_data_dir_path_for_agent,
 };
+use browser_visual::{optional_visual_prompt, screenshot_payload};
 
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -61,6 +64,21 @@ const MAX_OBSERVE_ELEMENTS: usize = 120;
 const MAX_CONTENT_CHARS: usize = 50_000;
 
 // ── Public types ───────────────────────────────────────────────────────────
+
+/// Browser tool output plus request-only multimodal content for the active LLM.
+pub(crate) struct BrowserToolResult {
+    pub(crate) content: String,
+    pub(crate) transient_content: Vec<ContentBlock>,
+}
+
+impl BrowserToolResult {
+    pub(crate) fn text(content: String) -> Self {
+        Self {
+            content,
+            transient_content: Vec::new(),
+        }
+    }
+}
 
 /// Command sent to the browser.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1349,26 +1367,6 @@ impl BrowserManager {
 //
 // ── Tool handler functions ─────────────────────────────────────────────────
 
-fn save_screenshot_upload_urls(data: &serde_json::Value) -> Vec<String> {
-    let b64 = data["image_base64"].as_str().unwrap_or("");
-    let mut image_urls: Vec<String> = Vec::new();
-    if b64.is_empty() {
-        return image_urls;
-    }
-
-    use base64::Engine;
-    let upload_dir = std::env::temp_dir().join("captain_uploads");
-    let _ = std::fs::create_dir_all(&upload_dir);
-    let file_id = uuid::Uuid::new_v4().to_string();
-    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64) {
-        let path = upload_dir.join(&file_id);
-        if std::fs::write(&path, &decoded).is_ok() {
-            image_urls.push(format!("/api/uploads/{file_id}"));
-        }
-    }
-    image_urls
-}
-
 /// browser_navigate: Navigate to a URL. SSRF-checked before sending.
 pub async fn tool_browser_navigate(
     input: &serde_json::Value,
@@ -1537,11 +1535,12 @@ pub async fn tool_browser_hover(
 }
 
 /// browser_screenshot: Take a screenshot of the current page.
-pub async fn tool_browser_screenshot(
-    _input: &serde_json::Value,
+pub(crate) async fn tool_browser_screenshot(
+    input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
-) -> Result<String, String> {
+) -> Result<BrowserToolResult, String> {
+    let prompt = optional_visual_prompt(input)?;
     let resp = mgr
         .send_command(agent_id, BrowserCommand::Screenshot)
         .await?;
@@ -1552,15 +1551,13 @@ pub async fn tool_browser_screenshot(
     }
 
     let data = resp.data.unwrap_or_default();
-    let url = data["url"].as_str().unwrap_or("");
-    let image_urls = save_screenshot_upload_urls(&data);
-
-    Ok(serde_json::json!({
-        "screenshot": true,
-        "url": url,
-        "image_urls": image_urls,
+    let payload = screenshot_payload(&data, prompt.as_deref())?;
+    let content = serde_json::to_string_pretty(&payload.metadata)
+        .map_err(|error| format!("Screenshot result serialization failed: {error}"))?;
+    Ok(BrowserToolResult {
+        content,
+        transient_content: payload.transient_content,
     })
-    .to_string())
 }
 
 /// browser_read_page: Read current page content as markdown.
@@ -1743,16 +1740,17 @@ pub async fn tool_browser_diagnostics(
 }
 
 /// browser_batch: execute a bounded multi-step browser scenario atomically.
-pub async fn tool_browser_batch(
+pub(crate) async fn tool_browser_batch(
     input: &serde_json::Value,
     mgr: &BrowserManager,
     agent_id: &str,
-) -> Result<String, String> {
+) -> Result<BrowserToolResult, String> {
     let steps = browser_batch_steps(input)?;
     let options = browser_batch_options(input);
     let mut entries = Vec::with_capacity(steps.len());
     let mut ok = true;
     let mut stopped_at = serde_json::Value::Null;
+    let mut transient_content = Vec::new();
 
     browser_batch_emit_progress(format!(
         "Browser activity · {} action{}",
@@ -1775,7 +1773,10 @@ pub async fn tool_browser_batch(
         };
 
         browser_batch_emit_progress(browser_batch_step_start_message(idx, steps.len(), &op));
-        let entry = browser_batch_step_entry(idx, action, op, mgr, agent_id, &options).await?;
+        let step_result =
+            browser_batch_step_entry(idx, action, op, mgr, agent_id, &options).await?;
+        let entry = step_result.entry;
+        transient_content.extend(step_result.transient_content);
         browser_batch_emit_progress(browser_batch_step_done_message(idx, steps.len(), &entry));
 
         if entry["success"].as_bool() == Some(false) {
@@ -1803,7 +1804,10 @@ pub async fn tool_browser_batch(
         if entries.len() == 1 { "" } else { "s" }
     ));
 
-    browser_batch_response(ok, entries, stopped_at, final_state)
+    Ok(BrowserToolResult {
+        content: browser_batch_response(ok, entries, stopped_at, final_state)?,
+        transient_content,
+    })
 }
 
 struct BrowserBatchOptions {
@@ -1811,6 +1815,20 @@ struct BrowserBatchOptions {
     include_data: bool,
     final_observation: String,
     max_elements: usize,
+}
+
+struct BrowserBatchStepResult {
+    entry: serde_json::Value,
+    transient_content: Vec<ContentBlock>,
+}
+
+impl BrowserBatchStepResult {
+    fn text(entry: serde_json::Value) -> Self {
+        Self {
+            entry,
+            transient_content: Vec::new(),
+        }
+    }
 }
 
 fn browser_batch_steps(input: &serde_json::Value) -> Result<&Vec<serde_json::Value>, String> {
@@ -1868,38 +1886,76 @@ async fn browser_batch_step_entry(
     mgr: &BrowserManager,
     agent_id: &str,
     options: &BrowserBatchOptions,
-) -> Result<serde_json::Value, String> {
+) -> Result<BrowserBatchStepResult, String> {
     Ok(match op {
         BrowserBatchOp::Command(command) => {
             let resp = mgr.send_command(agent_id, command).await?;
-            browser_batch_command_entry(index, &action, resp, options.include_data)
+            BrowserBatchStepResult::text(browser_batch_command_entry(
+                index,
+                &action,
+                resp,
+                options.include_data,
+            ))
         }
-        BrowserBatchOp::Status => serde_json::json!({
+        BrowserBatchOp::Screenshot { prompt } => {
+            let resp = mgr
+                .send_command(agent_id, BrowserCommand::Screenshot)
+                .await?;
+            if !resp.success {
+                BrowserBatchStepResult::text(serde_json::json!({
+                    "index": index,
+                    "action": action,
+                    "success": false,
+                    "error": resp.error.unwrap_or_else(|| "Screenshot failed".to_string()),
+                }))
+            } else {
+                let data = resp.data.unwrap_or_default();
+                let payload = screenshot_payload(&data, prompt.as_deref())?;
+                let mut entry = serde_json::json!({
+                    "index": index,
+                    "action": action,
+                    "success": true,
+                    "summary": payload.metadata,
+                });
+                if options.include_data {
+                    entry["data"] = entry["summary"].clone();
+                }
+                BrowserBatchStepResult {
+                    entry,
+                    transient_content: payload.transient_content,
+                }
+            }
+        }
+        BrowserBatchOp::Status => BrowserBatchStepResult::text(serde_json::json!({
             "index": index,
             "action": action,
             "success": true,
             "data": mgr.status(agent_id).await,
-        }),
-        BrowserBatchOp::NetworkLog { limit, clear } => serde_json::json!({
-            "index": index,
-            "action": action,
-            "success": true,
-            "data": mgr.network_log(agent_id, limit, clear).await,
-        }),
-        BrowserBatchOp::Diagnostics { limit, clear } => serde_json::json!({
-            "index": index,
-            "action": action,
-            "success": true,
-            "data": mgr.diagnostics(agent_id, limit, clear, options.max_elements).await,
-        }),
+        })),
+        BrowserBatchOp::NetworkLog { limit, clear } => {
+            BrowserBatchStepResult::text(serde_json::json!({
+                "index": index,
+                "action": action,
+                "success": true,
+                "data": mgr.network_log(agent_id, limit, clear).await,
+            }))
+        }
+        BrowserBatchOp::Diagnostics { limit, clear } => {
+            BrowserBatchStepResult::text(serde_json::json!({
+                "index": index,
+                "action": action,
+                "success": true,
+                "data": mgr.diagnostics(agent_id, limit, clear, options.max_elements).await,
+            }))
+        }
         BrowserBatchOp::Close => {
             mgr.close_session(agent_id).await;
-            serde_json::json!({
+            BrowserBatchStepResult::text(serde_json::json!({
                 "index": index,
                 "action": action,
                 "success": true,
                 "summary": {"closed": true},
-            })
+            }))
         }
     })
 }
@@ -2009,7 +2065,11 @@ fn browser_batch_op_label(op: &BrowserBatchOp) -> String {
         BrowserBatchOp::Command(BrowserCommand::Hover { selector }) => {
             format!("hover {}", browser_display_selector(selector))
         }
-        BrowserBatchOp::Command(BrowserCommand::Screenshot) => "capture screenshot".to_string(),
+        BrowserBatchOp::Screenshot { prompt: Some(_) } => {
+            "capture and analyze screenshot".to_string()
+        }
+        BrowserBatchOp::Screenshot { prompt: None }
+        | BrowserBatchOp::Command(BrowserCommand::Screenshot) => "capture screenshot".to_string(),
         BrowserBatchOp::Command(BrowserCommand::ReadPage) => "read page".to_string(),
         BrowserBatchOp::Command(BrowserCommand::Close) | BrowserBatchOp::Close => {
             "close browser".to_string()
@@ -2072,6 +2132,12 @@ fn browser_progress_summary(action: &str, summary: &serde_json::Value) -> String
             "{count} image{}",
             if count == 1 { "" } else { "s" }
         ));
+        if let Some(status) = summary
+            .pointer("/visual_analysis/status")
+            .and_then(|value| value.as_str())
+        {
+            parts.push(format!("visual {status}"));
+        }
     }
     if parts.is_empty() {
         summary
@@ -2209,7 +2275,7 @@ fn browser_batch_command_entry(
     }
 
     let data = resp.data.unwrap_or_default();
-    let summary = browser_command_summary(action, &data);
+    let summary = browser_command_summary(&data);
     let mut entry = serde_json::json!({
         "index": index,
         "action": action,
@@ -2217,20 +2283,12 @@ fn browser_batch_command_entry(
         "summary": summary,
     });
     if include_data {
-        entry["data"] = redact_large_browser_data(action, data);
+        entry["data"] = redact_large_browser_data(data);
     }
     entry
 }
 
-fn browser_command_summary(action: &str, data: &serde_json::Value) -> serde_json::Value {
-    if action.contains("screenshot") {
-        return serde_json::json!({
-            "screenshot": true,
-            "url": data["url"].as_str().unwrap_or(""),
-            "image_urls": save_screenshot_upload_urls(data),
-        });
-    }
-
+fn browser_command_summary(data: &serde_json::Value) -> serde_json::Value {
     let title = data["title"].as_str().unwrap_or("");
     let url = data["url"].as_str().unwrap_or("");
     let content = data["content"].as_str().unwrap_or("");
@@ -2256,24 +2314,7 @@ fn browser_command_summary(action: &str, data: &serde_json::Value) -> serde_json
     })
 }
 
-fn redact_large_browser_data(action: &str, mut data: serde_json::Value) -> serde_json::Value {
-    if action.contains("screenshot") {
-        let image_urls = save_screenshot_upload_urls(&data);
-        if let Some(obj) = data.as_object_mut() {
-            obj.remove("image_base64");
-            obj.insert(
-                "image_urls".to_string(),
-                serde_json::Value::Array(
-                    image_urls
-                        .into_iter()
-                        .map(serde_json::Value::String)
-                        .collect(),
-                ),
-            );
-        }
-        return data;
-    }
-
+fn redact_large_browser_data(mut data: serde_json::Value) -> serde_json::Value {
     if let Some(content) = data
         .get("content")
         .and_then(|v| v.as_str())

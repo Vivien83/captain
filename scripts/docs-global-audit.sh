@@ -48,8 +48,10 @@ CONTRACT_DOCS=(
   docs/agent-templates.md
   docs/mcp-a2a.md
   docs/workflows.md
+  docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.2.md
   docs/releases/v0.1.0-alpha.1.md
 )
 
@@ -255,7 +257,7 @@ if [ "$SITE_PRESENT" = "1" ]; then
   require_contains "DOC2 pins launch site browser smoke" docs/DOCS_STATUS.md "scripts/launch-site-browser-smoke.mjs"
   require_contains "DOC2 covers the terminal demo module" docs/DOCS_STATUS.md "site/assets/terminal-demo.js"
 else
-  require_contains "DOC2 marks the presentation site maintainer-only" docs/DOCS_STATUS.md "presentation site is maintainer-only"
+  require_contains "DOC2 keeps presentation-site source maintainer-only" docs/DOCS_STATUS.md "source remains maintainer-only"
 fi
 if [ "$INTERNAL_DOCS_PRESENT" = "1" ]; then
   require_contains "desktop reference is frozen" docs/desktop.md "DOC2 status: frozen compatibility reference"
@@ -280,9 +282,9 @@ require_contains "README points to DOC2" docs/README.md "Docs Status (DOC2)"
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.1"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.1/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.2"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.2/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -298,9 +300,10 @@ require_contains "English README documents proactive Codex discovery" README.md 
 require_contains "French README documents proactive Codex discovery" README.fr.md "une actualisation horaire signale les nouveaux modèles"
 require_contains "Spanish README documents proactive Codex discovery" README.es.md "una actualización cada hora muestra los modelos nuevos"
 require_contains "Chinese README documents proactive Codex discovery" README.zh.md "每小时刷新一次目录"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.1"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.1] - 2026-07-14"
-require_contains "reviewed alpha release notes exist" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.2"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.2] - 2026-07-14"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
+require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"
 require_not_contains "runtime changelog has no stale 07-12b candidate claim" docs/captain-tools/runtime-changelog.md 'aligned candidate is `0.1.0-dev.2026-07-12b`'
 require_contains "runtime changelog supersedes old WEB1 claim" docs/captain-tools/runtime-changelog.md "superseded by this entry"
@@ -317,6 +320,16 @@ require_contains "provider guide pins hourly Codex refresh" docs/providers.md "t
 require_contains "provider guide pins safe Codex session choices" docs/providers.md "Nouvelle session"
 require_contains "provider guide pins Codex catalog protocol" docs/providers.md '`client_version=1.0.0`'
 require_contains "runtime pins Codex catalog protocol" crates/captain-runtime/src/model_catalog_codex.rs 'CODEX_CATALOG_CLIENT_VERSION: &str = "1.0.0"'
+require_contains "browser docs pin same-model visual analysis" docs/captain-tools/browser.md "same active model"
+require_contains "browser docs reject a secondary Vision agent" docs/captain-tools/browser.md "does not call a separate Vision agent"
+require_contains "browser docs pin capture-only semantics" docs/captain-tools/browser.md "pixels are not injected into the model context"
+require_contains "DOC2 pins native same-model images" docs/DOCS_STATUS.md "Images and prompted browser screenshots stay on the active conversation model"
+require_contains "runtime validates active-model image support" crates/captain-kernel/src/capability_routing.rs "ensure_active_model_supports"
+require_contains "runtime discloses no hidden image delegation" crates/captain-kernel/src/capability_routing.rs "did not send the image to another agent or provider"
+require_not_contains "runtime has no automatic Vision-agent manifest" crates/captain-kernel/src/capability_routing.rs "build_vision_agent_manifest"
+require_not_contains "runtime has no hidden image spawn path" crates/captain-kernel/src/capability_routing.rs "SpawnAndDelegate"
+require_contains "Control declares the Captain favicon" crates/captain-api/src/webchat.rs 'every_web_surface_declares_the_captain_favicon'
+require_contains "favicon endpoint serves embedded Captain PNG" crates/captain-api/src/webchat.rs 'favicon_endpoint_serves_the_embedded_captain_png'
 require_contains "API documents Codex update inspection" docs/api-reference.md "GET /api/models/updates"
 require_contains "API documents Codex update decisions" docs/api-reference.md "POST /api/models/updates/decision"
 require_contains "API routes mount Codex update inspection" crates/captain-api/src/server_capability_routes.rs '"/api/models/updates"'

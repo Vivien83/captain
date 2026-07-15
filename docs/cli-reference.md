@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.1/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.2 bash
 ```
 
 ## Global Options

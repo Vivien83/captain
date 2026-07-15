@@ -54,15 +54,15 @@ Telegram o Discord.
 ## Instalación rápida
 
 Versión pública preliminar actual:
-[v0.1.0-alpha.1](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.1).
-Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1`;
+[v0.1.0-alpha.2](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.2).
+Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2`;
 canal alfa móvil: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.1/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.2 bash
 ```
 
 El repositorio oficial, los assets, los checksums y la imagen son públicos. No
@@ -89,8 +89,8 @@ los instaladores Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # o cualquier clave de proveedor soportado
 export TELEGRAM_BOT_TOKEN=...      # opcional — ver más abajo
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.1/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.1 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.2 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 El perfil `vps` instala un servicio systemd, lo inicia, y valida su salud.
@@ -108,8 +108,8 @@ sin arrancar aún el daemon, para que la comprobación de disponibilidad de
 abajo no se ejecute antes de que hayas iniciado sesión:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.1/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.1 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.2/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.2 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # muestra una URL + un código — ábrela en tu teléfono, sin necesidad de navegador local
 systemctl start captain    # instalación no-root: systemctl --user start captain
@@ -126,7 +126,7 @@ docker run -d --name captain --restart unless-stopped \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.1
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.2
 ```
 
 El primer arranque genera la clave API del daemon y la persiste — junto
@@ -236,7 +236,7 @@ ordenar mediante dependencias.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Instalaciones headless, proxy inverso, HTTPS |
 | [MCP & A2A](docs/mcp-a2a.md) | Servidores de herramientas externos, agente-a-agente |
 | [Troubleshooting](docs/troubleshooting.md) | Problemas comunes y sus soluciones |
-| [Notas de la versión 0.1.0-alpha.1](docs/releases/v0.1.0-alpha.1.md) | Alcance preliminar y limitaciones conocidas |
+| [Notas de la versión 0.1.0-alpha.2](docs/releases/v0.1.0-alpha.2.md) | Alcance preliminar y limitaciones conocidas |
 | [Docs Status (DOC2)](docs/DOCS_STATUS.md) | Contratos actuales, superficies congeladas y documentos históricos |
 
 > Las guías detalladas en `docs/` están actualmente solo en inglés.

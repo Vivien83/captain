@@ -26,6 +26,40 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.2 — Native visual inspection on the active conversation model
+
+Agent-facing changes:
+
+- `browser_screenshot` and the browser batch `screenshot` step accept an
+  optional visual prompt. With a prompt, Captain validates the PNG and attaches
+  its pixels directly to the same active conversation model through the native
+  multimodal request. No Vision agent is called, no provider is changed, and no
+  Mistral or other secondary API key is required.
+- A screenshot without a prompt remains capture-only and returns an upload URL
+  without inviting visual claims. The pixel payload is transient: it is present
+  for the current model continuation but omitted from durable tool-result
+  serialization, avoiding base64 growth in restored sessions.
+- Codex Responses requests now carry image data URLs beside text and tool
+  results. The OpenAI-compatible streaming path also preserves user text and
+  image blocks around tool results instead of dropping them.
+- Capability preflight resolves both `codex` and `openai-codex` aliases against
+  the catalog. If an active model is genuinely text-only, Captain refuses the
+  image with an actionable model-switch message instead of silently delegating
+  it to another agent or provider.
+- Control, Terminal and Config declare the same embedded Captain PNG as their
+  browser icon and Apple touch icon. Legacy `/favicon.ico` requests return that
+  PNG with its real media type instead of an empty response, so restored Web
+  terminal sessions keep the Captain identity in their tab and bookmarks.
+
+How to answer the user:
+
+- For a visual conclusion, call `browser_screenshot` with a precise prompt and
+  inspect the attached image. Do not treat an upload URL or DOM metadata as
+  proof of layout or visual quality.
+- If image input is rejected, report the active model and ask for an explicit
+  switch to a multimodal model. Never work around the refusal by spawning or
+  selecting a hidden specialist.
+
 ### 0.1.0-alpha.1 — First public early-access release
 
 Agent-facing changes:

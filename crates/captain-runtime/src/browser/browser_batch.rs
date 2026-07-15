@@ -3,6 +3,7 @@ use super::{BrowserCommand, DEFAULT_OBSERVE_ELEMENTS, MAX_NETWORK_EVENTS, MAX_OB
 #[derive(Debug)]
 pub(super) enum BrowserBatchOp {
     Command(BrowserCommand),
+    Screenshot { prompt: Option<String> },
     Status,
     NetworkLog { limit: usize, clear: bool },
     Diagnostics { limit: usize, clear: bool },
@@ -27,7 +28,9 @@ pub(super) fn parse_browser_batch_op(
         "read_page" | "read" | "browser_read_page" => {
             BrowserBatchOp::Command(BrowserCommand::ReadPage)
         }
-        "screenshot" | "browser_screenshot" => BrowserBatchOp::Command(BrowserCommand::Screenshot),
+        "screenshot" | "browser_screenshot" => BrowserBatchOp::Screenshot {
+            prompt: optional_batch_non_empty_string(step, "prompt", "screenshot 'prompt'")?,
+        },
         "observe" | "browser_observe" => parse_observe_batch_op(step),
         "status" | "browser_status" => BrowserBatchOp::Status,
         "network_log" | "browser_network_log" => parse_network_log_batch_op(step),
@@ -39,11 +42,15 @@ pub(super) fn parse_browser_batch_op(
 }
 
 fn normalized_batch_action(step: &serde_json::Value) -> Result<String, String> {
-    Ok(step["action"]
+    let action = step["action"]
         .as_str()
         .ok_or("Each batch step requires an 'action' string")?
         .trim()
-        .to_ascii_lowercase())
+        .to_ascii_lowercase();
+    if action.is_empty() {
+        return Err("Each batch step requires a non-empty 'action' string".to_string());
+    }
+    Ok(action)
 }
 
 fn required_batch_string(
@@ -55,6 +62,42 @@ fn required_batch_string(
         .as_str()
         .map(str::to_string)
         .ok_or(error.to_string())
+}
+
+fn required_batch_non_empty_string(
+    step: &serde_json::Value,
+    key: &str,
+    label: &'static str,
+) -> Result<String, String> {
+    let value = required_batch_string(step, key, label)?;
+    if value.trim().is_empty() {
+        return Err(format!("{label} must be a non-empty string"));
+    }
+    Ok(value)
+}
+
+fn optional_batch_non_empty_string(
+    step: &serde_json::Value,
+    key: &str,
+    label: &'static str,
+) -> Result<Option<String>, String> {
+    let Some(value) = step.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| format!("{label} must be a string when provided"))?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} must be a non-empty string when provided"));
+    }
+    if trimmed.chars().count() > 2_000 {
+        return Err(format!("{label} accepts at most 2000 characters"));
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 fn required_batch_string_either(
@@ -71,40 +114,42 @@ fn required_batch_string_either(
 }
 
 fn parse_navigate_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
-    let url = required_batch_string(step, "url", "navigate requires 'url'")?;
+    let url = required_batch_non_empty_string(step, "url", "navigate requires 'url'")?;
     crate::web_fetch::check_ssrf(&url)?;
     Ok(BrowserBatchOp::Command(BrowserCommand::Navigate { url }))
 }
 
 fn parse_click_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
     Ok(BrowserBatchOp::Command(BrowserCommand::Click {
-        selector: required_batch_string(step, "selector", "click requires 'selector'")?,
+        selector: required_batch_non_empty_string(step, "selector", "click requires 'selector'")?,
     }))
 }
 
 fn parse_type_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
     Ok(BrowserBatchOp::Command(BrowserCommand::Type {
-        selector: required_batch_string(step, "selector", "type requires 'selector'")?,
+        selector: required_batch_non_empty_string(step, "selector", "type requires 'selector'")?,
         text: required_batch_string(step, "text", "type requires 'text'")?,
     }))
 }
 
 fn parse_keys_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
-    Ok(BrowserBatchOp::Command(BrowserCommand::Keys {
-        keys: required_batch_string_either(step, "keys", "text", "keys requires 'keys'")?,
-    }))
+    let keys = required_batch_string_either(step, "keys", "text", "keys requires 'keys'")?;
+    if keys.trim().is_empty() {
+        return Err("keys requires 'keys' must be a non-empty string".to_string());
+    }
+    Ok(BrowserBatchOp::Command(BrowserCommand::Keys { keys }))
 }
 
 fn parse_select_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
     Ok(BrowserBatchOp::Command(BrowserCommand::Select {
-        selector: required_batch_string(step, "selector", "select requires 'selector'")?,
+        selector: required_batch_non_empty_string(step, "selector", "select requires 'selector'")?,
         value: required_batch_string_either(step, "value", "option", "select requires 'value'")?,
     }))
 }
 
 fn parse_hover_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
     Ok(BrowserBatchOp::Command(BrowserCommand::Hover {
-        selector: required_batch_string(step, "selector", "hover requires 'selector'")?,
+        selector: required_batch_non_empty_string(step, "selector", "hover requires 'selector'")?,
     }))
 }
 
@@ -117,14 +162,18 @@ fn parse_scroll_batch_op(step: &serde_json::Value) -> BrowserBatchOp {
 
 fn parse_wait_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
     Ok(BrowserBatchOp::Command(BrowserCommand::Wait {
-        selector: required_batch_string(step, "selector", "wait requires 'selector'")?,
+        selector: required_batch_non_empty_string(step, "selector", "wait requires 'selector'")?,
         timeout_ms: step["timeout_ms"].as_u64().unwrap_or(5000),
     }))
 }
 
 fn parse_run_js_batch_op(step: &serde_json::Value) -> Result<BrowserBatchOp, String> {
     Ok(BrowserBatchOp::Command(BrowserCommand::RunJs {
-        expression: required_batch_string(step, "expression", "run_js requires 'expression'")?,
+        expression: required_batch_non_empty_string(
+            step,
+            "expression",
+            "run_js requires 'expression'",
+        )?,
     }))
 }
 
@@ -264,5 +313,48 @@ mod tests {
         let err = parse_browser_batch_op(&serde_json::json!({"action": "teleport"}))
             .expect_err("unknown browser action must fail");
         assert!(err.contains("Unknown browser_batch action"));
+    }
+
+    #[test]
+    fn parse_browser_batch_rejects_blank_semantic_fields() {
+        for step in [
+            serde_json::json!({"action": " "}),
+            serde_json::json!({"action": "navigate", "url": "  "}),
+            serde_json::json!({"action": "click", "selector": ""}),
+            serde_json::json!({"action": "type", "selector": " ", "text": "value"}),
+            serde_json::json!({"action": "keys", "keys": ""}),
+            serde_json::json!({"action": "select", "selector": " ", "value": "x"}),
+            serde_json::json!({"action": "hover", "selector": ""}),
+            serde_json::json!({"action": "wait", "selector": " "}),
+            serde_json::json!({"action": "run_js", "expression": "\n"}),
+        ] {
+            let error = parse_browser_batch_op(&step).expect_err("blank input must fail");
+            assert!(error.contains("non-empty"), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn parse_browser_batch_screenshot_accepts_only_meaningful_prompt() {
+        let (_, op) = parse_browser_batch_op(&serde_json::json!({
+            "action": "screenshot",
+            "prompt": "  Vérifie les chevauchements visibles.  "
+        }))
+        .expect("valid visual screenshot");
+        match op {
+            BrowserBatchOp::Screenshot { prompt } => {
+                assert_eq!(
+                    prompt.as_deref(),
+                    Some("Vérifie les chevauchements visibles.")
+                );
+            }
+            _ => panic!("expected screenshot operation"),
+        }
+
+        let error = parse_browser_batch_op(&serde_json::json!({
+            "action": "screenshot",
+            "prompt": "  "
+        }))
+        .expect_err("blank prompt must fail");
+        assert!(error.contains("non-empty"));
     }
 }

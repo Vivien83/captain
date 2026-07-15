@@ -66,7 +66,7 @@ fn tool_definition(name: &str, description: &str, input_schema: Value) -> ToolDe
 fn browser_batch_tool_definition() -> ToolDefinition {
     tool_definition(
         "browser_batch",
-        "[BROWSER GROUPE - TOKEN ECONOMY] Exécute jusqu'à 20 actions navigateur dans un seul appel atomique: navigate, click, type, keys, select, hover, scroll, wait, run_js, read_page, screenshot, observe, status, network_log, diagnostics, back, close. Utiliser par défaut pour éviter les séquences coûteuses navigate→wait→read→diagnostics en plusieurs tours. Retourne des résumés compacts par étape et une observation finale configurable. Pour lire un article complet, mettre final_observation='read_page'; pour interaction UI, garder final_observation='observe' et utiliser les refs @eN.",
+        "[BROWSER GROUPE - TOKEN ECONOMY] Exécute jusqu'à 20 actions navigateur dans un seul appel atomique: navigate, click, type, keys, select, hover, scroll, wait, run_js, read_page, screenshot, observe, status, network_log, diagnostics, back, close. Utiliser par défaut pour éviter les séquences coûteuses navigate→wait→read→diagnostics en plusieurs tours. Pour toute conclusion visuelle, ajouter un prompt non vide à l'étape screenshot : le PNG est alors injecté nativement au modèle actif de cette conversation, sans agent vision ni clé provider supplémentaire. Sans prompt, la capture sert uniquement au partage et ne prouve aucun fait visuel. Retourne des résumés compacts par étape et une observation finale configurable. Pour lire un article complet, mettre final_observation='read_page'; pour interaction UI, garder final_observation='observe' et utiliser les refs @eN.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -88,6 +88,7 @@ fn browser_batch_tool_definition() -> ToolDefinition {
                             "amount": { "type": "integer" },
                             "timeout_ms": { "type": "integer" },
                             "expression": { "type": "string" },
+                            "prompt": { "type": "string", "description": "Pour screenshot uniquement: question visuelle précise. Si renseignée, les pixels PNG sont joints au prochain appel du modèle actif de la conversation." },
                             "limit": { "type": "integer" },
                             "clear": { "type": "boolean" },
                             "max_elements": { "type": "integer" }
@@ -194,8 +195,16 @@ fn browser_hover_tool_definition() -> ToolDefinition {
 fn browser_screenshot_tool_definition() -> ToolDefinition {
     tool_definition(
         "browser_screenshot",
-        "Capture une capture d'écran de la page courante dans la session navigateur active. Utiliser pour vérifier visuellement l'état d'une page, détecter un CAPTCHA, ou documenter une interface. Ne pas utiliser pour extraire du texte — `browser_read_page` est plus adapté et moins coûteux. Retourne une image PNG encodée en base64.",
-        serde_json::json!({"type": "object", "properties": {}}),
+        "Capture la page courante dans la session navigateur active. Pour vérifier un rendu, détecter un CAPTCHA ou auditer une interface, fournir un prompt visuel précis : Captain joint alors directement le PNG au même modèle actif de la conversation, sans agent vision ni clé Mistral. Sans prompt, la capture est seulement enregistrée pour partage et aucune conclusion visuelle ne doit en être tirée. Ne pas utiliser pour extraire du texte — `browser_read_page` est plus adapté et moins coûteux. Retourne une URL locale de capture et un statut explicite du rail multimodal.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Question visuelle précise à résoudre depuis les pixels. Optionnelle pour une capture destinée uniquement au partage; requise pour toute affirmation sur le rendu."
+                }
+            }
+        }),
     )
 }
 

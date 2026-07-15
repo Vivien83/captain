@@ -6,7 +6,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-No public changes have been queued after the first alpha.
+No public changes are queued yet.
+
+## [0.1.0-alpha.2] - 2026-07-14
+
+Follow-up early-access release focused on native visual inspection and a
+consistent Captain identity across browser surfaces.
+
+### Added
+
+- Browser screenshots with a visual prompt are attached directly to the active
+  conversation model through native multimodal input. This path requires no
+  separate Vision agent or secondary provider key.
+
+### Fixed
+
+- Control, Terminal, Config, Apple touch metadata, and `/favicon.ico` now use
+  the same embedded Captain logo instead of leaving terminal tabs unbranded.
+- Codex and OpenAI-compatible streaming requests preserve images beside tool
+  results, while durable sessions omit transient screenshot base64 payloads.
+- Text-only active models now reject images with an actionable switch message
+  instead of silently delegating them to another agent or provider.
+- Release gates can reuse the release Cargo profile explicitly, avoiding a
+  second debug artifact tree during local publication.
 
 ## [0.1.0-alpha.1] - 2026-07-14
 
@@ -71,5 +93,6 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.1

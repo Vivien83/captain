@@ -21,6 +21,7 @@ fn tool_result(tool_call: &ToolCall, content: String, is_error: bool) -> ToolRes
         tool_use_id: tool_call.id.clone(),
         content,
         is_error,
+        transient_content: Vec::new(),
     }
 }
 
@@ -131,4 +132,41 @@ async fn finish_tool_call_streaming_emits_result_event() {
     ));
     assert_eq!(records.len(), 1);
     assert_eq!(blocks.len(), 1);
+}
+
+#[tokio::test]
+async fn finish_tool_call_keeps_transient_image_adjacent_to_its_result() {
+    let manifest = manifest();
+    let caller_id = AgentId::new().to_string();
+    let call = tool_call("browser_screenshot");
+    let mut result = tool_result(&call, "screenshot metadata".to_string(), false);
+    result.transient_content.push(ContentBlock::Image {
+        media_type: "image/png".to_string(),
+        data: "cG5n".to_string(),
+    });
+    let mut visible_tools = Vec::new();
+    let mut records = Vec::new();
+    let mut blocks = Vec::new();
+
+    finish_tool_call(FinishToolCallInput {
+        manifest: &manifest,
+        tool_call: &call,
+        result,
+        verdict: &LoopGuardVerdict::Allow,
+        context_budget: &ContextBudget::new(200_000),
+        available_tools: &[],
+        visible_tools: &mut visible_tools,
+        tool_calls_recorded: &mut records,
+        tool_result_blocks: &mut blocks,
+        kernel: None,
+        hooks: None,
+        caller_id_str: &caller_id,
+        tool_elapsed_ms: 3,
+        streaming: false,
+        stream_tx: None,
+    })
+    .await;
+
+    assert!(matches!(blocks[0], ContentBlock::ToolResult { .. }));
+    assert!(matches!(blocks[1], ContentBlock::Image { .. }));
 }

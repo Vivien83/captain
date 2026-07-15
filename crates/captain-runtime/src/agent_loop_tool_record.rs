@@ -123,6 +123,7 @@ mod tests {
             tool_use_id: "call-1".to_string(),
             content,
             is_error,
+            transient_content: Vec::new(),
         }
     }
 

@@ -251,7 +251,7 @@ for target in $TARGETS; do
             CAPTAIN_BIN_PATH="$bin_path" \
             CAPTAIN_DIST_PLATFORM="$target" \
             CAPTAIN_VERSION="$VERSION" \
-            ${CAPTAIN_DIST_DIR:+CAPTAIN_DIST_DIR="$CAPTAIN_DIST_DIR"} \
+            CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}" \
                 bash "$ROOT_DIR/scripts/package-release.sh"
             ;;
     esac

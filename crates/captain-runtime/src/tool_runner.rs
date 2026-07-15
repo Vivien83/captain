@@ -135,12 +135,16 @@ pub async fn execute_tool(
         process_manager,
     })
     .await;
-    let result = match dispatch {
+    let (result, transient_content) = match dispatch {
         ToolDispatchOutcome::Blocked(result) => return result,
-        ToolDispatchOutcome::Dispatched(result) => result,
+        ToolDispatchOutcome::Dispatched(result) => (result, Vec::new()),
+        ToolDispatchOutcome::Browser(result) => match result {
+            Ok(output) => (Ok(output.content), output.transient_content),
+            Err(error) => (Err(error), Vec::new()),
+        },
     };
 
-    finalize_dispatch_result(
+    let mut tool_result = finalize_dispatch_result(
         DispatchFinalizeContext {
             tool_use_id,
             tool_name,
@@ -153,7 +157,11 @@ pub async fn execute_tool(
         },
         result,
     )
-    .await
+    .await;
+    if !tool_result.is_error {
+        tool_result.transient_content = transient_content;
+    }
+    tool_result
 }
 
 /// Get definitions for all built-in tools.

@@ -42,7 +42,7 @@ use captain_types::tool::ToolDefinition;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[path = "kernel_agent_api_provision.rs"]
 mod kernel_agent_api_provision;
@@ -754,118 +754,32 @@ impl CaptainKernel {
         Ok(kernel)
     }
 
-    /// Check if the target agent can handle the input. If not, find or spawn
-    /// a capable agent and return its ID + entry instead.
-    /// Check if the target agent can handle the input. If not, delegate to a
-    /// specialized agent in the background and inject its analysis as context.
+    /// Validate multimodal input against the active model without delegating it.
     ///
-    /// The original agent (e.g., Captain) stays the respondent — the user only
-    /// talks to Captain. The specialized agent works behind the scenes.
-    ///
-    /// Returns: (message, content_blocks) — possibly enriched with specialist output
-    /// and with capability-specific blocks (e.g., images) stripped.
+    /// This compatibility entrypoint preserves the original message and blocks.
+    /// An incompatible model receives an actionable error before any provider
+    /// request starts, so images never move to another agent implicitly.
     pub async fn resolve_capability_gap(
         &self,
         agent_id: AgentId,
         message: &str,
         content_blocks: Option<Vec<captain_types::message::ContentBlock>>,
     ) -> KernelResult<(String, Option<Vec<captain_types::message::ContentBlock>>)> {
-        use crate::capability_routing::{decide_routing, RoutingDecision};
+        use crate::capability_routing::ensure_active_model_supports;
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::Captain(CaptainError::AgentNotFound(agent_id.to_string()))
         })?;
+        let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
+        ensure_active_model_supports(
+            &catalog,
+            &entry.manifest.model.provider,
+            &entry.manifest.model.model,
+            content_blocks.as_deref(),
+        )
+        .map_err(KernelError::Captain)?;
 
-        let decision = {
-            let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
-            decide_routing(
-                &self.registry,
-                &catalog,
-                agent_id,
-                &entry.manifest.model.model,
-                content_blocks.as_deref(),
-            )
-        };
-
-        let target_id = match decision {
-            RoutingDecision::Proceed => return Ok((message.to_string(), content_blocks)),
-            RoutingDecision::NoCandidateAvailable(cap) => {
-                warn!(capability = ?cap, "No capable model available, proceeding without");
-                return Ok((message.to_string(), content_blocks));
-            }
-            RoutingDecision::DelegateTo(target_id) => {
-                info!(agent_id = %agent_id, target = %target_id, "Delegating to specialist agent");
-                target_id
-            }
-            RoutingDecision::SpawnAndDelegate {
-                manifest_toml,
-                capability,
-            } => {
-                info!(capability = ?capability, "Auto-spawning specialist agent");
-                let manifest: AgentManifest = toml::from_str(&manifest_toml).map_err(|e| {
-                    KernelError::Captain(CaptainError::ManifestParse(format!("Vision agent: {e}")))
-                })?;
-                let new_name = manifest.name.clone();
-                let new_id = self.spawn_agent(manifest)?;
-                info!(agent_id = %new_id, name = new_name, "Specialist agent spawned");
-                new_id
-            }
-        };
-
-        // Call the specialist agent with the full content (including images)
-        let specialist_name = self
-            .registry
-            .get(target_id)
-            .map(|e| e.name.clone())
-            .unwrap_or_else(|| "specialist".to_string());
-        info!(
-            specialist = specialist_name,
-            "Calling specialist for analysis"
-        );
-
-        let specialist_result = self
-            .send_message_with_blocks(
-                target_id,
-                message,
-                content_blocks.clone().unwrap_or_default(),
-            )
-            .await;
-
-        match specialist_result {
-            Ok(result) => {
-                // Strip images from blocks (Captain's model can't process them)
-                let cleaned_blocks = content_blocks
-                    .map(|blocks| {
-                        blocks
-                            .into_iter()
-                            .filter(|b| {
-                                !matches!(b, captain_types::message::ContentBlock::Image { .. })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .filter(|b: &Vec<_>| !b.is_empty());
-
-                // Enrich Captain's message with the specialist's analysis
-                let enriched = format!(
-                    "{message}\n\n\
-                     [Note: I delegated image analysis to my specialist agent \"{specialist_name}\". \
-                     Here is the raw analysis — reformulate it naturally in your response and mention \
-                     briefly that you used a specialist agent for the image.]\n\
-                     ---\n{}\n---",
-                    result.response
-                );
-
-                info!(
-                    specialist = specialist_name,
-                    "Specialist analysis injected into Captain's context"
-                );
-                Ok((enriched, cleaned_blocks))
-            }
-            Err(e) => {
-                warn!(specialist = specialist_name, error = %e, "Specialist agent failed, proceeding without");
-                Ok((message.to_string(), content_blocks))
-            }
-        }
+        Ok((message.to_string(), content_blocks))
     }
 
     /// Verify a signed manifest envelope (Ed25519 + SHA-256).

@@ -114,6 +114,7 @@ fn result_to_tool_result(
             tool_use_id: ctx.tool_use_id.to_string(),
             content,
             is_error: false,
+            transient_content: Vec::new(),
         },
         Err(err) => error_to_tool_result(ctx, err, recovered_after_retry),
     }
@@ -141,6 +142,7 @@ fn error_to_tool_result(
             tool_use_id: ctx.tool_use_id.to_string(),
             content: "Temporarily unavailable. Continue without this result.".to_string(),
             is_error: false,
+            transient_content: Vec::new(),
         };
     }
 
@@ -164,6 +166,7 @@ fn error_to_tool_result(
         tool_use_id: ctx.tool_use_id.to_string(),
         content: render_error_with_suggestion(ctx.tool_name, &err, &suggestion),
         is_error: true,
+        transient_content: Vec::new(),
     }
 }
 

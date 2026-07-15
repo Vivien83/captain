@@ -12,6 +12,7 @@ PACKAGE_RELEASE="$ROOT_DIR/scripts/package-release.sh"
 LOCAL_PUBLISHER="$ROOT_DIR/scripts/publish-release-local.sh"
 LOCAL_DOCKERFILE="$ROOT_DIR/Dockerfile.release"
 DOCKER_EMBEDDING_CACHE="$ROOT_DIR/scripts/prepare-docker-embedding-cache.sh"
+RELEASE_READINESS="$ROOT_DIR/scripts/release-readiness.sh"
 CROSS_CONFIG="$ROOT_DIR/Cross.toml"
 PASS=0
 
@@ -131,6 +132,7 @@ require_file_literal "local publisher stages deterministic embeddings" "$LOCAL_P
 require_file_literal "cross propagates compile-time version" "$CROSS_CONFIG" 'passthrough = ["CAPTAIN_BUILD_VERSION"]'
 require_file_literal "local packager executes embedded versions" "$RELEASE_ALL" 'embedded binary version mismatch'
 require_file_literal "local packager emulates Linux ARM64" "$RELEASE_ALL" 'qemu-aarch64-static'
+require_file_literal "local packager forwards custom output roots" "$RELEASE_ALL" 'CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"'
 require_file_literal "macOS bundle signing fails closed" "$PACKAGE_RELEASE" 'failed to verify $PLATFORM release signature'
 require_file_literal "Windows preflight requires LLVM" "$RELEASE_ALL" 'command -v llvm-ar'
 require_file_literal "Windows preflight requires NASM" "$RELEASE_ALL" 'command -v nasm'
@@ -143,10 +145,14 @@ require_file_literal "release image verifies staged embeddings" "$LOCAL_DOCKERFI
 require_file_literal "embedding cache pins the model revision" "$DOCKER_EMBEDDING_CACHE" '5f1b8cd78bc4fb444dd171e59b18f3a3af89a079'
 require_file_literal "embedding cache pins the model checksum" "$DOCKER_EMBEDDING_CACHE" 'bbd7b466f6d58e646fdc2bd5fd67b2f5e93c0b687011bd4548c420f7bd46f0c5'
 require_file_literal "embedding cache output stays ignored" "$ROOT_DIR/.gitignore" '/dist/docker/'
+require_file_literal "release readiness defaults to release Cargo" "$RELEASE_READINESS" 'CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"'
+require_file_literal "release readiness versions release-profile tests" "$RELEASE_READINESS" 'run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo test --release "$@"'
+require_file_literal "release readiness rejects unknown Cargo profiles" "$RELEASE_READINESS" 'CAPTAIN_RELEASE_CARGO_PROFILE must be dev or release'
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
 require_shell_syntax "$RELEASE_ALL"
 require_shell_syntax "$LOCAL_PUBLISHER"
 require_shell_syntax "$DOCKER_EMBEDDING_CACHE"
+require_shell_syntax "$RELEASE_READINESS"
 CAPTAIN_RELEASE_POLICY_TEST=1 "$LOCAL_PUBLISHER" >/dev/null
 pass "local release channel policy"
 

@@ -836,7 +836,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.1"
+  "version": "0.1.0-alpha.2"
 }
 ```
 
@@ -851,7 +851,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,

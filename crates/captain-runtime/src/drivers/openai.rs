@@ -136,7 +136,7 @@ impl OpenAIDriver {
 
         OaiRequest {
             model: request.model.clone(),
-            messages: build_oai_messages(request, mode, needs_reasoning),
+            messages: build_oai_messages(request, needs_reasoning),
             max_tokens,
             max_completion_tokens,
             temperature: oai_temperature(&request.model, request.temperature, needs_reasoning),
@@ -332,17 +332,9 @@ impl OaiRequestMode {
             None
         }
     }
-
-    fn includes_user_content_parts(self) -> bool {
-        matches!(self, Self::Complete)
-    }
 }
 
-fn build_oai_messages(
-    request: &CompletionRequest,
-    mode: OaiRequestMode,
-    needs_reasoning: bool,
-) -> Vec<OaiMessage> {
+fn build_oai_messages(request: &CompletionRequest, needs_reasoning: bool) -> Vec<OaiMessage> {
     let mut messages = Vec::new();
 
     if let Some(system) = &request.system {
@@ -363,7 +355,7 @@ fn build_oai_messages(
                 push_text_message(&mut messages, "assistant", text);
             }
             (Role::User, MessageContent::Blocks(blocks)) => {
-                push_user_block_messages(&mut messages, blocks, mode);
+                push_user_block_messages(&mut messages, blocks);
             }
             (Role::Assistant, MessageContent::Blocks(blocks)) => {
                 push_assistant_block_message(&mut messages, blocks, needs_reasoning);
@@ -385,13 +377,8 @@ fn push_text_message(messages: &mut Vec<OaiMessage>, role: &str, text: &str) {
     });
 }
 
-fn push_user_block_messages(
-    messages: &mut Vec<OaiMessage>,
-    blocks: &[ContentBlock],
-    mode: OaiRequestMode,
-) {
+fn push_user_block_messages(messages: &mut Vec<OaiMessage>, blocks: &[ContentBlock]) {
     let mut parts = Vec::new();
-    let mut has_tool_results = false;
 
     for block in blocks {
         match block {
@@ -400,7 +387,6 @@ fn push_user_block_messages(
                 content,
                 ..
             } => {
-                has_tool_results = true;
                 messages.push(OaiMessage {
                     role: "tool".to_string(),
                     content: Some(OaiMessageContent::Text(if content.is_empty() {
@@ -413,10 +399,10 @@ fn push_user_block_messages(
                     reasoning_content: None,
                 });
             }
-            ContentBlock::Text { text, .. } if mode.includes_user_content_parts() => {
+            ContentBlock::Text { text, .. } => {
                 parts.push(OaiContentPart::Text { text: text.clone() });
             }
-            ContentBlock::Image { media_type, data } if mode.includes_user_content_parts() => {
+            ContentBlock::Image { media_type, data } => {
                 parts.push(OaiContentPart::ImageUrl {
                     image_url: OaiImageUrl {
                         url: format!("data:{media_type};base64,{data}"),
@@ -428,7 +414,7 @@ fn push_user_block_messages(
         }
     }
 
-    if mode.includes_user_content_parts() && !parts.is_empty() && !has_tool_results {
+    if !parts.is_empty() {
         messages.push(OaiMessage {
             role: "user".to_string(),
             content: Some(OaiMessageContent::Parts(parts)),
@@ -1711,11 +1697,11 @@ mod tests {
     }
 
     #[test]
-    fn build_oai_request_stream_keeps_user_block_tool_results_only() {
+    fn build_oai_request_stream_keeps_tool_results_and_multimodal_user_content() {
         let driver = OpenAIDriver::new("test-key".to_string(), "http://localhost".to_string());
         let request = test_completion_request(vec![Message::user_with_blocks(vec![
             ContentBlock::Text {
-                text: "ignored in current streaming compatibility path".to_string(),
+                text: "inspect the screenshot".to_string(),
                 provider_metadata: None,
             },
             ContentBlock::ToolResult {
@@ -1723,6 +1709,10 @@ mod tests {
                 tool_name: "web_search".to_string(),
                 content: String::new(),
                 is_error: false,
+            },
+            ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                data: "cG5n".to_string(),
             },
         ])]);
 
@@ -1733,7 +1723,7 @@ mod tests {
             built.stream_options,
             Some(serde_json::json!({"include_usage": true}))
         );
-        assert_eq!(built.messages.len(), 1);
+        assert_eq!(built.messages.len(), 2);
         assert_eq!(built.messages[0].role, "tool");
         assert_eq!(
             built.messages[0].tool_call_id.as_deref(),
@@ -1742,6 +1732,22 @@ mod tests {
         match built.messages[0].content.as_ref().unwrap() {
             OaiMessageContent::Text(text) => assert_eq!(text, "(empty)"),
             _ => panic!("tool result message should be text"),
+        }
+        assert_eq!(built.messages[1].role, "user");
+        match built.messages[1].content.as_ref().unwrap() {
+            OaiMessageContent::Parts(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(
+                    &parts[0],
+                    OaiContentPart::Text { text } if text == "inspect the screenshot"
+                ));
+                assert!(matches!(
+                    &parts[1],
+                    OaiContentPart::ImageUrl { image_url }
+                        if image_url.url == "data:image/png;base64,cG5n"
+                ));
+            }
+            _ => panic!("streaming user message should keep multimodal parts"),
         }
     }
 

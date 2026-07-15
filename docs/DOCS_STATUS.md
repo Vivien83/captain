@@ -122,12 +122,22 @@ Telegram delivery. Availability never changes an active model by itself:
 keeping is explicit, and switching requires an agent and a provider-portable
 session strategy (`new_session` or `compact_session`).
 
-The standalone presentation site is maintainer-only and deliberately absent
-from the public Git repository. In the private checkout, `site/index.html`,
+Images and prompted browser screenshots stay on the active conversation model.
+Captain sends their pixels through the provider's native multimodal request and
+never auto-spawns a Vision agent or changes provider behind the user's back. A
+text-only active model receives an actionable refusal before the request and
+must be changed explicitly. Browser captures without a visual prompt remain
+share-only and cannot support visual claims.
+
+The standalone presentation site is publicly reachable at
+`https://captainagent.fr/` (with `https://www.captainagent.fr/` as an alias),
+but its source remains maintainer-only and deliberately absent from the public
+Git repository. In the private checkout, `site/index.html`,
 `site/assets/site.css`, `site/assets/site.js`, and
 `site/assets/terminal-demo.js` remain a separately audited product surface.
-Building or deploying that site never changes the public source export, release
-bundles, or authenticated Control app.
+Building or deploying that site never changes the public source export,
+release bundles, or authenticated Control app; the local browser smoke proves
+the build, not the state of the separately deployed host.
 
 ## Reproducible Gates
 

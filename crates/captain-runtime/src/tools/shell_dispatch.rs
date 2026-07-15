@@ -171,5 +171,6 @@ fn blocked_result(tool_use_id: &str, content: String) -> ToolResult {
         tool_use_id: tool_use_id.to_string(),
         content,
         is_error: true,
+        transient_content: Vec::new(),
     }
 }

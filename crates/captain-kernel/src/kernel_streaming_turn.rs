@@ -1,18 +1,14 @@
-use crate::capability_routing::{decide_routing, RoutingDecision};
+use crate::capability_routing::ensure_active_model_supports;
 use crate::error::{KernelError, KernelResult};
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_types::agent::{AgentEntry, AgentId, AgentManifest, SessionId};
-use captain_types::error::CaptainError;
 use captain_types::message::ContentBlock;
 use std::sync::Arc;
-use tracing::info;
 
 use super::kernel_llm_turn::{StreamingLlmTurnRequest, StreamingLlmTurnResult};
 use super::CaptainKernel;
 
-#[derive(Clone)]
 struct StreamingMessageRequest<'a> {
-    agent_id: AgentId,
     message: &'a str,
     kernel_handle: Option<Arc<dyn KernelHandle>>,
     sender_id: Option<String>,
@@ -75,7 +71,6 @@ impl CaptainKernel {
         session_id: Option<SessionId>,
     ) -> KernelResult<StreamingLlmTurnResult> {
         let request = StreamingMessageRequest {
-            agent_id,
             message,
             kernel_handle,
             sender_id,
@@ -112,9 +107,7 @@ impl CaptainKernel {
             return self.static_stream_result(agent_id, result);
         }
 
-        if let Some(result) = self.route_streaming_to_specialist(&entry, request.clone())? {
-            return Ok(result);
-        }
+        self.validate_streaming_capabilities(&entry, request.content_blocks.as_deref())?;
 
         if let Some(module_kind) = streaming_module_kind(&entry.manifest) {
             return self.stream_module_agent(
@@ -138,53 +131,19 @@ impl CaptainKernel {
         })
     }
 
-    fn route_streaming_to_specialist(
-        self: &Arc<Self>,
+    fn validate_streaming_capabilities(
+        &self,
         entry: &AgentEntry,
-        request: StreamingMessageRequest<'_>,
-    ) -> KernelResult<Option<StreamingLlmTurnResult>> {
+        content_blocks: Option<&[ContentBlock]>,
+    ) -> KernelResult<()> {
         let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
-        let decision = decide_routing(
-            &self.registry,
+        ensure_active_model_supports(
             &catalog,
-            request.agent_id,
+            &entry.manifest.model.provider,
             &entry.manifest.model.model,
-            request.content_blocks.as_deref(),
-        );
-        drop(catalog);
-
-        match decision {
-            RoutingDecision::Proceed | RoutingDecision::NoCandidateAvailable(_) => Ok(None),
-            RoutingDecision::DelegateTo(target_id) => {
-                info!(agent_id = %request.agent_id, target = %target_id, "Streaming: redirect to specialist");
-                self.send_message_streaming(
-                    target_id,
-                    request.message,
-                    request.kernel_handle,
-                    request.sender_id,
-                    request.sender_name,
-                    request.content_blocks,
-                    request.channel_type,
-                )
-                .map(Some)
-            }
-            RoutingDecision::SpawnAndDelegate { manifest_toml, .. } => {
-                let manifest: AgentManifest = toml::from_str(&manifest_toml).map_err(|e| {
-                    KernelError::Captain(CaptainError::ManifestParse(format!("Vision agent: {e}")))
-                })?;
-                let new_id = self.spawn_agent(manifest)?;
-                self.send_message_streaming(
-                    new_id,
-                    request.message,
-                    request.kernel_handle,
-                    request.sender_id,
-                    request.sender_name,
-                    request.content_blocks,
-                    request.channel_type,
-                )
-                .map(Some)
-            }
-        }
+            content_blocks,
+        )
+        .map_err(KernelError::Captain)
     }
 }
 

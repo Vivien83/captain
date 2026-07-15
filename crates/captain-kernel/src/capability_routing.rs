@@ -1,12 +1,11 @@
-//! Capability-aware auto-routing — delegates messages to specialized agents
-//! when the target agent's model lacks required capabilities (e.g., vision).
+//! Capability preflight for multimodal input.
 //!
-//! Pre-flight check: before sending to LLM, verify the model can handle the input.
-//! If not, find or spawn a capable agent and delegate transparently.
+//! Images stay on the active conversation model. Captain never delegates them
+//! to another agent or provider implicitly; an incompatible active model gets
+//! an actionable error before the LLM request starts.
 
-use captain_types::agent::AgentId;
+use captain_types::error::CaptainError;
 use captain_types::message::ContentBlock;
-use tracing::{info, warn};
 
 /// Capability required to process the given content blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,238 +18,181 @@ pub fn detect_required_capabilities(
     content_blocks: Option<&[ContentBlock]>,
 ) -> Vec<RequiredCapability> {
     let mut caps = Vec::new();
-    if let Some(blocks) = content_blocks {
-        let has_images = blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Image { .. }));
-        if has_images {
-            caps.push(RequiredCapability::Vision);
-        }
+    if content_blocks
+        .unwrap_or_default()
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Image { .. }))
+    {
+        caps.push(RequiredCapability::Vision);
     }
     caps
 }
 
-/// Check if a model supports the given capability, using the model catalog.
+fn catalog_provider(provider: &str) -> &str {
+    match provider.to_ascii_lowercase().as_str() {
+        "openai-codex" => "codex",
+        "google" => "gemini",
+        "azure-openai" => "azure",
+        "kimi" | "kimi2" => "moonshot",
+        "dashscope" | "model_studio" => "qwen",
+        "copilot" => "github-copilot",
+        _ => provider,
+    }
+}
+
+fn catalog_model_id(provider: &str, model_id: &str) -> String {
+    let model_slug = model_id
+        .split_once('/')
+        .filter(|(prefix, _)| catalog_provider(prefix).eq_ignore_ascii_case(provider))
+        .map(|(_, slug)| slug)
+        .unwrap_or(model_id);
+    format!("{provider}/{model_slug}")
+}
+
+/// Check if the active model supports the given capability.
 pub fn model_supports(
     catalog: &captain_runtime::model_catalog::ModelCatalog,
+    provider: &str,
     model_id: &str,
     cap: RequiredCapability,
 ) -> bool {
+    let provider = catalog_provider(provider);
+    let canonical_id = catalog_model_id(provider, model_id);
+    let model = catalog
+        .find_model(&canonical_id)
+        .filter(|model| model.provider.eq_ignore_ascii_case(provider))
+        .or_else(|| {
+            catalog
+                .find_model(model_id)
+                .filter(|model| model.provider.eq_ignore_ascii_case(provider))
+        });
+
     match cap {
-        RequiredCapability::Vision => catalog
-            .find_model(model_id)
-            .map(|m| m.supports_vision)
-            .unwrap_or(false),
+        RequiredCapability::Vision => model.is_some_and(|model| model.supports_vision),
     }
 }
 
-/// Find an existing agent whose model supports the required capability.
-pub fn find_capable_agent(
-    registry: &crate::registry::AgentRegistry,
-    catalog: &captain_runtime::model_catalog::ModelCatalog,
-    cap: RequiredCapability,
-    exclude_agent_id: AgentId,
-) -> Option<AgentId> {
-    registry
-        .list()
-        .into_iter()
-        .filter(|e| e.id != exclude_agent_id)
-        .filter(|e| matches!(e.state, captain_types::agent::AgentState::Running))
-        .find(|e| model_supports(catalog, &e.manifest.model.model, cap))
-        .map(|e| e.id)
-}
-
-/// Pick the best available vision model from the catalog based on configured API keys.
-pub fn best_vision_model(
-    catalog: &captain_runtime::model_catalog::ModelCatalog,
-) -> Option<(String, String)> {
-    // Priority: gemini-2.5-flash (cheap + fast) > claude-sonnet > gpt-4o
-    let candidates = [
-        ("mistral", "pixtral-large-latest"),
-        ("gemini", "gemini-2.5-flash"),
-        ("anthropic", "claude-sonnet-4-20250514"),
-        ("openai", "gpt-4o"),
-        ("groq", "llama-4-scout-17b-16e-instruct"),
-    ];
-
-    for (provider, model) in &candidates {
-        if let Some(entry) = catalog.find_model(model) {
-            if entry.supports_vision {
-                // Check if provider has auth configured
-                let provider_info = catalog.list_providers().iter().find(|p| p.id == *provider);
-                if let Some(p) = provider_info {
-                    if matches!(
-                        p.auth_status,
-                        captain_types::model_catalog::AuthStatus::Configured
-                    ) {
-                        return Some((provider.to_string(), model.to_string()));
-                    }
-                }
-            }
-        }
+fn active_model_label(provider: &str, model_id: &str) -> String {
+    if model_id.contains('/') {
+        model_id.to_string()
+    } else {
+        format!("{provider}/{model_id}")
     }
-
-    // Fallback: any vision model with configured auth
-    for entry in catalog.list_models() {
-        if entry.supports_vision {
-            let provider_info = catalog
-                .list_providers()
-                .iter()
-                .find(|p| p.id == entry.provider);
-            if let Some(p) = provider_info {
-                if matches!(
-                    p.auth_status,
-                    captain_types::model_catalog::AuthStatus::Configured
-                ) {
-                    return Some((entry.provider.clone(), entry.id.clone()));
-                }
-            }
-        }
-    }
-
-    None
 }
 
-/// Build a TOML manifest for a vision-capable agent.
-pub fn build_vision_agent_manifest(provider: &str, model: &str) -> String {
-    format!(
-        r#"name = "vision"
-version = "1.0.0"
-description = "Vision-capable agent for image analysis (auto-spawned)"
-module = "builtin:chat"
-tags = ["vision", "auto-spawned"]
-
-[model]
-provider = "{provider}"
-model = "{model}"
-system_prompt = "You are a vision analysis assistant. Images are sent to you inline as part of the conversation — you can see them directly. Describe what you see accurately and concisely. Always respond in the same language as the user's message."
-
-[capabilities]
-tools = ["memory_store", "memory_recall"]
-agent_spawn = false
-"#
-    )
-}
-
-/// Result of a capability routing decision.
-#[derive(Debug)]
-pub enum RoutingDecision {
-    /// No routing needed — the target agent can handle the input.
-    Proceed,
-    /// Delegate to an existing capable agent.
-    DelegateTo(AgentId),
-    /// Need to spawn a new capable agent first (returns manifest TOML).
-    SpawnAndDelegate {
-        manifest_toml: String,
-        capability: RequiredCapability,
-    },
-    /// No capable model available at all.
-    NoCandidateAvailable(RequiredCapability),
-}
-
-/// Make a routing decision for the given message and content blocks.
-pub fn decide_routing(
-    registry: &crate::registry::AgentRegistry,
+/// Reject unsupported multimodal input without changing agent or provider.
+pub fn ensure_active_model_supports(
     catalog: &captain_runtime::model_catalog::ModelCatalog,
-    agent_id: AgentId,
-    agent_model: &str,
+    provider: &str,
+    model_id: &str,
     content_blocks: Option<&[ContentBlock]>,
-) -> RoutingDecision {
-    let caps = detect_required_capabilities(content_blocks);
-
-    for cap in caps {
-        if !model_supports(catalog, agent_model, cap) {
-            info!(
-                agent_id = %agent_id,
-                model = agent_model,
-                capability = ?cap,
-                "Model lacks required capability, searching for capable agent"
-            );
-
-            // Try to find an existing capable agent
-            if let Some(target_id) = find_capable_agent(registry, catalog, cap, agent_id) {
-                info!(
-                    target_agent = %target_id,
-                    capability = ?cap,
-                    "Found existing capable agent, delegating"
-                );
-                return RoutingDecision::DelegateTo(target_id);
-            }
-
-            // No existing agent — try to spawn one
-            if let Some((provider, model)) = best_vision_model(catalog) {
-                info!(
-                    provider = provider,
-                    model = model,
-                    capability = ?cap,
-                    "No capable agent found, will auto-spawn"
-                );
-                return RoutingDecision::SpawnAndDelegate {
-                    manifest_toml: build_vision_agent_manifest(&provider, &model),
-                    capability: cap,
-                };
-            }
-
-            warn!(capability = ?cap, "No capable model available in catalog");
-            return RoutingDecision::NoCandidateAvailable(cap);
+) -> Result<(), CaptainError> {
+    for capability in detect_required_capabilities(content_blocks) {
+        if model_supports(catalog, provider, model_id, capability) {
+            continue;
         }
+
+        let model = active_model_label(provider, model_id);
+        return Err(match capability {
+            RequiredCapability::Vision => CaptainError::CapabilityDenied(format!(
+                "active model '{model}' does not support image input. Captain did not send the image to another agent or provider. Switch this agent to a vision-capable model, then retry"
+            )),
+        });
     }
 
-    RoutingDecision::Proceed
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_detect_no_images_no_caps() {
-        assert!(detect_required_capabilities(None).is_empty());
-        assert!(detect_required_capabilities(Some(&[])).is_empty());
-    }
-
-    #[test]
-    fn test_detect_text_only_no_caps() {
-        let blocks = vec![ContentBlock::Text {
-            text: "hello".to_string(),
-            provider_metadata: None,
-        }];
-        assert!(detect_required_capabilities(Some(&blocks)).is_empty());
-    }
-
-    #[test]
-    fn test_detect_image_requires_vision() {
-        let blocks = vec![ContentBlock::Image {
+    fn image() -> ContentBlock {
+        ContentBlock::Image {
             media_type: "image/png".to_string(),
             data: "base64data".to_string(),
-        }];
-        let caps = detect_required_capabilities(Some(&blocks));
-        assert_eq!(caps, vec![RequiredCapability::Vision]);
+        }
     }
 
     #[test]
-    fn test_detect_mixed_content_requires_vision() {
-        let blocks = vec![
-            ContentBlock::Text {
-                text: "What is this?".to_string(),
-                provider_metadata: None,
-            },
-            ContentBlock::Image {
-                media_type: "image/jpeg".to_string(),
-                data: "base64data".to_string(),
-            },
-        ];
-        let caps = detect_required_capabilities(Some(&blocks));
-        assert_eq!(caps, vec![RequiredCapability::Vision]);
+    fn text_only_needs_no_capability() {
+        let text = ContentBlock::Text {
+            text: "hello".to_string(),
+            provider_metadata: None,
+        };
+        assert!(detect_required_capabilities(None).is_empty());
+        assert!(detect_required_capabilities(Some(&[])).is_empty());
+        assert!(detect_required_capabilities(Some(&[text])).is_empty());
     }
 
     #[test]
-    fn test_build_vision_manifest_valid_toml() {
-        let manifest = build_vision_agent_manifest("gemini", "gemini-2.5-flash");
-        let parsed: toml::Value = toml::from_str(&manifest).expect("Invalid TOML");
-        assert_eq!(parsed["name"].as_str(), Some("vision"));
-        assert_eq!(parsed["model"]["provider"].as_str(), Some("gemini"));
-        assert_eq!(parsed["model"]["model"].as_str(), Some("gemini-2.5-flash"));
-        assert!(manifest.contains("vision"));
+    fn image_requires_vision() {
+        assert_eq!(
+            detect_required_capabilities(Some(&[image()])),
+            vec![RequiredCapability::Vision]
+        );
+    }
+
+    #[test]
+    fn codex_aliases_keep_images_on_the_active_model() {
+        let catalog = captain_runtime::model_catalog::ModelCatalog::new();
+
+        for (provider, model) in [
+            ("codex", "gpt-5.5"),
+            ("openai-codex", "gpt-5.5"),
+            ("openai-codex", "openai-codex/gpt-5.5"),
+            ("openai-codex", "codex/gpt-5.5"),
+        ] {
+            assert!(model_supports(
+                &catalog,
+                provider,
+                model,
+                RequiredCapability::Vision
+            ));
+            ensure_active_model_supports(&catalog, provider, model, Some(&[image()]))
+                .expect("the active Codex model should receive the image directly");
+        }
+    }
+
+    #[test]
+    fn multimodal_provider_aliases_resolve_to_their_catalog_family() {
+        let catalog = captain_runtime::model_catalog::ModelCatalog::new();
+
+        for (provider, model) in [("google", "gemini-2.5-flash"), ("azure-openai", "gpt-4o")] {
+            assert!(model_supports(
+                &catalog,
+                provider,
+                model,
+                RequiredCapability::Vision
+            ));
+        }
+    }
+
+    #[test]
+    fn incompatible_model_is_rejected_without_hidden_delegation() {
+        let catalog = captain_runtime::model_catalog::ModelCatalog::new();
+        let error = ensure_active_model_supports(
+            &catalog,
+            "codex",
+            "gpt-5.3-codex-spark",
+            Some(&[image()]),
+        )
+        .expect_err("Spark is text-only in the catalog");
+        let message = error.to_string();
+
+        assert!(message.contains("does not support image input"));
+        assert!(message.contains("did not send the image to another agent or provider"));
+        assert!(message.contains("Switch this agent to a vision-capable model"));
+    }
+
+    #[test]
+    fn unknown_model_does_not_claim_image_support() {
+        let catalog = captain_runtime::model_catalog::ModelCatalog::new();
+        assert!(!model_supports(
+            &catalog,
+            "custom-provider",
+            "unknown-model",
+            RequiredCapability::Vision
+        ));
     }
 }

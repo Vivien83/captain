@@ -34,7 +34,7 @@ pub(crate) async fn finish_tool_call(input: FinishToolCallInput<'_>) {
     let FinishToolCallInput {
         manifest,
         tool_call,
-        result,
+        mut result,
         verdict,
         context_budget,
         available_tools,
@@ -48,6 +48,8 @@ pub(crate) async fn finish_tool_call(input: FinishToolCallInput<'_>) {
         streaming,
         stream_tx,
     } = input;
+
+    let transient_content = std::mem::take(&mut result.transient_content);
 
     record_completed_tool_call(
         tool_calls_recorded,
@@ -90,6 +92,7 @@ pub(crate) async fn finish_tool_call(input: FinishToolCallInput<'_>) {
     }
 
     push_tool_result_block(tool_result_blocks, &tool_call.name, result, final_content);
+    tool_result_blocks.extend(transient_content);
 }
 
 #[cfg(test)]

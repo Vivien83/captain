@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::kernel_project_prompt::resolve_recent_projects;
 use super::CaptainKernel;
+use crate::capability_routing::ensure_active_model_supports;
 
 impl CaptainKernel {
     /// Full message send with all parameters including channel_type.
@@ -61,6 +62,17 @@ impl CaptainKernel {
 
         let entry = self.resolve_agent_session_entry(agent_id, session_id)?;
 
+        {
+            let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
+            ensure_active_model_supports(
+                &catalog,
+                &entry.manifest.model.provider,
+                &entry.manifest.model.model,
+                content_blocks.as_deref(),
+            )
+            .map_err(KernelError::Captain)?;
+        }
+
         // Mark activity at turn START: a long turn (LLM + tools, often 90s+)
         // must not read as inactivity to the 60s heartbeat timeout.
         let _ = self.registry.touch(agent_id);
@@ -77,9 +89,6 @@ impl CaptainKernel {
             .map_err(KernelError::Captain)?;
 
         let regex_hint = self.emit_user_message_learning_hint(agent_id, message);
-
-        // Capability routing is handled by callers (channel_bridge, ws.rs)
-        // before invoking send_message_full, avoiding async recursion.
 
         // Channel-neutral continuation for safe model switches. The TUI keeps
         // this state in its UI layer; Telegram arrives as a fresh user message,

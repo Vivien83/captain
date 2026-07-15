@@ -123,6 +123,7 @@ pub(crate) fn tool_timeout_result(
             tool_call.name, timeout_secs
         ),
         is_error: true,
+        transient_content: Vec::new(),
     }
 }
 

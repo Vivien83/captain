@@ -114,6 +114,7 @@ async fn run_tool_with_timeout_guard_returns_completed_result() {
         tool_use_id: "call-3".to_string(),
         content: "ok".to_string(),
         is_error: false,
+        transient_content: Vec::new(),
     };
 
     let actual =
@@ -152,6 +153,7 @@ async fn run_tool_with_timeout_guard_skips_outer_wall_when_disabled() {
         tool_use_id: "call-5".to_string(),
         content: "own timeout handled".to_string(),
         is_error: false,
+        transient_content: Vec::new(),
     };
 
     let actual = run_tool_with_timeout_guard(&call, None, false, std::future::ready(result)).await;
