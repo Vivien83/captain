@@ -29,7 +29,6 @@ CONTRACT_DOCS=(
   "${README_DOCS[@]}"
   CHANGELOG.md
   CONTRIBUTING.md
-  MIGRATION.md
   SECURITY.md
   docs/DOCS_STATUS.md
   docs/DEPLOY.md
@@ -44,9 +43,7 @@ CONTRACT_DOCS=(
   docs/skill-development.md
   docs/architecture.md
   docs/security.md
-  docs/SECURITY-PROFILES.md
   docs/agent-templates.md
-  docs/mcp-a2a.md
   docs/workflows.md
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
@@ -57,6 +54,9 @@ CONTRACT_DOCS=(
 )
 
 HISTORICAL_DOCS=(
+  MIGRATION.md
+  docs/SECURITY-PROFILES.md
+  docs/ssh-setup.md
   docs/launch-roadmap.md
   docs/PREPUBLICATION_24H_PLAN.md
   docs/excellence-roadmap.md
@@ -245,6 +245,8 @@ require_contains "DOC2 status defines current contract docs" docs/DOCS_STATUS.md
 require_contains "DOC2 status defines agent-facing source" docs/DOCS_STATUS.md "Agent-Facing Source"
 require_contains "DOC2 status defines historical docs" docs/DOCS_STATUS.md "Historical Docs"
 require_contains "DOC2 status references captain_docs" docs/DOCS_STATUS.md "captain_docs"
+require_contains "DOC2 defines the essential public navigation boundary" docs/DOCS_STATUS.md "public navigation exposes only current install, operation, API, security"
+require_contains "DOC2 preserves runtime-bound Markdown for reproducible builds" docs/DOCS_STATUS.md 'can also be executable or build-time source'
 require_contains "DOC2 pins six primary hubs" docs/DOCS_STATUS.md "exactly six primary hubs"
 require_contains "DOC2 pins Control audit" docs/DOCS_STATUS.md "scripts/control-web-audit.sh"
 require_contains "DOC2 pins web terminal Unicode smoke" docs/DOCS_STATUS.md "scripts/web-terminal-unicode-smoke.mjs"
@@ -279,7 +281,24 @@ scan_marketplace_active_claims
 require_contains "CLI exposes per-agent API command" docs/cli-reference.md "captain agent api"
 require_contains "API docs expose per-agent ingress" docs/api-reference.md "/hooks/agents/{id}/ingress"
 require_contains "agent captain_docs expose per-agent ingress" docs/captain-tools/agent-coordination.md "/hooks/agents/{id}/ingress"
+require_contains "agent guide uses the structured model table" docs/agent-templates.md '[model]'
+require_contains "agent guide pins strict in/out readiness" docs/agent-templates.md '`ingress_ready` means external callers can send work'
+require_not_contains "agent guide has no stale fixed catalog count" docs/agent-templates.md '30 pre-built agent templates'
+require_contains "channel guide exposes only the active external tier" docs/channel-adapters.md 'active external messaging tier is deliberately small'
+require_not_contains "CLI does not advertise frozen Slack setup" docs/cli-reference.md 'captain channel setup slack'
+require_not_contains "CLI does not advertise the removed migration command" docs/cli-reference.md 'captain migrate'
+require_contains "API reset preserves durable history" docs/api-reference.md 'only an explicit history deletion is destructive'
+require_not_contains "API docs do not advertise removed migration routes" docs/api-reference.md '/api/migrate'
+require_not_contains "API docs omit frozen A2A routes" docs/api-reference.md '/a2a/'
+require_not_contains "API docs omit frozen marketplace routes" docs/api-reference.md '/api/clawhub'
+require_not_contains "security docs do not price removed migration routes" docs/security.md '/api/migrate'
+require_not_contains "public Compose omits frozen Slack credentials" docker-compose.yml 'SLACK_BOT_TOKEN'
+require_not_contains "configuration guide omits frozen Slack setup" docs/configuration.md '[channels.slack]'
+require_not_contains "provider guide has no copied model catalog" docs/providers.md '**Available Models:**'
+require_not_contains "provider guide has no volatile price table" docs/providers.md '$/1M'
+require_not_contains "skill guide omits the frozen marketplace path" docs/skill-development.md 'Frozen Marketplace'
 require_contains "README points to DOC2" docs/README.md "Docs Status (DOC2)"
+require_not_contains "docs navigation does not advertise frozen migration" docs/README.md 'MIGRATION.md'
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
@@ -292,6 +311,9 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_not_contains "$readme has no private candidate version" "$readme" "0.1.0-dev.2026-07-13a"
   require_contains "$readme documents local release publication" "$readme" "scripts/publish-release-local.sh"
   require_contains "$readme documents deterministic Docker embeddings" "$readme" "FastEmbed"
+  require_not_contains "$readme does not link historical security profiles" "$readme" "SECURITY-PROFILES.md"
+  require_not_contains "$readme does not advertise removed host-access overlays" "$readme" "docker-compose.personal.yml"
+  require_not_contains "$readme does not advertise frozen A2A" "$readme" "mcp-a2a.md"
 done
 require_contains "English README discloses missing notarization" README.md "not Apple-notarized"
 require_contains "French README discloses missing notarization" README.fr.md "ne sont pas notarisés"
@@ -304,6 +326,9 @@ require_contains "Chinese README documents proactive Codex discovery" README.zh.
 require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.3"
 require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.3] - 2026-07-15"
 require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
+require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "13b8aca8d6d5f842cc93a23b9f03caf972f01bf1"
+require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2"
+require_contains "agent changelog records the published multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
 require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"

@@ -3,6 +3,14 @@
 # local integrations, and historical design material stay in the private repo.
 /.mcp.json export-ignore
 /AGENTS.md export-ignore
+/MIGRATION.md export-ignore
+/start.sh export-ignore
+/docker-compose.personal.yml export-ignore
+/docker-compose.trusted.yml export-ignore
+/docker-compose.yolo.yml export-ignore
+/flake.nix export-ignore
+/crates/captain-migrate export-ignore
+/crates/captain-migrate/** export-ignore
 /site export-ignore
 /site/** export-ignore
 /deploy/captain-site.caddy export-ignore
@@ -19,9 +27,12 @@
 /docs/excellence-roadmap.md export-ignore
 /docs/installation-excellence-roadmap.md export-ignore
 /docs/launch-roadmap.md export-ignore
+/docs/mcp-a2a.md export-ignore
 /docs/production-checklist.md export-ignore
 /docs/research export-ignore
 /docs/research/** export-ignore
+/docs/SECURITY-PROFILES.md export-ignore
+/docs/ssh-setup.md export-ignore
 /docs/v3*.md export-ignore
 /scripts/build-launch-site.sh export-ignore
 /scripts/deploy-launch-site.sh export-ignore

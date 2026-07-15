@@ -64,6 +64,9 @@ done
 grep -Fq '### 0.1.0-alpha.3' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
   || fail "agent-facing changelog does not identify the public alpha"
+grep -Fq 'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.3.md" \
+  || fail "release notes do not pin the published multi-architecture image"
 grep -Fq 'image: ghcr.io/vivien83/captain-agent-os:${CAPTAIN_IMAGE_TAG:-alpha}' \
   "$ROOT_DIR/docker-compose.yml" \
   || fail "Compose does not default to the public alpha channel"
@@ -83,6 +86,13 @@ pass "public alpha version, installer, image, and prerelease policy are coherent
 forbidden_paths=(
   .mcp.json
   AGENTS.md
+  MIGRATION.md
+  start.sh
+  docker-compose.personal.yml
+  docker-compose.trusted.yml
+  docker-compose.yolo.yml
+  flake.nix
+  crates/captain-migrate
   site
   deploy/captain-site.caddy
   docs/CAPTAIN_CORE_EXCELLENCE_PLAN.md
@@ -97,8 +107,11 @@ forbidden_paths=(
   docs/excellence-roadmap.md
   docs/installation-excellence-roadmap.md
   docs/launch-roadmap.md
+  docs/mcp-a2a.md
   docs/production-checklist.md
   docs/research
+  docs/SECURITY-PROFILES.md
+  docs/ssh-setup.md
   scripts/build-launch-site.sh
   scripts/deploy-launch-site.sh
   scripts/hermes-vs-captain-benchmark.sh
@@ -115,6 +128,38 @@ if find "$ROOT_DIR/docs" -maxdepth 1 -type f -name 'v3*.md' -print -quit | grep 
   fail "historical v3 design documents are present"
 fi
 pass "maintainer-only, historical, site, and generated paths are absent"
+
+historical_nav_matches=$(rg -n \
+  'MIGRATION\.md|SECURITY-PROFILES\.md|ssh-setup\.md' \
+  "$ROOT_DIR/README.md" \
+  "$ROOT_DIR/README.fr.md" \
+  "$ROOT_DIR/README.es.md" \
+  "$ROOT_DIR/README.zh.md" \
+  "$ROOT_DIR/docs/README.md" \
+  "$ROOT_DIR/docs/INDEX.md" || true)
+if [ -n "$historical_nav_matches" ]; then
+  printf '%s\n' "$historical_nav_matches" >&2
+  fail "public navigation still links a historical guide"
+fi
+pass "public navigation contains only current guides"
+
+for readme in README.md README.fr.md README.es.md README.zh.md; do
+  grep -Fq 'docker-compose.personal.yml' "$ROOT_DIR/$readme" \
+    && fail "$readme advertises a removed host-access overlay"
+done
+grep -Fq '/api/migrate' "$ROOT_DIR/docs/api-reference.md" \
+  && fail "API reference advertises removed migration routes"
+grep -Fq '/a2a/' "$ROOT_DIR/docs/api-reference.md" \
+  && fail "API reference advertises frozen A2A routes"
+grep -Fq '/api/clawhub' "$ROOT_DIR/docs/api-reference.md" \
+  && fail "API reference advertises frozen marketplace routes"
+grep -Fq 'captain migrate' "$ROOT_DIR/docs/cli-reference.md" \
+  && fail "CLI reference advertises the removed migration command"
+grep -Fq '[channels.slack]' "$ROOT_DIR/docs/configuration.md" \
+  && fail "configuration guide advertises a frozen Slack setup"
+grep -Fq 'SLACK_BOT_TOKEN' "$ROOT_DIR/docker-compose.yml" \
+  && fail "Compose exposes a frozen Slack credential"
+pass "removed launch, migration, host-access, and frozen-channel paths stay hidden"
 
 unexpected_secrets=$(find "$ROOT_DIR" -type f \( \
   -name '.env' -o -name '.env.*' -o -name '*.pem' -o -name '*.key' -o \

@@ -134,7 +134,6 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  -e MISTRAL_API_KEY \
   ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3
 ```
 
@@ -146,25 +145,19 @@ doctor semántico en cada arranque y repara un runtime ausente, corrupto o con
 permisos inseguros antes de iniciar el daemon, incluso cuando un bind mount
 oculta el estado precargado de la imagen.
 
-Para compilar desde el código o usar un perfil de acceso al host, clona el
-repositorio y usa los archivos Compose. El servicio base también lleva el
-nombre de la imagen GHCR, por lo que `docker compose pull` puede consumir una
-release publicada:
-
-| Perfil | Acceso al host |
-|---|---|
-| *por defecto* | ninguno — solo volumen de estado |
-| `personal` | Escritorio/Documentos/Descargas + SSH al host |
-| `trusted` | `$HOME` completo + socket de Docker |
-| `yolo` | privilegiado, red del host, sistema de archivos completo |
+El archivo Compose público monta deliberadamente solo el volumen de estado de
+Captain. No expone el sistema de archivos del host, el socket de Docker, el
+espacio PID ni el modo privilegiado. Para ejecutar la imagen inmutable:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-MISTRAL_API_KEY=... docker compose up -d --build
-
-# Ejemplo con acceso controlado a directorios personales
-docker compose -f docker-compose.yml -f docker-compose.personal.yml up -d --build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.3 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.3 docker compose up -d
 ```
+
+Configura el proveedor elegido después del primer arranque. Cualquier acceso
+al host debe ser un cambio de despliegue explícito y revisado localmente; los
+antiguos overlays de acceso amplio no forman parte de la release pública.
 
 ---
 
@@ -241,12 +234,12 @@ ordenar mediante dependencias.
 | [CLI Reference](docs/cli-reference.md) | Todos los comandos y flags |
 | [Providers](docs/providers.md) | Proveedores de modelos, auth, respaldo, enrutamiento |
 | [Channel Adapters](docs/channel-adapters.md) | Configuración de Telegram, Discord, Signal, Email |
-| [Security Profiles](docs/SECURITY-PROFILES.md) | Políticas de aprobación, modos de ejecución, aislamiento |
+| [Seguridad](docs/security.md) | Autenticación, capacidades, secretos, aprobaciones y auditoría |
 | [Built-in Tools](docs/captain-tools/) | Documentación de herramientas por familia |
 | [Architecture](docs/architecture.md) | Crates, bucle del agente, diseño del kernel |
 | [API Reference](docs/api-reference.md) | Endpoints REST, auth, streaming |
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Instalaciones headless, proxy inverso, HTTPS |
-| [MCP & A2A](docs/mcp-a2a.md) | Servidores de herramientas externos, agente-a-agente |
+| [MCP](docs/captain-tools/mcp.md) | Servidores de herramientas externos y contrato de transporte |
 | [Troubleshooting](docs/troubleshooting.md) | Problemas comunes y sus soluciones |
 | [Notas de la versión 0.1.0-alpha.3](docs/releases/v0.1.0-alpha.3.md) | MemPalace gestionado, recuperación duradera de memoria y límites del alfa |
 | [Docs Status (DOC2)](docs/DOCS_STATUS.md) | Contratos actuales, superficies congeladas y documentos históricos |

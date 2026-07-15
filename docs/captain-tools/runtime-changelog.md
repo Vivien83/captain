@@ -30,6 +30,12 @@ Decision rule:
 
 Agent-facing changes:
 
+- This public prerelease is available as 20 checksum/manifest/installer assets
+  at `https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3` and as
+  the anonymously readable multi-architecture image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3`. Its AMD64/ARM64 OCI index
+  digest is
+  `sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2`.
 - MemPalace is a managed core dependency when the configured memory backend is
   `mempalace`. Official installers and containers provision pinned uv 0.11.28,
   isolated CPython 3.13.14, MemPalace 3.5.0, and the frozen dependency graph

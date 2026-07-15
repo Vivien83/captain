@@ -4,18 +4,34 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Current Public Release
+
+`v0.1.0-alpha.3` is the current public prerelease. Its GitHub source tag points
+to commit `13b8aca8d6d5f842cc93a23b9f03caf972f01bf1`, and the reviewed GitHub
+Release contains 20 host/installer/manifest assets:
+
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3`
+- OCI index digest:
+  `sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2`
+
+The public OCI index is anonymously readable and contains both `linux/amd64`
+and `linux/arm64`. The moving `:alpha` channel resolved to the same digest at
+publication time; production automation should still pin the version tag or
+the digest explicitly.
+
 ## Current Contract Docs
 
 These files are maintained as current operator or runtime-facing references:
 
 - `README.md`, `README.fr.md`, `README.es.md`, `README.zh.md`
-- `CHANGELOG.md`, `CONTRIBUTING.md`, `MIGRATION.md`, `SECURITY.md`
+- `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`
 - `docs/README.md`, `docs/INDEX.md`, `docs/getting-started.md`,
   `docs/troubleshooting.md`, `docs/DEPLOY.md`
 - `docs/cli-reference.md`, `docs/api-reference.md`, `docs/configuration.md`
 - `docs/channel-adapters.md`, `docs/providers.md`, `docs/skill-development.md`
-- `docs/architecture.md`, `docs/security.md`, `docs/SECURITY-PROFILES.md`,
-  `docs/workflows.md`, `docs/agent-templates.md`, `docs/mcp-a2a.md`
+- `docs/architecture.md`, `docs/security.md`, `docs/workflows.md`,
+  `docs/agent-templates.md`
 - `docs/captain-tools/*.md`
 - `docs/deployment/github-vps-install.md`,
   `docs/deployment/vps-web-terminal.md`
@@ -28,6 +44,16 @@ generated, tested, or directly tied to an executable gate. Prefer live commands:
 
 Every tracked `README*` file must appear in the DOC2 audit inventory. Adding a
 README without classifying and validating it is a documentation gate failure.
+
+The public navigation exposes only current install, operation, API, security,
+and contributor guidance. Historical migrations, superseded deployment
+profiles, internal plans, research, and phase-oriented implementation notes are
+excluded by `git archive` and rejected by the public source audit.
+Unverified one-shot launchers, broad host-access Compose overlays, the frozen
+migration crate, and the stale Desktop-oriented Nix flake are excluded for the
+same reason.
+The standalone A2A compatibility guide is also excluded; active MCP behavior
+remains documented by `docs/captain-tools/mcp.md`.
 
 ```bash
 captain --version
@@ -54,6 +80,11 @@ These files are the source of truth for tool-family guidance shown to agents.
 Any runtime-visible tool behavior change must update the corresponding
 `captain_docs` family and pass the `captain_docs` tests.
 
+Markdown below `skills/`, bundled crate assets, and selected crate directories
+can also be executable or build-time source. These files remain in the public
+repository for reproducible builds even when they are not linked from the
+human documentation index. They are not additional product promises.
+
 ## Historical Docs (Maintainer-Only)
 
 The private maintainer checkout retains implementation plans and historical
@@ -65,6 +96,9 @@ under DOC2:
 - `docs/PREPUBLICATION_24H_PLAN.md`
 - `docs/excellence-roadmap.md`
 - `docs/installation-excellence-roadmap.md`
+- `MIGRATION.md`
+- `docs/SECURITY-PROFILES.md`
+- `docs/ssh-setup.md`
 - `docs/v3.*.md`
 
 Historical docs may contain old counts, old completion markers, or pre-DOC2

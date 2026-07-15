@@ -780,7 +780,9 @@ captain channel list
 
 Checks `config.toml` for channel configuration sections and environment variables for required tokens. Status is one of: `Ready`, `Missing env`, `Not configured`.
 
-**Channels checked:** webchat, telegram, discord, slack, whatsapp, signal, matrix, email.
+The command reports configured active channels and can also show frozen
+compatibility entries retained by an older configuration. A listed
+compatibility entry is not an active supported setup path.
 
 ---
 
@@ -798,7 +800,7 @@ captain channel setup [<CHANNEL>]
 |---|---|
 | `<CHANNEL>` | Channel name. If omitted, displays an interactive picker. |
 
-**Supported channels:** `telegram`, `discord`, `slack`, `whatsapp`, `email`, `signal`, `matrix`.
+**Supported setup channels:** `telegram`, `discord`, `signal`, `email`.
 
 Each wizard:
 1. Displays step-by-step instructions for obtaining credentials.
@@ -816,7 +818,8 @@ captain channel setup
 # Direct setup
 captain channel setup telegram
 captain channel setup discord
-captain channel setup slack
+captain channel setup signal
+captain channel setup email
 ```
 
 ---
@@ -1096,48 +1099,6 @@ captain chat a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 ---
 
-## Migration
-
-### captain migrate
-
-Migrate configuration and agents from another agent framework.
-
-```
-captain migrate --from <FRAMEWORK> [--source-dir <PATH>] [--dry-run]
-```
-
-**Options:**
-
-| Option | Description |
-|---|---|
-| `--from <FRAMEWORK>` | Source framework. One of: `openclaw`, `langchain`, `autogpt`. |
-| `--source-dir <PATH>` | Path to the source workspace. Auto-detected if not set (e.g. `~/.openclaw`, `~/.langchain`, `~/Auto-GPT`). |
-| `--dry-run` | Show what would be imported without making changes. |
-
-**Behavior:**
-
-- Converts agent configurations, YAML manifests, and settings from the source framework into Captain format.
-- Saves imported data to `~/.captain/`.
-- Writes a `migration_report.md` summarizing what was imported.
-
-**Example:**
-
-```bash
-# Dry run migration from OpenClaw
-captain migrate --from openclaw --dry-run
-
-# Migrate from OpenClaw (auto-detect source)
-captain migrate --from openclaw
-
-# Migrate from LangChain with explicit source
-captain migrate --from langchain --source-dir /home/user/.langchain
-
-# Migrate from AutoGPT
-captain migrate --from autogpt
-```
-
----
-
 ## MCP Server
 
 ### captain mcp
@@ -1352,7 +1313,7 @@ captain channel test telegram
 
 # Enable/disable channels
 captain channel enable discord
-captain channel disable slack
+captain channel disable signal
 ```
 
 ### Configuration
@@ -1376,19 +1337,6 @@ captain config delete-key openai
 
 # Open in editor
 captain config edit
-```
-
-### Migration from other frameworks
-
-```bash
-# Preview migration
-captain migrate --from openclaw --dry-run
-
-# Run migration
-captain migrate --from openclaw
-
-# Migrate from LangChain
-captain migrate --from langchain --source-dir ~/.langchain
 ```
 
 ### MCP integration

@@ -129,7 +129,6 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  -e MISTRAL_API_KEY \
   ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3
 ```
 
@@ -140,24 +139,19 @@ runs the live semantic doctor on every boot and repairs a missing, corrupt, or
 insecure runtime before the daemon starts, including when a bind mount hides
 the image's seeded state.
 
-For a source build or one of the host-access profiles, clone the repository
-and use the Compose files. The base Compose service is also tagged with the
-GHCR image name, so `docker compose pull` can consume a published release:
-
-| Profile | Host access |
-|---|---|
-| *default* | none — state volume only |
-| `personal` | Desktop/Documents/Downloads + SSH to host |
-| `trusted` | full `$HOME` + Docker socket |
-| `yolo` | privileged, host network, full filesystem |
+The public Compose file deliberately mounts only the named Captain state
+volume. It does not expose the host filesystem, Docker socket, PID namespace,
+or privileged mode. Pull and run the immutable image with:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-MISTRAL_API_KEY=... docker compose up -d --build
-
-# Example host-access overlay
-docker compose -f docker-compose.yml -f docker-compose.personal.yml up -d --build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.3 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.3 docker compose up -d
 ```
+
+Configure the chosen model provider after first boot. Add host access only as
+an explicit, locally reviewed deployment change; broad host-access overlays
+are not part of the public release contract.
 
 ---
 
@@ -231,12 +225,12 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 | [CLI Reference](docs/cli-reference.md) | All commands and flags |
 | [Providers](docs/providers.md) | Model providers, auth, fallbacks, routing |
 | [Channel Adapters](docs/channel-adapters.md) | Telegram, Discord, Signal, Email setup |
-| [Security Profiles](docs/SECURITY-PROFILES.md) | Approval policies, exec modes, isolation |
+| [Security](docs/security.md) | Authentication, capabilities, secrets, approvals, and audit trail |
 | [Built-in Tools](docs/captain-tools/) | Per-family tool documentation |
 | [Architecture](docs/architecture.md) | Crates, agent loop, kernel design |
 | [API Reference](docs/api-reference.md) | REST endpoints, auth, streaming |
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Headless installs, reverse proxy, HTTPS |
-| [MCP & A2A](docs/mcp-a2a.md) | External tool servers, agent-to-agent |
+| [MCP](docs/captain-tools/mcp.md) | External tool servers and transport contract |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and their fixes |
 | [0.1.0-alpha.3 Release Notes](docs/releases/v0.1.0-alpha.3.md) | Managed MemPalace, durable memory recovery, and alpha limitations |
 | [Docs Status (DOC2)](docs/DOCS_STATUS.md) | Current contracts, frozen surfaces, and historical documents |

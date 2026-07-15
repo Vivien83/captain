@@ -36,6 +36,9 @@ Use this index to find the right document quickly.
 | Web terminal (expert) | `http://127.0.0.1:50051/terminal` |
 | API | `http://127.0.0.1:50051/api/` |
 | Telegram | `captain channel setup telegram` |
+| Discord | `captain channel setup discord` |
+| Signal | `captain channel setup signal` |
+| Email | `captain channel setup email` |
 
 ## Capability Docs
 
@@ -52,14 +55,14 @@ Use this index to find the right document quickly.
 | Session/workspace | [Session Workspace](captain-tools/session-workspace.md) |
 | Runtime changelog | [Runtime Changelog](captain-tools/runtime-changelog.md) |
 
-## Architecture and Roadmaps
+## Architecture and APIs
 
 | Document | Purpose |
 |---|---|
 | [Architecture](architecture.md) | Runtime structure, boot, sessions, tools, and operational boundaries |
-| [Channel Adapters](channel-adapters.md) | Channel adapter inventory |
+| [Channel Adapters](channel-adapters.md) | Setup and operation of Telegram, Discord, Signal, and Email |
 | [API Reference](api-reference.md) | HTTP/WebSocket API reference |
-| [Agent Templates](agent-templates.md) | Agent template guidance |
+| [Agents](agent-templates.md) | Manifests, lifecycle, capabilities, and external in/out API |
 | [Security](security.md) | Authentication, capability controls, secrets, and audit trail |
 | [Workflows](workflows.md) | Durable automation and dependency-aware execution |
 

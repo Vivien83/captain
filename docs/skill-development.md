@@ -1,6 +1,6 @@
 # Skill Development
 
-Skills are pluggable tool bundles that extend agent capabilities in Captain. A skill packages one or more tools with their implementation, letting agents do things that built-in tools do not cover. This guide covers skill creation, the manifest format, Python and WASM runtimes, local/OpenClaw-compatible installation, frozen marketplace compatibility, and CLI management.
+Skills are pluggable tool bundles that extend agent capabilities in Captain. A skill packages one or more tools with their implementation, letting agents do things that built-in tools do not cover. This guide covers skill creation, the manifest format, Python and WASM runtimes, reviewed local or Git installation, OpenClaw-compatible skill formats, and CLI management.
 
 ## Table of Contents
 
@@ -10,7 +10,6 @@ Skills are pluggable tool bundles that extend agent capabilities in Captain. A s
 - [WASM Skills](#wasm-skills)
 - [Skill Requirements](#skill-requirements)
 - [Installing Skills](#installing-skills)
-- [Frozen Marketplace Compatibility](#frozen-marketplace-compatibility)
 - [CLI Commands](#cli-commands)
 - [OpenClaw Compatibility](#openclaw-compatibility)
 - [Best Practices](#best-practices)
@@ -379,16 +378,6 @@ captain skill install /path/to/my-skill
 
 This reads the `skill.toml`, validates the manifest, and copies the skill to `~/.captain/skills/my-skill/`.
 
-### From Frozen Marketplace-Compatible Metadata
-
-```bash
-captain skill install web-summarizer
-```
-
-Marketplace-compatible install/search paths are frozen outside the active core
-release path. Prefer local directories, reviewed git URLs, or generated skills
-until the marketplace path is explicitly reopened in the core plan.
-
 ### From a Git Repository
 
 ```bash
@@ -418,35 +407,6 @@ code-formatter       1.0.0      1        Format code in 20+ languages
 ```bash
 captain skill remove web-summarizer
 ```
-
----
-
-## Frozen Marketplace Compatibility
-
-Captain Marketplace compatibility is retained for ecosystem shape and migration
-context, but it is not an active Hermes-level product path in the current
-release.
-
-### Preparing a Portable Skill
-
-1. Ensure your `skill.toml` has complete metadata:
-   - `name`, `version`, `description`, `author`, `license`, `tags`
-2. Include a `README.md` with usage instructions.
-3. Test your skill locally:
-
-```bash
-captain skill install /path/to/my-skill
-# Spawn an agent with the skill's tools and test them
-```
-
-### Searching Skill Metadata
-
-```bash
-captain skill search "web scraping"
-```
-
-The search surface should be treated as local/generated/bundled plus frozen
-compatibility metadata unless a future plan reopens marketplace publishing.
 
 ---
 
@@ -562,7 +522,8 @@ Place this alongside the existing `index.js`/`index.ts` and install:
 captain skill install /path/to/skill-directory
 ```
 
-Skills imported via `captain migrate --from openclaw` are also scanned and reported in the migration report, with instructions for manual reinstallation.
+Migration from another agent runtime is not an active Captain release path.
+Install and review each compatible skill explicitly.
 
 ---
 

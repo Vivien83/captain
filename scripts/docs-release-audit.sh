@@ -17,7 +17,6 @@ DOC_FILES=(
   README.es.md
   README.zh.md
   CHANGELOG.md
-  MIGRATION.md
   CONTRIBUTING.md
   docs/api-reference.md
   docs/architecture.md
@@ -163,6 +162,14 @@ require_contains \
   "reviewed alpha notes exist" \
   docs/releases/v0.1.0-alpha.3.md \
   '# Captain 0.1.0-alpha.3'
+require_contains \
+  "reviewed alpha notes pin the public source commit" \
+  docs/releases/v0.1.0-alpha.3.md \
+  '13b8aca8d6d5f842cc93a23b9f03caf972f01bf1'
+require_contains \
+  "reviewed alpha notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.3.md \
+  'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2'
 require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \

@@ -16,7 +16,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Getting Started](getting-started.md) | Installation, first agent, first chat session |
-| [Configuration](configuration.md) | Complete `config.toml` reference with every field |
+| [Configuration](configuration.md) | Operational settings, secrets, and the live schema workflow |
 | [CLI Reference](cli-reference.md) | Every command and subcommand with examples |
 | [Troubleshooting](troubleshooting.md) | Common issues, FAQ, diagnostics |
 
@@ -25,7 +25,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Architecture](architecture.md) | Workspace structure, kernel boot, agent lifecycle, memory substrate |
-| [Agent Templates](agent-templates.md) | Agent manifest templates and provisioning guidance |
+| [Agents](agent-templates.md) | Manifests, lifecycle, capabilities, and external in/out API |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
 | [Security](security.md) | Defense-in-depth security model and audit trail |
 
@@ -33,10 +33,10 @@ counts when validating an installed runtime.
 
 | Guide | Description |
 |-------|-------------|
-| [Channel Adapters](channel-adapters.md) | Active channels, frozen compatibility adapters, configuration |
-| [LLM Providers](providers.md) | Model catalog, provider setup, auth detection, model routing |
+| [Channel Adapters](channel-adapters.md) | Telegram, Discord, Signal, and Email setup and operation |
+| [LLM Providers](providers.md) | Live catalog, provider setup, consent, and model routing |
 | [Skills](skill-development.md) | Bundled, installed, and generated skills; frozen marketplace compatibility |
-| [MCP & A2A](mcp-a2a.md) | Model Context Protocol and Agent-to-Agent protocol integration |
+| [MCP](captain-tools/mcp.md) | Active external tool-server and transport contract |
 
 ## Reference
 
@@ -60,7 +60,6 @@ counts when validating an installed runtime.
 | Resource | Description |
 |----------|-------------|
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Development setup, code style, PR guidelines |
-| [MIGRATION.md](../MIGRATION.md) | Migrating from OpenClaw, LangChain, or AutoGPT |
 | [SECURITY.md](../SECURITY.md) | Security policy and vulnerability reporting |
 | [CHANGELOG.md](../CHANGELOG.md) | Release notes and version history |
 

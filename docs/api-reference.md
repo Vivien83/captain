@@ -17,11 +17,9 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Model Catalog Endpoints](#model-catalog-endpoints)
 - [Provider Configuration Endpoints](#provider-configuration-endpoints)
 - [Skills Endpoints](#skills-endpoints)
-- [Frozen Marketplace/ClawHub Compatibility](#frozen-marketplaceclawhub-compatibility)
-- [MCP & A2A Protocol Endpoints](#mcp--a2a-protocol-endpoints)
+- [MCP Protocol Endpoints](#mcp-protocol-endpoints)
 - [Audit & Security Endpoints](#audit--security-endpoints)
 - [Usage & Analytics Endpoints](#usage--analytics-endpoints)
-- [Migration Endpoints](#migration-endpoints)
 - [Session Management Endpoints](#session-management-endpoints)
 - [WebSocket Protocol](#websocket-protocol)
 - [SSE Streaming](#sse-streaming)
@@ -1516,140 +1514,11 @@ Create a new skill from a template.
 }
 ```
 
-### GET /api/marketplace/search
+## MCP Protocol Endpoints
 
-Frozen compatibility endpoint. Marketplace search is not part of the active
-release UX while core reliability is hardened.
-
-**Query Parameters:**
-- `q` (required): Search query string
-- `page` (optional): Page number (default: 1)
-
-**Response** `200 OK`:
-
-```json
-{
-  "results": [
-    {
-      "name": "weather-api",
-      "author": "community",
-      "description": "Real-time weather data integration",
-      "downloads": 1250,
-      "version": "2.1.0"
-    }
-  ],
-  "total": 1,
-  "page": 1
-}
-```
-
----
-
-## Frozen Marketplace/ClawHub Compatibility
-
-ClawHub/OpenClaw compatibility endpoints are frozen outside the active release
-path. Prefer installed/bundled skills, generated-skill governance, and explicit
-human review. If these endpoints are re-enabled later, installations must go
-through checksum verification, SKILL.md scanning, quarantine, and trust-boundary
-enforcement.
-
-### GET /api/clawhub/search
-
-Search frozen ClawHub compatibility metadata.
-
-**Query Parameters:**
-- `q` (required): Search query
-
-**Response** `200 OK`:
-
-```json
-{
-  "results": [
-    {
-      "slug": "data-pipeline",
-      "name": "Data Pipeline",
-      "description": "ETL data pipeline automation",
-      "author": "clawhub-community",
-      "version": "1.2.0"
-    }
-  ],
-  "total": 1
-}
-```
-
-### GET /api/clawhub/browse
-
-Browse frozen ClawHub compatibility categories.
-
-**Query Parameters:**
-- `category` (optional): Filter by category
-- `page` (optional): Page number (default: 1)
-
-**Response** `200 OK`:
-
-```json
-{
-  "skills": [
-    {
-      "slug": "data-pipeline",
-      "name": "Data Pipeline",
-      "category": "data",
-      "description": "ETL data pipeline automation"
-    }
-  ],
-  "total": 15,
-  "page": 1
-}
-```
-
-### GET /api/clawhub/skill/{slug}
-
-Get frozen compatibility details for a specific ClawHub skill.
-
-**Response** `200 OK`:
-
-```json
-{
-  "slug": "data-pipeline",
-  "name": "Data Pipeline",
-  "description": "ETL data pipeline automation",
-  "author": "clawhub-community",
-  "version": "1.2.0",
-  "runtime": "python",
-  "readme": "# Data Pipeline\n\nAutomated ETL...",
-  "sha256": "a1b2c3d4..."
-}
-```
-
-### POST /api/clawhub/install
-
-Frozen compatibility install path. Do not expose this as a default active UX
-until the core release gate explicitly reopens it.
-
-**Request Body**:
-
-```json
-{
-  "slug": "data-pipeline"
-}
-```
-
-**Response** `201 Created`:
-
-```json
-{
-  "status": "installed",
-  "skill": "data-pipeline",
-  "version": "1.2.0",
-  "converted_from": "SKILL.md"
-}
-```
-
----
-
-## MCP & A2A Protocol Endpoints
-
-Captain supports both Model Context Protocol (MCP) for tool interoperability and Agent-to-Agent (A2A) protocol for cross-system agent communication.
+Captain exposes Model Context Protocol (MCP) for external tool-server
+interoperability. Frozen A2A compatibility routes are intentionally omitted
+from the active public API guide.
 
 ### GET /api/mcp/servers
 
@@ -1718,120 +1587,6 @@ MCP HTTP transport endpoint. Accepts JSON-RPC 2.0 requests and exposes Captain t
   "id": 1
 }
 ```
-
-### GET /.well-known/agent.json
-
-A2A agent card discovery endpoint. Returns the server's A2A agent card, which describes its capabilities, supported protocols, and available agents.
-
-**Response** `200 OK`:
-
-```json
-{
-  "name": "Captain",
-  "description": "Captain Agent Operating System",
-  "url": "http://127.0.0.1:50051",
-  "version": "0.1.0",
-  "capabilities": {
-    "streaming": true,
-    "pushNotifications": false
-  },
-  "skills": [
-    {
-      "id": "chat",
-      "name": "Chat",
-      "description": "General-purpose chat with any agent"
-    }
-  ]
-}
-```
-
-### GET /a2a/agents
-
-List agents available via A2A protocol.
-
-**Response** `200 OK`:
-
-```json
-{
-  "agents": [
-    {
-      "id": "a1b2c3d4-...",
-      "name": "coder",
-      "description": "Expert coding assistant",
-      "skills": ["code-review", "debugging", "refactoring"]
-    }
-  ]
-}
-```
-
-### POST /a2a/tasks/send
-
-Send a task to an agent via A2A protocol. Follows the Google A2A specification for inter-agent task delegation.
-
-**Request Body**:
-
-```json
-{
-  "agent_id": "a1b2c3d4-...",
-  "message": {
-    "role": "user",
-    "parts": [
-      {"text": "Review this code for security issues"}
-    ]
-  }
-}
-```
-
-**Response** `200 OK`:
-
-```json
-{
-  "task_id": "task-1234-...",
-  "status": "completed",
-  "result": {
-    "role": "agent",
-    "parts": [
-      {"text": "I found 2 potential security issues..."}
-    ]
-  }
-}
-```
-
-### GET /a2a/tasks/{id}
-
-Get the status and result of an A2A task.
-
-**Response** `200 OK`:
-
-```json
-{
-  "task_id": "task-1234-...",
-  "status": "completed",
-  "created_at": "2025-01-15T10:30:00Z",
-  "completed_at": "2025-01-15T10:30:05Z",
-  "result": {
-    "role": "agent",
-    "parts": [
-      {"text": "Analysis complete..."}
-    ]
-  }
-}
-```
-
-### POST /a2a/tasks/{id}/cancel
-
-Cancel a running A2A task.
-
-**Response** `200 OK`:
-
-```json
-{
-  "task_id": "task-1234-...",
-  "status": "cancelled"
-}
-```
-
----
 
 ## Audit & Security Endpoints
 
@@ -1999,100 +1754,13 @@ Get usage breakdown by model.
 
 ---
 
-## Migration Endpoints
-
-Import data from OpenClaw or other agent frameworks. The migration engine handles YAML-to-TOML manifest conversion, SKILL.md parsing, and session history import.
-
-### GET /api/migrate/detect
-
-Auto-detect migration sources on the system. Scans common locations for OpenClaw installations, config files, and agent data.
-
-**Response** `200 OK`:
-
-```json
-{
-  "sources": [
-    {
-      "type": "openclaw",
-      "path": "/home/user/.openclaw",
-      "version": "2.1.0",
-      "agents_found": 12,
-      "skills_found": 8
-    }
-  ]
-}
-```
-
-### POST /api/migrate/scan
-
-Scan a specific path for importable data.
-
-**Request Body**:
-
-```json
-{
-  "path": "/home/user/.openclaw"
-}
-```
-
-**Response** `200 OK`:
-
-```json
-{
-  "agents": [
-    {
-      "name": "my-agent",
-      "format": "yaml",
-      "convertible": true
-    }
-  ],
-  "skills": [
-    {
-      "name": "custom-skill",
-      "format": "SKILL.md",
-      "convertible": true
-    }
-  ],
-  "sessions": 45
-}
-```
-
-### POST /api/migrate
-
-Run the migration. Converts manifests, imports skills, and optionally imports session history.
-
-**Request Body**:
-
-```json
-{
-  "source": "/home/user/.openclaw",
-  "import_agents": true,
-  "import_skills": true,
-  "import_sessions": false
-}
-```
-
-**Response** `200 OK`:
-
-```json
-{
-  "status": "completed",
-  "agents_imported": 12,
-  "skills_imported": 8,
-  "sessions_imported": 0,
-  "warnings": [
-    "Skill 'legacy-plugin' uses unsupported runtime 'ruby', skipped"
-  ]
-}
-```
-
----
-
 ## Session Management Endpoints
 
 ### POST /api/agents/{id}/session/reset
 
-Reset an agent's session, clearing all conversation history.
+Create and activate a fresh session for the agent. The previous session and
+its transcript remain persisted and reopenable in the shared session catalog;
+only an explicit history deletion is destructive.
 
 **Response** `200 OK`:
 
@@ -2616,32 +2284,17 @@ as source of truth when validating exact route availability.
 | POST | `/api/skills/install` | Install skill |
 | POST | `/api/skills/uninstall` | Uninstall skill |
 | POST | `/api/skills/create` | Create new skill |
-| GET | `/api/marketplace/search` | Frozen marketplace compatibility search |
-| **Frozen ClawHub Compatibility** | | |
-| GET | `/api/clawhub/search` | Search frozen compatibility metadata |
-| GET | `/api/clawhub/browse` | Browse frozen compatibility metadata |
-| GET | `/api/clawhub/skill/{slug}` | Frozen compatibility details |
-| POST | `/api/clawhub/install` | Frozen compatibility install path |
-| **MCP & A2A** | | |
+| **MCP** | | |
 | GET | `/api/mcp/servers` | MCP server connections |
 | POST | `/mcp` | MCP HTTP transport (JSON-RPC 2.0) |
-| GET | `/.well-known/agent.json` | A2A agent card |
-| GET | `/a2a/agents` | A2A agent list |
-| POST | `/a2a/tasks/send` | Send A2A task |
-| GET | `/a2a/tasks/{id}` | Get A2A task status |
-| POST | `/a2a/tasks/{id}/cancel` | Cancel A2A task |
 | **Audit & Security** | | |
 | GET | `/api/audit/recent` | Recent audit logs |
 | GET | `/api/audit/verify` | Verify Merkle chain integrity |
-| GET | `/api/security` | Security status (16 systems) |
+| GET | `/api/security` | Security status |
 | **Usage & Analytics** | | |
 | GET | `/api/usage` | Usage statistics |
 | GET | `/api/usage/summary` | Usage summary with quota |
 | GET | `/api/usage/by-model` | Usage by model breakdown |
-| **Migration** | | |
-| GET | `/api/migrate/detect` | Detect migration sources |
-| POST | `/api/migrate/scan` | Scan for importable data |
-| POST | `/api/migrate` | Run migration |
 | **OpenAI Compatible** | | |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
 | GET | `/v1/models` | OpenAI-compatible model list |

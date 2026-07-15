@@ -882,7 +882,6 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("POST", p) if p.contains("/run")             => 100,
         ("POST", "/api/skills/install")               => 50,
         ("POST", "/api/skills/uninstall")             => 10,
-        ("POST", "/api/migrate")                      => 100,
         ("PUT", p) if p.contains("/update")           => 10,
         _                                             => 5,
     }

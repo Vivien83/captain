@@ -103,6 +103,11 @@ fi
 mkdir -p "$DEST"
 if [ "$ALLOW_DIRTY" = "1" ]; then
   git -C "$ROOT_DIR" ls-files --cached --others --exclude-standard -z \
+    | while IFS= read -r -d '' relative; do
+        if [ -e "$ROOT_DIR/$relative" ]; then
+          printf '%s\0' "$relative"
+        fi
+      done \
     | tar -C "$ROOT_DIR" --null -T - -cf - \
     | tar -xf - -C "$DEST"
 else
@@ -114,6 +119,13 @@ fi
 private_paths=(
   .mcp.json
   AGENTS.md
+  MIGRATION.md
+  start.sh
+  docker-compose.personal.yml
+  docker-compose.trusted.yml
+  docker-compose.yolo.yml
+  flake.nix
+  crates/captain-migrate
   site
   deploy/captain-site.caddy
   docs/CAPTAIN_CORE_EXCELLENCE_PLAN.md
@@ -128,8 +140,11 @@ private_paths=(
   docs/excellence-roadmap.md
   docs/installation-excellence-roadmap.md
   docs/launch-roadmap.md
+  docs/mcp-a2a.md
   docs/production-checklist.md
   docs/research
+  docs/SECURITY-PROFILES.md
+  docs/ssh-setup.md
   scripts/build-launch-site.sh
   scripts/deploy-launch-site.sh
   scripts/hermes-vs-captain-benchmark.sh

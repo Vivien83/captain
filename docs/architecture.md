@@ -93,7 +93,7 @@ When `CaptainKernel::boot_with_config()` is called (either by the daemon or in-p
 
 3. Initialize memory substrate
    - Open SQLite database (captain.db)
-   - Run schema migrations (up to v5)
+   - Run ordered schema migrations to the current runtime version
    - Set memory decay rate
 
 4. Initialize LLM driver
@@ -632,7 +632,7 @@ channels and frozen compatibility adapters.
 | Status | Channels |
 |--------|----------|
 | Active Hermes-level UX | Telegram, Discord, Signal, Email |
-| Frozen compatibility | Slack, WhatsApp, Matrix, Webhook, Teams, Mattermost, IRC, Google Chat, Twitch, Rocket.Chat, Zulip, XMPP, LINE, Viber, Messenger, Reddit, Mastodon, Bluesky, Feishu, Revolt, Nextcloud, Guilded, Keybase, Threema, Nostr, Webex, Pumble, Flock, Twist, Mumble, DingTalk, Discourse, Gitter, Ntfy, Gotify, LinkedIn, and any other non-core adapters |
+| Frozen compatibility | Every non-core external adapter; these are omitted from active setup and readiness claims |
 
 Use `captain channel list`, `captain status`, and `/api/channels` to inspect
 the runtime active/frozen state.
