@@ -30,6 +30,12 @@ Decision rule:
 
 Agent-facing changes:
 
+- This public prerelease is available as 20 checksum/manifest/installer assets
+  at `https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.4` and as
+  the anonymously readable multi-architecture image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4`. Its AMD64/ARM64 OCI index
+  digest is
+  `sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93`.
 - The latest user message is authoritative during a correction. Recalled
   memories are background only and must never replace exact old or new values
   stated in the current turn.
@@ -51,9 +57,9 @@ How to answer the user:
 - For a correction, use the current message's exact values, recall the active
   old triple, await `memory_forget`, then call `memory_save`. Confirm only the
   values and sync state present in the two tool receipts.
-- Verify the installed version before applying this entry. Publication links
-  and immutable image provenance are recorded here only after the release is
-  publicly verified.
+- Verify the installed version before applying this entry. The release link,
+  immutable image tag, and OCI digest above are the publicly verified
+  provenance for `0.1.0-alpha.4`.
 
 ### 0.1.0-alpha.3 — Native MemPalace and durable memory continuity
 

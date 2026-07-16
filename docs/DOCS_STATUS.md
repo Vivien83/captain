@@ -6,14 +6,14 @@ tool docs, CLI, API, and release gates.
 
 ## Current Public Release
 
-`v0.1.0-alpha.3` is the current public prerelease. Its GitHub source tag points
-to commit `13b8aca8d6d5f842cc93a23b9f03caf972f01bf1`, and the reviewed GitHub
+`v0.1.0-alpha.4` is the current public prerelease. Its GitHub source tag points
+to commit `a58bb3bcf5563beaee6b10d7672284c4c1ab9aa4`, and the reviewed GitHub
 Release contains 20 host/installer/manifest assets:
 
-- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3>
-- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3`
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.4>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4`
 - OCI index digest:
-  `sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2`
+  `sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93`
 
 The public OCI index is anonymously readable and contains both `linux/amd64`
 and `linux/arm64`. The moving `:alpha` channel resolved to the same digest at

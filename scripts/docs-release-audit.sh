@@ -171,14 +171,14 @@ require_contains \
   "last published alpha.3 notes pin the multi-arch digest" \
   docs/releases/v0.1.0-alpha.3.md \
   'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2'
-require_not_contains \
-  "alpha.4 notes do not copy the alpha.3 source commit" \
+require_contains \
+  "alpha.4 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.4.md \
-  '13b8aca8d6d5f842cc93a23b9f03caf972f01bf1'
-require_not_contains \
-  "alpha.4 notes do not copy the alpha.3 OCI digest" \
+  'a58bb3bcf5563beaee6b10d7672284c4c1ab9aa4'
+require_contains \
+  "alpha.4 notes pin the multi-arch digest" \
   docs/releases/v0.1.0-alpha.4.md \
-  'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2'
+  'sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93'
 require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \

@@ -65,8 +65,8 @@ done
 grep -Fq '### 0.1.0-alpha.4' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
   || fail "agent-facing changelog does not identify the public alpha"
-grep -Fq 'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2' \
-  "$ROOT_DIR/docs/releases/v0.1.0-alpha.3.md" \
+grep -Fq 'sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.4.md" \
   || fail "release notes do not pin the published multi-architecture image"
 grep -Fq 'image: ghcr.io/vivien83/captain-agent-os:${CAPTAIN_IMAGE_TAG:-alpha}' \
   "$ROOT_DIR/docker-compose.yml" \
