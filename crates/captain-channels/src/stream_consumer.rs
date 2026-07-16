@@ -4,7 +4,7 @@
 //! agent loop and translates them into a *succession* of channel messages:
 //!
 //! ```text
-//!   text (edited live, cursor ▉) → tool bubble → text (live) → tool → final text
+//!   text (edited live, cursor ▉) → tool activity board → text (live) → final text
 //! ```
 //!
 //! This feels much more human than buffering the whole reply and posting one
@@ -19,21 +19,19 @@
 //! `captain_runtime::llm_driver::StreamEvent` to this enum lives one
 //! layer up, in `captain-api` (HS.2 / HS.3).
 //!
-//! ## What HS.1 does NOT do
-//!
-//! - No Telegram wiring (HS.2).
-//! - No MarkdownV2 escaping (HS.3 — kept plain-text for now).
-//! - No 4096-char overflow split (HS.4).
-//! - No flood-control adaptive interval (HS.2).
+//! Telegram binds this neutral consumer to native Rich Message drafts and
+//! persistent rich sends. Other editable channels can keep using the same
+//! event contract without depending on Telegram-specific payloads.
 
 use async_trait::async_trait;
-use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
+
+use crate::tool_activity::{render_standalone_tool_result, ToolActivityTracker};
 
 /// Default cadence at which we re-edit the live message. Telegram applies
 /// aggressive per-chat edit flood control on long turns; keep this deliberately
-/// below one edit per second so tool-heavy Codex streams have room for tool
-/// bubbles and final delivery.
+/// below one edit per second so tool-heavy Codex streams have room for activity
+/// boards and final delivery.
 pub const DEFAULT_EDIT_INTERVAL_MS: u64 = 2_500;
 pub const DEFAULT_TOOL_PROGRESS_EDIT_INTERVAL_MS: u64 = 1_000;
 
@@ -52,18 +50,18 @@ pub enum ChannelStreamEvent {
     /// Append text to the *current* live message.
     TextDelta(String),
     /// A tool call started. The current text message is finalised
-    /// (cursor removed) and a tool bubble is emitted as a NEW message.
+    /// (cursor removed) and the current parallel activity board is created
+    /// or updated.
     ///
     /// `emoji` is a compact prefix (`💻`, `📖`, …) the upstream layer
-    /// chose for the tool family. Empty string means "no preference",
-    /// the renderer falls back to a generic arrow. HS.6.
+    /// chose for the tool family. Empty string means "no preference". HS.6.
     ToolStart {
         tool_use_id: String,
         emoji: String,
         name: String,
         input_preview: String,
     },
-    /// A tool call finished. The matching tool bubble is updated with
+    /// A tool call finished. The matching activity entry is updated with
     /// its result preview. After this, the next `TextDelta` opens a
     /// fresh live message — *that's* what makes a "semi-response"
     /// possible between tools without coupling to a Commentary event.
@@ -75,7 +73,7 @@ pub enum ChannelStreamEvent {
         is_error: bool,
     },
     /// Semantic progress for a currently-running tool. Unlike generic
-    /// commentary, this edits the existing tool bubble when possible,
+    /// commentary, this edits the existing activity board when possible,
     /// so Telegram does not receive a burst of standalone messages.
     ToolProgress { tool_use_id: String, chunk: String },
     /// An intermediate "semi-response" the agent emits proactively
@@ -114,9 +112,9 @@ pub trait StreamingChannelAdapter: Send + Sync {
     fn arm_final_reply_quote(&self) {}
 }
 
-/// Telegram's hard ceiling per message body, kept here so the consumer
-/// can split before the platform refuses an edit. HS.4.
-pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
+/// Conservative byte ceiling for Telegram Rich Messages. The Bot API limit is
+/// 32,768 UTF-8 characters; bytes are stricter for non-ASCII text. HS.4.
+pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 32_768;
 
 /// Tunable behaviour.
 #[derive(Debug, Clone)]
@@ -201,19 +199,6 @@ fn split_at_char_boundary(text: &str, max_bytes: usize) -> (String, String) {
     (text[..cut].to_string(), text[cut..].to_string())
 }
 
-fn clip_bytes(text: &str, max_bytes: usize) -> String {
-    if max_bytes == 0 || text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let mut cut = max_bytes.saturating_sub("…".len());
-    while cut > 0 && !text.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    let mut out = text[..cut].to_string();
-    out.push('…');
-    out
-}
-
 /// State machine that drives a [`StreamingChannelAdapter`] from a stream
 /// of [`ChannelStreamEvent`]s.
 ///
@@ -234,7 +219,7 @@ pub struct StreamConsumer<A: StreamingChannelAdapter> {
     /// Timestamp of the last `edit_message` call we issued. Used to
     /// throttle to `edit_interval` cadence.
     last_edit_at: Option<Instant>,
-    /// Timestamp of the last tool progress bubble edit. Browser batches
+    /// Timestamp of the last tool activity edit. Browser batches
     /// can emit many semantic ticks quickly; keep Telegram readable and
     /// below flood-control while still storing every tick for the final
     /// tool result edit.
@@ -242,27 +227,19 @@ pub struct StreamConsumer<A: StreamingChannelAdapter> {
     /// `true` once the live message has been opened; goes back to
     /// `false` after a tool segment closes it.
     has_live_message: bool,
-    /// HS.9 — true once at least one tool bubble has been emitted in
+    /// HS.9 — true once at least one tool activity board has been emitted in
     /// this stream. Used to decide whether the *next* live message
     /// to open is the "final reply" (post-tool) and should carry a
     /// reply-quote of the user's prompt.
     seen_tool: bool,
     /// HS.9 — true once `arm_final_reply_quote` has been called for
     /// this stream. Prevents quoting twice if multiple text segments
-    /// follow tool bubbles.
+    /// follow tool activity boards.
     replied: bool,
-    /// HS.10/HS.11 — pending tool bubbles keyed by tool_use_id when
-    /// available, falling back to tool name for older event producers.
-    /// `ToolProgress` edits the same bubble in place, which keeps
-    /// Telegram readable during long browser runs.
-    tool_pending: HashMap<String, VecDeque<PendingToolBubble>>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingToolBubble {
-    message_id: String,
-    start_body: String,
-    body: String,
+    /// Rich activity boards group one parallel tool wave into a single
+    /// editable message. The tracker keeps tool_use_id correlation and
+    /// closes the wave as soon as execution progress or a result arrives.
+    tool_activity: ToolActivityTracker,
 }
 
 impl<A: StreamingChannelAdapter> StreamConsumer<A> {
@@ -277,21 +254,24 @@ impl<A: StreamingChannelAdapter> StreamConsumer<A> {
             has_live_message: false,
             seen_tool: false,
             replied: false,
-            tool_pending: HashMap::new(),
+            tool_activity: ToolActivityTracker::default(),
         }
     }
 
     /// Process a single event. The decision tree follows progressive delivery:
     ///
     /// - `TextDelta` → append + maybe flush
-    /// - `ToolStart` → finalise the live text (cursor off), emit tool bubble
-    /// - `ToolProgress` → edit the matching tool bubble in place
-    /// - `ToolEnd`   → emit tool result bubble; live message stays closed
+    /// - `ToolStart` → finalise live text and create/update the active board
+    /// - `ToolProgress` → edit the matching entry in place
+    /// - `ToolEnd`   → finalise the matching entry; live message stays closed
     /// - `Commentary` → finalise + open a NEW live message with `text`
     /// - `Done`      → final flush, no cursor on the rendered text
     pub async fn handle_event(&mut self, event: ChannelStreamEvent) -> Result<(), String> {
         match event {
-            ChannelStreamEvent::TextDelta(text) => self.on_text_delta(&text).await,
+            ChannelStreamEvent::TextDelta(text) => {
+                self.tool_activity.close_wave();
+                self.on_text_delta(&text).await
+            }
             ChannelStreamEvent::ToolStart {
                 tool_use_id,
                 emoji,
@@ -301,18 +281,16 @@ impl<A: StreamingChannelAdapter> StreamConsumer<A> {
                 self.finalise_live_text().await?;
                 self.seen_tool = true;
                 self.last_tool_progress_edit_at = None;
-                let body = render_tool_start(&emoji, &name, &input_preview);
-                let mid = self.adapter.send_new_message(&body).await?;
-                // HS.10 — remember the (mid, body) so the matching
-                // ToolProgress/ToolEnd can EDIT this same bubble.
-                self.tool_pending
-                    .entry(tool_pending_key(&tool_use_id, &name))
-                    .or_default()
-                    .push_back(PendingToolBubble {
-                        message_id: mid,
-                        start_body: body.clone(),
-                        body,
-                    });
+                let update =
+                    self.tool_activity
+                        .start_tool(&tool_use_id, &emoji, &name, &input_preview);
+                if let Some(message_id) = update.message_id {
+                    self.adapter.edit_message(&message_id, &update.body).await?;
+                } else {
+                    let message_id = self.adapter.send_new_message(&update.body).await?;
+                    self.tool_activity
+                        .bind_message_id(update.board_index, message_id);
+                }
                 Ok(())
             }
             ChannelStreamEvent::ToolEnd {
@@ -323,25 +301,18 @@ impl<A: StreamingChannelAdapter> StreamConsumer<A> {
                 is_error,
             } => {
                 self.seen_tool = true;
-                // HS.10 — try to edit the matching ToolStart bubble in
-                // place. Falls back to a fresh send_new_message for
-                // tool ends that arrive without a prior start (an
-                // edge case when the runtime emitted a result for a
-                // tool the channel filter dropped).
-                let pending = self.pop_pending_tool(&tool_use_id, &name);
-                if let Some(pending) = pending {
-                    let combined = format!(
-                        "{}\n{}",
-                        pending.body,
-                        render_tool_result_suffix(&result_preview, is_error)
-                    );
-                    self.adapter
-                        .edit_message(&pending.message_id, &combined)
-                        .await?;
+                if let Some(update) =
+                    self.tool_activity
+                        .finish_tool(&tool_use_id, &name, &result_preview, is_error)
+                {
+                    let message_id = update
+                        .message_id
+                        .ok_or_else(|| "tool activity board has no message id".to_string())?;
+                    self.adapter.edit_message(&message_id, &update.body).await?;
                     Ok(())
                 } else {
                     self.adapter
-                        .send_new_message(&render_tool_end(
+                        .send_new_message(&render_standalone_tool_result(
                             &emoji,
                             &name,
                             &result_preview,
@@ -352,57 +323,27 @@ impl<A: StreamingChannelAdapter> StreamConsumer<A> {
                 }
             }
             ChannelStreamEvent::ToolProgress { tool_use_id, chunk } => {
-                let max_message_bytes = self.config.max_message_bytes;
-                if let Some((message_id, body)) =
-                    self.update_pending_tool_progress(&tool_use_id, &chunk, max_message_bytes)
-                {
+                if let Some(update) = self.tool_activity.progress_tool(&tool_use_id, &chunk) {
                     if self.should_edit_tool_progress() {
-                        self.adapter.edit_message(&message_id, &body).await?;
+                        let message_id = update
+                            .message_id
+                            .ok_or_else(|| "tool activity board has no message id".to_string())?;
+                        self.adapter.edit_message(&message_id, &update.body).await?;
                         self.last_tool_progress_edit_at = Some(Instant::now());
                     }
                 }
                 Ok(())
             }
             ChannelStreamEvent::Commentary(text) => {
+                self.tool_activity.close_wave();
                 self.finalise_live_text().await?;
                 self.open_live_message(&text).await
             }
-            ChannelStreamEvent::Done => self.finalise_live_text().await,
+            ChannelStreamEvent::Done => {
+                self.tool_activity.close_wave();
+                self.finalise_live_text().await
+            }
         }
-    }
-
-    fn pop_pending_tool(&mut self, tool_use_id: &str, name: &str) -> Option<PendingToolBubble> {
-        let primary = tool_pending_key(tool_use_id, name);
-        if let Some(pending) = self
-            .tool_pending
-            .get_mut(&primary)
-            .and_then(|q| q.pop_front())
-        {
-            return Some(pending);
-        }
-        if tool_use_id.is_empty() {
-            return None;
-        }
-        self.tool_pending
-            .get_mut(&tool_name_pending_key(name))
-            .and_then(|q| q.pop_front())
-    }
-
-    fn update_pending_tool_progress(
-        &mut self,
-        tool_use_id: &str,
-        chunk: &str,
-        max_message_bytes: usize,
-    ) -> Option<(String, String)> {
-        if tool_use_id.trim().is_empty() {
-            return None;
-        }
-        let key = tool_id_pending_key(tool_use_id);
-        let queue = self.tool_pending.get_mut(&key)?;
-        let pending = queue.front_mut()?;
-        pending.body =
-            append_tool_progress_body(&pending.start_body, &pending.body, chunk, max_message_bytes);
-        Some((pending.message_id.clone(), pending.body.clone()))
     }
 
     fn should_edit_tool_progress(&self) -> bool {
@@ -611,128 +552,6 @@ impl<A: StreamingChannelAdapter> StreamConsumer<A> {
     }
 }
 
-/// Render a "tool started" bubble — HS.6 with extra polish: a family emoji
-/// + the tool name on its own line (HTML
-///   `<b>`-bolded so the eye lands on it first), then the input preview
-///   as a `<code>` block on the next line. Falls back to `→` if no
-///   emoji is provided.
-///
-/// The HTML tags are honoured by Telegram (`parse_mode=HTML`,
-/// `sanitize_telegram_html` already allows them) and stripped harmlessly
-/// by the unit tests' MockAdapter — they're just bytes in the body.
-pub fn render_tool_start(emoji: &str, name: &str, input_preview: &str) -> String {
-    let prefix = if emoji.is_empty() { "→" } else { emoji };
-    if input_preview.is_empty() {
-        format!("{prefix} <b>{name}</b>")
-    } else {
-        format!("{prefix} <b>{name}</b>\n<code>{input_preview}</code>")
-    }
-}
-
-fn tool_pending_key(tool_use_id: &str, name: &str) -> String {
-    if tool_use_id.trim().is_empty() {
-        tool_name_pending_key(name)
-    } else {
-        tool_id_pending_key(tool_use_id)
-    }
-}
-
-fn tool_id_pending_key(tool_use_id: &str) -> String {
-    format!("id:{}", tool_use_id.trim())
-}
-
-fn tool_name_pending_key(name: &str) -> String {
-    format!("name:{name}")
-}
-
-const MAX_TOOL_PROGRESS_LINES: usize = 12;
-const MAX_TOOL_PROGRESS_LINE_BYTES: usize = 240;
-
-fn append_tool_progress_body(
-    start_body: &str,
-    current_body: &str,
-    chunk: &str,
-    max_message_bytes: usize,
-) -> String {
-    let mut progress_lines: VecDeque<String> = current_body
-        .strip_prefix(start_body)
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
-
-    for line in render_tool_progress_lines(chunk) {
-        progress_lines.push_back(line);
-    }
-    while progress_lines.len() > MAX_TOOL_PROGRESS_LINES {
-        progress_lines.pop_front();
-    }
-
-    loop {
-        let body = if progress_lines.is_empty() {
-            start_body.to_string()
-        } else {
-            format!(
-                "{start_body}\n{}",
-                progress_lines
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        };
-        if max_message_bytes == 0 || body.len() <= max_message_bytes || progress_lines.is_empty() {
-            return body;
-        }
-        progress_lines.pop_front();
-    }
-}
-
-pub fn render_tool_progress_lines(chunk: &str) -> Vec<String> {
-    chunk
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(MAX_TOOL_PROGRESS_LINES)
-        .map(|line| {
-            let clipped = clip_bytes(line, MAX_TOOL_PROGRESS_LINE_BYTES);
-            format!("↳ {clipped}")
-        })
-        .collect()
-}
-
-/// HS.10 — Render JUST the result line that gets appended to a
-/// ToolStart bubble when the tool finishes. Used by the in-place
-/// edit path so a single Telegram message holds both the command
-/// and its result, in chronological order.
-pub fn render_tool_result_suffix(result_preview: &str, is_error: bool) -> String {
-    let prefix = if is_error { "✗" } else { "✓" };
-    if result_preview.is_empty() {
-        prefix.to_string()
-    } else {
-        format!("{prefix} <code>{result_preview}</code>")
-    }
-}
-
-/// Render a "tool ended" bubble as a STANDALONE message. Used as a
-/// fallback when no matching ToolStart bubble was tracked (HS.10
-/// graceful degradation). Compact on success, expanded on error.
-pub fn render_tool_end(_emoji: &str, name: &str, result_preview: &str, is_error: bool) -> String {
-    if is_error {
-        if result_preview.is_empty() {
-            format!("✗ <b>{name}</b>")
-        } else {
-            format!("✗ <b>{name}</b>\n<code>{result_preview}</code>")
-        }
-    } else if result_preview.is_empty() {
-        "✓".to_string()
-    } else {
-        format!("✓ <code>{result_preview}</code>")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -891,7 +710,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_start_finalises_text_then_posts_tool_bubble() {
+    async fn tool_start_finalises_text_then_posts_activity_board() {
         let mock = MockAdapter::new();
         let mut consumer = StreamConsumer::new(mock.clone(), cfg_no_throttle());
 
@@ -910,17 +729,17 @@ mod tests {
             .unwrap();
 
         let calls = mock.calls();
-        // 1: send_new("checking… ▉"), 2: edit("checking…"), 3: send_new(tool bubble)
+        // 1: send_new("checking… ▉"), 2: edit("checking…"),
+        // 3: send_new(tool activity board).
         assert_eq!(calls.len(), 3, "got {calls:?}");
         match &calls[2] {
             MockCall::SendNew(body) => {
-                assert!(
-                    body.starts_with("→ <b>web_search</b>"),
-                    "tool bubble: {body}"
-                );
+                assert!(body.starts_with("### ⚙️ Captain"), "tool board: {body}");
+                assert!(body.contains("<details open>"));
+                assert!(body.contains("<b>web_search</b>"));
                 assert!(body.contains("rust async"));
             }
-            other => panic!("expected tool bubble as a NEW message, got {other:?}"),
+            other => panic!("expected activity board as a NEW message, got {other:?}"),
         }
     }
 
@@ -962,7 +781,8 @@ mod tests {
             .unwrap();
 
         let calls = mock.calls();
-        // Expected: send("first ▉"), edit("first"), send(tool start), send(tool end), send("second ▉")
+        // Expected: send("first ▉"), edit("first"), send(tool board),
+        // edit(tool result), send("second ▉").
         assert_eq!(calls.len(), 5, "got {calls:?}");
         assert!(
             matches!(&calls[4], MockCall::SendNew(b) if b == &format!("second{STREAM_CURSOR}"))
@@ -1080,7 +900,7 @@ mod tests {
         // HS.10 graceful degradation: a ToolEnd that arrives without
         // a paired ToolStart (channel filter dropped the start, or
         // the runtime emitted only a result event) still produces a
-        // visible bubble via send_new_message.
+        // visible activity entry via send_new_message.
         let mock = MockAdapter::new();
         let mut consumer = StreamConsumer::new(mock.clone(), cfg_no_throttle());
 
@@ -1099,15 +919,18 @@ mod tests {
         assert_eq!(calls.len(), 1, "no matching start → fallback to send_new");
         match &calls[0] {
             MockCall::SendNew(body) => {
-                assert!(body.starts_with("✗"), "error arrow expected, got {body}");
+                assert!(
+                    body.contains("<details open>\n<summary>✗"),
+                    "open error details expected, got {body}"
+                );
             }
-            other => panic!("expected tool bubble, got {other:?}"),
+            other => panic!("expected tool activity board, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn tool_start_then_end_edits_the_same_bubble() {
-        // HS.10 happy path: ToolStart posts the bubble, ToolEnd EDITS
+    async fn tool_start_then_end_edits_the_same_activity_board() {
+        // HS.10 happy path: ToolStart posts the board, ToolEnd EDITS
         // the same message_id with the original body + a result line.
         // No second send_new, no separate "result" message.
         let mock = MockAdapter::new();
@@ -1144,15 +967,11 @@ mod tests {
         }
         match &calls[1] {
             MockCall::Edit(_id, body) => {
-                // Same body as the start (preserved verbatim) +
-                // a result suffix on a new line.
                 assert!(body.contains("uname -a"), "edit must preserve start body");
                 assert!(body.contains("Darwin"), "edit must append result");
-                assert!(body.starts_with("💻"), "emoji must remain first");
-                let result_line = body.lines().last().unwrap();
                 assert!(
-                    result_line.starts_with('✓'),
-                    "result line must start with ✓: {result_line}"
+                    body.contains("<details>\n<summary>✓ 💻 <b>shell_exec</b>"),
+                    "successful tool details must collapse: {body}"
                 );
             }
             other => panic!("expected ToolEnd edit, got {other:?}"),
@@ -1160,7 +979,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_progress_edits_the_running_tool_bubble() {
+    async fn tool_progress_edits_the_running_activity_board() {
         let mock = MockAdapter::new();
         let mut consumer = StreamConsumer::new(mock.clone(), cfg_no_throttle());
 
@@ -1202,7 +1021,7 @@ mod tests {
         assert_eq!(calls.len(), 4, "start + 2 progress edits + result edit");
         assert!(matches!(&calls[0], MockCall::SendNew(body) if body.contains("browser_batch")));
         assert!(
-            matches!(&calls[1], MockCall::Edit(id, body) if id == "mid_0" && body.contains("↳ > 1/2 open"))
+            matches!(&calls[1], MockCall::Edit(id, body) if id == "mid_0" && body.contains("↳ &gt; 1/2 open"))
         );
         assert!(
             matches!(&calls[2], MockCall::Edit(id, body) if id == "mid_0" && body.contains("Example Domain"))
@@ -1231,7 +1050,7 @@ mod tests {
         consumer
             .handle_event(ChannelStreamEvent::ToolProgress {
                 tool_use_id: "browser-b".into(),
-                chunk: "✓ second bubble only".into(),
+                chunk: "✓ second entry only".into(),
             })
             .await
             .unwrap();
@@ -1239,14 +1058,13 @@ mod tests {
         let calls = mock.calls();
         assert_eq!(calls.len(), 3, "two starts + one progress edit");
         assert!(
-            matches!(&calls[2], MockCall::Edit(id, body) if id == "mid_1" && body.contains("second bubble only"))
+            matches!(&calls[2], MockCall::Edit(id, body) if id == "mid_0" && body.contains("second entry only") && body.contains("browser-a") && body.contains("browser-b"))
         );
     }
 
     #[tokio::test]
     async fn tool_pairs_are_fifo_per_name() {
-        // HS.10 — two consecutive shell_exec calls must edit the
-        // bubbles in the order they were opened, not interleaved.
+        // Two id-less calls share one board but still pair FIFO by name.
         let mock = MockAdapter::new();
         let mut consumer = StreamConsumer::new(mock.clone(), cfg_no_throttle());
 
@@ -1275,67 +1093,25 @@ mod tests {
         }
 
         let calls = mock.calls();
-        // 2 sends (alpha, bravo) + 2 edits (alpha→one, bravo→two).
+        // Send alpha, edit to add bravo, then one result edit per tool.
         assert_eq!(calls.len(), 4, "got {calls:?}");
         let edits: Vec<&MockCall> = calls
             .iter()
             .filter(|c| matches!(c, MockCall::Edit(_, _)))
             .collect();
-        assert_eq!(edits.len(), 2);
-        let MockCall::Edit(id_a, body_a) = edits[0] else {
+        assert_eq!(edits.len(), 3);
+        let MockCall::Edit(id_a, body_a) = edits[1] else {
             panic!()
         };
-        let MockCall::Edit(id_b, body_b) = edits[1] else {
+        let MockCall::Edit(id_b, body_b) = edits[2] else {
             panic!()
         };
-        assert_eq!(id_a, "mid_0", "first edit must target the first bubble");
-        assert_eq!(id_b, "mid_1", "second edit must target the second bubble");
+        assert_eq!(id_a, "mid_0");
+        assert_eq!(id_b, "mid_0");
         assert!(body_a.contains("alpha") && body_a.contains("one"));
+        assert!(body_a.contains("bravo") && !body_a.contains("two"));
+        assert!(body_b.contains("alpha") && body_b.contains("one"));
         assert!(body_b.contains("bravo") && body_b.contains("two"));
-    }
-
-    #[test]
-    fn render_tool_result_suffix_compact_on_success() {
-        assert_eq!(render_tool_result_suffix("ok", false), "✓ <code>ok</code>");
-        assert_eq!(render_tool_result_suffix("", false), "✓");
-        assert_eq!(
-            render_tool_result_suffix("boom", true),
-            "✗ <code>boom</code>"
-        );
-        assert_eq!(render_tool_result_suffix("", true), "✗");
-    }
-
-    #[test]
-    fn render_tool_start_uses_emoji_and_html_bold() {
-        // No emoji → fallback arrow.
-        assert_eq!(render_tool_start("", "ls", ""), "→ <b>ls</b>");
-        // With emoji + input → emoji + bold name + code block on next line.
-        assert_eq!(
-            render_tool_start("💻", "shell_exec", "curl -s example.com"),
-            "💻 <b>shell_exec</b>\n<code>curl -s example.com</code>"
-        );
-    }
-
-    #[test]
-    fn render_tool_end_compact_on_success_explicit_on_error() {
-        // Success + empty preview → just the checkmark.
-        assert_eq!(render_tool_end("💻", "shell_exec", "", false), "✓");
-        // Success + preview → "✓ <code>preview</code>", no name (the
-        // start bubble carries the name; repeating it would be noise).
-        assert_eq!(
-            render_tool_end("💻", "shell_exec", "ok", false),
-            "✓ <code>ok</code>"
-        );
-        // Error → ✗ + bold name + code block (always visible).
-        assert_eq!(
-            render_tool_end("💻", "shell_exec", "boom", true),
-            "✗ <b>shell_exec</b>\n<code>boom</code>"
-        );
-        // Error + empty preview → ✗ + name, no empty code block.
-        assert_eq!(
-            render_tool_end("💻", "shell_exec", "", true),
-            "✗ <b>shell_exec</b>"
-        );
     }
 
     // -----------------------------------------------------------------

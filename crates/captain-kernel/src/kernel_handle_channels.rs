@@ -5,7 +5,6 @@ use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelUser};
 use captain_types::config::{ChannelsConfig, OutputFormat};
 use tracing::info;
 
-use super::kernel_delivery_runtime::format_for_telegram;
 use super::CaptainKernel;
 
 impl CaptainKernel {
@@ -95,7 +94,7 @@ impl CaptainKernel {
                 .unwrap_or(OutputFormat::PlainText);
             captain_channels::formatter::format_for_wecom(message, output_format)
         } else {
-            format_channel_text(channel, message)
+            message.to_string()
         };
         let content = ChannelContent::Text(formatted);
 
@@ -139,7 +138,7 @@ impl CaptainKernel {
             .value()
             .clone();
         let user = channel_user(recipient);
-        let content = ChannelContent::Text(format_channel_text(channel, message));
+        let content = ChannelContent::Text(message.to_string());
         let target = crate::delivery_reliability::channel_target(channel, recipient);
         let delivery = crate::channel_delivery_retry::retry_channel_delivery(&target, || {
             let adapter = adapter.clone();
@@ -324,14 +323,6 @@ fn channel_user(recipient: &str) -> ChannelUser {
     }
 }
 
-fn format_channel_text(channel: &str, message: &str) -> String {
-    if channel == "telegram" {
-        format_for_telegram(message)
-    } else {
-        message.to_string()
-    }
-}
-
 fn topic_suffix(thread_id: Option<&str>) -> String {
     thread_id
         .map(|thread| format!(" (topic: {thread})"))
@@ -442,7 +433,7 @@ fn plain_channel_configured(channels: &ChannelsConfig) -> [(&'static str, bool);
 mod tests {
     use captain_types::config::{ChannelsConfig, DiscordConfig, TelegramConfig};
 
-    use super::{build_channels_context, format_channel_text, missing_channel_error, topic_suffix};
+    use super::{build_channels_context, missing_channel_error, topic_suffix};
 
     #[test]
     fn channel_context_includes_defaults_and_active_state() {
@@ -469,12 +460,6 @@ mod tests {
     #[test]
     fn channel_context_is_absent_without_configured_channels() {
         assert!(build_channels_context(&ChannelsConfig::default(), |_| false).is_none());
-    }
-
-    #[test]
-    fn channel_text_formats_telegram_only() {
-        assert_eq!(format_channel_text("discord", "**hi**"), "**hi**");
-        assert_ne!(format_channel_text("telegram", "**hi**"), "**hi**");
     }
 
     #[test]

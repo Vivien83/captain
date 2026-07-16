@@ -1024,10 +1024,25 @@ impl ChannelDispatchTask {
         // failure (stale/already-answered/expired), tell the clicking user
         // directly — there is no live turn left to piggyback a reply on.
         if let Err(reason) = self.handle.try_answer_ask_user(short_id, idx).await {
-            let _ = self
-                .adapter
-                .send(&self.message.sender, ChannelContent::Text(reason))
-                .await;
+            if self.adapter.name() == "telegram" {
+                let mut metadata = HashMap::new();
+                if let Some(thread_id) = &self.message.thread_id {
+                    metadata.insert("thread_id".to_string(), serde_json::json!(thread_id));
+                }
+                let _ = self
+                    .adapter
+                    .send_rich(
+                        &self.message.sender,
+                        ChannelContent::Text(crate::render_telegram_channel_error(&reason)),
+                        &metadata,
+                    )
+                    .await;
+            } else {
+                let _ = self
+                    .adapter
+                    .send(&self.message.sender, ChannelContent::Text(reason))
+                    .await;
+            }
         }
         true
     }
@@ -1519,13 +1534,18 @@ mod tests {
     /// Records every `send` call so tests can assert whether (and what) a
     /// reply was posted directly, bypassing the normal turn/reply pipeline.
     struct RecordingAdapter {
+        telegram: bool,
         sent: Mutex<Vec<String>>,
     }
 
     #[async_trait]
     impl ChannelAdapter for RecordingAdapter {
         fn name(&self) -> &str {
-            "recording-test-adapter"
+            if self.telegram {
+                "telegram"
+            } else {
+                "recording-test-adapter"
+            }
         }
         fn channel_type(&self) -> ChannelType {
             ChannelType::Telegram
@@ -1547,6 +1567,15 @@ mod tests {
                 self.sent.lock().unwrap().push(text);
             }
             Ok(())
+        }
+        async fn send_rich(
+            &self,
+            user: &ChannelUser,
+            content: ChannelContent,
+            _metadata: &HashMap<String, serde_json::Value>,
+        ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+            self.send(user, content).await?;
+            Ok(Some("17".to_string()))
         }
         async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
@@ -1586,6 +1615,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         let adapter = Arc::new(RecordingAdapter {
+            telegram: false,
             sent: Mutex::new(Vec::new()),
         });
         let task = ask_user_dispatch_task(Arc::clone(&handle), Arc::clone(&adapter), "short-1", 2);
@@ -1608,6 +1638,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         let adapter = Arc::new(RecordingAdapter {
+            telegram: true,
             sent: Mutex::new(Vec::new()),
         });
         let task = ask_user_dispatch_task(handle, Arc::clone(&adapter), "stale-id", 0);
@@ -1616,7 +1647,9 @@ mod tests {
 
         assert_eq!(
             *adapter.sent.lock().unwrap(),
-            vec!["Cette question n'est plus active.".to_string()]
+            vec![crate::render_telegram_channel_error(
+                "Cette question n'est plus active."
+            )]
         );
     }
 
@@ -1627,6 +1660,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         let adapter = Arc::new(RecordingAdapter {
+            telegram: false,
             sent: Mutex::new(Vec::new()),
         });
         let task = ChannelDispatchTask {

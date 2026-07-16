@@ -20,6 +20,10 @@ pub use crate::telegram_callbacks::{
 };
 use crate::telegram_html::{sanitize_telegram_html, telegram_html_to_plain_text};
 use crate::telegram_reply_context::apply_telegram_reply_context;
+use crate::telegram_rich::{
+    split_telegram_rich_markdown, telegram_edit_rich_message_body, telegram_rich_fallback_reason,
+    telegram_send_rich_message_body, telegram_send_rich_message_draft_body, RichFallbackReason,
+};
 use crate::telegram_streaming::is_telegram_html_parse_failure;
 pub use crate::telegram_streaming::{
     classify_telegram_edit_outcome, EditOutcome, TelegramStreamTarget, TELEGRAM_MAX_FLOOD_STRIKES,
@@ -38,6 +42,7 @@ use crate::types::{
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -53,6 +58,15 @@ const LONG_POLL_TIMEOUT: u64 = 30;
 
 /// Default Telegram Bot API base URL.
 const DEFAULT_API_URL: &str = "https://api.telegram.org";
+const RICH_CAPABILITY_UNKNOWN: u8 = 0;
+const RICH_CAPABILITY_AVAILABLE: u8 = 1;
+const RICH_CAPABILITY_UNAVAILABLE: u8 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RichDraftOutcome {
+    Sent,
+    FallbackRequired,
+}
 
 pub struct TelegramAdapter {
     /// SECURITY: Bot token is zeroized on drop to prevent memory disclosure.
@@ -65,6 +79,8 @@ pub struct TelegramAdapter {
     /// Bot username (without @), populated from `getMe` during `start()`.
     /// Used for @mention detection in group messages.
     bot_username: Arc<tokio::sync::RwLock<Option<String>>>,
+    /// Runtime compatibility cache for custom/older Bot API endpoints.
+    rich_capability: AtomicU8,
     shutdown_tx: Arc<watch::Sender<bool>>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -94,6 +110,7 @@ impl TelegramAdapter {
             poll_interval,
             api_base_url,
             bot_username: Arc::new(tokio::sync::RwLock::new(None)),
+            rich_capability: AtomicU8::new(RICH_CAPABILITY_UNKNOWN),
             shutdown_tx: Arc::new(shutdown_tx),
             shutdown_rx,
         }
@@ -162,16 +179,20 @@ impl TelegramAdapter {
         reply_markup: Option<&serde_json::Value>,
         reply_to_message_id: Option<i64>,
     ) -> Result<Option<i64>, Box<dyn std::error::Error>> {
-        let url = format!(
-            "{}/bot{}/sendMessage",
-            self.api_base_url,
-            self.token.as_str()
-        );
+        if self.rich_messages_unavailable() {
+            return self
+                .api_send_legacy_markdown_full(
+                    chat_id,
+                    text,
+                    thread_id,
+                    reply_markup,
+                    reply_to_message_id,
+                )
+                .await;
+        }
 
-        let sanitized = sanitize_telegram_html(text);
-        let chunks = split_message(&sanitized, 4096);
+        let chunks = split_telegram_rich_markdown(text);
         let mut last_msg_id: Option<i64> = None;
-
         for (i, chunk) in chunks.iter().enumerate() {
             let reply_to = if i == 0 { reply_to_message_id } else { None };
             let markup = if i == chunks.len() - 1 {
@@ -179,60 +200,190 @@ impl TelegramAdapter {
             } else {
                 None
             };
-            let body = telegram_send_message_body(chat_id, chunk, thread_id, reply_to, markup);
-
-            let mut attempts = 0;
-            let (status, body_text) = loop {
-                let resp = self.client.post(&url).json(&body).send().await?;
-                let status = resp.status();
-                let body_text = resp.text().await.unwrap_or_default();
-                if status.is_success() {
-                    break (status, body_text);
-                }
-                if let Some(retry_after) = telegram_retry_after_seconds(status.as_u16(), &body_text)
-                {
-                    if attempts < 2 {
-                        warn!("Telegram sendMessage rate limited, retrying after {retry_after}s");
-                        tokio::time::sleep(Duration::from_secs(retry_after.saturating_add(1)))
-                            .await;
-                        attempts += 1;
-                        continue;
-                    }
-                }
-                break (status, body_text);
-            };
-            if status.is_success() {
+            let body = telegram_send_rich_message_body(chat_id, chunk, thread_id, reply_to, markup);
+            let (status, body_text) = self
+                .post_json_with_rate_limit("sendRichMessage", &body)
+                .await?;
+            if (200..300).contains(&status) {
+                self.mark_rich_available();
                 last_msg_id = telegram_message_id_from_response(&body_text);
                 continue;
             }
 
-            warn!("Telegram sendMessage failed ({status}): {body_text}");
+            let Some(reason) = telegram_rich_fallback_reason(status, &body_text) else {
+                return Err(
+                    format!("Telegram sendRichMessage failed ({status}): {body_text}").into(),
+                );
+            };
+            if reason == RichFallbackReason::Unsupported {
+                self.mark_rich_unavailable();
+            }
+            warn!(
+                ?reason,
+                "Telegram Rich Message rejected; using legacy HTML fallback"
+            );
+            last_msg_id = self
+                .api_send_legacy_markdown_full(chat_id, chunk, thread_id, markup, reply_to)
+                .await?;
+        }
+        Ok(last_msg_id)
+    }
 
-            if telegram_retry_after_seconds(status.as_u16(), &body_text).is_some() {
+    pub(crate) async fn api_send_rich_message_draft(
+        &self,
+        chat_id: i64,
+        draft_id: i64,
+        text: &str,
+        thread_id: Option<i64>,
+    ) -> Result<RichDraftOutcome, Box<dyn std::error::Error>> {
+        if self.rich_messages_unavailable() {
+            return Ok(RichDraftOutcome::FallbackRequired);
+        }
+        let body = telegram_send_rich_message_draft_body(chat_id, draft_id, text, thread_id);
+        let (status, body_text) = self
+            .post_json_with_rate_limit("sendRichMessageDraft", &body)
+            .await?;
+        if (200..300).contains(&status) {
+            self.mark_rich_available();
+            return Ok(RichDraftOutcome::Sent);
+        }
+        let Some(reason) = telegram_rich_fallback_reason(status, &body_text) else {
+            return Err(
+                format!("Telegram sendRichMessageDraft failed ({status}): {body_text}").into(),
+            );
+        };
+        if reason == RichFallbackReason::Unsupported {
+            self.mark_rich_unavailable();
+        }
+        Ok(RichDraftOutcome::FallbackRequired)
+    }
+
+    async fn api_send_legacy_markdown_full(
+        &self,
+        chat_id: i64,
+        markdown: &str,
+        thread_id: Option<i64>,
+        reply_markup: Option<&serde_json::Value>,
+        reply_to_message_id: Option<i64>,
+    ) -> Result<Option<i64>, Box<dyn std::error::Error>> {
+        let html = crate::formatter::format_for_channel(
+            markdown,
+            captain_types::config::OutputFormat::TelegramHtml,
+        );
+        self.api_send_legacy_html_full(chat_id, &html, thread_id, reply_markup, reply_to_message_id)
+            .await
+    }
+
+    async fn api_send_legacy_html_full(
+        &self,
+        chat_id: i64,
+        html: &str,
+        thread_id: Option<i64>,
+        reply_markup: Option<&serde_json::Value>,
+        reply_to_message_id: Option<i64>,
+    ) -> Result<Option<i64>, Box<dyn std::error::Error>> {
+        let sanitized = sanitize_telegram_html(html);
+        let chunks = split_message(&sanitized, 4096);
+        let mut last_msg_id = None;
+        for (index, chunk) in chunks.iter().enumerate() {
+            let reply_to = (index == 0).then_some(reply_to_message_id).flatten();
+            let markup = (index == chunks.len() - 1)
+                .then_some(reply_markup)
+                .flatten();
+            let body = telegram_send_message_body(chat_id, chunk, thread_id, reply_to, markup);
+            let (status, body_text) = self.post_json_with_rate_limit("sendMessage", &body).await?;
+            if (200..300).contains(&status) {
+                last_msg_id = telegram_message_id_from_response(&body_text);
+                continue;
+            }
+            if telegram_retry_after_seconds(status, &body_text).is_some() {
                 return Err(format!("Telegram sendMessage failed ({status}): {body_text}").into());
             }
 
-            // TG.12 — Rich HTML is nice when it works, but Telegram is
-            // strict: a long split can land inside an entity/tag and
-            // reject a whole chunk. Retry that exact chunk as plain text
-            // before surfacing the failure, so channel delivery wins over
-            // formatting. This path is only used on rejected chunks.
             let plain_body =
                 telegram_plain_text_fallback_body(&body, telegram_html_to_plain_text(chunk));
-            let retry = self.client.post(&url).json(&plain_body).send().await?;
-            let retry_status = retry.status();
-            let retry_body = retry.text().await.unwrap_or_default();
-            if retry_status.is_success() {
-                last_msg_id = telegram_message_id_from_response(&retry_body);
+            let (plain_status, plain_response) = self
+                .post_json_with_rate_limit("sendMessage", &plain_body)
+                .await?;
+            if (200..300).contains(&plain_status) {
+                last_msg_id = telegram_message_id_from_response(&plain_response);
             } else {
-                warn!("Telegram sendMessage plain fallback failed ({retry_status}): {retry_body}");
                 return Err(format!(
-                    "Telegram sendMessage failed ({status}): {body_text}; plain fallback failed ({retry_status}): {retry_body}"
+                    "Telegram sendMessage failed ({status}): {body_text}; plain fallback failed ({plain_status}): {plain_response}"
                 )
                 .into());
             }
         }
         Ok(last_msg_id)
+    }
+
+    async fn api_send_plain_text_full(
+        &self,
+        chat_id: i64,
+        text: &str,
+        thread_id: Option<i64>,
+        reply_markup: Option<&serde_json::Value>,
+    ) -> Result<Option<i64>, Box<dyn std::error::Error>> {
+        let chunks = split_message(text, 4096);
+        let mut last_msg_id = None;
+        for (index, chunk) in chunks.iter().enumerate() {
+            let markup = (index == chunks.len() - 1)
+                .then_some(reply_markup)
+                .flatten();
+            let html_body = telegram_send_message_body(chat_id, chunk, thread_id, None, markup);
+            let body = telegram_plain_text_fallback_body(&html_body, (*chunk).to_string());
+            let (status, response) = self.post_json_with_rate_limit("sendMessage", &body).await?;
+            if !(200..300).contains(&status) {
+                return Err(format!("Telegram sendMessage failed ({status}): {response}").into());
+            }
+            last_msg_id = telegram_message_id_from_response(&response);
+        }
+        Ok(last_msg_id)
+    }
+
+    async fn post_json_with_rate_limit(
+        &self,
+        endpoint: &str,
+        body: &serde_json::Value,
+    ) -> Result<(u16, String), Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/bot{}/{}",
+            self.api_base_url,
+            self.token.as_str(),
+            endpoint
+        );
+        let mut attempts = 0;
+        loop {
+            let response = self.client.post(&url).json(body).send().await?;
+            let status = response.status().as_u16();
+            let response_body = response.text().await.unwrap_or_default();
+            let Some(retry_after) = telegram_retry_after_seconds(status, &response_body) else {
+                return Ok((status, response_body));
+            };
+            if attempts >= 2 {
+                return Ok((status, response_body));
+            }
+            warn!(
+                endpoint,
+                retry_after, "Telegram rate limited request; retrying"
+            );
+            tokio::time::sleep(Duration::from_secs(retry_after.saturating_add(1))).await;
+            attempts += 1;
+        }
+    }
+
+    fn rich_messages_unavailable(&self) -> bool {
+        self.rich_capability.load(Ordering::Relaxed) == RICH_CAPABILITY_UNAVAILABLE
+    }
+
+    fn mark_rich_available(&self) {
+        self.rich_capability
+            .store(RICH_CAPABILITY_AVAILABLE, Ordering::Relaxed);
+    }
+
+    fn mark_rich_unavailable(&self) {
+        self.rich_capability
+            .store(RICH_CAPABILITY_UNAVAILABLE, Ordering::Relaxed);
     }
 
     /// Edit a previously sent message's text and/or reply markup.
@@ -243,31 +394,102 @@ impl TelegramAdapter {
         text: Option<&str>,
         reply_markup: Option<&serde_json::Value>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let endpoint = if text.is_some() {
-            "editMessageText"
-        } else {
-            "editMessageReplyMarkup"
-        };
-        let url = format!(
-            "{}/bot{}/{}",
-            self.api_base_url,
-            self.token.as_str(),
-            endpoint
-        );
-        let mut body = serde_json::json!({ "chat_id": chat_id, "message_id": message_id });
-        if let Some(t) = text {
-            body["text"] = serde_json::Value::String(sanitize_telegram_html(t));
-            body["parse_mode"] = serde_json::Value::String("HTML".to_string());
+        if let Some(text) = text {
+            let outcome = self
+                .api_edit_rich_with_markup(chat_id, message_id, text, reply_markup)
+                .await?;
+            if !matches!(outcome, EditOutcome::Ok | EditOutcome::NotModified) {
+                warn!(?outcome, "Telegram editMessageText failed");
+            }
+            return Ok(());
         }
+
+        let mut body = serde_json::json!({ "chat_id": chat_id, "message_id": message_id });
         if let Some(markup) = reply_markup {
             body["reply_markup"] = markup.clone();
         }
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            let body_text = resp.text().await.unwrap_or_default();
-            warn!("Telegram {endpoint} failed: {body_text}");
+        let (status, response) = self
+            .post_json_with_rate_limit("editMessageReplyMarkup", &body)
+            .await?;
+        if !(200..300).contains(&status) {
+            warn!(status, response, "Telegram editMessageReplyMarkup failed");
         }
         Ok(())
+    }
+
+    async fn api_edit_rich_with_markup(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+        reply_markup: Option<&serde_json::Value>,
+    ) -> Result<EditOutcome, Box<dyn std::error::Error>> {
+        if !self.rich_messages_unavailable() {
+            let body = telegram_edit_rich_message_body(chat_id, message_id, text, reply_markup);
+            let (status, response) = self
+                .post_json_with_rate_limit("editMessageText", &body)
+                .await?;
+            let outcome = classify_telegram_edit_outcome(status, &response);
+            if matches!(outcome, EditOutcome::Ok | EditOutcome::NotModified) {
+                self.mark_rich_available();
+                return Ok(outcome);
+            }
+            if let Some(reason) = telegram_rich_fallback_reason(status, &response) {
+                if reason == RichFallbackReason::Unsupported {
+                    self.mark_rich_unavailable();
+                }
+                return self
+                    .api_edit_legacy_markdown_strict(chat_id, message_id, text, reply_markup)
+                    .await;
+            }
+            return Ok(outcome);
+        }
+        self.api_edit_legacy_markdown_strict(chat_id, message_id, text, reply_markup)
+            .await
+    }
+
+    async fn api_edit_legacy_markdown_strict(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        markdown: &str,
+        reply_markup: Option<&serde_json::Value>,
+    ) -> Result<EditOutcome, Box<dyn std::error::Error>> {
+        let html = crate::formatter::format_for_channel(
+            markdown,
+            captain_types::config::OutputFormat::TelegramHtml,
+        );
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": sanitize_telegram_html(&html),
+            "parse_mode": "HTML",
+        });
+        if let Some(reply_markup) = reply_markup {
+            body["reply_markup"] = reply_markup.clone();
+        }
+        let (status, response) = self
+            .post_json_with_rate_limit("editMessageText", &body)
+            .await?;
+        let outcome = classify_telegram_edit_outcome(status, &response);
+        if !is_telegram_html_parse_failure(&outcome) {
+            return Ok(outcome);
+        }
+
+        if let serde_json::Value::Object(map) = &mut body {
+            map.remove("parse_mode");
+        }
+        body["text"] = serde_json::Value::String(telegram_html_to_plain_text(&html));
+        let (plain_status, plain_response) = self
+            .post_json_with_rate_limit("editMessageText", &body)
+            .await?;
+        let plain_outcome = classify_telegram_edit_outcome(plain_status, &plain_response);
+        if let EditOutcome::PermanentFailure(description) = plain_outcome {
+            return Ok(EditOutcome::PermanentFailure(format!(
+                "{outcome:?}; plain fallback: {description}"
+            )));
+        }
+        Ok(plain_outcome)
     }
 
     /// Answer a callback query (acknowledge button press).
@@ -1238,9 +1460,17 @@ impl ChannelAdapter for TelegramAdapter {
             }
         };
 
-        let msg_id = self
-            .api_send_message_rich(chat_id, &text, thread_id, reply_markup)
-            .await?;
+        let plain_text = metadata
+            .get("telegram_plain_text")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let msg_id = if plain_text {
+            self.api_send_plain_text_full(chat_id, &text, thread_id, reply_markup)
+                .await?
+        } else {
+            self.api_send_message_rich(chat_id, &text, thread_id, reply_markup)
+                .await?
+        };
         Ok(msg_id.map(|id| id.to_string()))
     }
 
@@ -1370,50 +1600,281 @@ impl TelegramAdapter {
         message_id: i64,
         text: &str,
     ) -> Result<EditOutcome, Box<dyn std::error::Error>> {
-        let url = format!(
-            "{}/bot{}/editMessageText",
-            self.api_base_url,
-            self.token.as_str()
-        );
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": sanitize_telegram_html(text),
-            "parse_mode": "HTML",
-        });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        let status = resp.status().as_u16();
-        let body_text = resp.text().await.unwrap_or_default();
-        let outcome = classify_telegram_edit_outcome(status, &body_text);
-        if !is_telegram_html_parse_failure(&outcome) {
-            return Ok(outcome);
-        }
-
-        // TG.13 — Streaming edits were the remaining delivery weak point:
-        // `sendMessage` had a plain-text retry, but `editMessageText` could
-        // still abort the live pump on strict Telegram HTML parsing. Retry
-        // the exact body without parse_mode before surfacing the failure.
-        let plain_body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": telegram_html_to_plain_text(text),
-        });
-        let retry = self.client.post(&url).json(&plain_body).send().await?;
-        let retry_status = retry.status().as_u16();
-        let retry_body = retry.text().await.unwrap_or_default();
-        let retry_outcome = classify_telegram_edit_outcome(retry_status, &retry_body);
-        if let EditOutcome::PermanentFailure(retry_description) = retry_outcome {
-            return Ok(EditOutcome::PermanentFailure(format!(
-                "{outcome:?}; plain fallback: {retry_description}"
-            )));
-        }
-        Ok(retry_outcome)
+        self.api_edit_rich_with_markup(chat_id, message_id, text, None)
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mock_telegram_adapter(server: &wiremock::MockServer) -> TelegramAdapter {
+        TelegramAdapter::new(
+            "123:ABC".to_string(),
+            vec!["*".to_string()],
+            Duration::from_secs(1),
+            Some(server.uri()),
+        )
+    }
+
+    #[tokio::test]
+    async fn telegram_native_rich_send_preserves_markdown_and_metadata() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 77, "rich_message": {"blocks": []}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = mock_telegram_adapter(&server);
+        let keyboard = serde_json::json!({
+            "inline_keyboard": [[{"text": "OK", "callback_data": "ok"}]]
+        });
+        let markdown = "## Report\n\n| Metric | Value |\n|---|---:|\n| Status | **OK** |";
+
+        let message_id = adapter
+            .api_send_message_rich_full(42, markdown, Some(7), Some(&keyboard), Some(99))
+            .await
+            .expect("native rich send");
+
+        assert_eq!(message_id, Some(77));
+        let requests = server.received_requests().await.expect("requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("json request");
+        assert_eq!(body["rich_message"]["markdown"], markdown);
+        assert_eq!(body["message_thread_id"], 7);
+        assert_eq!(body["reply_parameters"]["message_id"], 99);
+        assert_eq!(body["reply_markup"], keyboard);
+        assert!(body.get("text").is_none());
+        assert!(body.get("parse_mode").is_none());
+    }
+
+    #[tokio::test]
+    async fn telegram_native_rich_draft_and_edit_use_bot_api_10_2_fields() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessageDraft"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/editMessageText"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 9}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = mock_telegram_adapter(&server);
+
+        assert_eq!(
+            adapter
+                .api_send_rich_message_draft(
+                    42,
+                    123,
+                    "<tg-thinking>Captain travaille</tg-thinking>",
+                    Some(7)
+                )
+                .await
+                .expect("draft"),
+            RichDraftOutcome::Sent
+        );
+        assert_eq!(
+            adapter
+                .api_edit_message_strict(42, 9, "## Final")
+                .await
+                .expect("rich edit"),
+            EditOutcome::Ok
+        );
+
+        let requests = server.received_requests().await.expect("requests");
+        let draft = requests
+            .iter()
+            .find(|request| request.url.path().ends_with("sendRichMessageDraft"))
+            .expect("draft request");
+        let draft_body: serde_json::Value =
+            serde_json::from_slice(&draft.body).expect("draft json");
+        assert_eq!(draft_body["draft_id"], 123);
+        assert_eq!(draft_body["message_thread_id"], 7);
+        assert!(draft_body["rich_message"]["markdown"]
+            .as_str()
+            .expect("markdown")
+            .contains("tg-thinking"));
+
+        let edit = requests
+            .iter()
+            .find(|request| request.url.path().ends_with("editMessageText"))
+            .expect("edit request");
+        let edit_body: serde_json::Value = serde_json::from_slice(&edit.body).expect("edit json");
+        assert_eq!(edit_body["rich_message"]["markdown"], "## Final");
+        assert!(edit_body.get("text").is_none());
+    }
+
+    #[tokio::test]
+    async fn telegram_edit_rich_clears_inline_keyboard_explicitly() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/editMessageText"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 9}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = mock_telegram_adapter(&server);
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("chat_id".to_string(), serde_json::json!(42));
+
+        adapter
+            .edit_rich("9", "### ✓ Décision enregistrée", &metadata)
+            .await
+            .expect("resolved Rich card");
+
+        let requests = server.received_requests().await.expect("requests");
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("edit json");
+        assert_eq!(
+            body["rich_message"]["markdown"],
+            "### ✓ Décision enregistrée"
+        );
+        assert_eq!(
+            body["reply_markup"],
+            serde_json::json!({"inline_keyboard": []})
+        );
+        assert!(body.get("text").is_none());
+    }
+
+    #[tokio::test]
+    async fn telegram_unsupported_rich_endpoint_falls_back_and_is_cached() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessage"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "ok": false,
+                "description": "Not Found: method not found"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 78}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let adapter = mock_telegram_adapter(&server);
+
+        for markdown in ["**first**", "**second**"] {
+            assert_eq!(
+                adapter
+                    .api_send_message_rich_full(42, markdown, None, None, None)
+                    .await
+                    .expect("legacy fallback"),
+                Some(78)
+            );
+        }
+
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3, "one Rich probe then two HTML sends");
+        for request in requests
+            .iter()
+            .filter(|request| request.url.path().ends_with("sendMessage"))
+        {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("legacy json");
+            assert_eq!(body["parse_mode"], "HTML");
+            assert!(body["text"].as_str().expect("text").contains("<b>"));
+        }
+    }
+
+    #[tokio::test]
+    async fn telegram_rich_server_failure_does_not_risk_duplicate_fallback_send() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessage"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("upstream failure"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = mock_telegram_adapter(&server);
+
+        let error = adapter
+            .api_send_message_rich_full(42, "hello", None, None, None)
+            .await
+            .expect_err("500 must be surfaced");
+        assert!(error.to_string().contains("500"));
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 1, "no duplicate legacy send after 5xx");
+    }
+
+    #[tokio::test]
+    async fn telegram_explicit_plain_text_bypasses_rich_and_parse_mode() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 79}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = mock_telegram_adapter(&server);
+        let user = ChannelUser {
+            platform_id: "42".to_string(),
+            display_name: "Test".to_string(),
+            captain_user: None,
+        };
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("telegram_plain_text".to_string(), serde_json::json!(true));
+
+        let message_id = adapter
+            .send_rich(
+                &user,
+                ChannelContent::Text("**literal**".to_string()),
+                &metadata,
+            )
+            .await
+            .expect("plain send");
+        assert_eq!(message_id.as_deref(), Some("79"));
+
+        let requests = server.received_requests().await.expect("requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("plain json");
+        assert_eq!(body["text"], "**literal**");
+        assert!(body.get("parse_mode").is_none());
+        assert!(body.get("rich_message").is_none());
+    }
 
     fn test_client() -> reqwest::Client {
         reqwest::Client::new()

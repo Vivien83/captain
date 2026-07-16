@@ -4,6 +4,14 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Release Candidate
+
+`v0.1.0-alpha.6` is the current verified source candidate. It adds native
+Telegram Rich Messages, tool-wave activity boards, ephemeral idle progress,
+and stateful `ask_user` and error cards. Until GitHub assets and the
+multi-architecture OCI image are published and inspected, no public source
+commit or image digest is claimed for this version.
+
 ## Current Public Release
 
 `v0.1.0-alpha.5` is the current public prerelease. Its annotated GitHub source

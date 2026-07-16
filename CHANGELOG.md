@@ -8,6 +8,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 No public changes are queued yet.
 
+## [0.1.0-alpha.6] - 2026-07-16
+
+Early-access Telegram UX release focused on native Rich Messages, coherent
+tool activity, ephemeral long-run presence, and reliable interactive controls.
+
+### Added
+
+- Telegram final answers use native Bot API 10.2 Rich Messages, preserving GFM
+  tables, lists, code, and collapsible details with explicit legacy fallback.
+- Independent tools share one live activity board and remain correlated by
+  tool-call id even when results arrive out of order.
+- Private chats use ephemeral Rich drafts for response formation and idle
+  operational presence without adding persistent heartbeat messages.
+
+### Fixed
+
+- Dependent tool calls open a new activity board instead of being presented as
+  parallel work; successful rows collapse while failures remain visible.
+- `ask_user` button and freeform answers now resolve the waiting agent turn
+  before confirmation. Invalid indices preserve the active question, and
+  answered or expired cards explicitly remove stale inline keyboards.
+- Telegram turn and stale-callback errors are sanitized and rendered as Rich
+  control cards without provider payloads or secrets.
+- Explicit unsupported-endpoint responses may use the legacy HTML/plain path,
+  while ambiguous network or server failures never trigger a duplicate send.
+
 ## [0.1.0-alpha.5] - 2026-07-16
 
 Early-access reliability release focused on clean runtime lifecycle, explicit
@@ -187,7 +213,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.5...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.6...HEAD
+[0.1.0-alpha.6]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.3...v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.2...v0.1.0-alpha.3

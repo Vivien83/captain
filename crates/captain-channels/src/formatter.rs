@@ -84,8 +84,9 @@ fn render_telegram_structured_block(
         return Some(render_telegram_blockquote_block(lines, index));
     }
 
-    // Telegram has no table entity; render a compact monospaced block instead
-    // of leaking hard-to-read pipe syntax.
+    // Legacy Bot API fallback has no table entity; render a compact monospaced
+    // block instead of leaking hard-to-read pipe syntax. Native Rich Messages
+    // bypass this formatter and retain the original GFM table.
     if is_markdown_table_start(lines, index) {
         return Some(render_telegram_table_block(lines, index));
     }

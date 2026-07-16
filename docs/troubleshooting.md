@@ -46,8 +46,8 @@ export PATH="$HOME/.captain/bin:$PATH"
 GitHub's `/releases/latest` route excludes prereleases. Pin the alpha tag:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.5/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.5 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.6 bash
 ```
 
 No GitHub token is required for the official public repository. A token is
@@ -203,8 +203,8 @@ should not be the first production integration.
 The public alpha image supports Linux AMD64 and ARM64:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5
-docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5 --version
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
+docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6 --version
 docker logs captain
 ```
 

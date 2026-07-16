@@ -32,9 +32,17 @@ mod telegram_api_response;
 mod telegram_callbacks;
 mod telegram_html;
 mod telegram_reply_context;
+mod telegram_rich;
 mod telegram_streaming;
+pub use telegram_streaming::TelegramProgressDraft;
+mod telegram_ui;
 mod telegram_update_content;
 mod telegram_update_context;
+pub use telegram_ui::{
+    render_telegram_ask_user_answer, render_telegram_ask_user_expired,
+    render_telegram_ask_user_prompt, render_telegram_channel_error,
+};
+mod tool_activity;
 pub mod twitch;
 pub mod types;
 pub mod whatsapp;

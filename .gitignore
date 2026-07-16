@@ -3,6 +3,7 @@
 /dist/releases/
 /dist/site/
 /dist/docker/
+/dist/handoff/
 /site/releases/
 **/*.rs.bk
 *.pdb

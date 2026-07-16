@@ -21,6 +21,10 @@ use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelUser};
 use captain_channels::whatsapp::WhatsAppAdapter;
 use captain_channels::xmpp::XmppAdapter;
 use captain_channels::zulip::ZulipAdapter;
+use captain_channels::{
+    render_telegram_ask_user_answer, render_telegram_ask_user_expired,
+    render_telegram_ask_user_prompt, TelegramProgressDraft,
+};
 // Wave 3
 use captain_channels::bluesky::BlueskyAdapter;
 use captain_channels::feishu::FeishuAdapter;
@@ -79,25 +83,22 @@ pub struct KernelBridgeAdapter {
     /// bubble cites the freshest user message rather than the one
     /// that started the turn. Both are removed when the loop ends.
     active_streams: Arc<tokio::sync::Mutex<ActiveStreamMap>>,
-    /// TG1 — one pending `ask_user` tool call with inline-keyboard options,
-    /// per Telegram stream, keyed by a short-lived id minted when the
-    /// question is shown (never derived from `StreamEvent`, which has no
-    /// `id` field — see the plan's "découverte critique"). Resolved and
-    /// removed by `try_answer_ask_user` (TG2) when the button is clicked,
-    /// or by `pump_telegram_live_stream` when the stream ends unanswered.
+    /// Pending Telegram `ask_user` controls keyed by a short-lived id minted
+    /// when each question is shown (never derived from `StreamEvent`, which
+    /// has no `id` field). Button clicks resolve one entry; an accepted
+    /// freeform answer resolves the waiting session's entries; stream end
+    /// visibly expires anything left unanswered.
     pending_ask_users: Arc<std::sync::Mutex<HashMap<String, PendingTelegramAsk>>>,
 }
 
-/// TG1 — everything `try_answer_ask_user` (TG2) needs to resolve a button
-/// click back into the waiting agent-loop turn: the full option text (only
-/// the index round-trips through Telegram's callback_data) and the stored
-/// `session_key`/`agent_id` to reuse `try_forward_active_stream_interjection`
-/// without recomputing `session_key` from the callback (see plan: recomputing
-/// it would need to replicate `session_key()`'s `sender_user_id`/
-/// `captain_user` resolution, a fragile duplication).
+/// Everything needed to resolve a button click or freeform answer back into
+/// the waiting agent-loop turn. Only the option index round-trips through
+/// Telegram callback data; the stored session identity avoids duplicating
+/// the channel bridge's user/session resolution rules.
 struct PendingTelegramAsk {
     agent_id: AgentId,
     session_key: String,
+    question: String,
     options: Vec<String>,
     telegram: Arc<TelegramAdapter>,
     chat_id: i64,
@@ -113,6 +114,7 @@ struct ActiveStream {
     agent_id: AgentId,
     sender: tokio::sync::mpsc::Sender<String>,
     reply_handle: Arc<std::sync::Mutex<Option<i64>>>,
+    progress_draft: Option<TelegramProgressDraft>,
 }
 
 type TelegramStreamParts = (
@@ -123,20 +125,16 @@ type TelegramStreamParts = (
 type TelegramStreamJoin = tokio::task::JoinHandle<KernelResult<AgentLoopResult>>;
 type ChannelAdapterStartup = (Arc<dyn ChannelAdapter>, Option<String>);
 
-const TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS: u64 = 120;
-const TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS: u64 = 600;
+const TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS: u64 = 20;
+const TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS: u64 = 20;
 const SKILL_PROPOSAL_APPROVAL_USAGE: &str =
     "Usage: /skill_approve <id-prefix> schema diff tests human";
 
 fn telegram_stream_progress_text(elapsed: Duration) -> String {
     let minutes = elapsed.as_secs().div_ceil(60).max(1);
-    if minutes <= 2 {
-        "⏳ Toujours en cours. Tu peux envoyer un complément, ou Stop pour interrompre.".to_string()
-    } else {
-        format!(
-            "⏳ Toujours en cours depuis environ {minutes} min. Tu peux envoyer un complément, ou Stop pour interrompre."
-        )
-    }
+    format!(
+        "<tg-thinking>Captain travaille…</tg-thinking>\n\n<blockquote>Tour actif · environ {minutes} min\nTu peux envoyer un complément, ou Stop pour interrompre.</blockquote>"
+    )
 }
 
 fn telegram_streaming_enabled(config: &captain_types::config::ChannelsConfig) -> bool {
@@ -217,14 +215,16 @@ async fn pump_telegram_live_stream(
     user_message_id: Option<i64>,
     user_input_tx: tokio::sync::mpsc::Sender<String>,
 ) -> Option<String> {
-    let progress_task =
-        spawn_telegram_stream_progress_loop(Arc::clone(&telegram), chat_id, thread_id);
     let target = captain_channels::telegram::TelegramStreamTarget::new(
         Arc::clone(&telegram),
         chat_id,
         thread_id,
     )
     .with_reply_to(user_message_id);
+    let progress_draft = target.progress_draft();
+    let progress_task = progress_draft
+        .clone()
+        .map(spawn_telegram_stream_progress_loop);
     let reply_handle = target.reply_to_handle();
     if let Some(key) = session_key {
         active_streams.lock().await.insert(
@@ -233,14 +233,16 @@ async fn pump_telegram_live_stream(
                 agent_id,
                 sender: user_input_tx,
                 reply_handle,
+                progress_draft: progress_draft.clone(),
             },
         );
     }
 
-    let (rx, ask_user_short_id) = tee_ask_user_events_to_telegram(
+    let (rx, ask_user_ids) = tee_ask_user_events_to_telegram(
         raw_rx,
         Arc::clone(&telegram),
         Arc::clone(pending_ask_users),
+        progress_draft,
         agent_id,
         session_key.map(str::to_string),
         chat_id,
@@ -267,45 +269,39 @@ async fn pump_telegram_live_stream(
         }
     };
     stream_metric.finish();
-    progress_task.abort();
+    if let Some(progress_task) = progress_task {
+        progress_task.abort();
+    }
     if let Some(key) = session_key {
         active_streams.lock().await.remove(key);
     }
-    // A question that never got answered (timeout, or the stream ended
-    // before the click landed) must not linger in the registry.
-    if let Some(short_id) = ask_user_short_id.lock().ok().and_then(|g| g.clone()) {
-        pending_ask_users
-            .lock()
-            .ok()
-            .map(|mut m| m.remove(&short_id));
-    }
+    expire_unanswered_telegram_asks(&ask_user_ids, pending_ask_users).await;
     stream_error
 }
 
 /// TG1 — forward every `StreamEvent` unchanged except `AskUser`, which is
 /// intercepted here instead of reaching `map_runtime_event()` (which drops
 /// it — see the plan's "découverte critique"). On `AskUser`, post the
-/// question to Telegram (plain text, or an inline keyboard when `options`
-/// is non-empty) and register the pending answer. Returns the receiving
-/// half of a fresh channel plus a shared slot holding the short_id of the
-/// most recently posted question, so the caller can clean it up if it's
-/// never answered.
+/// question to Telegram as a Rich card and register inline-keyboard options.
+/// Returns the receiving half of a fresh channel plus every short-lived id
+/// created during the stream so unanswered controls can be expired visibly.
 #[allow(clippy::too_many_arguments)]
 fn tee_ask_user_events_to_telegram(
     mut raw_rx: tokio::sync::mpsc::Receiver<StreamEvent>,
     telegram: Arc<TelegramAdapter>,
     pending_ask_users: Arc<std::sync::Mutex<HashMap<String, PendingTelegramAsk>>>,
+    progress_draft: Option<TelegramProgressDraft>,
     agent_id: AgentId,
     session_key: Option<String>,
     chat_id: i64,
     thread_id: Option<i64>,
 ) -> (
     tokio::sync::mpsc::Receiver<StreamEvent>,
-    Arc<std::sync::Mutex<Option<String>>>,
+    Arc<std::sync::Mutex<Vec<String>>>,
 ) {
     let (forward_tx, forward_rx) = tokio::sync::mpsc::channel(32);
-    let last_short_id = Arc::new(std::sync::Mutex::new(None));
-    let last_short_id_task = Arc::clone(&last_short_id);
+    let ask_user_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let ask_user_ids_task = Arc::clone(&ask_user_ids);
 
     tokio::spawn(async move {
         while let Some(event) = raw_rx.recv().await {
@@ -313,18 +309,21 @@ fn tee_ask_user_events_to_telegram(
                 let options = options.clone().unwrap_or_default();
                 let user = telegram_channel_user(chat_id);
                 let mut metadata = telegram_thread_metadata(thread_id);
-                let short_id = (!options.is_empty()).then(|| uuid::Uuid::new_v4().to_string());
-                if let Some(short_id) = &short_id {
+                let has_buttons = !options.is_empty() && session_key.is_some();
+                let short_id = session_key
+                    .as_ref()
+                    .map(|_| uuid::Uuid::new_v4().to_string());
+                if has_buttons {
+                    let short_id = short_id
+                        .as_ref()
+                        .expect("button-backed ask_user requires a session key");
                     metadata.insert(
                         "reply_markup".to_string(),
                         captain_channels::telegram::build_ask_user_keyboard(short_id, &options),
                     );
                 }
-                let content = if options.is_empty() {
-                    ChannelContent::Text(format!("❓ {question}"))
-                } else {
-                    ChannelContent::Text(question.clone())
-                };
+                let content =
+                    ChannelContent::Text(render_telegram_ask_user_prompt(question, has_buttons));
                 match telegram.send_rich(&user, content, &metadata).await {
                     Ok(sent_id) => {
                         if let Some(short_id) = short_id {
@@ -337,6 +336,7 @@ fn tee_ask_user_events_to_telegram(
                                     PendingTelegramAsk {
                                         agent_id,
                                         session_key: key.clone(),
+                                        question: question.clone(),
                                         options: options.clone(),
                                         telegram: Arc::clone(&telegram),
                                         chat_id,
@@ -344,9 +344,12 @@ fn tee_ask_user_events_to_telegram(
                                     },
                                 );
                             }
-                            if let Ok(mut guard) = last_short_id_task.lock() {
-                                *guard = Some(short_id);
+                            if let Ok(mut guard) = ask_user_ids_task.lock() {
+                                guard.push(short_id);
                             }
+                        }
+                        if let Some(progress) = &progress_draft {
+                            progress.set_waiting_for_user(true);
                         }
                     }
                     Err(e) => {
@@ -361,7 +364,48 @@ fn tee_ask_user_events_to_telegram(
         }
     });
 
-    (forward_rx, last_short_id)
+    (forward_rx, ask_user_ids)
+}
+
+async fn edit_pending_telegram_ask(pending: &PendingTelegramAsk, content: String) {
+    let Some(message_id) = pending.message_id else {
+        return;
+    };
+    let mut metadata = HashMap::new();
+    metadata.insert("chat_id".to_string(), serde_json::json!(pending.chat_id));
+    if let Err(e) = pending
+        .telegram
+        .edit_rich(&message_id.to_string(), &content, &metadata)
+        .await
+    {
+        warn!(error = %e, "failed to resolve Telegram ask_user card");
+    }
+}
+
+async fn expire_unanswered_telegram_asks(
+    ask_user_ids: &Arc<std::sync::Mutex<Vec<String>>>,
+    pending_ask_users: &Arc<std::sync::Mutex<HashMap<String, PendingTelegramAsk>>>,
+) {
+    let ids = ask_user_ids
+        .lock()
+        .map(|mut ids| ids.drain(..).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let stale = pending_ask_users
+        .lock()
+        .map(|mut pending| {
+            ids.into_iter()
+                .filter_map(|id| pending.remove(&id))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    for pending in stale {
+        edit_pending_telegram_ask(
+            &pending,
+            render_telegram_ask_user_expired(&pending.question),
+        )
+        .await;
+    }
 }
 
 async fn await_telegram_stream_result(
@@ -597,48 +641,84 @@ fn clone_active_stream_for_session(
 ) -> Option<(
     tokio::sync::mpsc::Sender<String>,
     Arc<std::sync::Mutex<Option<i64>>>,
+    Option<TelegramProgressDraft>,
 )> {
     let key = session_key?;
     let active = streams.get(key)?;
     if active.agent_id != agent_id {
         return None;
     }
-    Some((active.sender.clone(), active.reply_handle.clone()))
+    Some((
+        active.sender.clone(),
+        active.reply_handle.clone(),
+        active.progress_draft.clone(),
+    ))
+}
+
+fn take_pending_telegram_ask(
+    pending_ask_users: &std::sync::Mutex<HashMap<String, PendingTelegramAsk>>,
+    short_id: &str,
+    idx: usize,
+) -> Result<(PendingTelegramAsk, String), String> {
+    let mut pending = pending_ask_users
+        .lock()
+        .map_err(|_| "ask_user registry poisoned".to_string())?;
+    let Some(chosen) = pending
+        .get(short_id)
+        .and_then(|entry| entry.options.get(idx))
+        .cloned()
+    else {
+        return if pending.contains_key(short_id) {
+            Err("Ce choix n'est pas valide. Utilise un des boutons proposés.".to_string())
+        } else {
+            Err("Cette question n'est plus active.".to_string())
+        };
+    };
+    let Some(entry) = pending.remove(short_id) else {
+        return Err("Cette question n'est plus active.".to_string());
+    };
+    Ok((entry, chosen))
+}
+
+fn take_pending_telegram_asks_for_session(
+    pending_ask_users: &std::sync::Mutex<HashMap<String, PendingTelegramAsk>>,
+    session_key: &str,
+) -> Result<Vec<PendingTelegramAsk>, String> {
+    let mut pending = pending_ask_users
+        .lock()
+        .map_err(|_| "ask_user registry poisoned".to_string())?;
+    let ids = pending
+        .iter()
+        .filter(|(_, entry)| entry.session_key == session_key)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| pending.remove(&id))
+        .collect())
 }
 
 fn spawn_telegram_stream_progress_loop(
-    telegram: Arc<TelegramAdapter>,
-    chat_id: i64,
-    thread_id: Option<i64>,
+    progress: TelegramProgressDraft,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let started = Instant::now();
-        let user = ChannelUser {
-            platform_id: chat_id.to_string(),
-            display_name: "Telegram".to_string(),
-            captain_user: None,
-        };
-        let mut metadata = std::collections::HashMap::new();
-        if let Some(tid) = thread_id {
-            metadata.insert("thread_id".to_string(), serde_json::json!(tid));
-        }
-
-        tokio::time::sleep(Duration::from_secs(
-            TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS,
-        ))
-        .await;
         loop {
-            if let Err(e) = telegram
-                .send_rich(
-                    &user,
-                    ChannelContent::Text(telegram_stream_progress_text(started.elapsed())),
-                    &metadata,
-                )
+            tokio::time::sleep(Duration::from_secs(TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS)).await;
+            if progress.is_waiting_for_user()
+                || progress.idle_for()
+                    < Duration::from_secs(TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS)
+            {
+                continue;
+            }
+            match progress
+                .refresh(&telegram_stream_progress_text(started.elapsed()))
                 .await
             {
-                warn!(error = %e, "telegram stream progress send failed");
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(e) => warn!(error = %e, "telegram stream progress draft refresh failed"),
             }
-            tokio::time::sleep(Duration::from_secs(TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS)).await;
         }
     })
 }
@@ -819,7 +899,7 @@ impl KernelBridgeAdapter {
             let map = self.active_streams.lock().await;
             clone_active_stream_for_session(&map, session_key, agent_id)
         };
-        let Some((sender, reply_handle)) = active else {
+        let Some((sender, reply_handle, progress_draft)) = active else {
             return Ok(false);
         };
 
@@ -828,6 +908,33 @@ impl KernelBridgeAdapter {
                 if let Some(new_id) = telegram_reply_to {
                     if let Ok(mut g) = reply_handle.lock() {
                         *g = Some(new_id);
+                    }
+                }
+                let was_waiting_for_user = progress_draft
+                    .as_ref()
+                    .is_some_and(TelegramProgressDraft::is_waiting_for_user);
+                if let Some(progress) = &progress_draft {
+                    progress.set_waiting_for_user(false);
+                }
+                if was_waiting_for_user {
+                    if let Some(session_key) = session_key {
+                        match take_pending_telegram_asks_for_session(
+                            &self.pending_ask_users,
+                            session_key,
+                        ) {
+                            Ok(pending) => {
+                                for pending in pending {
+                                    edit_pending_telegram_ask(
+                                        &pending,
+                                        render_telegram_ask_user_answer(&pending.question, message),
+                                    )
+                                    .await;
+                                }
+                            }
+                            Err(error) => {
+                                warn!(%error, "failed to resolve Telegram ask_user card after accepted freeform answer");
+                            }
+                        }
                     }
                 }
                 info!(
@@ -1030,17 +1137,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
     }
 
     async fn try_answer_ask_user(&self, short_id: &str, idx: usize) -> Result<String, String> {
-        let pending = self
-            .pending_ask_users
-            .lock()
-            .map_err(|_| "ask_user registry poisoned".to_string())?
-            .remove(short_id);
-        let Some(pending) = pending else {
-            return Err("Cette question n'est plus active.".to_string());
-        };
-        let Some(chosen) = pending.options.get(idx).cloned() else {
-            return Err("Cette question n'est plus active.".to_string());
-        };
+        let (pending, chosen) = take_pending_telegram_ask(&self.pending_ask_users, short_id, idx)?;
 
         let delivered = self
             .try_forward_active_stream_interjection(
@@ -1051,22 +1148,32 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             )
             .await;
 
-        if let Some(message_id) = pending.message_id {
-            let mut metadata = HashMap::new();
-            metadata.insert("chat_id".to_string(), serde_json::json!(pending.chat_id));
-            let confirmation = format!("✅ Tu as choisi : {chosen}");
-            if let Err(e) = pending
-                .telegram
-                .edit_rich(&message_id.to_string(), &confirmation, &metadata)
-                .await
-            {
-                warn!(error = %e, "failed to edit ask_user message after answer");
-            }
-        }
-
         match delivered {
-            Ok(true) => Ok(chosen),
-            Ok(false) | Err(_) => Err("Cette question n'est plus active.".to_string()),
+            Ok(true) => {
+                edit_pending_telegram_ask(
+                    &pending,
+                    render_telegram_ask_user_answer(&pending.question, &chosen),
+                )
+                .await;
+                Ok(chosen)
+            }
+            Ok(false) => {
+                edit_pending_telegram_ask(
+                    &pending,
+                    render_telegram_ask_user_expired(&pending.question),
+                )
+                .await;
+                Err("Cette question n'est plus active.".to_string())
+            }
+            Err(error) => {
+                warn!(error = %error, "failed to deliver Telegram ask_user answer");
+                edit_pending_telegram_ask(
+                    &pending,
+                    render_telegram_ask_user_expired(&pending.question),
+                )
+                .await;
+                Err("Cette question n'est plus active.".to_string())
+            }
         }
     }
 
@@ -3757,7 +3864,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use captain_channels::bridge::ChannelBridgeHandle;
+    use captain_channels::telegram::{TelegramAdapter, TelegramStreamTarget};
     use captain_channels::types::ChannelType;
+    use captain_runtime::llm_driver::StreamEvent;
     use captain_types::agent::AgentId;
     use captain_types::message::{ContentBlock, Message, MessageContent, Role};
 
@@ -3801,15 +3911,46 @@ mod tests {
         (tmp, kernel)
     }
 
+    fn test_telegram_adapter(base_url: Option<String>) -> Arc<TelegramAdapter> {
+        Arc::new(TelegramAdapter::new(
+            "123:ABC".to_string(),
+            vec!["*".to_string()],
+            Duration::from_secs(1),
+            base_url,
+        ))
+    }
+
+    fn pending_telegram_ask(
+        telegram: Arc<TelegramAdapter>,
+        agent_id: AgentId,
+        session_key: &str,
+        question: &str,
+        options: Vec<&str>,
+        message_id: Option<i64>,
+    ) -> super::PendingTelegramAsk {
+        super::PendingTelegramAsk {
+            agent_id,
+            session_key: session_key.to_string(),
+            question: question.to_string(),
+            options: options.into_iter().map(str::to_string).collect(),
+            telegram,
+            chat_id: 42,
+            message_id,
+        }
+    }
+
     #[test]
-    fn telegram_progress_is_sparse_and_actionable() {
-        assert_eq!(
-            super::telegram_stream_progress_text(Duration::from_secs(120)),
-            "⏳ Toujours en cours. Tu peux envoyer un complément, ou Stop pour interrompre."
-        );
-        assert_eq!(
-            super::telegram_stream_progress_text(Duration::from_secs(12 * 60)),
-            "⏳ Toujours en cours depuis environ 12 min. Tu peux envoyer un complément, ou Stop pour interrompre."
+    fn telegram_progress_is_ephemeral_operational_and_actionable() {
+        let short = super::telegram_stream_progress_text(Duration::from_secs(20));
+        assert!(short.contains("<tg-thinking>Captain travaille…</tg-thinking>"));
+        assert!(short.contains("environ 1 min"));
+        assert!(short.contains("Stop"));
+
+        let long = super::telegram_stream_progress_text(Duration::from_secs(12 * 60));
+        assert!(long.contains("environ 12 min"));
+        assert!(
+            super::TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS < 30,
+            "drafts expire after 30 seconds and must be refreshed sooner"
         );
     }
 
@@ -3837,6 +3978,304 @@ mod tests {
     #[test]
     fn telegram_thread_metadata_is_empty_without_topic() {
         assert!(super::telegram_thread_metadata(None).is_empty());
+    }
+
+    #[test]
+    fn invalid_telegram_ask_choice_does_not_consume_the_question() {
+        let agent_id = AgentId::new();
+        let telegram = test_telegram_adapter(Some("http://127.0.0.1:1".to_string()));
+        let pending = Mutex::new(HashMap::from([(
+            "ask-1".to_string(),
+            pending_telegram_ask(
+                telegram,
+                agent_id,
+                "telegram|session:1",
+                "Déployer ?",
+                vec!["Oui", "Non"],
+                None,
+            ),
+        )]));
+
+        let error = match super::take_pending_telegram_ask(&pending, "ask-1", 8) {
+            Ok(_) => panic!("invalid index must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("n'est pas valide"));
+        assert!(pending.lock().unwrap().contains_key("ask-1"));
+
+        let (_, chosen) = super::take_pending_telegram_ask(&pending, "ask-1", 1)
+            .expect("valid choice remains available");
+        assert_eq!(chosen, "Non");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn telegram_ask_events_register_every_card_and_only_button_choices() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 71}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let telegram = test_telegram_adapter(Some(server.uri()));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::channel(4);
+        let (mut forwarded, ids) = super::tee_ask_user_events_to_telegram(
+            raw_rx,
+            telegram,
+            Arc::clone(&pending),
+            None,
+            AgentId::new(),
+            Some("telegram|session:1".to_string()),
+            42,
+            Some(7),
+        );
+
+        raw_tx
+            .send(StreamEvent::AskUser {
+                question: "Déployer ?".to_string(),
+                options: Some(vec!["Oui".to_string(), "Non".to_string()]),
+            })
+            .await
+            .unwrap();
+        raw_tx
+            .send(StreamEvent::AskUser {
+                question: "Quel commentaire ?".to_string(),
+                options: None,
+            })
+            .await
+            .unwrap();
+        drop(raw_tx);
+        assert!(forwarded.recv().await.is_none());
+
+        assert_eq!(ids.lock().unwrap().len(), 2);
+        let pending = pending.lock().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.values().any(|entry| entry.options.is_empty()));
+        assert!(pending.values().any(|entry| entry.options.len() == 2));
+        drop(pending);
+
+        let requests = server.received_requests().await.expect("requests");
+        let bodies = requests
+            .iter()
+            .map(|request| {
+                serde_json::from_slice::<serde_json::Value>(&request.body).expect("Rich request")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bodies[0]["message_thread_id"], 7);
+        assert!(bodies[0]["reply_markup"]["inline_keyboard"].is_array());
+        assert!(bodies[1].get("reply_markup").is_none());
+        assert!(bodies[0]["rich_message"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Décision requise"));
+        assert!(bodies[1]["rich_message"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("### ❓ Question"));
+    }
+
+    #[tokio::test]
+    async fn telegram_ask_answer_reaches_agent_before_card_is_confirmed() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/editMessageText"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 71}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let telegram = test_telegram_adapter(Some(server.uri()));
+        let (_tmp, kernel) = test_kernel();
+        let bridge = super::KernelBridgeAdapter::new(kernel);
+        let agent_id = AgentId::new();
+        let session_key = "telegram|session:1";
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        bridge.active_streams.lock().await.insert(
+            session_key.to_string(),
+            super::ActiveStream {
+                agent_id,
+                sender: tx,
+                reply_handle: Arc::new(Mutex::new(None)),
+                progress_draft: None,
+            },
+        );
+        bridge.pending_ask_users.lock().unwrap().insert(
+            "ask-1".to_string(),
+            pending_telegram_ask(
+                telegram,
+                agent_id,
+                session_key,
+                "Déployer ?",
+                vec!["Oui", "Non"],
+                Some(71),
+            ),
+        );
+
+        let chosen = bridge
+            .try_answer_ask_user("ask-1", 0)
+            .await
+            .expect("answer delivered");
+        assert_eq!(chosen, "Oui");
+        assert_eq!(rx.recv().await.as_deref(), Some("Oui"));
+        assert!(bridge.pending_ask_users.lock().unwrap().is_empty());
+
+        let requests = server.received_requests().await.expect("requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("edit request");
+        assert!(body["rich_message"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Décision enregistrée"));
+        assert_eq!(
+            body["reply_markup"],
+            serde_json::json!({"inline_keyboard": []})
+        );
+    }
+
+    #[tokio::test]
+    async fn freeform_answer_resolves_waiting_telegram_card_and_progress_state() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/editMessageText"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 72}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let telegram = test_telegram_adapter(Some(server.uri()));
+        let progress = TelegramStreamTarget::new(Arc::clone(&telegram), 42, None)
+            .progress_draft()
+            .expect("private chat progress");
+        progress.set_waiting_for_user(true);
+        let (_tmp, kernel) = test_kernel();
+        let bridge = super::KernelBridgeAdapter::new(kernel);
+        let agent_id = AgentId::new();
+        let session_key = "telegram|session:freeform";
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        bridge.active_streams.lock().await.insert(
+            session_key.to_string(),
+            super::ActiveStream {
+                agent_id,
+                sender: tx,
+                reply_handle: Arc::new(Mutex::new(None)),
+                progress_draft: Some(progress.clone()),
+            },
+        );
+        bridge.pending_ask_users.lock().unwrap().insert(
+            "ask-free".to_string(),
+            pending_telegram_ask(
+                telegram,
+                agent_id,
+                session_key,
+                "Quel commentaire ?",
+                vec![],
+                Some(72),
+            ),
+        );
+
+        assert!(bridge
+            .try_forward_active_stream_interjection(
+                agent_id,
+                Some(session_key),
+                "Déployer après le smoke test.",
+                Some(101),
+            )
+            .await
+            .expect("interjection"));
+        assert_eq!(
+            rx.recv().await.as_deref(),
+            Some("Déployer après le smoke test.")
+        );
+        assert!(!progress.is_waiting_for_user());
+        assert!(bridge.pending_ask_users.lock().unwrap().is_empty());
+
+        let requests = server.received_requests().await.expect("requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("edit request");
+        let markdown = body["rich_message"]["markdown"].as_str().unwrap();
+        assert!(markdown.contains("Décision enregistrée"));
+        assert!(markdown.contains("Déployer après le smoke test."));
+    }
+
+    #[tokio::test]
+    async fn stream_end_expires_every_unanswered_telegram_card() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/editMessageText"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 73}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let telegram = test_telegram_adapter(Some(server.uri()));
+        let agent_id = AgentId::new();
+        let ids = Arc::new(Mutex::new(vec!["ask-1".to_string(), "ask-2".to_string()]));
+        let pending = Arc::new(Mutex::new(HashMap::from([
+            (
+                "ask-1".to_string(),
+                pending_telegram_ask(
+                    Arc::clone(&telegram),
+                    agent_id,
+                    "telegram|session:1",
+                    "Première question ?",
+                    vec!["Oui"],
+                    Some(73),
+                ),
+            ),
+            (
+                "ask-2".to_string(),
+                pending_telegram_ask(
+                    telegram,
+                    agent_id,
+                    "telegram|session:1",
+                    "Deuxième question ?",
+                    vec![],
+                    Some(74),
+                ),
+            ),
+        ])));
+
+        super::expire_unanswered_telegram_asks(&ids, &pending).await;
+
+        assert!(ids.lock().unwrap().is_empty());
+        assert!(pending.lock().unwrap().is_empty());
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("edit request");
+            assert!(body["rich_message"]["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("Question expirée"));
+            assert_eq!(
+                body["reply_markup"],
+                serde_json::json!({"inline_keyboard": []})
+            );
+        }
     }
 
     #[test]
@@ -3933,6 +4372,7 @@ mod tests {
                 agent_id,
                 sender: tx,
                 reply_handle: Arc::new(Mutex::new(None)),
+                progress_draft: None,
             },
         );
 

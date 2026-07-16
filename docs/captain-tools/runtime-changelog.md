@@ -26,6 +26,48 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.6 — Telegram Rich Messages and reliable controls
+
+Agent-facing changes:
+
+- Telegram is a Rich-first surface. Normal final answers preserve GFM tables,
+  lists, code, and collapsible details through Bot API 10.2; plain or raw
+  command output still uses the exact-text path.
+- Consecutive independent tool calls share one live activity board. A result or
+  progress event closes that parallel wave, so a dependent call opens the next
+  board. Tool-call ids keep out-of-order results attached to the correct row.
+- Private chats form replies with an ephemeral Rich draft and persist one final
+  message. Groups use persistent Rich messages directly.
+- After 20 seconds of real inactivity, a long private turn refreshes one
+  ephemeral operational draft before Telegram's 30-second TTL. New text, tool
+  activity, or a visible edit resets the timer. Do not add manual heartbeat
+  messages that duplicate this transport behavior.
+- Telegram `ask_user` prompts are stateful Rich cards. Button and freeform
+  replies unblock the active turn, answered cards show the accepted response,
+  and unanswered cards are visibly expired at stream end. Resolved cards clear
+  their inline keyboard so an old button cannot fire twice.
+- User-visible turn and stale-callback errors are sanitized before entering a
+  Rich card. Raw provider payloads and secret-bearing diagnostics remain out of
+  the channel response.
+- An explicit unsupported Rich endpoint falls back once to Telegram HTML/plain
+  behavior and caches that capability result. A network ambiguity or server
+  failure is not retried through another send path because Telegram may already
+  have accepted the first request.
+
+How to answer the user:
+
+- Use tables when comparison benefits from aligned columns; Rich transport now
+  preserves them. Keep prose compact enough for mobile reading.
+- Let Captain's tool activity board and ephemeral progress draft report
+  operational state. Add a separate message only when there is a meaningful
+  decision, result, or changed next action.
+- Treat an `ask_user` card as active only until the user answers or the stream
+  expires it. Never claim that a choice was recorded unless the active agent
+  loop accepted it.
+- Verify the installed version before applying this entry. Publication links
+  and immutable image provenance are recorded only after the release is
+  publicly verified.
+
 ### 0.1.0-alpha.5 — Clean lifecycle, explicit memory privacy, and runtime truth
 
 Agent-facing changes:

@@ -48,6 +48,26 @@ Follow the setup wizard for the exact fields required by the installed Captain
 version. Never paste a bot token, mailbox password, or callback secret into a
 manifest, repository, issue, or chat message.
 
+### Telegram Rich Messages
+
+Telegram is Rich-first for normal Captain replies. Bot API 10.2 preserves GFM
+tables, lists, code, and collapsible details; exact plain-text commands and raw
+dumps keep their literal transport. Private chats form a response in an
+ephemeral draft and then persist one final message, while groups use persistent
+Rich messages directly.
+
+Consecutive independent tools share one editable activity board. A dependent
+tool opens the next board after the prior wave produces progress or a result.
+Long private turns show one ephemeral operational draft only after real
+inactivity, so the durable transcript does not fill with heartbeat notices.
+
+Interactive `ask_user` prompts are stateful Rich cards. Buttons and freeform
+replies unblock the active turn; answer and expiry edits remove the inline
+keyboard. User-visible errors are sanitized before rendering. If a Telegram
+server explicitly lacks the Rich endpoints, Captain caches that result and
+uses the existing HTML/plain fallback. Ambiguous network or server failures do
+not trigger a second send that could duplicate a message.
+
 ## Access Policy
 
 Restrict inbound users before exposing a channel. For active inbound adapters,

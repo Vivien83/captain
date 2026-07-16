@@ -35,6 +35,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.6.md
   docs/releases/v0.1.0-alpha.5.md
   docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.3.md
@@ -149,23 +150,23 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.5"
+  "### 0.1.0-alpha.6"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.5'
+  '0.1.0-alpha.6'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.5'
+  '0.1.0-alpha.6'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.5] - 2026-07-16'
+  '## [0.1.0-alpha.6] - 2026-07-16'
 require_contains \
   "reviewed alpha notes exist" \
-  docs/releases/v0.1.0-alpha.5.md \
-  '# Captain 0.1.0-alpha.5'
+  docs/releases/v0.1.0-alpha.6.md \
+  '# Captain 0.1.0-alpha.6'
 require_contains \
   "last published alpha.3 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.3.md \
@@ -198,6 +199,30 @@ require_not_contains \
   "alpha.5 notes do not copy the alpha.4 OCI digest" \
   docs/releases/v0.1.0-alpha.5.md \
   'sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93'
+require_not_contains \
+  "alpha.6 notes do not copy the alpha.5 source commit" \
+  docs/releases/v0.1.0-alpha.6.md \
+  '6d159dbf7597a0d7710e3362d4422e557c51ee10'
+require_not_contains \
+  "alpha.6 notes do not copy the alpha.5 OCI digest" \
+  docs/releases/v0.1.0-alpha.6.md \
+  'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873'
+require_contains \
+  "Telegram operator docs pin Rich-first transport" \
+  docs/channel-adapters.md \
+  'Telegram is Rich-first for normal Captain replies'
+require_contains \
+  "agent-facing channel docs pin ephemeral progress" \
+  docs/captain-tools/channel.md \
+  'ephemeral operational draft after 20 seconds of real inactivity'
+require_contains \
+  "agent-facing changelog pins reliable ask_user cards" \
+  docs/captain-tools/runtime-changelog.md \
+  'Telegram `ask_user` prompts are stateful Rich cards'
+require_contains \
+  "alpha.6 notes pin duplicate-safe Rich fallback" \
+  docs/releases/v0.1.0-alpha.6.md \
+  'server failures never trigger a second send'
 require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
@@ -218,11 +243,11 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the public prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.5/install.sh'
+    'releases/download/v0.1.0-alpha.6/install.sh'
   require_contains \
     "$readme pins the immutable alpha image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
