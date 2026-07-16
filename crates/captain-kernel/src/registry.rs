@@ -235,7 +235,7 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's orchestration mode (routing / delegation / pinned).
+    /// Update an agent's orchestration mode (direct / delegation).
     pub fn update_orchestration_mode(
         &self,
         id: AgentId,
@@ -246,21 +246,6 @@ impl AgentRegistry {
             .get_mut(&id)
             .ok_or_else(|| CaptainError::AgentNotFound(id.to_string()))?;
         entry.manifest.orchestration_mode = mode;
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
-    /// Replace an agent's routing config (used after model switch).
-    pub fn update_routing(
-        &self,
-        id: AgentId,
-        routing: Option<captain_types::agent::ModelRoutingConfig>,
-    ) -> CaptainResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| CaptainError::AgentNotFound(id.to_string()))?;
-        entry.manifest.routing = routing;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -446,9 +431,7 @@ mod tests {
                 mcp_servers: vec![],
                 metadata: HashMap::new(),
                 tags: vec![],
-                routing: None,
                 autonomous: None,
-                pinned_model: None,
                 workspace: None,
                 generate_identity_files: true,
                 exec_policy: None,

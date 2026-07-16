@@ -26,6 +26,53 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.5 — Clean lifecycle, explicit memory privacy, and runtime truth
+
+Agent-facing changes:
+
+- Persistent Web terminal PTYs are owned by the daemon lifecycle. Graceful
+  shutdown drains the terminal registry and terminates every owned child before
+  the API bridge and kernel finish shutting down, so stop/restart cannot leave
+  an orphan `captain chat` process or listener.
+- A clear instruction not to remember, save, learn, retain, or add long-term
+  memory from the current message takes precedence over remember-like wording
+  in that message. Captain keeps the session transcript and mandatory
+  operational audit, but does not derive semantic graph facts, MemPalace
+  mirrors, reflection, conversation-learning signals, or workflow learning
+  from that turn.
+- The write opt-out is scoped to the current turn. It does not delete existing
+  knowledge; use `memory_forget` for an explicit correction or retraction.
+- Full, Codex-economy, and direct-response prompts receive a dynamic runtime
+  identity containing the authoritative configured provider and model for that
+  turn.
+  Answer model-identity questions from this live section, never from peer-agent
+  rows, an old transcript, or model training.
+- Automatic complexity routing has been removed from streaming and
+  non-streaming execution. Message length, estimated complexity, session age,
+  and channel never replace an agent's configured model. Use an explicit
+  specialist sub-agent or the safe model-switch rail when another model is
+  required.
+- Captain no longer discovers a backup chain from provider credentials on the
+  host. `fallback_models` are failure-only and opt-in; an empty chain guarantees
+  strict single-model execution.
+- A fresh setup, init, or factory reset leaves the runtime agent directory free
+  of bundled templates. First boot creates only the principal `captain` agent;
+  specialist templates remain available solely through explicit creation.
+- The local release gate terminates the complete isolated candidate process
+  tree before deleting its temporary home. A slow or interrupted native
+  MemPalace bootstrap no longer leaves uv/Python workers behind.
+
+How to answer the user:
+
+- When a turn opts out, complete the requested work without calling
+  `memory_save` and without claiming that a new durable memory was created.
+- When asked which model this agent uses, report the exact active provider and
+  model from runtime identity. Do not confuse this with the Captain binary
+  version or with a peer agent's model.
+- Verify the installed version before applying this entry. Publication links
+  and immutable image provenance are recorded here only after the release is
+  publicly verified.
+
 ### 0.1.0-alpha.4 — Authoritative memory corrections
 
 Agent-facing changes:
@@ -4476,7 +4523,7 @@ turns and voice-response flows:
 Critical note: this targets Telegram delivery and TTS routing only. The STT
 pre-processing from `0.1.0-dev.2026-05-05i` remains the inbound voice path.
 
-### 0.1.0-dev.2026-05-05i — Telegram voice STT and first-turn routing guard
+### 0.1.0-dev.2026-05-05i — Telegram voice STT and historical first-turn guard
 
 Captain now treats Telegram voice messages as a channel-native input instead
 of asking the LLM to discover transcription tooling:
@@ -4492,9 +4539,9 @@ of asking the LLM to discover transcription tooling:
   transcript directly plus the saved audio path for audit/retry. If
   transcription fails, Captain still provides the local path and a clear
   fallback instruction.
-- **Routing guard**: the first LLM interaction in a fresh session now uses the
-  agent's configured primary model before complexity routing can optimize
-  later turns.
+- **Historical first-turn guard**: this build used the configured primary model
+  only for the first interaction before routing later turns. That behavior is
+  superseded by `0.1.0-alpha.5`, which uses the configured model for every turn.
 
 Critical note: this fixes the product path for channel voice inputs. The
 `media_transcribe` and `speech_to_text` tools remain available for explicit
@@ -5021,7 +5068,11 @@ How to answer the user:
 - If Captain already shows a prepared switch prompt and the user replies `Nouvelle`, `Nouvelle session`, `Résumé compact`, or `Annule`, treat that reply as the model-switch decision.
 - Never ask for provider secrets manually before `model_switch_plan`; the plan reports driver/auth readiness.
 
-### 0.1.0-dev.2026-05-03l — Codex request contract and supported model routing
+### 0.1.0-dev.2026-05-03l — Codex request contract and historical model routing
+
+The routing behavior in this historical entry is superseded by
+`0.1.0-alpha.5`. Current Captain uses each agent's configured model for every
+turn and does not repair or generate complexity tiers.
 
 Agent-facing changes:
 

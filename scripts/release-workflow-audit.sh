@@ -65,6 +65,17 @@ require_shell_syntax() {
     fi
 }
 
+require_command_success() {
+    local label="$1"
+    shift
+    if "$@" >/dev/null; then
+        pass "$label"
+    else
+        printf '   FAIL %s\n' "$label" >&2
+        exit 1
+    fi
+}
+
 printf '== Release workflow audit\n'
 printf '   workflow=%s\n' "$WORKFLOW"
 
@@ -157,7 +168,11 @@ require_file_literal "release readiness rejects unknown Cargo profiles" "$RELEAS
 require_file_literal "release readiness resolves the built candidate" "$RELEASE_READINESS" 'release_candidate_bin'
 require_file_literal "release readiness isolates the candidate home" "$RELEASE_READINESS" 'captain-release-smoke.XXXXXX'
 require_file_literal "release readiness provisions native MemPalace" "$RELEASE_READINESS" 'CAPTAIN_MEMPALACE_INSTALL=1 CAPTAIN_HOME="$home_dir"'
+require_file_literal "release readiness requires process-tree discovery" "$RELEASE_READINESS" 'need_cmd pgrep'
+require_file_literal "release readiness captures smoke descendants before the parent" "$RELEASE_READINESS" 'descendants="$(collect_process_descendants "$SMOKE_PID")"'
+require_file_literal "release readiness terminates smoke descendants first" "$RELEASE_READINESS" 'signal_process_list TERM "$descendants"'
 require_file_literal "release readiness verifies candidate HTTP version" "$RELEASE_READINESS" 'isolated release candidate health version mismatch'
+require_file_literal "release smoke requires only the principal agent" "$EXCELLENCE_SMOKE" 'fresh release starts with only the captain agent'
 require_file_literal "release smoke keeps header arguments nonempty on Bash 3.2" "$EXCELLENCE_SMOKE" 'AUTH_HEADER_ARGS=(-H "Accept: application/json")'
 require_file_literal "release smoke preserves absolute artifact roots" "$EXCELLENCE_SMOKE" '/*) doc_path="$WORKDIR/excellence-smoke.md"'
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
@@ -166,6 +181,7 @@ require_shell_syntax "$LOCAL_PUBLISHER"
 require_shell_syntax "$DOCKER_EMBEDDING_CACHE"
 require_shell_syntax "$RELEASE_READINESS"
 require_shell_syntax "$EXCELLENCE_SMOKE"
+require_command_success "release readiness help exits cleanly" "$RELEASE_READINESS" --help
 CAPTAIN_RELEASE_POLICY_TEST=1 "$LOCAL_PUBLISHER" >/dev/null
 pass "local release channel policy"
 

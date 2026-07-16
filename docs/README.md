@@ -34,7 +34,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Channel Adapters](channel-adapters.md) | Telegram, Discord, Signal, and Email setup and operation |
-| [LLM Providers](providers.md) | Live catalog, provider setup, consent, and model routing |
+| [LLM Providers](providers.md) | Live catalog, configured-model authority, consent, and explicit fallbacks |
 | [Skills](skill-development.md) | Bundled, installed, and generated skills; frozen marketplace compatibility |
 | [MCP](captain-tools/mcp.md) | Active external tool-server and transport contract |
 
@@ -49,6 +49,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
+| [0.1.0-alpha.5 release notes](releases/v0.1.0-alpha.5.md) | Clean daemon shutdown and explicit memory write opt-out |
 | [0.1.0-alpha.4 release notes](releases/v0.1.0-alpha.4.md) | Authoritative corrections, complete active recall, and CLI continuation |
 | [0.1.0-alpha.3 release notes](releases/v0.1.0-alpha.3.md) | Managed MemPalace, durable memory recovery, and alpha limitations |
 | [0.1.0-alpha.2 release notes](releases/v0.1.0-alpha.2.md) | Native visual inspection, browser identity, and alpha limitations |

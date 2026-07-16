@@ -78,6 +78,48 @@ fn lean_direct_prompt_omits_heavy_agent_surface() {
 }
 
 #[test]
+fn every_prompt_profile_exposes_exact_live_model_identity() {
+    let mut ctx = basic_ctx();
+    ctx.active_provider = Some("codex".to_string());
+    ctx.active_model = Some("gpt-5.6-sol".to_string());
+    ctx.peer_agents = vec![(
+        "researcher-hand".to_string(),
+        "Running".to_string(),
+        "gpt-5.5".to_string(),
+    )];
+
+    let full = build_system_prompt_with_cache(&ctx);
+    assert!(full.system_prompt.contains("## Runtime Identity"));
+    assert!(full
+        .system_prompt
+        .contains("Active agent provider: `codex`"));
+    assert!(full
+        .system_prompt
+        .contains("Active agent model: `gpt-5.6-sol`"));
+    assert!(full
+        .system_prompt
+        .contains("Do not infer your identity from peer agents"));
+    let full_prefix = &full.system_prompt[..full.cacheable_prefix_bytes.unwrap()];
+    assert!(!full_prefix.contains("gpt-5.6-sol"));
+
+    ctx.prompt_profile = PromptProfile::CodexEconomy;
+    let compact = build_system_prompt_with_cache(&ctx);
+    assert!(compact
+        .system_prompt
+        .contains("Active agent model: `gpt-5.6-sol`"));
+    let compact_prefix = &compact.system_prompt[..compact.cacheable_prefix_bytes.unwrap()];
+    assert!(!compact_prefix.contains("gpt-5.6-sol"));
+
+    let lean = build_lean_direct_system_prompt(&ctx);
+    assert!(lean
+        .system_prompt
+        .contains("Active agent model: `gpt-5.6-sol`"));
+    assert!(lean
+        .system_prompt
+        .contains("separate from the Captain binary version"));
+}
+
+#[test]
 fn test_section_ordering() {
     let prompt = build_system_prompt(&basic_ctx());
     let tool_behavior_pos = prompt.find("## Tool Call Behavior").unwrap();

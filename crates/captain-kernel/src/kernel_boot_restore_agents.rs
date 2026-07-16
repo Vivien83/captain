@@ -1,6 +1,5 @@
 use super::kernel_model_support::{
-    apply_budget_defaults, build_default_fallbacks, build_default_routing,
-    manifest_to_capabilities, model_routing_needs_repair,
+    apply_budget_defaults, build_configured_fallbacks, manifest_to_capabilities,
 };
 use super::kernel_workspace_security::is_runtime_agent_manifest_toml;
 use super::CaptainKernel;
@@ -133,22 +132,11 @@ fn prepare_restored_agent(kernel: &CaptainKernel, entry: AgentEntry, name: &str)
 
     let model_repair =
         reconcile_restored_agent_model(&mut restored_entry, &kernel.config.default_model, name);
-    let routing_changed = repair_restored_agent_routing(
-        kernel,
-        &mut restored_entry,
-        name,
-        model_repair.principal_reconciled,
-    );
-    let fallback_changed = repair_restored_agent_fallbacks(
-        kernel,
-        &mut restored_entry,
-        name,
-        model_repair.principal_reconciled,
-    );
+    let fallback_changed = repair_restored_agent_fallbacks(kernel, &mut restored_entry, name);
 
     RestoredAgent {
         entry: restored_entry,
-        manifest_changed: model_repair.manifest_changed || routing_changed || fallback_changed,
+        manifest_changed: model_repair.manifest_changed || fallback_changed,
     }
 }
 
@@ -160,7 +148,6 @@ fn ensure_restored_exec_policy(kernel: &CaptainKernel, restored_entry: &mut Agen
 
 struct RestoredModelRepair {
     manifest_changed: bool,
-    principal_reconciled: bool,
 }
 
 fn reconcile_restored_agent_model(
@@ -182,7 +169,6 @@ fn reconcile_restored_agent_model(
         && apply_default_model_to_placeholder_manifest(&mut restored_entry.manifest, default_model);
     RestoredModelRepair {
         manifest_changed: principal_reconciled || default_model_applied,
-        principal_reconciled,
     }
 }
 
@@ -229,76 +215,23 @@ fn default_api_key_env(default_model: &DefaultModelConfig) -> Option<String> {
     }
 }
 
-fn repair_restored_agent_routing(
-    kernel: &CaptainKernel,
-    restored_entry: &mut AgentEntry,
-    name: &str,
-    principal_model_reconciled: bool,
-) -> bool {
-    let routing_needs_repair = restored_entry
-        .manifest
-        .routing
-        .as_ref()
-        .map(|routing| {
-            model_routing_needs_repair(
-                &restored_entry.manifest.model.provider,
-                routing,
-                &kernel
-                    .model_catalog
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner()),
-            )
-        })
-        .unwrap_or(false);
-
-    if principal_model_reconciled {
-        restored_entry.manifest.routing = build_default_routing(
-            &restored_entry.manifest.model.provider,
-            &restored_entry.manifest.model.model,
-        );
-        return true;
-    }
-    if restored_entry.manifest.routing.is_some() && !routing_needs_repair {
-        return false;
-    }
-    let Some(routing) = build_default_routing(
-        &restored_entry.manifest.model.provider,
-        &restored_entry.manifest.model.model,
-    ) else {
-        return false;
-    };
-    tracing::info!(
-        agent = %name,
-        repaired = routing_needs_repair,
-        "Applying default model routing"
-    );
-    restored_entry.manifest.routing = Some(routing);
-    true
-}
-
 fn repair_restored_agent_fallbacks(
     kernel: &CaptainKernel,
     restored_entry: &mut AgentEntry,
     name: &str,
-    principal_model_reconciled: bool,
 ) -> bool {
-    let user_set_fallbacks = !kernel.config.fallback_providers.is_empty();
-    if !principal_model_reconciled
-        && !restored_entry.manifest.fallback_models.is_empty()
-        && !user_set_fallbacks
-    {
+    if kernel.config.fallback_providers.is_empty() {
         return false;
     }
-    let fallbacks = build_default_fallbacks(
-        &restored_entry.manifest.model.provider,
-        &kernel.model_catalog,
-        &kernel.config.fallback_providers,
-    );
+    let fallbacks = build_configured_fallbacks(&kernel.config.fallback_providers);
+    if restored_entry.manifest.fallback_models == fallbacks {
+        return false;
+    }
     tracing::info!(
         agent = %name,
         count = fallbacks.len(),
-        source = if user_set_fallbacks { "config" } else { "auto" },
-        "Applying fallback chain"
+        source = "config",
+        "Applying explicitly configured fallback chain"
     );
     restored_entry.manifest.fallback_models = fallbacks;
     true

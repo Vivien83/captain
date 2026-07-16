@@ -1,9 +1,10 @@
 use crate::prompt_sanitizer::sanitize;
 
 use super::{
-    build_deployment_context_section, build_language_contract_section, cap_str, capitalize,
-    format_active_project_section, format_recent_projects_section, tool_category, tool_hint,
-    BuiltSystemPrompt, ModelFamily, PromptContext,
+    build_deployment_context_section, build_language_contract_section,
+    build_runtime_identity_section, cap_str, capitalize, format_active_project_section,
+    format_recent_projects_section, tool_category, tool_hint, BuiltSystemPrompt, ModelFamily,
+    PromptContext,
 };
 
 pub(super) fn build_codex_economy_system_prompt_with_cache(
@@ -74,6 +75,9 @@ fn build_codex_compact_dynamic_sections(ctx: &PromptContext) -> Vec<String> {
     }
     if let Some(ref date) = ctx.current_date {
         dynamic_sections.push(format!("## Current Date\n{date}"));
+    }
+    if let Some(section) = build_runtime_identity_section(ctx) {
+        dynamic_sections.push(section);
     }
     if let Some(section) = build_language_contract_section(ctx.configured_language.as_deref()) {
         dynamic_sections.push(section);

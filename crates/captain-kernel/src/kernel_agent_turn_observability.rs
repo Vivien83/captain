@@ -38,18 +38,24 @@ impl CaptainKernel {
         regex_hint: Option<&'static str>,
         result: &AgentLoopResult,
     ) {
+        let semantic_memory_opt_out =
+            captain_runtime::outcome_detector::memory_write_opt_out(message);
         self.record_successful_turn_state(agent_id, result);
-        self.emit_successful_conversation_signal(
-            agent_id,
-            message,
-            &result.response,
-            channel_type,
-            regex_hint,
-        );
-        self.spawn_agent_turn_memory_job(agent_id, entry, message, result);
+        if !semantic_memory_opt_out {
+            self.emit_successful_conversation_signal(
+                agent_id,
+                message,
+                &result.response,
+                channel_type,
+                regex_hint,
+            );
+        }
+        self.spawn_agent_turn_memory_job(agent_id, entry, message, result, semantic_memory_opt_out);
         self.record_successful_turn_audit(agent_id, result);
 
-        let _ = emit(workflow_success_signal(agent_id, result));
+        if !semantic_memory_opt_out {
+            let _ = emit(workflow_success_signal(agent_id, result));
+        }
     }
 
     fn record_successful_turn_state(&self, agent_id: AgentId, result: &AgentLoopResult) {
@@ -81,6 +87,7 @@ impl CaptainKernel {
         entry: &AgentEntry,
         message: &str,
         result: &AgentLoopResult,
+        semantic_memory_opt_out: bool,
     ) {
         let job = AgentTurnMemoryJob {
             graph: self.graph_memory.clone(),
@@ -94,6 +101,7 @@ impl CaptainKernel {
             memory_backend: self.config.memory.backend,
             mcp_connections: Arc::clone(&self.mcp_connections),
             memory_writes_conn: self.memory.usage_conn(),
+            semantic_memory_opt_out,
         };
         tokio::spawn(job.run());
     }
@@ -161,19 +169,26 @@ struct AgentTurnMemoryJob {
     memory_backend: MemoryBackend,
     mcp_connections: Arc<tokio::sync::Mutex<Vec<McpConnection>>>,
     memory_writes_conn: Arc<std::sync::Mutex<Connection>>,
+    semantic_memory_opt_out: bool,
 }
 
 impl AgentTurnMemoryJob {
     async fn run(self) {
-        self.store_conversation_turns();
+        if !self.semantic_memory_opt_out {
+            self.store_conversation_turns();
+        }
 
         let agent_entity_id = self.graph.find_entity_by_name("agent", &self.agent_name);
         let timestamp_millis = chrono::Utc::now().timestamp_millis();
         self.record_tool_events(agent_entity_id, timestamp_millis);
         self.record_usage_event(agent_entity_id, timestamp_millis);
-        self.record_graph_reflection();
+        if !self.semantic_memory_opt_out {
+            self.record_graph_reflection();
+        }
         let _ = self.graph.save();
-        self.mirror_to_mempalace_if_configured().await;
+        if !self.semantic_memory_opt_out {
+            self.mirror_to_mempalace_if_configured().await;
+        }
     }
 
     fn store_conversation_turns(&self) {

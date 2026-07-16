@@ -56,6 +56,12 @@ pub struct PromptContext {
     pub agent_name: String,
     /// Agent description (from manifest).
     pub agent_description: String,
+    /// Provider selected for this agent turn. This is live runtime identity,
+    /// not a catalog recommendation or a peer-agent attribute.
+    pub active_provider: Option<String>,
+    /// Model selected for this agent turn. Prompt builders expose it in a
+    /// dynamic section so restored history cannot override current identity.
+    pub active_model: Option<String>,
     /// Base system prompt authored in the agent manifest.
     pub base_system_prompt: String,
     /// Tool names this agent has access to.

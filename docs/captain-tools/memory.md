@@ -46,6 +46,17 @@ answering. Use `memory_context_batch` for multi-fact or past-session questions,
 `memory_recall` for one focused durable fact, and `session_recall` for a
 specific previous conversation.
 
+Explicit write opt-out contract: when the current user turn clearly says not to
+remember, save, learn, retain, or add long-term memory from that message,
+Captain must not derive semantic graph facts, MemPalace mirrors, reflections,
+conversation-learning signals, or workflow learning from the turn. This
+instruction takes precedence over remember-like wording in the same message.
+The normal conversation transcript and mandatory operational/audit records are
+still retained; the opt-out is not an instruction to hide tool execution or
+erase the session. It is per-turn and does not retract an older fact. Use
+`memory_forget` when the user asks to remove or correct knowledge already
+stored.
+
 ### `memory_save`
 
 Captain-native declarative learning. Use **spontaneously** when the user states a preference, a personal fact, a project decision, or asks you to remember something.

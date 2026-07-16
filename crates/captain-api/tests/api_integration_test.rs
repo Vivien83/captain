@@ -140,7 +140,9 @@ async fn start_test_server_with_config(tmp: tempfile::TempDir, config: KernelCon
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route(
             "/api/agents/{id}",
-            axum::routing::delete(routes::kill_agent),
+            axum::routing::delete(routes::kill_agent)
+                .put(routes::update_agent)
+                .patch(routes::patch_agent),
         )
         .route(
             "/api/triggers",
@@ -1033,6 +1035,78 @@ async fn test_spawn_invalid_manifest_returns_400() {
     assert_eq!(resp.status(), 400);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["error"].as_str().unwrap().contains("Invalid manifest"));
+}
+
+#[tokio::test]
+async fn test_agent_updates_reject_removed_automatic_routing() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let captain = server
+        .state
+        .kernel
+        .registry
+        .find_by_name("captain")
+        .expect("default Captain");
+    let url = format!("{}/api/agents/{}", server.base_url, captain.id);
+
+    let patch = client
+        .patch(&url)
+        .json(&serde_json::json!({
+            "routing": {"simple_model": "small", "complex_model": "large"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), 400);
+    let patch_body: serde_json::Value = patch.json().await.unwrap();
+    assert!(patch_body["error"]
+        .as_str()
+        .unwrap()
+        .contains("model routing was removed"));
+
+    let legacy_mode_patch = client
+        .patch(&url)
+        .json(&serde_json::json!({"orchestration_mode": "routing"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(legacy_mode_patch.status(), 400);
+    let legacy_mode_patch_body: serde_json::Value = legacy_mode_patch.json().await.unwrap();
+    assert!(legacy_mode_patch_body["error"]
+        .as_str()
+        .unwrap()
+        .contains("model routing was removed"));
+
+    let manifest_with_routing = format!(
+        "{TEST_MANIFEST}\n[routing]\nsimple_model = \"small\"\ncomplex_model = \"large\"\n"
+    );
+    let put = client
+        .put(&url)
+        .json(&serde_json::json!({"manifest_toml": manifest_with_routing}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), 400);
+    let put_body: serde_json::Value = put.json().await.unwrap();
+    assert!(put_body["error"]
+        .as_str()
+        .unwrap()
+        .contains("model routing was removed"));
+
+    let manifest_with_legacy_mode =
+        TEST_MANIFEST.replacen("[model]", "orchestration_mode = \"routing\"\n\n[model]", 1);
+    let legacy_mode_put = client
+        .put(url)
+        .json(&serde_json::json!({"manifest_toml": manifest_with_legacy_mode}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(legacy_mode_put.status(), 400);
+    let legacy_mode_put_body: serde_json::Value = legacy_mode_put.json().await.unwrap();
+    assert!(legacy_mode_put_body["error"]
+        .as_str()
+        .unwrap()
+        .contains("model routing was removed"));
 }
 
 #[tokio::test]

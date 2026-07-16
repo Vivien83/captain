@@ -834,7 +834,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.4"
+  "version": "0.1.0-alpha.5"
 }
 ```
 
@@ -849,7 +849,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -936,7 +936,10 @@ Build and version information.
 
 ### POST /api/shutdown
 
-Initiate graceful shutdown. Agent states are preserved to SQLite for restore on next boot.
+Initiate graceful shutdown. Agent states are preserved to SQLite for restore on
+next boot. The server also drains its persistent Web terminal registry and
+terminates each owned PTY child, so a daemon restart cannot inherit an orphaned
+`captain chat` process.
 
 **Response** `200 OK`:
 

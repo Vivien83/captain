@@ -378,6 +378,11 @@ async fn shutdown_daemon_state(
         crate::daemon_info::remove_daemon_info_file(info_path);
     }
 
+    let terminal_sessions = crate::ws_terminal::shutdown_terminal_sessions();
+    if terminal_sessions > 0 {
+        info!(terminal_sessions, "Persistent terminal sessions terminated");
+    }
+
     run_shutdown_phase_with_timeout("channel_bridge", CHANNEL_BRIDGE_SHUTDOWN_TIMEOUT, async {
         // Move the manager out before awaiting adapter shutdown. This keeps
         // the shared mutex available and makes timeout cancellation drop

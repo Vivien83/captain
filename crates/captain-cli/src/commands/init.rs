@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::{
-    bundled_agents, cli_captain_home, find_daemon, open_in_browser, restrict_dir_permissions,
+    cli_captain_home, find_daemon, open_in_browser, restrict_dir_permissions,
     restrict_file_permissions, ui,
 };
 
@@ -38,8 +38,6 @@ pub(crate) fn cmd_init(quick: bool) {
             });
         }
     }
-
-    bundled_agents::install_bundled_agents(&captain_dir.join("agents"));
 
     if quick {
         cmd_init_quick(&captain_dir);

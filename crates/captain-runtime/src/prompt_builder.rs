@@ -158,6 +158,9 @@ fn push_dynamic_turn_context_sections(ctx: &PromptContext, sections: &mut Prompt
     if let Some(ref date) = ctx.current_date {
         sections.push_dynamic(format!("## Current Date\nToday is {date}."));
     }
+    if let Some(section) = build_runtime_identity_section(ctx) {
+        sections.push_dynamic(section);
+    }
     if let Some(section) = build_language_contract_section(ctx.configured_language.as_deref()) {
         sections.push_dynamic(section);
     }
@@ -394,6 +397,10 @@ pub fn build_lean_direct_system_prompt(ctx: &PromptContext) -> BuiltSystemPrompt
             .to_string(),
     );
 
+    if let Some(section) = build_runtime_identity_section(ctx) {
+        sections.push(section);
+    }
+
     if let Some(ref channel) = ctx.channel_type {
         if !channel.trim().is_empty() {
             sections.push(format!("Channel: {channel}."));
@@ -416,6 +423,23 @@ pub fn build_lean_direct_system_prompt(ctx: &PromptContext) -> BuiltSystemPrompt
 // ---------------------------------------------------------------------------
 // Section builders
 // ---------------------------------------------------------------------------
+
+fn build_runtime_identity_section(ctx: &PromptContext) -> Option<String> {
+    let provider = ctx.active_provider.as_deref()?.trim();
+    let model = ctx.active_model.as_deref()?.trim();
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "## Runtime Identity\n\
+         Active agent provider: `{}`\n\
+         Active agent model: `{}`\n\
+         These values are live for this turn. When asked which provider or model this agent is using, answer from this section. Do not infer your identity from peer agents, old session messages, memory, or model training. This is separate from the Captain binary version, which must be verified from live runtime status.",
+        cap_str(provider, 80),
+        cap_str(model, 160)
+    ))
+}
 
 fn build_identity_section(ctx: &PromptContext) -> String {
     if ctx.base_system_prompt.is_empty() {

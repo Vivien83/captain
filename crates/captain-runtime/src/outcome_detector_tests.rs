@@ -105,6 +105,35 @@ fn classify_user_message_fr_explicit_remember() {
 }
 
 #[test]
+fn explicit_memory_opt_out_overrides_remember_patterns() {
+    let cases = [
+        "N'enregistre aucun nouveau souvenir à partir de ce message.",
+        "Ne mémorise pas cette préférence.",
+        "Ne l'enregistre pas dans ma mémoire.",
+        "Do not remember this preference.",
+        "Don't save this to memory.",
+        "No new memory should be created from this request.",
+    ];
+
+    for msg in cases {
+        assert!(memory_write_opt_out(msg), "opt-out not detected: {msg}");
+        assert_eq!(
+            classify_user_message(msg),
+            None,
+            "opt-out must override remember classification: {msg}"
+        );
+    }
+}
+
+#[test]
+fn memory_opt_out_does_not_hide_real_preferences() {
+    assert!(!memory_write_opt_out(
+        "Enregistre ma préférence : réponses courtes."
+    ));
+    assert!(!memory_write_opt_out("Ne fais jamais de résumé à la fin."));
+}
+
+#[test]
 fn classify_user_message_en_patterns() {
     assert_eq!(
         classify_user_message("No, not that one"),

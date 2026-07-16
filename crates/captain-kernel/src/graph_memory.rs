@@ -2835,6 +2835,10 @@ pub struct UserFact {
 /// Extract preferences and personal info from a user message.
 /// Returns structured facts suitable for mirroring to any memory backend.
 pub fn extract_user_facts(content: &str) -> Vec<UserFact> {
+    if captain_runtime::outcome_detector::memory_write_opt_out(content) {
+        return Vec::new();
+    }
+
     let mut facts = Vec::new();
     let lower = content.to_lowercase();
 
@@ -3807,6 +3811,14 @@ mod tests {
     #[test]
     fn test_extract_nothing_from_neutral() {
         let facts = extract_user_facts("quel temps fait-il ?");
+        assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn test_extract_nothing_when_user_opts_out_of_memory() {
+        let facts = extract_user_facts(
+            "N'enregistre aucun nouveau souvenir. Ma préférence actuelle est le mode sombre.",
+        );
         assert!(facts.is_empty());
     }
 

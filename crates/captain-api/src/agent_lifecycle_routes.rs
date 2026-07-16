@@ -178,11 +178,9 @@ pub async fn get_agent(
             "mcp_servers": entry.manifest.mcp_servers,
             "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
             "fallback_models": entry.manifest.fallback_models,
-            "routing": entry.manifest.routing,
             "orchestration_mode": match entry.manifest.orchestration_mode {
-                OrchestrationMode::Routing => "routing",
+                OrchestrationMode::Direct => "direct",
                 OrchestrationMode::Delegation => "delegation",
-                OrchestrationMode::Pinned => "pinned",
             },
         })),
     )

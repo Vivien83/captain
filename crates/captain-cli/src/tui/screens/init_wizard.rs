@@ -1,4 +1,4 @@
-//! Standalone ratatui init wizard: 6-step onboarding flow.
+//! Standalone ratatui init wizard: 5-step onboarding flow.
 //!
 //! Launched by `captain init` (without `--quick`). Takes over the terminal,
 //! runs its own event loop, and returns an `InitResult`.
@@ -250,17 +250,7 @@ enum Step {
     Provider,
     ApiKey,
     Model,
-    Routing,
     Complete,
-}
-
-/// Sub-state within the Routing step.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RoutingPhase {
-    /// Yes / No choice
-    Choice,
-    /// Picking model for a tier (0=fast, 1=balanced, 2=frontier)
-    PickTier(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,13 +268,6 @@ struct ModelEntry {
     tier: &'static str,
     cost: String,
 }
-
-const ROUTING_TIER_NAMES: [&str; 3] = ["Fast", "Balanced", "Frontier"];
-const ROUTING_TIER_DESC: [&str; 3] = [
-    "quick lookups, greetings, simple Q&A",
-    "standard conversation, general tasks",
-    "multi-step reasoning, code generation",
-];
 
 struct State {
     step: Step,
@@ -306,14 +289,6 @@ struct State {
     model_catalog: ModelCatalog,
     model_entries: Vec<ModelEntry>,
     model_list: ListState,
-
-    // Routing
-    routing_phase: RoutingPhase,
-    routing_choice_list: ListState, // 0=Yes, 1=No
-    routing_enabled: bool,
-    /// Selected model IDs per tier: [fast, balanced, frontier]
-    routing_models: [String; 3],
-    routing_tier_list: ListState, // for PickTier model selection
 
     // Complete
     complete_list: ListState,
@@ -340,11 +315,6 @@ impl State {
             model_catalog: ModelCatalog::new(),
             model_entries: Vec::new(),
             model_list: ListState::default(),
-            routing_phase: RoutingPhase::Choice,
-            routing_choice_list: ListState::default(),
-            routing_enabled: false,
-            routing_models: [String::new(), String::new(), String::new()],
-            routing_tier_list: ListState::default(),
             complete_list: ListState::default(),
             daemon_started: false,
             daemon_url: String::new(),
@@ -354,7 +324,6 @@ impl State {
         };
         s.build_provider_order();
         s.provider_list.select(Some(0));
-        s.routing_choice_list.select(Some(0));
         s.complete_list.select(Some(0));
         s
     }
@@ -392,12 +361,11 @@ impl State {
 
     fn step_label(&self) -> &'static str {
         match self.step {
-            Step::Welcome => "1 of 6",
-            Step::Provider => "2 of 6",
-            Step::ApiKey => "3 of 6",
-            Step::Model => "4 of 6",
-            Step::Routing => "5 of 6",
-            Step::Complete => "6 of 6",
+            Step::Welcome => "1 of 5",
+            Step::Provider => "2 of 5",
+            Step::ApiKey => "3 of 5",
+            Step::Model => "4 of 5",
+            Step::Complete => "5 of 5",
         }
     }
 
@@ -466,67 +434,6 @@ impl State {
         self.provider()
             .map(|p| p.default_model.to_string())
             .unwrap_or_default()
-    }
-
-    /// Auto-select routing models based on the provider's catalog entries.
-    fn auto_select_routing_models(&mut self) {
-        let p = match self.provider() {
-            Some(p) => p,
-            None => return,
-        };
-
-        let models = self.model_catalog.models_by_provider(p.name);
-
-        // Find best candidates per target tier
-        let mut fast: Option<&str> = None;
-        let mut balanced: Option<&str> = None;
-        let mut frontier: Option<&str> = None;
-
-        for m in &models {
-            match m.tier {
-                ModelTier::Fast | ModelTier::Local | ModelTier::Custom => {
-                    if fast.is_none() {
-                        fast = Some(&m.id);
-                    }
-                }
-                ModelTier::Balanced => {
-                    if balanced.is_none() {
-                        balanced = Some(&m.id);
-                    }
-                }
-                ModelTier::Smart => {
-                    // Smart is a good balanced pick; also good frontier if no frontier exists
-                    if balanced.is_none() {
-                        balanced = Some(&m.id);
-                    }
-                    if frontier.is_none() {
-                        frontier = Some(&m.id);
-                    }
-                }
-                ModelTier::Frontier => {
-                    if frontier.is_none() {
-                        frontier = Some(&m.id);
-                    }
-                }
-            }
-        }
-
-        // Fallback: use selected default model for any missing tier
-        let fallback = &self.model_input;
-        self.routing_models[0] = fast.unwrap_or(fallback).to_string();
-        self.routing_models[1] = balanced.unwrap_or(fallback).to_string();
-        self.routing_models[2] = frontier.unwrap_or(fallback).to_string();
-    }
-
-    /// Pre-select the routing_tier_list to match the current routing_models[tier].
-    fn select_routing_tier_model(&mut self, tier: usize) {
-        let target = &self.routing_models[tier];
-        let idx = self
-            .model_entries
-            .iter()
-            .position(|e| e.id == *target)
-            .unwrap_or(0);
-        self.routing_tier_list.select(Some(idx));
     }
 }
 
@@ -636,10 +543,6 @@ fn handle_step_key(
         Step::Provider => handle_provider_key(state, key.code),
         Step::ApiKey => handle_api_key_key(state, key.code, test_tx),
         Step::Model => handle_model_key(state, key.code),
-        Step::Routing => {
-            handle_routing_key(state, key.code);
-            None
-        }
         Step::Complete => handle_complete_key(state, key.code),
     }
 }
@@ -777,15 +680,8 @@ fn handle_model_key(state: &mut State, code: KeyCode) -> Option<InitResult> {
         }
         KeyCode::Enter => {
             state.model_input = state.selected_model_id();
-            state.routing_phase = RoutingPhase::Choice;
-            state.routing_choice_list.select(Some(0));
-            if state.model_entries.len() < 2 {
-                state.routing_enabled = false;
-                save_config(state);
-                state.step = Step::Complete;
-            } else {
-                state.step = Step::Routing;
-            }
+            save_config(state);
+            state.step = Step::Complete;
         }
         _ => {}
     }
@@ -843,86 +739,6 @@ fn completed_result(state: &State, launch: LaunchChoice) -> InitResult {
     }
 }
 
-// ── Routing step key handler ───────────────────────────────────────────────
-
-fn handle_routing_key(state: &mut State, code: KeyCode) {
-    match state.routing_phase {
-        RoutingPhase::Choice => match code {
-            KeyCode::Esc => {
-                state.step = Step::Model;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                let i = state.routing_choice_list.selected().unwrap_or(0);
-                state
-                    .routing_choice_list
-                    .select(Some(if i == 0 { 1 } else { 0 }));
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let i = state.routing_choice_list.selected().unwrap_or(0);
-                state
-                    .routing_choice_list
-                    .select(Some(if i == 0 { 1 } else { 0 }));
-            }
-            KeyCode::Enter => {
-                let yes = state.routing_choice_list.selected() == Some(0);
-                if yes {
-                    state.routing_enabled = true;
-                    state.auto_select_routing_models();
-                    state.routing_phase = RoutingPhase::PickTier(0);
-                    state.select_routing_tier_model(0);
-                } else {
-                    state.routing_enabled = false;
-                    save_config(state);
-                    state.step = Step::Complete;
-                }
-            }
-            _ => {}
-        },
-        RoutingPhase::PickTier(tier) => match code {
-            KeyCode::Esc => {
-                if tier == 0 {
-                    state.routing_phase = RoutingPhase::Choice;
-                } else {
-                    state.routing_phase = RoutingPhase::PickTier(tier - 1);
-                    state.select_routing_tier_model(tier - 1);
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                let len = state.model_entries.len().max(1);
-                let i = state.routing_tier_list.selected().unwrap_or(0);
-                let next = if i == 0 { len - 1 } else { i - 1 };
-                state.routing_tier_list.select(Some(next));
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let len = state.model_entries.len().max(1);
-                let i = state.routing_tier_list.selected().unwrap_or(0);
-                let next = (i + 1) % len;
-                state.routing_tier_list.select(Some(next));
-            }
-            KeyCode::Enter => {
-                // Save selected model for this tier
-                if let Some(idx) = state.routing_tier_list.selected() {
-                    if let Some(entry) = state.model_entries.get(idx) {
-                        state.routing_models[tier] = entry.id.clone();
-                    }
-                }
-
-                if tier < 2 {
-                    // Advance to next tier
-                    let next_tier = tier + 1;
-                    state.routing_phase = RoutingPhase::PickTier(next_tier);
-                    state.select_routing_tier_model(next_tier);
-                } else {
-                    // All 3 tiers picked — save and advance
-                    save_config(state);
-                    state.step = Step::Complete;
-                }
-            }
-            _ => {}
-        },
-    }
-}
-
 // ── Config save ────────────────────────────────────────────────────────────
 
 fn save_config(state: &mut State) {
@@ -955,47 +771,8 @@ fn save_config(state: &mut State) {
         &state.model_input
     };
 
-    let routing_section = if state.routing_enabled {
-        format!(
-            r#"
-[routing]
-simple_model = "{fast}"
-medium_model = "{balanced}"
-complex_model = "{frontier}"
-simple_threshold = 100
-complex_threshold = 500
-"#,
-            fast = state.routing_models[0],
-            balanced = state.routing_models[1],
-            frontier = state.routing_models[2],
-        )
-    } else {
-        String::new()
-    };
-
     let config_path = captain_dir.join("config.toml");
-    let api_key_line = if p.env_var.is_empty() {
-        String::new()
-    } else {
-        format!("api_key_env = \"{}\"", p.env_var)
-    };
-
-    let config = format!(
-        r#"# Captain Agent OS configuration
-# See https://github.com/Vivien83/captain for documentation
-
-api_listen = "127.0.0.1:4200"
-
-[default_model]
-provider = "{provider}"
-model = "{model}"
-{api_key_line}
-
-[memory]
-decay_rate = 0.05
-{routing_section}"#,
-        provider = p.name,
-    );
+    let config = render_config(p, model);
 
     match std::fs::write(&config_path, &config) {
         Ok(()) => {
@@ -1019,6 +796,31 @@ decay_rate = 0.05
             state.daemon_error = format!("Daemon failed: {e}");
         }
     }
+}
+
+fn render_config(provider: &ProviderInfo, model: &str) -> String {
+    let api_key_line = if provider.env_var.is_empty() {
+        String::new()
+    } else {
+        format!("api_key_env = \"{}\"", provider.env_var)
+    };
+
+    format!(
+        r#"# Captain Agent OS configuration
+# See https://github.com/Vivien83/captain for documentation
+
+api_listen = "127.0.0.1:4200"
+
+[default_model]
+provider = "{provider}"
+model = "{model}"
+{api_key_line}
+
+[memory]
+decay_rate = 0.05
+"#,
+        provider = provider.name,
+    )
 }
 
 /// Check if the `captain-desktop` binary exists next to the current exe.
@@ -1070,7 +872,7 @@ fn draw(f: &mut Frame, area: Rect, state: &mut State) {
     ])
     .split(content);
 
-    // Header: "Captain Init  Step X of 7"
+    // Header: "Captain Init  Step X of 5"
     let header = Line::from(vec![
         Span::styled(
             "Captain",
@@ -1097,7 +899,6 @@ fn draw(f: &mut Frame, area: Rect, state: &mut State) {
         Step::Provider => draw_provider(f, chunks[3], state),
         Step::ApiKey => draw_api_key(f, chunks[3], state),
         Step::Model => draw_model(f, chunks[3], state),
-        Step::Routing => draw_routing(f, chunks[3], state),
         Step::Complete => draw_complete(f, chunks[3], state),
     }
 }
@@ -1390,196 +1191,7 @@ fn draw_model(f: &mut Frame, area: Rect, state: &mut State) {
     );
 }
 
-fn draw_routing(f: &mut Frame, area: Rect, state: &mut State) {
-    match state.routing_phase {
-        RoutingPhase::Choice => draw_routing_choice(f, area, state),
-        RoutingPhase::PickTier(tier) => draw_routing_pick(f, area, state, tier),
-    }
-}
-
-fn draw_routing_choice(f: &mut Frame, area: Rect, state: &mut State) {
-    let chunks = Layout::vertical([
-        Constraint::Length(2), // title
-        Constraint::Length(1), // description 1
-        Constraint::Length(1), // description 2
-        Constraint::Length(1), // description 3
-        Constraint::Length(1), // spacer
-        Constraint::Length(1), // separator
-        Constraint::Length(1), // spacer
-        Constraint::Length(1), // option yes
-        Constraint::Length(1), // option no
-        Constraint::Min(0),
-        Constraint::Length(1), // hints
-    ])
-    .split(area);
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  Smart Model Routing",
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )])),
-        chunks[0],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  Automatically picks the right model per task complexity.",
-            theme::dim_style(),
-        )])),
-        chunks[1],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  Simple tasks use cheap/fast models, complex tasks use",
-            theme::dim_style(),
-        )])),
-        chunks[2],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  frontier models. Saves cost without sacrificing quality.",
-            theme::dim_style(),
-        )])),
-        chunks[3],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "\u{2500}".repeat(area.width.saturating_sub(2) as usize),
-            Style::default().fg(theme::BORDER),
-        )])),
-        chunks[5],
-    );
-
-    let options = [
-        ("Yes", "pick 3 models (fast / balanced / frontier)"),
-        ("No", "use one model for everything"),
-    ];
-
-    for (i, (label, desc)) in options.iter().enumerate() {
-        let selected = state.routing_choice_list.selected() == Some(i);
-        let arrow = if selected {
-            Span::styled("  \u{25b8} ", Style::default().fg(theme::ACCENT))
-        } else {
-            Span::raw("    ")
-        };
-        let label_style = if selected {
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_PRIMARY)
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                arrow,
-                Span::styled(format!("{:<6}", label), label_style),
-                Span::styled(*desc, theme::dim_style()),
-            ])),
-            chunks[7 + i],
-        );
-    }
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  [\u{2191}\u{2193}] Navigate  [Enter] Select  [Esc] Back",
-            theme::hint_style(),
-        )])),
-        chunks[10],
-    );
-}
-
-fn draw_routing_pick(f: &mut Frame, area: Rect, state: &mut State, tier: usize) {
-    let chunks = Layout::vertical([
-        Constraint::Length(1), // tier label
-        Constraint::Length(1), // tier description
-        Constraint::Length(1), // spacer + current selections
-        Constraint::Min(3),    // model list
-        Constraint::Length(1), // hints
-    ])
-    .split(area);
-
-    // Tier header with colored label
-    let tier_color = match tier {
-        0 => theme::GREEN,
-        1 => theme::YELLOW,
-        _ => theme::PURPLE,
-    };
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  Pick "),
-            Span::styled(
-                ROUTING_TIER_NAMES[tier],
-                Style::default().fg(tier_color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(" model ({}/3):", tier + 1)),
-        ])),
-        chunks[0],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            format!("  {}", ROUTING_TIER_DESC[tier]),
-            theme::dim_style(),
-        )])),
-        chunks[1],
-    );
-
-    // Show already-picked tiers as summary
-    let tier_colors = [theme::GREEN, theme::YELLOW, theme::PURPLE];
-    let mut summary_spans: Vec<Span> = vec![Span::raw("  ")];
-    for (t, (name, c)) in ROUTING_TIER_NAMES
-        .iter()
-        .zip(tier_colors.iter())
-        .enumerate()
-    {
-        if t == tier {
-            summary_spans.push(Span::styled(
-                format!("[{name}]"),
-                Style::default().fg(*c).add_modifier(Modifier::BOLD),
-            ));
-        } else if t < tier {
-            // Already picked — show short model name
-            let short = state.routing_models[t]
-                .split('/')
-                .next_back()
-                .unwrap_or(&state.routing_models[t]);
-            let display = captain_types::truncate_str(short, 14);
-            summary_spans.push(Span::styled(
-                format!("{name}:{display}"),
-                Style::default().fg(*c),
-            ));
-        } else {
-            summary_spans.push(Span::styled(*name, theme::dim_style()));
-        }
-        if t < 2 {
-            summary_spans.push(Span::raw("  "));
-        }
-    }
-    f.render_widget(Paragraph::new(Line::from(summary_spans)), chunks[2]);
-
-    // Reuse the same model list as Model step
-    let items = build_model_list_items(&state.model_entries, None);
-    let list = List::new(items)
-        .highlight_style(theme::selected_style())
-        .highlight_symbol("\u{25b8} ");
-    f.render_stateful_widget(list, chunks[3], &mut state.routing_tier_list);
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  [\u{2191}\u{2193}/jk] Navigate  [Enter] Select  [Esc] Back",
-            theme::hint_style(),
-        )])),
-        chunks[4],
-    );
-}
-
-/// Build list items for the model picker (shared between Model and Routing steps).
+/// Build list items for the model picker.
 fn build_model_list_items<'a>(
     entries: &'a [ModelEntry],
     default_id: Option<&str>,
@@ -1937,12 +1549,25 @@ mod tests {
     fn fresh_wizard_advances_from_welcome_to_provider_without_migration() {
         let mut state = State::new();
         assert_eq!(state.step, Step::Welcome);
-        assert_eq!(state.step_label(), "1 of 6");
+        assert_eq!(state.step_label(), "1 of 5");
 
         state.advance_to_provider();
 
         assert_eq!(state.step, Step::Provider);
-        assert_eq!(state.step_label(), "2 of 6");
+        assert_eq!(state.step_label(), "2 of 5");
+    }
+
+    #[test]
+    fn rendered_config_uses_only_the_selected_model() {
+        let provider = &PROVIDERS[provider_index("openai")];
+        let config = render_config(provider, "gpt-configured");
+
+        assert!(config.contains("provider = \"openai\""));
+        assert!(config.contains("model = \"gpt-configured\""));
+        assert_eq!(config.matches("model =").count(), 1);
+        assert!(!config.contains("[routing]"));
+        assert!(!config.contains("simple_model"));
+        assert!(!config.contains("complex_model"));
     }
 
     #[test]

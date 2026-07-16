@@ -71,6 +71,36 @@ fn sessions() -> &'static DashMap<String, TerminalSession> {
     SESSIONS.get_or_init(DashMap::new)
 }
 
+/// Terminate every persistent browser PTY before the daemon runtime exits.
+///
+/// Browser disconnects intentionally leave PTYs alive for later reattachment,
+/// so the process-wide registry must be drained explicitly during daemon
+/// shutdown. Otherwise Tokio waits forever for the PTY reader threads while
+/// the static registry keeps their masters open.
+pub(crate) fn shutdown_terminal_sessions() -> usize {
+    terminate_terminal_sessions(sessions())
+}
+
+fn terminate_terminal_sessions(registry: &DashMap<String, TerminalSession>) -> usize {
+    let keys = registry
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect::<Vec<_>>();
+    let mut terminated = 0;
+
+    for key in keys {
+        let Some((_, session)) = registry.remove(&key) else {
+            continue;
+        };
+        if let Err(error) = session.actor.terminate() {
+            warn!(session_key = %key, %error, "terminal PTY termination failed during shutdown");
+        }
+        terminated += 1;
+    }
+
+    terminated
+}
+
 /// Handler wired in server.rs: `GET /api/sessions/{id}/terminal`.
 pub async fn terminal_ws(
     ws: WebSocketUpgrade,
@@ -860,6 +890,34 @@ mod tests {
         let actor = shell_actor();
         let result = dispatch_client_frame(&actor, "not-json");
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_persistent_terminal_sessions() {
+        let registry = DashMap::new();
+        let (tx, rx) = mpsc::channel::<PtyEvent>(8);
+        let actor = SessionActor::spawn(
+            SessionSpec {
+                shell: Some("/bin/sh".to_string()),
+                ..SessionSpec::default()
+            },
+            tx,
+        )
+        .expect("spawn ok");
+        registry.insert(
+            "captain:shutdown-test".to_string(),
+            TerminalSession {
+                actor: Arc::new(actor),
+                rx: Arc::new(Mutex::new(rx)),
+                replay: Arc::new(Mutex::new(Vec::new())),
+                active_clients: Arc::new(AtomicUsize::new(0)),
+                mode: TerminalMode::Captain,
+            },
+        );
+
+        assert_eq!(terminate_terminal_sessions(&registry), 1);
+        assert!(registry.is_empty());
+        assert_eq!(terminate_terminal_sessions(&registry), 0);
     }
 
     #[test]

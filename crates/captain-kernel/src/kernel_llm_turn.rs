@@ -192,8 +192,6 @@ impl CaptainKernel {
         let initial_ctx_window = prepared.context_window;
         let lean_direct = prepared.lean_direct;
         let tools = prepared.tools;
-        let first_session_turn = session.messages.is_empty();
-
         self.compact_llm_session_before_loop(
             request.agent_id,
             &mut session,
@@ -207,13 +205,8 @@ impl CaptainKernel {
         let messages_before = session.messages.len();
         log_llm_tools_selected(request.entry, request.agent_id, &tools, lean_direct);
 
-        let manifest = self.prepare_non_streaming_manifest_for_loop(
-            request,
-            &session,
-            &tools,
-            first_session_turn,
-            lean_direct,
-        );
+        let manifest =
+            self.prepare_non_streaming_manifest_for_loop(request, &session, &tools, lean_direct);
         let driver = self.resolve_driver(&manifest)?;
         let effective_ctx_window =
             self.prepare_non_streaming_effective_context(&mut session, &manifest);
@@ -244,7 +237,6 @@ impl CaptainKernel {
         request: &NonStreamingLlmTurnRequest<'_>,
         session: &Session,
         tools: &[ToolDefinition],
-        first_session_turn: bool,
         lean_direct: bool,
     ) -> AgentManifest {
         let mut manifest = request.entry.manifest.clone();
@@ -262,13 +254,6 @@ impl CaptainKernel {
             channel_type: request.channel_type.clone(),
             include_graph_recall: true,
         });
-
-        self.route_non_streaming_llm_model(
-            &mut manifest,
-            first_session_turn,
-            request.message,
-            tools,
-        );
         manifest
     }
 

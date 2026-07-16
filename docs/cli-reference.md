@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.4 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.5/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.5 bash
 ```
 
 ## Global Options
@@ -83,7 +83,11 @@ Press `Ctrl+C` to exit. A second `Ctrl+C` force-exits the process.
 
 ### captain init
 
-Initialize the Captain workspace. Creates `~/.captain/` with subdirectories (`data/`, `agents/`) and a default `config.toml`.
+Initialize the Captain workspace. Creates `~/.captain/` with subdirectories
+(`data/`, `agents/`) and a default `config.toml`. The `agents/` directory is
+runtime state, not a template catalog: a fresh first boot creates only the
+principal `captain` agent. Specialist templates remain embedded for explicit
+creation with `captain agent new` and are never copied automatically.
 
 ```
 captain init [--quick]

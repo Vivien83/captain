@@ -187,7 +187,6 @@ mod reflection_job_tests;
 pub mod reply_directives;
 pub mod retry;
 pub mod retry_transformer;
-pub mod routing;
 pub mod sandbox;
 pub mod session_repair;
 pub mod session_summarizer;

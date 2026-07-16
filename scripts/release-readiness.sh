@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.4}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.5}"
 CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
@@ -24,7 +24,6 @@ cleanup() {
         rm -rf -- "$PUBLIC_EXPORT_TMP"
     fi
 }
-trap cleanup EXIT
 
 usage() {
     cat <<EOF
@@ -128,15 +127,62 @@ release_candidate_bin() {
     printf '%s/release/captain\n' "$(release_target_root)"
 }
 
+collect_process_descendants() {
+    local parent_pid="$1"
+    local child_pid
+    while IFS= read -r child_pid; do
+        [ -n "$child_pid" ] || continue
+        collect_process_descendants "$child_pid"
+        printf '%s\n' "$child_pid"
+    done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+}
+
+signal_process_list() {
+    local signal="$1"
+    local pids="$2"
+    local pid
+    for pid in $pids; do
+        if kill -0 "$pid" >/dev/null 2>&1; then
+            kill -"$signal" "$pid" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+process_list_has_live_pid() {
+    local pids="$1"
+    local pid
+    for pid in $pids; do
+        if kill -0 "$pid" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 stop_candidate_smoke_daemon() {
-    if [ -n "${SMOKE_PID:-}" ] && kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
-        kill "$SMOKE_PID" >/dev/null 2>&1 || true
+    local descendants=""
+    local late_descendants=""
+    if [ -n "${SMOKE_PID:-}" ]; then
+        # Snapshot and terminate descendants before their parent can reparent
+        # them. MemPalace bootstrap may have uv/Python workers below Captain.
+        descendants="$(collect_process_descendants "$SMOKE_PID")"
+        signal_process_list TERM "$descendants"
+        late_descendants="$(collect_process_descendants "$SMOKE_PID")"
+        if [ -n "$late_descendants" ]; then
+            descendants="$descendants $late_descendants"
+            signal_process_list TERM "$late_descendants"
+        fi
+        if kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
+            kill -TERM "$SMOKE_PID" >/dev/null 2>&1 || true
+        fi
         for _ in $(seq 1 20); do
-            if ! kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
+            if ! kill -0 "$SMOKE_PID" >/dev/null 2>&1 \
+                && ! process_list_has_live_pid "$descendants"; then
                 break
             fi
             sleep 0.2
         done
+        signal_process_list KILL "$descendants"
         if kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
             kill -KILL "$SMOKE_PID" >/dev/null 2>&1 || true
         fi
@@ -148,6 +194,10 @@ stop_candidate_smoke_daemon() {
     fi
     SMOKE_TMP=""
 }
+
+# Argument-only exits happen before this function is defined and allocate no
+# temporary state. Register cleanup only once every cleanup dependency exists.
+trap cleanup EXIT
 
 start_candidate_smoke_daemon() {
     local candidate_bin="$1"
@@ -347,6 +397,7 @@ need_cmd cargo-audit
 need_cmd mktemp
 need_cmd curl
 need_cmd jq
+need_cmd pgrep
 
 case "$CARGO_PROFILE" in
     dev|release) ;;

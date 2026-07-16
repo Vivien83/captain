@@ -105,6 +105,8 @@ impl CaptainKernel {
         PromptContext {
             agent_name: manifest.name.clone(),
             agent_description: manifest.description.clone(),
+            active_provider: Some(manifest.model.provider.clone()),
+            active_model: Some(manifest.model.model.clone()),
             base_system_prompt: manifest.model.system_prompt.clone(),
             configured_language: Some(self.config.language.clone()),
             deployment_profile: Some(self.config.deployment.profile.clone()),
@@ -180,6 +182,8 @@ impl CaptainKernel {
         PromptContext {
             agent_name: manifest.name.clone(),
             agent_description: manifest.description.clone(),
+            active_provider: Some(manifest.model.provider.clone()),
+            active_model: Some(manifest.model.model.clone()),
             base_system_prompt: system_prompt_with_runtime_update(
                 &manifest.model.system_prompt,
                 snapshot.runtime_update_notice.clone(),

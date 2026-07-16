@@ -1,12 +1,8 @@
-use captain_runtime::model_catalog::ModelCatalog;
 use captain_types::agent::{
-    effective_manifest_capabilities, AgentManifest, FallbackModel, ModelRoutingConfig,
-    ResourceQuota,
+    effective_manifest_capabilities, AgentManifest, FallbackModel, ResourceQuota,
 };
 use captain_types::capability::Capability;
 use captain_types::config::{BudgetConfig, FallbackProviderConfig};
-use captain_types::model_catalog::AuthStatus;
-use std::sync::RwLock;
 
 /// Convert a manifest's capability declarations into Capability enums.
 ///
@@ -49,164 +45,24 @@ pub(super) fn manifest_to_capabilities(manifest: &AgentManifest) -> Vec<Capabili
     caps
 }
 
-/// Build fallback models from other providers for service continuity.
-///
-/// Configured fallbacks are trusted as-is. Auto-discovered fallbacks only use
-/// configured providers and skip the primary provider.
-pub(super) fn build_default_fallbacks(
-    primary_provider: &str,
-    catalog: &RwLock<ModelCatalog>,
+/// Build the failure-only fallback chain explicitly declared by the user.
+/// Captain never infers alternate models from credentials present on the host.
+pub(super) fn build_configured_fallbacks(
     config_fallbacks: &[FallbackProviderConfig],
 ) -> Vec<FallbackModel> {
-    if !config_fallbacks.is_empty() {
-        return config_fallbacks
-            .iter()
-            .map(|fb| FallbackModel {
-                provider: fb.provider.clone(),
-                model: fb.model.clone(),
-                api_key_env: if fb.api_key_env.is_empty() {
-                    None
-                } else {
-                    Some(fb.api_key_env.clone())
-                },
-                base_url: fb.base_url.clone(),
-            })
-            .collect();
-    }
-
-    let cat = catalog.read().unwrap_or_else(|e| e.into_inner());
-    let providers = cat.list_providers();
-    let candidates: &[(&str, &str)] = &[
-        ("gemini", "gemini-2.5-flash"),
-        ("groq", "llama-3.3-70b-versatile"),
-        ("anthropic", "claude-haiku-4-5"),
-        ("openai", "gpt-4.1-mini"),
-        ("mistral", "mistral-small-latest"),
-    ];
-
-    candidates
+    config_fallbacks
         .iter()
-        .filter(|(provider, _)| *provider != primary_provider)
-        .filter(|(provider, _)| {
-            providers
-                .iter()
-                .any(|p| p.id == *provider && matches!(p.auth_status, AuthStatus::Configured))
-        })
-        .take(2)
-        .map(|(provider, model)| FallbackModel {
-            provider: provider.to_string(),
-            model: model.to_string(),
-            api_key_env: None,
-            base_url: None,
+        .map(|fallback| FallbackModel {
+            provider: fallback.provider.clone(),
+            model: fallback.model.clone(),
+            api_key_env: if fallback.api_key_env.is_empty() {
+                None
+            } else {
+                Some(fallback.api_key_env.clone())
+            },
+            base_url: fallback.base_url.clone(),
         })
         .collect()
-}
-
-/// Build a model routing config based on the default model's provider/family.
-pub(super) fn build_default_routing(provider: &str, model: &str) -> Option<ModelRoutingConfig> {
-    let model_lower = model.to_lowercase();
-
-    if provider == "openrouter" && model_lower.contains("claude") {
-        return Some(ModelRoutingConfig {
-            simple_model: "anthropic/claude-haiku-4.5".to_string(),
-            medium_model: "anthropic/claude-haiku-4.5".to_string(),
-            complex_model: "anthropic/claude-sonnet-4.6".to_string(),
-            simple_threshold: 50,
-            complex_threshold: 200,
-        });
-    }
-
-    if provider == "openrouter" && !model_lower.contains("mimo") {
-        return None;
-    }
-
-    if model_lower.contains("mimo") {
-        return Some(ModelRoutingConfig {
-            simple_model: "xiaomi/mimo-v2-flash".to_string(),
-            medium_model: "xiaomi/mimo-v2-omni".to_string(),
-            complex_model: "xiaomi/mimo-v2-pro".to_string(),
-            simple_threshold: 50,
-            complex_threshold: 200,
-        });
-    }
-
-    if provider == "anthropic" || model_lower.contains("claude") {
-        return Some(ModelRoutingConfig {
-            simple_model: "claude-haiku-4-5".to_string(),
-            medium_model: "claude-sonnet-4-6".to_string(),
-            complex_model: model.to_string(),
-            simple_threshold: 100,
-            complex_threshold: 500,
-        });
-    }
-
-    if provider == "codex" || provider == "openai-codex" {
-        let complex_model = if model.contains('/') {
-            model.to_string()
-        } else {
-            format!("codex/{model}")
-        };
-        let cached = captain_runtime::model_catalog::codex_cached_model_ids();
-        let has_cached = |id: &str| cached.iter().any(|m| m == id);
-        let medium_model = if has_cached("codex/gpt-5.4") {
-            "codex/gpt-5.4".to_string()
-        } else {
-            complex_model.clone()
-        };
-        let simple_model = if has_cached("codex/gpt-5.4-mini") {
-            "codex/gpt-5.4-mini".to_string()
-        } else {
-            medium_model.clone()
-        };
-        return Some(ModelRoutingConfig {
-            simple_model,
-            medium_model,
-            complex_model,
-            simple_threshold: 100,
-            complex_threshold: 500,
-        });
-    }
-
-    if provider == "openai" || model_lower.contains("gpt") {
-        return Some(ModelRoutingConfig {
-            simple_model: "gpt-4.1-nano".to_string(),
-            medium_model: "gpt-4.1-mini".to_string(),
-            complex_model: model.to_string(),
-            simple_threshold: 100,
-            complex_threshold: 500,
-        });
-    }
-
-    if provider == "gemini" || model_lower.contains("gemini") {
-        return Some(ModelRoutingConfig {
-            simple_model: "gemini-2.5-flash-lite".to_string(),
-            medium_model: "gemini-2.5-flash".to_string(),
-            complex_model: model.to_string(),
-            simple_threshold: 50,
-            complex_threshold: 200,
-        });
-    }
-
-    None
-}
-
-pub(super) fn model_routing_needs_repair(
-    provider: &str,
-    routing: &ModelRoutingConfig,
-    catalog: &ModelCatalog,
-) -> bool {
-    let provider = provider.trim().to_ascii_lowercase();
-    if provider != "codex" && provider != "openai-codex" {
-        return false;
-    }
-
-    [
-        &routing.simple_model,
-        &routing.medium_model,
-        &routing.complex_model,
-    ]
-    .iter()
-    .any(|model| model.contains("o4-mini") || catalog.find_model(model).is_none())
 }
 
 pub(super) fn apply_budget_defaults(budget: &BudgetConfig, resources: &mut ResourceQuota) {

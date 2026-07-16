@@ -81,6 +81,11 @@ pub(crate) async fn mirror_to_mempalace(
     assistant_msg: &str,
     tool_calls: &[captain_runtime::agent_loop::ToolCallRecord],
 ) {
+    if captain_runtime::outcome_detector::memory_write_opt_out(user_msg) {
+        debug!("MemPalace mirror skipped because the user opted out of semantic memory");
+        return;
+    }
+
     // 1. Diary: conversation summary — direct MCP call (not a triple).
     {
         let mut conns = mcp_conns.lock().await;

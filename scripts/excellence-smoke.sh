@@ -16,7 +16,7 @@ CAPTAIN_SMOKE_LLM="${CAPTAIN_SMOKE_LLM:-0}"
 CAPTAIN_SMOKE_TTS="${CAPTAIN_SMOKE_TTS:-0}"
 CAPTAIN_SMOKE_SSH_ALIAS="${CAPTAIN_SMOKE_SSH_ALIAS:-}"
 CAPTAIN_SMOKE_STRICT_RELEASE="${CAPTAIN_SMOKE_STRICT_RELEASE:-0}"
-EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.4}"
+EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.5}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -93,7 +93,7 @@ Environment:
   CAPTAIN_SMOKE_LLM=1            Enable live agent message in --full mode
   CAPTAIN_SMOKE_SSH_ALIAS=name   Enable ssh_health_check in --full mode
   CAPTAIN_SMOKE_TTS=1            Enable media_pipeline TTS in --full mode
-  CAPTAIN_SMOKE_STRICT_RELEASE=1 Fail on leftover project runtime worker agents
+  CAPTAIN_SMOKE_STRICT_RELEASE=1 Require a fresh single-Captain agent inventory
 
 Flags:
   --llm                         Enable live agent message and set --full
@@ -369,6 +369,9 @@ agents=$(http_get "$BASE/api/agents") || {
 }
 assert_jq_true "$agents" 'type == "array" and length > 0' "agents endpoint returns at least one agent"
 assert_jq_true "$agents" 'map(select(.name == "captain" and .state == "Running")) | length >= 1' "captain agent is running"
+if [ "$CAPTAIN_SMOKE_STRICT_RELEASE" = "1" ]; then
+  assert_jq_true "$agents" 'length == 1 and .[0].name == "captain"' "fresh release starts with only the captain agent"
+fi
 CAPTAIN_AGENT_ID="${CAPTAIN_SMOKE_AGENT_ID:-$(printf '%s' "$agents" | jq -r 'map(select(.name == "captain"))[0].id // empty')}"
 project_worker_count=$(printf '%s' "$agents" | jq -r '[.[] | select((.name // "") | startswith("project-"))] | length')
 if [ "$project_worker_count" -eq 0 ]; then

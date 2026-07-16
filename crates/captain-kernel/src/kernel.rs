@@ -135,8 +135,6 @@ mod kernel_handle_projects;
 mod kernel_llm_launch;
 #[path = "kernel_llm_prompt.rs"]
 mod kernel_llm_prompt;
-#[path = "kernel_llm_routing.rs"]
-mod kernel_llm_routing;
 #[path = "kernel_llm_runtime.rs"]
 mod kernel_llm_runtime;
 #[path = "kernel_llm_turn.rs"]
@@ -208,7 +206,7 @@ mod kernel_workspace_security;
 use kernel_agent_runtime::{
     normalize_background_fallbacks_for_provider, normalize_background_model_for_provider,
 };
-use kernel_boot_default_agent::{ensure_default_captain, validate_boot_agent_routing};
+use kernel_boot_default_agent::ensure_default_captain;
 use kernel_boot_devices::build_boot_devices;
 use kernel_boot_embedding::build_boot_embedding_driver;
 use kernel_boot_foundations::{build_boot_core, prepare_boot_config};
@@ -220,7 +218,7 @@ use kernel_boot_restore_tool_runs::restore_persisted_tool_runs;
 pub use kernel_delivery_tracker::DeliveryTracker;
 #[cfg(test)]
 pub(crate) use kernel_fleet_autoscale::worker_tools_for_domain;
-use kernel_model_support::{build_default_routing, infer_provider_from_model};
+use kernel_model_support::infer_provider_from_model;
 #[cfg(test)]
 use kernel_prompt_context::{append_turn_diagnostic_context, assistant_style_context};
 #[cfg(test)]
@@ -744,7 +742,6 @@ impl CaptainKernel {
         restore_persisted_tool_runs(&kernel);
         ensure_default_captain(&kernel);
         import_legacy_tui_sessions(&kernel);
-        validate_boot_agent_routing(&kernel);
 
         info!("Captain kernel booted successfully");
         Ok(kernel)
@@ -960,22 +957,11 @@ impl CaptainKernel {
                 .update_model_and_provider(agent_id, normalized_model.clone(), provider.clone())
                 .map_err(KernelError::Captain)?;
             info!(agent_id = %agent_id, model = %normalized_model, provider = %provider, "Agent model+provider updated");
-            // Routing was generated for the old model family — regenerate for the new one
-            // so we don't keep routing Qwen requests to mimo, etc.
-            let new_routing = build_default_routing(&provider, &normalized_model);
-            let _ = self.registry.update_routing(agent_id, new_routing);
         } else {
             self.registry
                 .update_model(agent_id, normalized_model.clone())
                 .map_err(KernelError::Captain)?;
             info!(agent_id = %agent_id, model = %normalized_model, "Agent model updated (provider unchanged)");
-            let prov = self
-                .registry
-                .get(agent_id)
-                .map(|e| e.manifest.model.provider.clone())
-                .unwrap_or_default();
-            let new_routing = build_default_routing(&prov, &normalized_model);
-            let _ = self.registry.update_routing(agent_id, new_routing);
         }
 
         // Persist the updated entry

@@ -112,12 +112,23 @@ Use Control or the model commands surfaced by the installed CLI. Verify the
 result with `captain models current`, `captain agent list`, and
 `captain agent caps <agent>`.
 
-## Fallbacks and Routing
+## Configured Model Authority
 
-Fallback providers are optional. Configure them only after each provider has
-passed a live test, and keep the route ordered and bounded. A fallback must not
-bypass an agent's capability policy, budget, image requirements, or explicit
-provider choice.
+Every normal agent turn uses the provider and model declared on that agent.
+Captain does not classify a request as simple, medium, or complex to substitute
+another model, and it does not change model because a conversation became long
+or moved between CLI, Web, Desktop, API, or a messaging channel.
+
+When work benefits from a different model or role, Captain creates or delegates
+to an explicit specialist sub-agent. Changing the current agent itself remains
+an explicit model-switch decision with a safe session strategy.
+
+Fallback providers are optional, failure-only continuity settings. Captain
+never infers them from credentials present on the host. Leave
+`fallback_providers` and an agent's `fallback_models` empty for strict
+single-model execution. If fallbacks are configured deliberately, test each
+provider first and keep the ordered chain bounded. A fallback is not task
+routing and must not bypass capability, budget, or image requirements.
 
 Images and prompted browser screenshots stay on the active conversation model.
 Captain never auto-spawns a secondary Vision agent or changes provider to

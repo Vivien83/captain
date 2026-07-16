@@ -49,6 +49,7 @@ CONTRACT_DOCS=(
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
   docs/releases/v0.1.0-alpha.4.md
+  docs/releases/v0.1.0-alpha.5.md
   docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
   docs/releases/v0.1.0-alpha.1.md
@@ -303,9 +304,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.4"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.4/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.5"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.5/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -324,9 +325,10 @@ require_contains "English README documents proactive Codex discovery" README.md 
 require_contains "French README documents proactive Codex discovery" README.fr.md "une actualisation horaire signale les nouveaux modèles"
 require_contains "Spanish README documents proactive Codex discovery" README.es.md "una actualización cada hora muestra los modelos nuevos"
 require_contains "Chinese README documents proactive Codex discovery" README.zh.md "每小时刷新一次目录"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.4"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.4] - 2026-07-16"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.4.md "# Captain 0.1.0-alpha.4"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.5"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.5] - 2026-07-16"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.5.md "# Captain 0.1.0-alpha.5"
+require_contains "historical alpha.4 release notes remain available" docs/releases/v0.1.0-alpha.4.md "# Captain 0.1.0-alpha.4"
 require_contains "historical alpha.3 release notes remain available" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
 require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "a58bb3bcf5563beaee6b10d7672284c4c1ab9aa4"
 require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93"
@@ -348,6 +350,15 @@ require_contains "runtime changelog pins Codex model consent" docs/captain-tools
 require_contains "provider guide pins hourly Codex refresh" docs/providers.md "then once per hour"
 require_contains "provider guide pins safe Codex session choices" docs/providers.md "Nouvelle session"
 require_contains "provider guide pins Codex catalog protocol" docs/providers.md '`client_version=1.0.0`'
+require_contains "provider guide pins configured-model authority" docs/providers.md 'Every normal agent turn uses the provider and model declared on that agent.'
+require_contains "provider guide routes specialization through explicit sub-agents" docs/providers.md 'explicit specialist sub-agent'
+require_contains "provider guide rejects inferred fallback models" docs/providers.md 'never infers them from credentials present on the host.'
+require_not_contains "provider guide does not advertise model routing" docs/providers.md 'Fallbacks and Routing'
+require_not_contains "self-configure docs omit removed routing input" docs/captain-tools/config-secret.md '| `routing` |'
+require_contains "DOC2 pins configured-model authority" docs/DOCS_STATUS.md "Each agent's configured provider/model is authoritative"
+require_not_contains "kernel no longer exports complexity routing" crates/captain-kernel/src/kernel.rs 'kernel_llm_routing'
+require_not_contains "runtime no longer exports complexity routing" crates/captain-runtime/src/lib.rs 'pub mod routing'
+require_not_contains "init wizard no longer offers complexity routing" crates/captain-cli/src/tui/screens/init_wizard.rs 'Smart Model Routing'
 require_contains "runtime pins Codex catalog protocol" crates/captain-runtime/src/model_catalog_codex.rs 'CODEX_CATALOG_CLIENT_VERSION: &str = "1.0.0"'
 require_contains "browser docs pin same-model visual analysis" docs/captain-tools/browser.md "same active model"
 require_contains "browser docs reject a secondary Vision agent" docs/captain-tools/browser.md "does not call a separate Vision agent"

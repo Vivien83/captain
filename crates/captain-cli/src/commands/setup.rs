@@ -21,9 +21,7 @@ use super::setup_profile::{
 };
 use super::setup_support::setup_load_answers;
 use super::setup_surface::{setup_configure_product_surface, SetupDeploymentOutcome};
-use crate::{
-    bundled_agents, cli_captain_home, cmd_init, prompt_input, restrict_dir_permissions, ui,
-};
+use crate::{cli_captain_home, cmd_init, prompt_input, restrict_dir_permissions, ui};
 
 #[derive(Clone, Copy)]
 struct InteractiveInstallChoice {
@@ -121,7 +119,6 @@ fn setup_prepare_captain_dir_or_exit() -> PathBuf {
     for sub in ["data", "agents"] {
         let _ = std::fs::create_dir_all(captain_dir.join(sub));
     }
-    bundled_agents::install_bundled_agents(&captain_dir.join("agents"));
     captain_dir
 }
 

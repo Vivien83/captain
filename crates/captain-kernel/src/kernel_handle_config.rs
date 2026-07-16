@@ -126,15 +126,11 @@ impl CaptainKernel {
             changes.push("fallback_models updated".to_string());
         }
 
-        if let Some(routing) = patch.get("routing") {
-            let rc: captain_types::agent::ModelRoutingConfig =
-                serde_json::from_value(routing.clone())
-                    .map_err(|e| format!("Invalid routing: {e}"))?;
-            if let Some(mut entry) = self.registry.get(id) {
-                entry.manifest.routing = Some(rc);
-                let _ = self.memory.save_agent(&entry);
-            }
-            changes.push("routing updated".to_string());
+        if patch.get("routing").is_some() {
+            return Err(
+                "Automatic per-turn model routing was removed. Configure the model/provider explicitly or create a specialist sub-agent."
+                    .to_string(),
+            );
         }
 
         if let Some(desc) = patch.get("description").and_then(|v| v.as_str()) {

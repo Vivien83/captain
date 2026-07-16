@@ -7,7 +7,7 @@ the first time.
 
 Captain is a local Agent OS. It runs a persistent daemon that connects:
 
-- LLM providers and model routing
+- one explicitly configured LLM provider/model per agent
 - agent sessions
 - tools such as files, shell, SSH, browser, documents, memory, and media
 - channels such as Telegram and Discord
@@ -35,20 +35,20 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.4` explicitly.
+below pins `v0.1.0-alpha.5` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.4 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.5/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.5 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.4 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.5/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.5 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=captain.example.com \
     bash
@@ -61,8 +61,8 @@ domain/HTTPS wiring where the host supports it.
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.4"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.5"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.5/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -80,12 +80,17 @@ Run the setup wizard:
 captain setup
 ```
 
+On a fresh home, setup prepares an empty runtime `agents/` directory and first
+boot creates only the principal `captain` agent. Bundled specialist templates
+remain available through explicit agent creation; installation does not enable
+or materialize them automatically.
+
 For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.4 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.5/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.5 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \

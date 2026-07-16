@@ -39,34 +39,6 @@ impl std::str::FromStr for UserId {
     }
 }
 
-/// Model routing configuration — auto-selects cheap/mid/expensive models by complexity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ModelRoutingConfig {
-    /// Model to use for simple queries.
-    pub simple_model: String,
-    /// Model to use for medium-complexity queries.
-    pub medium_model: String,
-    /// Model to use for complex queries.
-    pub complex_model: String,
-    /// Token count threshold: below this = simple.
-    pub simple_threshold: u32,
-    /// Token count threshold: above this = complex.
-    pub complex_threshold: u32,
-}
-
-impl Default for ModelRoutingConfig {
-    fn default() -> Self {
-        Self {
-            simple_model: "anthropic/claude-haiku-4.5".to_string(),
-            medium_model: "anthropic/claude-sonnet-4.6".to_string(),
-            complex_model: "anthropic/claude-sonnet-4.6".to_string(),
-            simple_threshold: 100,
-            complex_threshold: 500,
-        }
-    }
-}
-
 /// Autonomous agent configuration — guardrails for 24/7 agents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -224,21 +196,19 @@ impl AgentMode {
     }
 }
 
-/// How an agent dispatches requests across models / sub-agents.
+/// How an agent handles work with its configured model and optional sub-agents.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrchestrationMode {
-    /// Automatic tier routing — cheap model for simple queries, expensive for
-    /// complex ones. Uses `build_default_routing` based on the agent's model family.
+    /// Use the configured model for every turn. Sub-agent tools remain available
+    /// when the agent decides an independent specialist is appropriate.
     #[default]
-    Routing,
+    #[serde(alias = "routing", alias = "pinned")]
+    Direct,
     /// Primary model acts as an orchestrator that delegates multi-step work to
     /// worker sub-agents via agent_spawn/task_post. The prompt receives explicit
-    /// delegation instructions.
+    /// delegation instructions, while the primary model remains unchanged.
     Delegation,
-    /// No routing, no delegation — the configured model is used as-is for every
-    /// request. Most predictable but most expensive on complex models.
-    Pinned,
 }
 
 /// How an agent is scheduled to run.
@@ -552,7 +522,7 @@ fn redact_toml_error_line(line: &str) -> String {
 }
 
 /// A fallback model entry in a chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FallbackModel {
     pub provider: String,
     pub model: String,
@@ -614,15 +584,9 @@ pub struct AgentManifest {
     /// Tags for agent discovery and categorization.
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tags: Vec<String>,
-    /// Model routing configuration — auto-select models by complexity.
-    #[serde(default)]
-    pub routing: Option<ModelRoutingConfig>,
     /// Autonomous agent configuration — guardrails for 24/7 agents.
     #[serde(default)]
     pub autonomous: Option<AutonomousConfig>,
-    /// Pinned model override (used in Stable mode).
-    #[serde(default)]
-    pub pinned_model: Option<String>,
     /// Agent workspace directory. Auto-created on spawn.
     /// Default: `{workspaces_dir}/{agent_name}-{agent_id_prefix}/`
     #[serde(default)]
@@ -640,7 +604,7 @@ pub struct AgentManifest {
     /// Tool blocklist — these tools are excluded (applied after allowlist).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tool_blocklist: Vec<String>,
-    /// How this agent dispatches requests (auto-routing / delegation / pinned).
+    /// How this agent coordinates direct work or explicit delegation.
     #[serde(default)]
     pub orchestration_mode: OrchestrationMode,
 }
@@ -669,9 +633,7 @@ impl Default for AgentManifest {
             mcp_servers: Vec::new(),
             metadata: HashMap::new(),
             tags: Vec::new(),
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
@@ -1046,21 +1008,6 @@ mod tests {
     }
 
     #[test]
-    fn test_model_routing_config_defaults() {
-        let cfg = ModelRoutingConfig::default();
-        assert!(!cfg.simple_model.is_empty());
-        assert!(cfg.simple_threshold < cfg.complex_threshold);
-    }
-
-    #[test]
-    fn test_model_routing_config_serde() {
-        let cfg = ModelRoutingConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: ModelRoutingConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.simple_model, cfg.simple_model);
-    }
-
-    #[test]
     fn test_autonomous_config_defaults() {
         let cfg = AutonomousConfig::default();
         assert_eq!(cfg.max_iterations, 50);
@@ -1081,21 +1028,24 @@ mod tests {
     }
 
     #[test]
-    fn test_manifest_with_routing_and_autonomous() {
+    fn test_manifest_with_autonomous_and_direct_orchestration() {
         let manifest = AgentManifest {
-            routing: Some(ModelRoutingConfig::default()),
             autonomous: Some(AutonomousConfig::default()),
-            pinned_model: Some("claude-sonnet-4-20250514".into()),
             ..Default::default()
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let back: AgentManifest = serde_json::from_str(&json).unwrap();
-        assert!(back.routing.is_some());
         assert!(back.autonomous.is_some());
-        assert_eq!(
-            back.pinned_model,
-            Some("claude-sonnet-4-20250514".to_string())
-        );
+        assert_eq!(back.orchestration_mode, OrchestrationMode::Direct);
+    }
+
+    #[test]
+    fn legacy_routing_and_pinned_modes_deserialize_as_direct() {
+        for legacy in ["routing", "pinned"] {
+            let json = format!(r#"{{"orchestration_mode":"{legacy}"}}"#);
+            let manifest: AgentManifest = serde_json::from_str(&json).unwrap();
+            assert_eq!(manifest.orchestration_mode, OrchestrationMode::Direct);
+        }
     }
 
     #[test]
@@ -1118,9 +1068,7 @@ mod tests {
             mcp_servers: vec![],
             metadata: HashMap::new(),
             tags: vec!["test".to_string()],
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,

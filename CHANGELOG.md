@@ -8,6 +8,39 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 No public changes are queued yet.
 
+## [0.1.0-alpha.5] - 2026-07-16
+
+Early-access reliability release focused on clean runtime lifecycle, explicit
+per-turn memory privacy, truthful live model identity, configured-model
+authority, and a single-agent first boot.
+
+### Fixed
+
+- Graceful shutdown now drains persistent Web terminal PTYs and terminates
+  their child `captain chat` processes before the API server exits. A stop or
+  restart no longer leaves an orphan terminal process or listener behind.
+- An explicit instruction not to remember the current message now takes
+  precedence over remember-like wording in that same message. Captain keeps
+  the conversation transcript and mandatory operational audit, but suppresses
+  semantic graph facts, MemPalace mirroring, reflection, conversation/workflow
+  learning, and other long-term memory writes derived from the turn.
+- Fresh `setup`, `init`, and factory-reset paths no longer copy the bundled
+  template catalog into the runtime agent directory. First boot creates only
+  the principal `captain` agent; every specialist remains an explicit user
+  action.
+- All prompt profiles now receive the exact live provider and model selected
+  for the current turn. Direct TUI questions can no longer infer Captain's
+  model identity from a peer agent or stale session history.
+- Automatic complexity routing is removed. Streaming and one-shot turns use
+  the agent's configured provider/model instead of silently substituting a
+  small, medium, or frontier model.
+- Fresh agents no longer infer fallback models from other provider credentials
+  found on the host. Failure-only fallback chains remain available only when
+  explicitly configured.
+- Release-candidate cleanup now captures and terminates the complete isolated
+  daemon process tree before removing its temporary home, including native
+  MemPalace bootstrap workers after a timeout or interrupted gate.
+
 ## [0.1.0-alpha.4] - 2026-07-16
 
 Early-access release focused on authoritative memory corrections, complete
@@ -154,7 +187,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.4...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.5...HEAD
+[0.1.0-alpha.5]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.3...v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.1...v0.1.0-alpha.2

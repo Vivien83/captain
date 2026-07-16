@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::daemon::cmd_stop_result;
 use crate::{
-    bundled_agents, captain_version, cli_captain_home, copy_dir_recursive, find_daemon,
-    prompt_input, restrict_dir_permissions, restrict_file_permissions, ui,
+    captain_version, cli_captain_home, copy_dir_recursive, find_daemon, prompt_input,
+    restrict_dir_permissions, restrict_file_permissions, ui,
 };
 
 fn unix_timestamp_secs() -> u64 {
@@ -439,7 +439,6 @@ pub(crate) fn cmd_reset(
         for sub in ["data", "agents"] {
             let _ = std::fs::create_dir_all(captain_dir.join(sub));
         }
-        bundled_agents::install_bundled_agents(&captain_dir.join("agents"));
         restore_reset_artifacts(&captain_dir, staging);
         ui::success("Factory reset complete. Run `captain setup` to configure a fresh install.");
     }

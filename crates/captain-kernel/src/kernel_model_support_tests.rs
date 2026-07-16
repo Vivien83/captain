@@ -88,7 +88,6 @@ fn manifest_to_capabilities_prefers_tool_allowlist_over_capability_tools() {
 
 #[test]
 fn configured_fallbacks_are_preserved_in_order() {
-    let catalog = RwLock::new(ModelCatalog::new());
     let fallbacks = vec![
         FallbackProviderConfig {
             provider: "ollama".to_string(),
@@ -104,7 +103,7 @@ fn configured_fallbacks_are_preserved_in_order() {
         },
     ];
 
-    let built = build_default_fallbacks("codex", &catalog, &fallbacks);
+    let built = build_configured_fallbacks(&fallbacks);
 
     assert_eq!(built.len(), 2);
     assert_eq!(built[0].provider, "ollama");
@@ -115,37 +114,8 @@ fn configured_fallbacks_are_preserved_in_order() {
 }
 
 #[test]
-fn codex_default_routing_stays_on_codex_provider() {
-    let routing = build_default_routing("codex", "gpt-5.5").unwrap();
-
-    assert!(routing.simple_model.starts_with("codex/"));
-    assert!(!routing.simple_model.contains("o4"));
-    assert!(routing.medium_model.starts_with("codex/"));
-    assert!(!routing.medium_model.contains("o4"));
-    assert_eq!(routing.complex_model, "codex/gpt-5.5");
-}
-
-#[test]
-fn codex_routing_repair_rejects_o4_mini() {
-    let catalog = ModelCatalog::new();
-    let routing = ModelRoutingConfig {
-        simple_model: "codex/o4-mini".to_string(),
-        medium_model: "codex/gpt-5.4".to_string(),
-        complex_model: "codex/gpt-5.5".to_string(),
-        simple_threshold: 100,
-        complex_threshold: 500,
-    };
-
-    assert!(model_routing_needs_repair("codex", &routing, &catalog));
-}
-
-#[test]
-fn openai_default_routing_stays_on_openai_provider() {
-    let routing = build_default_routing("openai", "gpt-5.5").unwrap();
-
-    assert_eq!(routing.simple_model, "gpt-4.1-nano");
-    assert_eq!(routing.medium_model, "gpt-4.1-mini");
-    assert_eq!(routing.complex_model, "gpt-5.5");
+fn empty_fallback_config_never_discovers_alternate_models() {
+    assert!(build_configured_fallbacks(&[]).is_empty());
 }
 
 #[test]

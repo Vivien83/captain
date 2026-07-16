@@ -102,8 +102,12 @@ Lets the caller agent reconfigure itself without touching `config.toml`. The tar
 | `provider` | no | Provider to pair with `model`. |
 | `description` | no | Agent description. |
 | `system_prompt` | no | Agent system prompt. Use small patches, not a wholesale rewrite. |
-| `routing` | no | `{simple_model, medium_model, complex_model, simple_threshold, complex_threshold}`. |
-| `fallback_models` | no | Array of `{provider, model}` fallbacks. |
+| `fallback_models` | no | Explicit failure-only array of `{provider, model}` fallbacks. Empty means strict single-model execution. |
+
+The configured provider/model is authoritative for every normal turn.
+`self_configure` does not expose complexity routing. A `routing` patch is
+rejected with an actionable error; use the safe model-switch rail or create a
+specialist sub-agent explicitly.
 
 ### Model Switch and Codex OAuth
 
@@ -210,7 +214,7 @@ Correct pattern:
 When changing Captain's own behavior, choose the narrowest tool:
 
 1. **Need your own model/provider changed?** Use `model_switch_plan` first, then ask the user to choose `new_session` or `compact_session`, then call `model_switch_apply`. Never write `default_model.provider` / `default_model.model` directly: Claude, Codex and OpenAI do not share identical tool-call history formats, so a provider switch is a session migration.
-2. **Need your own prompt/routing/fallbacks changed?** Use `self_configure`, then inspect the agent state if available. This is per-agent, not global. If `model` or `provider` is included, `self_configure` requires the same explicit `session_strategy` safety rail.
+2. **Need your own prompt or explicit fallbacks changed?** Use `self_configure`, then inspect the agent state if available. This is per-agent, not global. If `model` or `provider` is included, `self_configure` requires the same explicit `session_strategy` safety rail.
 3. **Need a scalar global setting changed?** Call `config_schema`, then `config_read(path)`, then `config_write(path, value)`, then read back the same path.
 4. **Need the public assistant name or answer style changed?** Use `config_write("assistant.display_name", "...")` or `config_write("assistant.style", "balanced|concise|professional|developer|friendly|classic")`. The internal `captain` slug is not renamed by this.
 5. **Need the web terminal login changed?** Use `web_credentials_update`, not `config_write("auth.password_hash", ...)`: the native rail hashes, backs up, validates and hot-reloads.

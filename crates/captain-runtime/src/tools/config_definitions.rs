@@ -103,7 +103,7 @@ fn config_schema_tool_definition() -> ToolDefinition {
 fn self_configure_tool_definition() -> ToolDefinition {
     tool_definition(
         "self_configure",
-        "Modifie ta propre configuration d'agent (routing par complexité, chaîne de fallbacks, description, system prompt). Pour changer de modèle ou de provider, ne pas utiliser ce chemin directement: appeler model_switch_plan puis model_switch_apply afin de choisir explicitement new_session ou compact_session et éviter de casser l'historique de tool calls. Les autres changements sont persistés et prennent effet immédiatement sans redémarrage.",
+        "Modifie ta propre configuration d'agent (chaîne de fallbacks, description, system prompt). Le modèle configuré reste autoritaire pour chaque tour. Pour changer de modèle ou de provider, ne pas utiliser ce chemin directement: appeler model_switch_plan puis model_switch_apply afin de choisir explicitement new_session ou compact_session et éviter de casser l'historique de tool calls. Pour une spécialisation ponctuelle, créer un sous-agent explicitement. Les autres changements sont persistés et prennent effet immédiatement sans redémarrage.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -112,17 +112,6 @@ fn self_configure_tool_definition() -> ToolDefinition {
                 "session_strategy": { "type": "string", "enum": ["new_session", "compact_session"], "description": "Obligatoire si model/provider est fourni. Utiliser seulement apres model_switch_plan et accord utilisateur." },
                 "description": { "type": "string", "description": "Nouvelle description de l'agent" },
                 "system_prompt": { "type": "string", "description": "Nouveau system prompt" },
-                "routing": {
-                    "type": "object",
-                    "description": "Configuration de routing par complexite",
-                    "properties": {
-                        "simple_model": { "type": "string" },
-                        "medium_model": { "type": "string" },
-                        "complex_model": { "type": "string" },
-                        "simple_threshold": { "type": "integer" },
-                        "complex_threshold": { "type": "integer" }
-                    }
-                },
                 "fallback_models": {
                     "type": "array",
                     "description": "Chaine de fallback (provider/modele differents pour la continuite)",

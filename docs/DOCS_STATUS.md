@@ -4,6 +4,16 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Release Candidate
+
+`v0.1.0-alpha.5` is the current verified source candidate. It adds clean
+shutdown ownership for persistent Web terminal PTYs, an explicit per-turn
+opt-out for semantic memory writes, exact live model identity in every prompt
+profile, a single-agent fresh boot, and configured-model authority without
+complexity routing or inferred fallback models. Until GitHub assets and the
+multi-arch OCI image are published and inspected, no public source commit or
+image digest is claimed for this version.
+
 ## Current Public Release
 
 `v0.1.0-alpha.4` is the current public prerelease. Its GitHub source tag points
@@ -155,6 +165,12 @@ decisions, and exposes them through authenticated Control/API plus configured
 Telegram delivery. Availability never changes an active model by itself:
 keeping is explicit, and switching requires an agent and a provider-portable
 session strategy (`new_session` or `compact_session`).
+
+Each agent's configured provider/model is authoritative for every normal turn.
+Captain does not substitute a cheaper or larger model from message complexity,
+token count, session age, or channel. Specialization uses an explicitly created
+or delegated sub-agent. Failure-only fallbacks are opt-in: Captain never derives
+them from unrelated provider credentials found on the host.
 
 Images and prompted browser screenshots stay on the active conversation model.
 Captain sends their pixels through the provider's native multimodal request and

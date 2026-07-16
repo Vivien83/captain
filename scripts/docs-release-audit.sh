@@ -20,6 +20,7 @@ DOC_FILES=(
   CONTRIBUTING.md
   docs/api-reference.md
   docs/architecture.md
+  docs/providers.md
   docs/cli-reference.md
   docs/channel-adapters.md
   docs/configuration.md
@@ -27,12 +28,14 @@ DOC_FILES=(
   docs/captain-tools/memory.md
   docs/captain-tools/skill.md
   docs/captain-tools/runtime-changelog.md
+  docs/captain-tools/config-secret.md
   docs/INDEX.md
   docs/DOCS_STATUS.md
   docs/DEPLOY.md
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.5.md
   docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
@@ -146,23 +149,23 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.4"
+  "### 0.1.0-alpha.5"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.4'
+  '0.1.0-alpha.5'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.4'
+  '0.1.0-alpha.5'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.4] - 2026-07-16'
+  '## [0.1.0-alpha.5] - 2026-07-16'
 require_contains \
   "reviewed alpha notes exist" \
-  docs/releases/v0.1.0-alpha.4.md \
-  '# Captain 0.1.0-alpha.4'
+  docs/releases/v0.1.0-alpha.5.md \
+  '# Captain 0.1.0-alpha.5'
 require_contains \
   "last published alpha.3 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.3.md \
@@ -172,12 +175,20 @@ require_contains \
   docs/releases/v0.1.0-alpha.3.md \
   'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2'
 require_contains \
-  "alpha.4 notes pin the public source commit" \
+  "last published alpha.4 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.4.md \
   'a58bb3bcf5563beaee6b10d7672284c4c1ab9aa4'
 require_contains \
-  "alpha.4 notes pin the multi-arch digest" \
+  "last published alpha.4 notes pin the multi-arch digest" \
   docs/releases/v0.1.0-alpha.4.md \
+  'sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93'
+require_not_contains \
+  "alpha.5 notes do not copy the alpha.4 source commit" \
+  docs/releases/v0.1.0-alpha.5.md \
+  'a58bb3bcf5563beaee6b10d7672284c4c1ab9aa4'
+require_not_contains \
+  "alpha.5 notes do not copy the alpha.4 OCI digest" \
+  docs/releases/v0.1.0-alpha.5.md \
   'sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93'
 require_contains \
   "release readiness executes workflow audit" \
@@ -199,11 +210,11 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the public prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.4/install.sh'
+    'releases/download/v0.1.0-alpha.5/install.sh'
   require_contains \
     "$readme pins the immutable alpha image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
@@ -233,6 +244,58 @@ require_contains \
   "memory docs pin fail-closed production readiness" \
   docs/captain-tools/memory.md \
   'does not claim production readiness'
+require_contains \
+  "memory docs pin explicit per-turn write opt-out" \
+  docs/captain-tools/memory.md \
+  'Explicit write opt-out contract'
+require_contains \
+  "CLI docs pin a single-agent fresh install" \
+  docs/cli-reference.md \
+  'a fresh first boot creates only the'
+require_contains \
+  "runtime changelog pins live model identity" \
+  docs/captain-tools/runtime-changelog.md \
+  'identity containing the authoritative configured provider and model for that'
+require_contains \
+  "provider docs pin configured-model authority" \
+  docs/providers.md \
+  'Every normal agent turn uses the provider and model declared on that agent.'
+require_contains \
+  "provider docs reject inferred fallbacks" \
+  docs/providers.md \
+  'never infers them from credentials present on the host.'
+require_not_contains \
+  "self-configure docs omit removed routing input" \
+  docs/captain-tools/config-secret.md \
+  '| `routing` |'
+require_not_contains \
+  "kernel no longer exports the routing module" \
+  crates/captain-kernel/src/kernel.rs \
+  'kernel_llm_routing'
+require_not_contains \
+  "runtime no longer exports the routing module" \
+  crates/captain-runtime/src/lib.rs \
+  'pub mod routing'
+require_not_contains \
+  "init wizard no longer offers smart model routing" \
+  crates/captain-cli/src/tui/screens/init_wizard.rs \
+  'Smart Model Routing'
+require_contains \
+  "kernel never infers fallback models" \
+  crates/captain-kernel/src/kernel_model_support.rs \
+  'Captain never infers alternate models from credentials present on the host.'
+require_not_contains \
+  "setup does not materialize the specialist template catalog" \
+  crates/captain-cli/src/commands/setup.rs \
+  'install_bundled_agents'
+require_not_contains \
+  "init does not materialize the specialist template catalog" \
+  crates/captain-cli/src/commands/init.rs \
+  'install_bundled_agents'
+require_not_contains \
+  "factory reset does not materialize the specialist template catalog" \
+  crates/captain-cli/src/snapshot.rs \
+  'install_bundled_agents'
 require_contains \
   "runtime changelog documents manual-only release fallback" \
   docs/captain-tools/runtime-changelog.md \

@@ -114,11 +114,31 @@ static RE_EXPLICIT_REMEMBER: LazyLock<Regex> = LazyLock::new(|| {
     ).expect("static regex")
 });
 
+static RE_MEMORY_WRITE_OPT_OUT: LazyLock<Regex> = LazyLock::new(|| {
+    // An explicit privacy instruction wins over every remember/preference
+    // heuristic. Keep this intentionally conservative: a false negative may
+    // persist data the user rejected, while a false positive only skips one
+    // semantic-learning turn (the session transcript remains available).
+    Regex::new(
+        r"(?i)(n['’]enregistre\s+(?:pas|aucun(?:e|s)?)\b|ne\s+(?:l['’])?(?:enregistre|m[eé]morise|retiens|sauvegarde|stocke)\s+pas\b|ne\s+garde\s+pas\b.{0,40}\b(?:m[eé]moire|souvenir)\b|(?:do\s+not|don['’]t)\s+(?:remember|memorize|save|store|learn)\b|(?:do\s+not|don['’]t)\s+(?:add|write)\b.{0,40}\bmemor(?:y|ies)\b|\bno\s+new\s+memor(?:y|ies)\b)"
+    ).expect("static regex")
+});
+
+/// Return true when the user explicitly refuses semantic memory writes for
+/// the current message. Session history and mandatory operational audit data
+/// are separate concerns and remain available for recovery.
+pub fn memory_write_opt_out(msg: &str) -> bool {
+    !msg.is_empty() && RE_MEMORY_WRITE_OPT_OUT.is_match(msg)
+}
+
 /// Pure function: classify a user message by running the three heuristic
 /// regexes. `ExplicitRemember` takes precedence (strongest signal),
 /// then `Correction`, then `Satisfaction`.
 pub fn classify_user_message(msg: &str) -> Option<UserMessageKind> {
     if msg.is_empty() {
+        return None;
+    }
+    if memory_write_opt_out(msg) {
         return None;
     }
     if RE_EXPLICIT_REMEMBER.is_match(msg) {
