@@ -30,6 +30,12 @@ Decision rule:
 
 Agent-facing changes:
 
+- This public prerelease is available as 20 checksum/manifest/installer assets
+  at `https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.5` and as
+  the anonymously readable multi-architecture image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5`. Its AMD64/ARM64 OCI index
+  digest is
+  `sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873`.
 - Persistent Web terminal PTYs are owned by the daemon lifecycle. Graceful
   shutdown drains the terminal registry and terminates every owned child before
   the API bridge and kernel finish shutting down, so stop/restart cannot leave
@@ -69,9 +75,9 @@ How to answer the user:
 - When asked which model this agent uses, report the exact active provider and
   model from runtime identity. Do not confuse this with the Captain binary
   version or with a peer agent's model.
-- Verify the installed version before applying this entry. Publication links
-  and immutable image provenance are recorded here only after the release is
-  publicly verified.
+- Verify the installed version before applying this entry. The release link,
+  immutable image tag, and OCI digest above are the publicly verified
+  provenance for `0.1.0-alpha.5`.
 
 ### 0.1.0-alpha.4 — Authoritative memory corrections
 

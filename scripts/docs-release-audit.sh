@@ -182,6 +182,14 @@ require_contains \
   "last published alpha.4 notes pin the multi-arch digest" \
   docs/releases/v0.1.0-alpha.4.md \
   'sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93'
+require_contains \
+  "published alpha.5 notes pin the public source commit" \
+  docs/releases/v0.1.0-alpha.5.md \
+  '6d159dbf7597a0d7710e3362d4422e557c51ee10'
+require_contains \
+  "published alpha.5 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.5.md \
+  'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873'
 require_not_contains \
   "alpha.5 notes do not copy the alpha.4 source commit" \
   docs/releases/v0.1.0-alpha.5.md \

@@ -4,26 +4,16 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Release Candidate
-
-`v0.1.0-alpha.5` is the current verified source candidate. It adds clean
-shutdown ownership for persistent Web terminal PTYs, an explicit per-turn
-opt-out for semantic memory writes, exact live model identity in every prompt
-profile, a single-agent fresh boot, and configured-model authority without
-complexity routing or inferred fallback models. Until GitHub assets and the
-multi-arch OCI image are published and inspected, no public source commit or
-image digest is claimed for this version.
-
 ## Current Public Release
 
-`v0.1.0-alpha.4` is the current public prerelease. Its GitHub source tag points
-to commit `a58bb3bcf5563beaee6b10d7672284c4c1ab9aa4`, and the reviewed GitHub
+`v0.1.0-alpha.5` is the current public prerelease. Its annotated GitHub source
+tag dereferences to commit `6d159dbf7597a0d7710e3362d4422e557c51ee10`, and the reviewed GitHub
 Release contains 20 host/installer/manifest assets:
 
-- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.4>
-- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4`
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.5>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5`
 - OCI index digest:
-  `sha256:4bdf0e224d95f7a5cd14360d2e2abb9c3bb7dfbe757fdedddab4c0246ec8aa93`
+  `sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873`
 
 The public OCI index is anonymously readable and contains both `linux/amd64`
 and `linux/arm64`. The moving `:alpha` channel resolved to the same digest at
