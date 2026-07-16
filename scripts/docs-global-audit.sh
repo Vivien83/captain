@@ -48,6 +48,7 @@ CONTRACT_DOCS=(
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
   docs/releases/v0.1.0-alpha.1.md
@@ -302,9 +303,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.3/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.4"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.4/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -323,9 +324,10 @@ require_contains "English README documents proactive Codex discovery" README.md 
 require_contains "French README documents proactive Codex discovery" README.fr.md "une actualisation horaire signale les nouveaux modèles"
 require_contains "Spanish README documents proactive Codex discovery" README.es.md "una actualización cada hora muestra los modelos nuevos"
 require_contains "Chinese README documents proactive Codex discovery" README.zh.md "每小时刷新一次目录"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.3"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.3] - 2026-07-15"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.4"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.4] - 2026-07-16"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.4.md "# Captain 0.1.0-alpha.4"
+require_contains "historical alpha.3 release notes remain available" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
 require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "13b8aca8d6d5f842cc93a23b9f03caf972f01bf1"
 require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2"
 require_contains "agent changelog records the published multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2"

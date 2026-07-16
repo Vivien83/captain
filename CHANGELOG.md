@@ -8,6 +8,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 No public changes are queued yet.
 
+## [0.1.0-alpha.4] - 2026-07-16
+
+Early-access release focused on authoritative memory corrections, complete
+active-journal recall, and reliable cross-surface CLI continuation.
+
+### Added
+
+- Durable memory recall now searches the complete active local journal before
+  semantic archives and returns exact active triples to `memory_recall`.
+- Memory-save receipts repeat the bounded stored object so an agent can verify
+  the effective value before confirming it to the user.
+
+### Fixed
+
+- A correction in the latest user message now overrides recalled background
+  facts. Precise product/session markers outrank generic older corrections,
+  while active replacement facts are no longer hidden by fuzzy archive guards.
+- Automatic memory mirroring applies the same sensitive-field filter as
+  explicit memory writes, preventing verification codes, tokens, passwords,
+  and similarly named secrets from bypassing the durable-memory guard.
+- `captain message` now accepts an agent name as documented, resolves it to the
+  unique daemon UUID, and identifies one-shot turns as originating from CLI.
+
 ## [0.1.0-alpha.3] - 2026-07-15
 
 Early-access release focused on a self-contained semantic-memory runtime and
@@ -131,7 +154,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.4...HEAD
+[0.1.0-alpha.4]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.3...v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.1

@@ -65,10 +65,21 @@ fn test_memory_section_prevents_personal_memory_showcase() {
         "memory section must forbid memory showcase behaviour"
     );
     assert!(
-        section.contains("recall the exact old triple")
+        section
+            .to_lowercase()
+            .contains("recall the exact old triple")
             && section.contains("await success")
             && section.contains("then memory_save"),
         "memory section must teach ordered correction handling"
+    );
+    assert!(
+        section
+            .to_lowercase()
+            .contains("latest user message is authoritative")
+            && section
+                .to_lowercase()
+                .contains("never substitute a recalled value"),
+        "current-turn correction values must override recalled memory"
     );
 }
 
@@ -92,6 +103,15 @@ fn test_memory_context_fenced() {
         section.contains("NOT new user input"),
         "fence must carry the system note"
     );
+    assert!(
+        section
+            .to_lowercase()
+            .contains("latest user message is authoritative")
+            && section
+                .to_lowercase()
+                .contains("never substitute a recalled value"),
+        "memory fence must preserve current-turn authority"
+    );
 }
 
 #[test]
@@ -107,6 +127,18 @@ fn test_memory_context_fence_escapes_nested() {
         closes, 1,
         "exactly one </memory-context> closing tag expected, got {closes}"
     );
+}
+
+#[test]
+fn codex_compact_memory_capsule_keeps_current_turn_authoritative() {
+    let mut ctx = basic_ctx();
+    ctx.prompt_profile = PromptProfile::CodexEconomy;
+    ctx.recalled_memories = vec![("old".into(), "old recalled value".into())];
+
+    let prompt = build_system_prompt(&ctx);
+
+    assert!(prompt.contains("latest user message is authoritative"));
+    assert!(prompt.contains("never substitute a recalled value"));
 }
 
 /// v3.7a — The memory section teaches the agent to write declarative facts,

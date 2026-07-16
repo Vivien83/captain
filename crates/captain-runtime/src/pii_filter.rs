@@ -86,12 +86,51 @@ pub fn detect_pii(text: &str) -> Option<&'static str> {
     None
 }
 
-/// Check the whole `(subject, predicate, object)` triple. Subject and
-/// predicate are typically short structured tags (e.g. `pref:lang`,
-/// `prefers`) — we skip them by default. Only the `object` payload is
-/// scanned because that's where free-text (and thus secrets) lands.
-pub fn check_memory_triple(_subject: &str, _predicate: &str, object: &str) -> Option<&'static str> {
+/// Check the whole `(subject, predicate, object)` triple. Free-text PII is
+/// detected in `object`; credential-shaped field names are rejected even when
+/// the value itself does not match a known provider format.
+pub fn check_memory_triple(subject: &str, predicate: &str, object: &str) -> Option<&'static str> {
+    if memory_field_is_sensitive(subject) || memory_field_is_sensitive(predicate) {
+        return Some("sensitive_field");
+    }
     detect_pii(object)
+}
+
+fn memory_field_is_sensitive(field: &str) -> bool {
+    let mut normalized = String::with_capacity(field.len());
+    for c in field.chars() {
+        if c.is_alphanumeric() {
+            for lower in c.to_lowercase() {
+                normalized.push(lower);
+            }
+        } else {
+            normalized.push(' ');
+        }
+    }
+    let joined = format!(
+        "_{}_",
+        normalized.split_whitespace().collect::<Vec<_>>().join("_")
+    );
+    [
+        "secret",
+        "password",
+        "passwd",
+        "passphrase",
+        "mdp",
+        "api_key",
+        "apikey",
+        "token",
+        "credential",
+        "credentials",
+        "private_key",
+        "verification_code",
+        "code_de_vérification",
+        "code_de_verification",
+        "auth_code",
+        "otp",
+    ]
+    .iter()
+    .any(|marker| joined.contains(&format!("_{marker}_")))
 }
 
 #[cfg(test)]
@@ -240,11 +279,25 @@ mod tests {
     }
 
     #[test]
-    fn check_memory_triple_only_scans_object() {
-        // A subject like "phone:emergency" naming a category should NOT
-        // trip the phone_fr regex — we only check the object.
+    fn check_memory_triple_allows_non_secret_category_labels() {
         let r = check_memory_triple("phone:emergency", "is_documented", "yes");
         assert_eq!(r, None);
+    }
+
+    #[test]
+    fn check_memory_triple_rejects_sensitive_field_names() {
+        assert_eq!(
+            check_memory_triple("code de vérification actuel", "is", "orchid-731"),
+            Some("sensitive_field")
+        );
+        assert_eq!(
+            check_memory_triple("CODE DE VÉRIFICATION ACTUEL", "is", "orchid-731"),
+            Some("sensitive_field")
+        );
+        assert_eq!(
+            check_memory_triple("service", "api_key", "synthetic-value"),
+            Some("sensitive_field")
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ use captain_memory::memory_writer::{
     self, MemoryOperation, MemoryWrite, NewMemoryWrite, SyncStatus,
 };
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
@@ -48,12 +49,13 @@ impl<'a> MemPalaceSender for McpMemPalaceSender<'a> {
             .find(|c| c.name() == "mempalace")
             .ok_or("mempalace MCP server not connected")?;
 
-        // MemPalace KG operations accept only the bare triple. The wing/room
-        // taxonomy lives in Captain's local journal.
+        // MemPalace KG operations accept only the bare, bounded triple. The
+        // full-fidelity value and wing/room taxonomy stay in Captain's journal.
+        let triple = mempalace_triple(row);
         let input = serde_json::json!({
-            "subject": row.subject,
-            "predicate": row.predicate,
-            "object": row.object,
+            "subject": triple.subject,
+            "predicate": triple.predicate,
+            "object": triple.object,
         });
         let tool_name = match row.operation {
             MemoryOperation::Add => "mcp_mempalace_mempalace_kg_add",
@@ -65,6 +67,99 @@ impl<'a> MemPalaceSender for McpMemPalaceSender<'a> {
             .map_err(|e| format!("{tool_name} failed: {e}"))?;
         validate_mempalace_response(tool_name, &response)
     }
+}
+
+const MEMPALACE_KG_VALUE_MAX_CHARS: usize = 128;
+const MEMPALACE_KG_HASH_CHARS: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MemPalaceTriple {
+    subject: String,
+    predicate: String,
+    object: String,
+}
+
+fn mempalace_triple(row: &MemoryWrite) -> MemPalaceTriple {
+    MemPalaceTriple {
+        subject: bounded_mempalace_value(&row.subject, "unknown_subject"),
+        predicate: mempalace_predicate(&row.predicate),
+        object: bounded_mempalace_value(&row.object, "unknown_object"),
+    }
+}
+
+fn bounded_mempalace_value(value: &str, fallback: &str) -> String {
+    let cleaned = value.replace('\0', "").trim().to_string();
+    if cleaned.is_empty() {
+        return fallback.to_string();
+    }
+    if cleaned.chars().count() <= MEMPALACE_KG_VALUE_MAX_CHARS {
+        return cleaned;
+    }
+    bounded_with_hash(&cleaned, MEMPALACE_KG_VALUE_MAX_CHARS, '#')
+}
+
+fn mempalace_predicate(value: &str) -> String {
+    let cleaned = value.replace('\0', "").trim().to_string();
+    if mempalace_predicate_is_safe(&cleaned) {
+        return cleaned;
+    }
+
+    let mut normalized = String::new();
+    let mut separator_pending = false;
+    for character in cleaned.chars() {
+        if character.is_alphanumeric() {
+            if separator_pending && !normalized.is_empty() {
+                normalized.push('_');
+            }
+            for lower in character.to_lowercase() {
+                normalized.push(lower);
+            }
+            separator_pending = false;
+        } else if !normalized.is_empty() {
+            separator_pending = true;
+        }
+    }
+    if normalized.is_empty() {
+        normalized.push_str("related_to");
+    }
+    if normalized.chars().count() > MEMPALACE_KG_VALUE_MAX_CHARS {
+        bounded_with_hash(&normalized, MEMPALACE_KG_VALUE_MAX_CHARS, '_')
+    } else {
+        normalized
+    }
+}
+
+fn mempalace_predicate_is_safe(value: &str) -> bool {
+    if value.is_empty()
+        || value.chars().count() > MEMPALACE_KG_VALUE_MAX_CHARS
+        || value.contains("..")
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains('\0')
+    {
+        return false;
+    }
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    let Some(last) = value.chars().last() else {
+        return false;
+    };
+    first.is_alphanumeric()
+        && last.is_alphanumeric()
+        && value.chars().all(|character| {
+            character.is_alphanumeric() || matches!(character, '_' | ' ' | '.' | '\'' | '-')
+        })
+}
+
+fn bounded_with_hash(value: &str, max_chars: usize, separator: char) -> String {
+    let digest = hex::encode(Sha256::digest(value.as_bytes()));
+    let suffix = format!("{separator}{}", &digest[..MEMPALACE_KG_HASH_CHARS]);
+    let prefix_chars = max_chars.saturating_sub(suffix.chars().count());
+    let mut bounded = value.chars().take(prefix_chars).collect::<String>();
+    bounded.push_str(&suffix);
+    bounded
 }
 
 fn validate_mempalace_response(tool_name: &str, response: &str) -> Result<(), String> {
@@ -548,5 +643,45 @@ mod tests {
             r#"{"success":true,"triple_id":"abc"}"#,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn mempalace_triple_bounds_long_values_without_losing_local_fact() {
+        let db = fresh_db();
+        let mut row = store::append(&db.lock().unwrap(), sample()).unwrap();
+        row.object = "préférence très détaillée ".repeat(20);
+        let original = row.object.clone();
+
+        let triple = mempalace_triple(&row);
+
+        assert_eq!(row.object, original);
+        assert_eq!(triple.object.chars().count(), MEMPALACE_KG_VALUE_MAX_CHARS);
+        assert!(triple.object.contains('#'));
+        assert_eq!(triple, mempalace_triple(&row));
+    }
+
+    #[test]
+    fn mempalace_triple_normalizes_invalid_or_long_predicate_deterministically() {
+        let db = fresh_db();
+        let mut row = store::append(&db.lock().unwrap(), sample()).unwrap();
+        row.predicate = "Tick autonome: état vérifié; aucun signal actionnable ".repeat(6);
+
+        let triple = mempalace_triple(&row);
+
+        assert!(triple.predicate.chars().count() <= MEMPALACE_KG_VALUE_MAX_CHARS);
+        assert!(mempalace_predicate_is_safe(&triple.predicate));
+        assert_eq!(triple, mempalace_triple(&row));
+    }
+
+    #[test]
+    fn add_and_invalidate_use_the_same_normalized_triple() {
+        let db = fresh_db();
+        let mut add = store::append(&db.lock().unwrap(), sample()).unwrap();
+        add.object = "long value ".repeat(30);
+        add.predicate = "invalid/predicate ".repeat(12);
+        let mut invalidate = add.clone();
+        invalidate.operation = MemoryOperation::Invalidate;
+
+        assert_eq!(mempalace_triple(&add), mempalace_triple(&invalidate));
     }
 }

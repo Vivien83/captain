@@ -148,12 +148,14 @@ mod tests {
     use chrono::Utc;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
 
     /// Captures every prompt it's asked to complete, so tests can assert on
     /// what a "wake-up" system message actually put in front of the model —
     /// without ever making a real network call.
     struct CapturingDriver {
         captured_user_texts: Mutex<Vec<String>>,
+        captured: Notify,
     }
 
     #[async_trait]
@@ -176,6 +178,7 @@ mod tests {
                     }
                 }
             }
+            self.captured.notify_one();
             Ok(CompletionResponse {
                 content: vec![ContentBlock::Text {
                     text: "ok".to_string(),
@@ -312,6 +315,7 @@ mod tests {
         let mut kernel = Arc::new(CaptainKernel::boot_with_config(config).expect("kernel boot"));
         let driver = Arc::new(CapturingDriver {
             captured_user_texts: Mutex::new(Vec::new()),
+            captured: Notify::new(),
         });
         Arc::get_mut(&mut kernel)
             .expect("kernel has no shared references yet")
@@ -350,19 +354,32 @@ mod tests {
         .expect("Terminated lifecycle event must be published for the killed child");
         assert!(matches!(event.target, EventTarget::Broadcast));
 
-        // The wake-up message to the parent is injected via a spawned task;
-        // give it a few scheduler turns to land before asserting.
-        for _ in 0..50 {
-            if !driver.captured_user_texts.lock().unwrap().is_empty() {
-                break;
+        // The wake-up runs in a spawned task and executes a complete parent
+        // turn. Wait on the test driver instead of relying on scheduler-speed
+        // polling, which is flaky when the full release suite is under load.
+        let wake_observed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let captured = driver.captured.notified();
+                if driver
+                    .captured_user_texts
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t.contains(&child_id.to_string()) && t.contains("s'est terminé"))
+                {
+                    return;
+                }
+                captured.await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        })
+        .await
+        .is_ok();
         let captured_texts = driver.captured_user_texts.lock().unwrap().clone();
         assert!(
-            captured_texts
-                .iter()
-                .any(|t| t.contains(&child_id.to_string()) && t.contains("s'est terminé")),
+            wake_observed
+                && captured_texts
+                    .iter()
+                    .any(|t| t.contains(&child_id.to_string()) && t.contains("s'est terminé")),
             "parent agent should have been woken up with a message naming the terminated child, got: {captured_texts:?}"
         );
 

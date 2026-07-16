@@ -33,6 +33,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
   docs/releases/v0.1.0-alpha.1.md
@@ -145,30 +146,38 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.3"
+  "### 0.1.0-alpha.4"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.3'
+  '0.1.0-alpha.4'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.3'
+  '0.1.0-alpha.4'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.3] - 2026-07-15'
+  '## [0.1.0-alpha.4] - 2026-07-16'
 require_contains \
   "reviewed alpha notes exist" \
-  docs/releases/v0.1.0-alpha.3.md \
-  '# Captain 0.1.0-alpha.3'
+  docs/releases/v0.1.0-alpha.4.md \
+  '# Captain 0.1.0-alpha.4'
 require_contains \
-  "reviewed alpha notes pin the public source commit" \
+  "last published alpha.3 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.3.md \
   '13b8aca8d6d5f842cc93a23b9f03caf972f01bf1'
 require_contains \
-  "reviewed alpha notes pin the multi-arch digest" \
+  "last published alpha.3 notes pin the multi-arch digest" \
   docs/releases/v0.1.0-alpha.3.md \
+  'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2'
+require_not_contains \
+  "alpha.4 notes do not copy the alpha.3 source commit" \
+  docs/releases/v0.1.0-alpha.4.md \
+  '13b8aca8d6d5f842cc93a23b9f03caf972f01bf1'
+require_not_contains \
+  "alpha.4 notes do not copy the alpha.3 OCI digest" \
+  docs/releases/v0.1.0-alpha.4.md \
   'sha256:f7ff11969ed8b75b31c15dbc610fd785f4983f17e322f0501eea627df08ea4a2'
 require_contains \
   "release readiness executes workflow audit" \
@@ -190,11 +199,11 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the public prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.3/install.sh'
+    'releases/download/v0.1.0-alpha.4/install.sh'
   require_contains \
     "$readme pins the immutable alpha image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \

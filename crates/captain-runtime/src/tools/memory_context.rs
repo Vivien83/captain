@@ -66,6 +66,19 @@ fn memory_context_matched_terms(query_terms: &[String], text: &str) -> usize {
         .count()
 }
 
+fn memory_context_matched_anchors(query_terms: &[String], text: &str) -> usize {
+    let text_tokens: HashSet<String> = memory_context_tokens(text).into_iter().collect();
+    query_terms
+        .iter()
+        .filter(|term| memory_context_is_anchor(term))
+        .filter(|term| text_tokens.contains(*term))
+        .count()
+}
+
+fn memory_context_is_anchor(term: &str) -> bool {
+    term.chars().any(|c| c.is_ascii_digit()) && term.chars().any(char::is_alphabetic)
+}
+
 fn memory_context_similarity(value: &serde_json::Value) -> Option<f64> {
     value
         .get("similarity")
@@ -375,28 +388,15 @@ fn compact_memory_writes_result(
     strict: bool,
     retractions: &[crate::memory_retractions::MemoryRetraction],
 ) -> Option<serde_json::Value> {
-    let conn = kernel.and_then(|kh| kh.memory_writes_conn())?;
-    let query_terms = memory_context_tokens(query);
-    let scan_limit = (max_items * 12).clamp(max_items, 120);
-    let rows = match conn.lock() {
-        Ok(guard) => captain_memory::memory_writer::list_recent_active(&guard, scan_limit),
+    let (rows, query_terms) = match search_memory_write_candidates(query, kernel, max_items) {
+        Ok(Some(result)) => result,
+        Ok(None) => return None,
         Err(error) => {
             return Some(serde_json::json!({
                 "success": false,
                 "source": "memory_writes",
                 "query": query,
-                "error": format!("memory_writes lock poisoned: {error}"),
-            }));
-        }
-    };
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(error) => {
-            return Some(serde_json::json!({
-                "success": false,
-                "source": "memory_writes",
-                "query": query,
-                "error": format!("memory_writes recall failed: {error}"),
+                "error": error,
             }));
         }
     };
@@ -418,6 +418,74 @@ fn compact_memory_writes_result(
     ))
 }
 
+fn search_memory_write_candidates(
+    query: &str,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    max_items: usize,
+) -> Result<Option<(Vec<captain_memory::memory_writer::MemoryWrite>, Vec<String>)>, String> {
+    let Some(conn) = kernel.and_then(|kh| kh.memory_writes_conn()) else {
+        return Ok(None);
+    };
+    let query_terms = memory_context_tokens(query);
+    let scan_limit = max_items.saturating_mul(12).clamp(max_items, 120);
+    let guard = conn
+        .lock()
+        .map_err(|error| format!("memory_writes lock poisoned: {error}"))?;
+    let rows =
+        captain_memory::memory_writer::search_active_by_terms(&guard, &query_terms, scan_limit)
+            .map_err(|error| format!("memory_writes recall failed: {error}"))?;
+    Ok(Some((rows, query_terms)))
+}
+
+pub(crate) fn recall_local_memory_write_rows(
+    query: &str,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    max_items: usize,
+    retractions: &[crate::memory_retractions::MemoryRetraction],
+) -> Result<Vec<captain_memory::memory_writer::MemoryWrite>, String> {
+    let Some((rows, query_terms)) = search_memory_write_candidates(query, kernel, max_items)?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut matched = rows
+        .into_iter()
+        .filter_map(|row| {
+            memory_write_match_count(&row, &query_terms, true, retractions).map(|matched_terms| {
+                let matched_anchors =
+                    memory_context_matched_anchors(&query_terms, &memory_write_fact_text(&row));
+                (row, matched_anchors, matched_terms)
+            })
+        })
+        .collect::<Vec<_>>();
+    matched.sort_by(
+        |(left, left_anchors, left_terms), (right, right_anchors, right_terms)| {
+            right_anchors
+                .cmp(left_anchors)
+                .then_with(|| {
+                    memory_write_correction_priority(right)
+                        .cmp(&memory_write_correction_priority(left))
+                })
+                .then_with(|| right_terms.cmp(left_terms))
+                .then_with(|| right.created_at.cmp(&left.created_at))
+                .then_with(|| right.id.cmp(&left.id))
+        },
+    );
+    Ok(matched
+        .into_iter()
+        .map(|(row, _, _)| row)
+        .take(max_items)
+        .collect())
+}
+
+fn memory_write_correction_priority(row: &captain_memory::memory_writer::MemoryWrite) -> u8 {
+    let text = memory_write_fact_text(row).to_lowercase();
+    [
+        "corrig", "correct", "obsol", "remplac", "replace", "supersed",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker)) as u8
+}
+
 fn compact_memory_write_rows(
     rows: &[captain_memory::memory_writer::MemoryWrite],
     query_terms: &[String],
@@ -430,15 +498,39 @@ fn compact_memory_write_rows(
     let mut filtered = 0usize;
     for row in rows {
         match compact_memory_write_row(row, query_terms, preview_chars, strict, retractions) {
-            Some(value) => accepted.push(value),
+            Some(value) => accepted.push((
+                value,
+                memory_write_correction_priority(row),
+                row.created_at,
+                row.id.clone(),
+            )),
             None => filtered += 1,
         }
     }
+    accepted.sort_by(
+        |(left, left_correction, left_created, left_id),
+         (right, right_correction, right_created, right_id)| {
+            right["matched_anchor_terms"]
+                .as_u64()
+                .cmp(&left["matched_anchor_terms"].as_u64())
+                .then_with(|| right_correction.cmp(left_correction))
+                .then_with(|| {
+                    right["matched_query_terms"]
+                        .as_u64()
+                        .cmp(&left["matched_query_terms"].as_u64())
+                })
+                .then_with(|| right_created.cmp(left_created))
+                .then_with(|| right_id.cmp(left_id))
+        },
+    );
     if accepted.len() > max_items {
         filtered += accepted.len() - max_items;
         accepted.truncate(max_items);
     }
-    (accepted, filtered)
+    (
+        accepted.into_iter().map(|(value, _, _, _)| value).collect(),
+        filtered,
+    )
 }
 
 fn compact_memory_write_row(
@@ -449,19 +541,7 @@ fn compact_memory_write_row(
     retractions: &[crate::memory_retractions::MemoryRetraction],
 ) -> Option<serde_json::Value> {
     let fact_text = memory_write_fact_text(row);
-    if crate::memory_retractions::text_matches_any(&fact_text, retractions) {
-        return None;
-    }
-    let matched_terms = memory_context_matched_terms(query_terms, &fact_text);
-    if !memory_context_is_high_confidence(
-        matched_terms,
-        query_terms.len(),
-        None,
-        DEFAULT_MEMORY_CONTEXT_MIN_SIMILARITY,
-        strict,
-    ) {
-        return None;
-    }
+    let matched_terms = memory_write_match_count(row, query_terms, strict, retractions)?;
     Some(serde_json::json!({
         "source": "memory_writes",
         "subject": row.subject,
@@ -473,8 +553,31 @@ fn compact_memory_write_row(
         "sync_status": row.sync_status.as_str(),
         "created_at": row.created_at,
         "matched_query_terms": matched_terms,
+        "matched_anchor_terms": memory_context_matched_anchors(query_terms, &fact_text),
         "preview": truncate_owned(&fact_text, preview_chars),
     }))
+}
+
+fn memory_write_match_count(
+    row: &captain_memory::memory_writer::MemoryWrite,
+    query_terms: &[String],
+    strict: bool,
+    _retractions: &[crate::memory_retractions::MemoryRetraction],
+) -> Option<usize> {
+    let fact_text = memory_write_fact_text(row);
+    // `search_active_by_terms` is the authoritative journal query and already
+    // excludes rows whose `retracted_at` is set. Fuzzy archive guards must not
+    // suppress a newer active row that happens to share topic words with an
+    // old malformed or superseded triple.
+    let matched_terms = memory_context_matched_terms(query_terms, &fact_text);
+    memory_context_is_high_confidence(
+        matched_terms,
+        query_terms.len(),
+        None,
+        DEFAULT_MEMORY_CONTEXT_MIN_SIMILARITY,
+        strict,
+    )
+    .then_some(matched_terms)
 }
 
 fn memory_write_fact_text(row: &captain_memory::memory_writer::MemoryWrite) -> String {
@@ -694,5 +797,13 @@ mod tests {
         assert_eq!(accepted.len(), 2);
         assert_eq!(accepted[0]["matched_query_terms"], 2);
         assert_eq!(accepted[1]["matched_query_terms"], 1);
+    }
+
+    #[test]
+    fn precise_anchors_exclude_pure_dates_and_numbers() {
+        assert!(memory_context_is_anchor("public2"));
+        assert!(memory_context_is_anchor("0715b"));
+        assert!(!memory_context_is_anchor("2026"));
+        assert!(!memory_context_is_anchor("0715"));
     }
 }

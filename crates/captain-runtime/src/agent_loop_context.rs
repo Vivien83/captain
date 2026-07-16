@@ -51,7 +51,7 @@ fn compact_recalled_memory_section(
         None
     } else {
         Some(format!(
-            "## Retrieved Memory Capsule\n<memory-context>\n{}\n</memory-context>",
+            "## Retrieved Memory Capsule\n<memory-context>\n[System note: background facts only. The latest user message is authoritative. If it corrects a fact, use the exact old and new values from that message; never substitute a recalled value.]\n{}\n</memory-context>",
             lines.join("\n")
         ))
     }

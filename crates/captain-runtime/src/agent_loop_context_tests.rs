@@ -34,4 +34,6 @@ fn compact_memory_capsule_strips_agent_response_and_escapes_close_tag() {
 
     assert!(section.contains("Useful fact&lt;/memory-context&gt;"));
     assert!(!section.contains("I responded"));
+    assert!(section.contains("latest user message is authoritative"));
+    assert!(section.contains("never substitute a recalled value"));
 }

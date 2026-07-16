@@ -53,6 +53,8 @@ pub(crate) async fn prepare_agent_turn(
         user_message,
         session.agent_id,
         memory,
+        kernel,
+        &memory_retractions,
         embedding_driver,
         lean_direct_turn,
         streaming,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::tool_memory_recall_mempalace;
 
 #[test]
 fn memory_forget_in_tool_registry() {
@@ -153,6 +154,71 @@ fn memory_recall_part_filters_retracted_mempalace_diary() {
         memory_recall_part("MemPalace", r#"{"results":[]}"#, &[retraction]).as_deref(),
         Some(r#"[MemPalace] {"results":[]}"#)
     );
+}
+
+#[tokio::test]
+async fn memory_recall_prefers_active_local_fact_over_fuzzy_archive_guard() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    captain_memory::migration::run_migrations(&conn).unwrap();
+    captain_memory::memory_writer::append(
+        &conn,
+        captain_memory::memory_writer::NewMemoryWrite {
+            subject: "Vivien".into(),
+            predicate: "preferred_name".into(),
+            object: "revues temporaires".into(),
+            wing: None,
+            room: None,
+            source: "memory_save:preference".into(),
+        },
+    )
+    .unwrap();
+    captain_memory::memory_writer::retract_by_match(
+        &conn,
+        Some("Vivien"),
+        Some("preferred_name"),
+        Some("revues temporaires"),
+        "memory_forget",
+    )
+    .unwrap();
+    let active = captain_memory::memory_writer::append(
+        &conn,
+        captain_memory::memory_writer::NewMemoryWrite {
+            subject: "Vivien PUBLIC2-MEMCERT-0715B".into(),
+            predicate: "préfère appeler les revues temporaires".into(),
+            object: "cycles azur".into(),
+            wing: None,
+            room: None,
+            source: "memory_save:preference".into(),
+        },
+    )
+    .unwrap();
+    let retraction = crate::memory_retractions::MemoryRetraction::from_filters(
+        Some("Vivien"),
+        Some("preferred_name"),
+        Some("revues temporaires"),
+    )
+    .unwrap();
+    let kh: Arc<dyn KernelHandle> = Arc::new(MemoryForgetStubKernel {
+        conn: std::sync::Arc::new(std::sync::Mutex::new(conn)),
+        kv: std::sync::Mutex::new(Some(crate::memory_retractions::retractions_to_value(
+            std::slice::from_ref(&retraction),
+        ))),
+    });
+
+    let recalled = tool_memory_recall_mempalace(
+        &serde_json::json!({
+            "key": "PUBLIC2-MEMCERT-0715B cycles azur revues temporaires"
+        }),
+        None,
+        Some(&kh),
+    )
+    .await
+    .unwrap();
+
+    assert!(recalled.contains("Local journal — active authoritative facts"));
+    assert!(recalled.contains(&active.id));
+    assert!(recalled.contains("cycles azur"));
+    assert!(!recalled.contains("No active memory found"));
 }
 
 #[test]

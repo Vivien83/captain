@@ -26,6 +26,35 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.4 — Authoritative memory corrections
+
+Agent-facing changes:
+
+- The latest user message is authoritative during a correction. Recalled
+  memories are background only and must never replace exact old or new values
+  stated in the current turn.
+- Automatic recall searches the complete active local continuity journal and
+  ranks precise alphanumeric markers before generic older corrections; pure
+  dates and numbers are not treated as anchors.
+  `memory_recall` returns exact active local triples before consulting archive
+  sources, even when a fuzzy retraction guard matches related wording.
+- `memory_save` receipts include the effective stored object. Compare that
+  value with the request before confirming success.
+- Automatic fact mirroring rejects sensitive field names with the same policy
+  as explicit memory writes.
+- `captain message` accepts a unique agent name or UUID and records the turn as
+  CLI-originated. Sessions created through Web/API remain listable, resumable,
+  and writable from CLI, and the resulting turns remain visible through Web.
+
+How to answer the user:
+
+- For a correction, use the current message's exact values, recall the active
+  old triple, await `memory_forget`, then call `memory_save`. Confirm only the
+  values and sync state present in the two tool receipts.
+- Verify the installed version before applying this entry. Publication links
+  and immutable image provenance are recorded here only after the release is
+  publicly verified.
+
 ### 0.1.0-alpha.3 — Native MemPalace and durable memory continuity
 
 Agent-facing changes:

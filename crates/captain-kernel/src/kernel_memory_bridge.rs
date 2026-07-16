@@ -113,6 +113,10 @@ pub(crate) async fn mirror_to_mempalace(
     // 2. User facts (preferences + personal info) — write-through.
     let facts = crate::graph_memory::extract_user_facts(user_msg);
     for fact in &facts {
+        if let Some(pattern) = user_fact_rejection(fact) {
+            debug!(pattern, "MemPalace mirror skipped sensitive user fact");
+            continue;
+        }
         let record = captain_memory::memory_writer::NewMemoryWrite {
             subject: fact.subject.clone(),
             predicate: fact.predicate.clone(),
@@ -171,6 +175,10 @@ pub(crate) async fn mirror_to_mempalace(
             tool_calls.len(),
         );
     }
+}
+
+fn user_fact_rejection(fact: &crate::graph_memory::UserFact) -> Option<&'static str> {
+    captain_runtime::pii_filter::check_memory_triple(&fact.subject, &fact.predicate, &fact.object)
 }
 
 /// Append an assistant response summary to the daily memory log (best-effort, append-only).
@@ -315,6 +323,23 @@ mod tests {
         assert!(outcome.contains("... 2 more"));
         assert!(!outcome.contains("tool_9"));
         assert!(!outcome.contains("hidden"));
+    }
+
+    #[test]
+    fn mempalace_mirror_rejects_sensitive_extracted_facts() {
+        let sensitive = crate::graph_memory::UserFact {
+            subject: "code de vérification actuel".into(),
+            predicate: "is".into(),
+            object: "orchid-731".into(),
+        };
+        let preference = crate::graph_memory::UserFact {
+            subject: "user".into(),
+            predicate: "prefers".into(),
+            object: "réponses courtes en français".into(),
+        };
+
+        assert_eq!(user_fact_rejection(&sensitive), Some("sensitive_field"));
+        assert_eq!(user_fact_rejection(&preference), None);
     }
 
     #[test]

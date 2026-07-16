@@ -108,41 +108,42 @@ pub(crate) async fn tool_memory_recall_mempalace(
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     let mut parts: Vec<String> = Vec::new();
     let retractions = kernel.map(|kh| kh.memory_retractions()).unwrap_or_default();
-    if crate::memory_retractions::text_matches_any(key, &retractions) {
-        return Ok(format!(
-            "No active memory found for key '{key}' (query matches an active memory retraction guard)."
-        ));
+    if let Some(part) = local_memory_recall_part(key, kernel, &retractions)? {
+        parts.push(part);
     }
-    let mut suppressed = false;
+    let query_guarded = crate::memory_retractions::text_matches_any(key, &retractions);
+    let mut suppressed = query_guarded;
 
-    let mcp_input = serde_json::json!({
-        "query": key,
-        "limit": 5,
-    });
-    match call_mempalace_tool(
-        "mcp_mempalace_mempalace_search",
-        &mcp_input,
-        mcp_connections,
-    )
-    .await
-    {
-        Ok(result) if !result.is_empty() && result != "[]" && result != "null" => {
-            if let Some(part) = memory_recall_part("MemPalace", &result, &retractions) {
-                parts.push(part);
-            } else {
-                suppressed = true;
+    if !query_guarded {
+        let mcp_input = serde_json::json!({
+            "query": key,
+            "limit": 5,
+        });
+        match call_mempalace_tool(
+            "mcp_mempalace_mempalace_search",
+            &mcp_input,
+            mcp_connections,
+        )
+        .await
+        {
+            Ok(result) if !result.is_empty() && result != "[]" && result != "null" => {
+                if let Some(part) = memory_recall_part("MemPalace", &result, &retractions) {
+                    parts.push(part);
+                } else {
+                    suppressed = true;
+                }
             }
+            _ => {}
         }
-        _ => {}
-    }
 
-    if let Some(kh) = kernel {
-        if let Ok(Some(val)) = kh.memory_recall(key) {
-            let s = serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
-            if let Some(part) = memory_recall_part("Graph", &s, &retractions) {
-                parts.push(part);
-            } else {
-                suppressed = true;
+        if let Some(kh) = kernel {
+            if let Ok(Some(val)) = kh.memory_recall(key) {
+                let s = serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
+                if let Some(part) = memory_recall_part("Graph", &s, &retractions) {
+                    parts.push(part);
+                } else {
+                    suppressed = true;
+                }
             }
         }
     }
@@ -158,6 +159,36 @@ pub(crate) async fn tool_memory_recall_mempalace(
     } else {
         Ok(parts.join("\n\n"))
     }
+}
+
+fn local_memory_recall_part(
+    key: &str,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    retractions: &[crate::memory_retractions::MemoryRetraction],
+) -> Result<Option<String>, String> {
+    let rows =
+        crate::tools::memory_context::recall_local_memory_write_rows(key, kernel, 5, retractions)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let facts = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "write_id": row.id,
+                "subject": row.subject,
+                "predicate": row.predicate,
+                "object": row.object,
+                "source": row.source,
+                "created_at": row.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = serde_json::to_string_pretty(&facts)
+        .map_err(|error| format!("local memory recall serialization failed: {error}"))?;
+    Ok(Some(format!(
+        "[Local journal — active authoritative facts]\n{payload}"
+    )))
 }
 
 pub(crate) fn memory_recall_part(

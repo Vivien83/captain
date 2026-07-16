@@ -52,15 +52,15 @@ app, Telegram, or Discord.
 ## Quick Install
 
 Current public early-access prerelease:
-[v0.1.0-alpha.3](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.3).
-Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3`;
+[v0.1.0-alpha.4](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.4).
+Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.3 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.4 bash
 ```
 
 The official repository, release assets, checksums, and container image are
@@ -94,8 +94,8 @@ Unix installers.
 ```bash
 export ANTHROPIC_API_KEY=...       # or any supported provider key
 export TELEGRAM_BOT_TOKEN=...      # optional — see below
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.3 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.4 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 The `vps` profile installs a systemd service, starts it, and validates
@@ -112,8 +112,8 @@ installs everything (binary, systemd service) without starting the daemon
 yet, so the readiness check below doesn't run before you've logged in:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.3/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.3 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.4/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.4 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # prints a URL + code — open it on your phone, no local browser needed
 systemctl start captain    # non-root install: systemctl --user start captain
@@ -129,7 +129,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.3
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.4
 ```
 
 First boot generates the daemon API key and persists it — along with all
@@ -145,8 +145,8 @@ or privileged mode. Pull and run the immutable image with:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.3 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.3 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.4 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.4 docker compose up -d
 ```
 
 Configure the chosen model provider after first boot. Add host access only as
@@ -232,7 +232,7 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Headless installs, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | External tool servers and transport contract |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and their fixes |
-| [0.1.0-alpha.3 Release Notes](docs/releases/v0.1.0-alpha.3.md) | Managed MemPalace, durable memory recovery, and alpha limitations |
+| [0.1.0-alpha.4 Release Notes](docs/releases/v0.1.0-alpha.4.md) | Authoritative corrections, complete active recall, and CLI continuation |
 | [Docs Status (DOC2)](docs/DOCS_STATUS.md) | Current contracts, frozen surfaces, and historical documents |
 
 ---

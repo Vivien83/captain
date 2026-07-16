@@ -280,6 +280,7 @@ async fn tool_memory_save_impl(
     Ok(format_memory_save_receipt(
         subject,
         predicate,
+        object,
         category,
         sync_status,
     ))
@@ -288,6 +289,7 @@ async fn tool_memory_save_impl(
 fn format_memory_save_receipt(
     subject: &str,
     predicate: &str,
+    object: &str,
     category: &str,
     sync_status: Option<captain_memory::memory_writer::SyncStatus>,
 ) -> String {
@@ -298,7 +300,15 @@ fn format_memory_save_receipt(
         }
         _ => "local=durable · index=pending/retry-auto",
     };
-    format!("🧠 mémorisé · {subject}/{predicate} ({category}) · {receipt}")
+    let object_preview = captain_types::truncate_str(object, 180);
+    let truncated = if object_preview.len() < object.len() {
+        "…"
+    } else {
+        ""
+    };
+    format!(
+        "🧠 mémorisé · {subject}/{predicate} = «{object_preview}{truncated}» ({category}) · {receipt}"
+    )
 }
 
 #[cfg(test)]
@@ -308,14 +318,39 @@ mod tests {
 
     #[test]
     fn memory_save_receipt_distinguishes_remote_sync_from_local_durability() {
-        let synced =
-            format_memory_save_receipt("user", "prefers", "info", Some(SyncStatus::Synced));
-        let pending =
-            format_memory_save_receipt("user", "prefers", "info", Some(SyncStatus::Pending));
-        let degraded =
-            format_memory_save_receipt("user", "prefers", "info", Some(SyncStatus::Error));
+        let synced = format_memory_save_receipt(
+            "user",
+            "prefers",
+            "rondes orchidée",
+            "info",
+            Some(SyncStatus::Synced),
+        );
+        let pending = format_memory_save_receipt(
+            "user",
+            "prefers",
+            "rondes orchidée",
+            "info",
+            Some(SyncStatus::Pending),
+        );
+        let degraded = format_memory_save_receipt(
+            "user",
+            "prefers",
+            "rondes orchidée",
+            "info",
+            Some(SyncStatus::Error),
+        );
+        assert!(synced.contains("user/prefers = «rondes orchidée»"));
         assert!(synced.contains("index=sync"));
         assert!(pending.contains("local=durable · index=pending/retry-auto"));
         assert!(degraded.contains("local=durable · index=degraded/retry-auto"));
+    }
+
+    #[test]
+    fn memory_save_receipt_bounds_the_echoed_value() {
+        let object = "x".repeat(400);
+        let receipt = format_memory_save_receipt("user", "prefers", &object, "info", None);
+
+        assert!(receipt.chars().count() < object.chars().count());
+        assert!(receipt.contains('…'));
     }
 }

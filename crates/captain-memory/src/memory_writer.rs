@@ -19,6 +19,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Consecutive failures before a row is surfaced as degraded. `Error` is an
@@ -561,6 +562,67 @@ pub fn list_recent_active(
     rows.collect()
 }
 
+/// Search the complete active journal for facts containing any supplied term.
+/// Results are ranked by lexical coverage, then recency, so an older precise
+/// fact cannot disappear behind a busy stream of unrelated recent writes.
+pub fn search_active_by_terms(
+    conn: &Connection,
+    terms: &[String],
+    limit: usize,
+) -> Result<Vec<MemoryWrite>, rusqlite::Error> {
+    const MAX_SEARCH_TERMS: usize = 12;
+    let mut seen = HashSet::new();
+    let mut terms = terms
+        .iter()
+        .map(|term| term.trim().to_lowercase())
+        .filter(|term| !term.is_empty() && seen.insert(term.clone()))
+        .collect::<Vec<_>>();
+    terms.sort_by(|left, right| {
+        term_is_precise_anchor(right)
+            .cmp(&term_is_precise_anchor(left))
+            .then_with(|| right.chars().count().cmp(&left.chars().count()))
+    });
+    terms.truncate(MAX_SEARCH_TERMS);
+    if terms.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let haystack = "lower(subject || ' ' || predicate || ' ' || object)";
+    let matches = (1..=terms.len())
+        .map(|index| format!("instr({haystack}, ?{index}) > 0"))
+        .collect::<Vec<_>>();
+    let score = (1..=terms.len())
+        .map(|index| format!("CASE WHEN instr({haystack}, ?{index}) > 0 THEN 1 ELSE 0 END"))
+        .collect::<Vec<_>>();
+    let limit_index = terms.len() + 1;
+    let sql = format!(
+        "SELECT id, operation, subject, predicate, object, wing, room, source,
+                sync_status, sync_attempts, created_at, synced_at, last_error,
+                last_attempt_at, next_retry_at, retracted_at
+         FROM memory_writes
+         WHERE retracted_at IS NULL
+           AND operation = 'add'
+           AND ({})
+         ORDER BY ({}) DESC, created_at DESC, id DESC
+         LIMIT ?{limit_index}",
+        matches.join(" OR "),
+        score.join(" + "),
+    );
+    let mut args = terms
+        .into_iter()
+        .map(rusqlite::types::Value::Text)
+        .collect::<Vec<_>>();
+    args.push(rusqlite::types::Value::Integer(limit.min(10_000) as i64));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), row_to_memory_write)?;
+    rows.collect()
+}
+
+fn term_is_precise_anchor(term: &str) -> bool {
+    term.chars().any(|character| character.is_ascii_digit())
+        && term.chars().any(char::is_alphabetic)
+}
+
 /// List retracted add rows newest first so active-context guards can be
 /// reconstructed after a crash even if the auxiliary KV snapshot was not yet
 /// written.
@@ -961,6 +1023,95 @@ mod tests {
         let retracted = list_recent_retracted(&conn, 10).unwrap();
         assert_eq!(retracted.len(), 1);
         assert_eq!(retracted[0].id, row.id);
+    }
+
+    #[test]
+    fn search_active_by_terms_finds_precise_fact_beyond_recent_noise() {
+        let conn = fresh_db();
+        let durable = append(
+            &conn,
+            NewMemoryWrite {
+                subject: "user:vivien".into(),
+                predicate: "prefers_certification_label".into(),
+                object: "PUBLIC2 stages are called jalons ambre".into(),
+                wing: Some("preferences".into()),
+                room: Some("naming".into()),
+                source: "memory_save:preference".into(),
+            },
+        )
+        .unwrap();
+        for index in 0..200 {
+            let mut noise = sample("mirror");
+            noise.object = format!("unrelated recent event {index}");
+            append(&conn, noise).unwrap();
+        }
+
+        let rows = search_active_by_terms(
+            &conn,
+            &[
+                "relire".into(),
+                "autre".into(),
+                "session".into(),
+                "utiliser".into(),
+                "historique".into(),
+                "visible".into(),
+                "demander".into(),
+                "indice".into(),
+                "quelle".into(),
+                "préférence".into(),
+                "durable".into(),
+                "actuelle".into(),
+                "nommer".into(),
+                "étapes".into(),
+                "certification".into(),
+                "public2".into(),
+                "ambre".into(),
+            ],
+            5,
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, durable.id);
+    }
+
+    #[test]
+    fn search_term_anchor_requires_letters_and_digits() {
+        assert!(term_is_precise_anchor("public2"));
+        assert!(term_is_precise_anchor("0715b"));
+        assert!(!term_is_precise_anchor("2026"));
+    }
+
+    #[test]
+    fn search_active_by_terms_excludes_retracted_and_respects_limit() {
+        let conn = fresh_db();
+        for object in ["jalons ambre", "jalons cuivre", "jalons argent"] {
+            append(
+                &conn,
+                NewMemoryWrite {
+                    subject: "user:vivien".into(),
+                    predicate: "prefers_label".into(),
+                    object: object.into(),
+                    wing: None,
+                    room: None,
+                    source: "test".into(),
+                },
+            )
+            .unwrap();
+        }
+        retract_by_match(
+            &conn,
+            Some("user:vivien"),
+            Some("prefers_label"),
+            Some("jalons cuivre"),
+            "memory_forget",
+        )
+        .unwrap();
+
+        let rows = search_active_by_terms(&conn, &["jalons".into()], 1).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_ne!(rows[0].object, "jalons cuivre");
     }
 
     #[test]
