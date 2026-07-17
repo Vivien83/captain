@@ -336,10 +336,10 @@ require_contains "Telegram docs pin Rich-first transport" docs/channel-adapters.
 require_contains "channel family docs pin stateful ask_user" docs/captain-tools/channel.md '`ask_user` questions are stateful Rich cards'
 require_contains "historical alpha.4 release notes remain available" docs/releases/v0.1.0-alpha.4.md "# Captain 0.1.0-alpha.4"
 require_contains "historical alpha.3 release notes remain available" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
-require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "797d093b44a93850b40f058691931c25f1701900"
-require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318"
-require_contains "agent changelog records the published multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318"
-require_contains "DOC2 identifies the alpha.7 release candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the current candidate'
+require_contains "DOC2 records the published alpha.7 provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
+require_contains "DOC2 records the published alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
+require_contains "agent changelog records the published alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
+require_contains "DOC2 identifies the alpha.7 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the current public prerelease'
 require_contains "DOC2 discloses the alpha.7 memory opt-out limitation" docs/DOCS_STATUS.md "agent-loop finalizer still writes its local episodic interaction fragment"
 require_contains "memory docs disclose the alpha.7 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"

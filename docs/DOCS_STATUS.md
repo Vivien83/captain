@@ -4,22 +4,26 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Current Release Candidate
+## Current Public Release
 
-`v0.1.0-alpha.7` is the current candidate. It keeps kernel-backed tools
+`v0.1.0-alpha.7` is the current public prerelease. It keeps kernel-backed tools
 available in direct TUI/CLI turns, supervises the macOS service after unexpected
 exits, follows the active model catalog window, and gives committed SQLite and
-file state an explicit power-loss boundary. Its intended immutable surfaces
-are:
+file state an explicit power-loss boundary. Its immutable public surfaces are:
 
 - release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7>
 - image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7`
-- host assets: five platforms, checksums, manifests, and four installers
+- source commit: `dc2f64603eff708a8eab5735121cfc1a2d39386f`
+- OCI index digest:
+  `sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354`
+- host assets: exactly 20 files covering five platforms, checksums, manifests,
+  and four installers
 
-Public source commit, asset count, OCI digest, anonymous access, and platform
-inventory remain unclaimed until the live publication audit completes. The
-candidate must be built and published locally; GitHub Actions are a manual
-fallback only.
+The annotated source tag dereferences to the source commit above. At publication
+time, the immutable image tag and moving `:alpha` channel resolved to the same
+digest; anonymous release download and OCI pull both succeeded for
+`linux/amd64` and `linux/arm64`. The GitHub Actions API returned zero runs: the
+release was built and published locally.
 
 Known `alpha.7` limitation: an explicit per-turn memory write opt-out suppresses
 the post-turn graph, MemPalace, reflection, and learning paths, but the core
@@ -28,10 +32,10 @@ normal transcript and audit remain intentional; this extra semantic fragment
 does not. Treat the opt-out as incomplete until a later immutable release
 closes the core finalizer path.
 
-## Last Verified Public Release
+## Previous Verified Public Release
 
-`v0.1.0-alpha.6` remains the last fully verified public provenance while the
-candidate is being prepared. Its annotated source tag dereferences to commit
+`v0.1.0-alpha.6` remains the preceding verified public provenance. Its
+annotated source tag dereferences to commit
 `797d093b44a93850b40f058691931c25f1701900`; its 20-asset GitHub Release and
 anonymous AMD64/ARM64 OCI image are pinned by:
 

@@ -62,10 +62,12 @@ Agent-facing changes:
   runtime. The blocking downloader can no longer panic by destroying its helper
   runtime from an async context, and the same full-daemon smoke verifies native
   MemPalace bootstrap before the abrupt-stop cycle.
-- This prerelease is distributed through the immutable GitHub release
-  `v0.1.0-alpha.7` and image
-  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7`. Verify the installed
-  version before applying this entry.
+- This public prerelease contains exactly 20 assets at the immutable GitHub
+  release `v0.1.0-alpha.7`. Its anonymously readable AMD64/ARM64 image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7` is pinned by OCI index
+  digest
+  `sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354`.
+  Verify the installed version before applying this entry.
 - Known limitation retained from `0.1.0-alpha.6`: the explicit per-turn memory
   write opt-out still leaves the core agent-loop finalizer's local episodic
   interaction fragment. The normal transcript and mandatory audit remain
