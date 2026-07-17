@@ -334,9 +334,9 @@ require_contains "Telegram docs pin Rich-first transport" docs/channel-adapters.
 require_contains "channel family docs pin stateful ask_user" docs/captain-tools/channel.md '`ask_user` questions are stateful Rich cards'
 require_contains "historical alpha.4 release notes remain available" docs/releases/v0.1.0-alpha.4.md "# Captain 0.1.0-alpha.4"
 require_contains "historical alpha.3 release notes remain available" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
-require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "6d159dbf7597a0d7710e3362d4422e557c51ee10"
-require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873"
-require_contains "agent changelog records the published multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873"
+require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "797d093b44a93850b40f058691931c25f1701900"
+require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318"
+require_contains "agent changelog records the published multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
 require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"

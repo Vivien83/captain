@@ -30,6 +30,12 @@ Decision rule:
 
 Agent-facing changes:
 
+- This public prerelease is available as 20 checksum/manifest/installer assets
+  at `https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.6` and as
+  the anonymously readable multi-architecture image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6`. Its AMD64/ARM64 OCI index
+  digest is
+  `sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318`.
 - Telegram is a Rich-first surface. Normal final answers preserve GFM tables,
   lists, code, and collapsible details through Bot API 10.2; plain or raw
   command output still uses the exact-text path.
@@ -64,9 +70,9 @@ How to answer the user:
 - Treat an `ask_user` card as active only until the user answers or the stream
   expires it. Never claim that a choice was recorded unless the active agent
   loop accepted it.
-- Verify the installed version before applying this entry. Publication links
-  and immutable image provenance are recorded only after the release is
-  publicly verified.
+- Verify the installed version before applying this entry. The release link,
+  immutable image tag, and OCI digest above are the publicly verified
+  provenance for `0.1.0-alpha.6`.
 
 ### 0.1.0-alpha.5 — Clean lifecycle, explicit memory privacy, and runtime truth
 

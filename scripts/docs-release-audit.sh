@@ -208,6 +208,14 @@ require_not_contains \
   docs/releases/v0.1.0-alpha.6.md \
   'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873'
 require_contains \
+  "published alpha.6 notes pin the public source commit" \
+  docs/releases/v0.1.0-alpha.6.md \
+  '797d093b44a93850b40f058691931c25f1701900'
+require_contains \
+  "published alpha.6 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.6.md \
+  'sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318'
+require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
   'Telegram is Rich-first for normal Captain replies'

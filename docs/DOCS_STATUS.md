@@ -4,29 +4,24 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Release Candidate
-
-`v0.1.0-alpha.6` is the current verified source candidate. It adds native
-Telegram Rich Messages, tool-wave activity boards, ephemeral idle progress,
-and stateful `ask_user` and error cards. Until GitHub assets and the
-multi-architecture OCI image are published and inspected, no public source
-commit or image digest is claimed for this version.
-
 ## Current Public Release
 
-`v0.1.0-alpha.5` is the current public prerelease. Its annotated GitHub source
-tag dereferences to commit `6d159dbf7597a0d7710e3362d4422e557c51ee10`, and the reviewed GitHub
+`v0.1.0-alpha.6` is the current public prerelease. It adds native Telegram Rich
+Messages, tool-wave activity boards, ephemeral idle progress, and stateful
+`ask_user` and error cards. Its annotated GitHub source tag dereferences to
+commit `797d093b44a93850b40f058691931c25f1701900`, and the reviewed GitHub
 Release contains 20 host/installer/manifest assets:
 
-- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.5>
-- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.5`
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.6>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6`
 - OCI index digest:
-  `sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873`
+  `sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318`
 
 The public OCI index is anonymously readable and contains both `linux/amd64`
 and `linux/arm64`. The moving `:alpha` channel resolved to the same digest at
-publication time; production automation should still pin the version tag or
-the digest explicitly.
+publication time. The release was built and published locally, and the GitHub
+Actions API returned zero runs. Production automation should still pin the
+version tag or the digest explicitly.
 
 ## Current Contract Docs
 
