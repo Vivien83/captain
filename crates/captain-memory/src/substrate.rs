@@ -39,8 +39,7 @@ impl MemorySubstrate {
     /// Open or create a memory substrate at the given database path.
     pub fn open(db_path: &Path, decay_rate: f32) -> CaptainResult<Self> {
         let conn = Connection::open(db_path).map_err(|e| CaptainError::Memory(e.to_string()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-            .map_err(|e| CaptainError::Memory(e.to_string()))?;
+        configure_durable_connection(&conn)?;
         run_migrations(&conn).map_err(|e| CaptainError::Memory(e.to_string()))?;
         let shared = Arc::new(Mutex::new(conn));
 
@@ -951,6 +950,17 @@ impl MemorySubstrate {
     }
 }
 
+fn configure_durable_connection(conn: &Connection) -> CaptainResult<()> {
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=FULL;
+         PRAGMA fullfsync=ON;
+         PRAGMA checkpoint_fullfsync=ON;
+         PRAGMA busy_timeout=5000;",
+    )
+    .map_err(|error| CaptainError::Memory(format!("configure durable SQLite: {error}")))
+}
+
 #[async_trait]
 impl Memory for MemorySubstrate {
     async fn get(&self, agent_id: AgentId, key: &str) -> CaptainResult<Option<serde_json::Value>> {
@@ -1066,6 +1076,32 @@ impl Memory for MemorySubstrate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_backed_substrate_enables_power_loss_safe_sqlite() {
+        let root = tempfile::tempdir().unwrap();
+        let substrate = MemorySubstrate::open(&root.path().join("captain.db"), 0.1).unwrap();
+        let connection = substrate.usage_conn();
+        let connection = connection.lock().unwrap();
+
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        let synchronous: i64 = connection
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        let fullfsync: i64 = connection
+            .query_row("PRAGMA fullfsync", [], |row| row.get(0))
+            .unwrap();
+        let checkpoint_fullfsync: i64 = connection
+            .query_row("PRAGMA checkpoint_fullfsync", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(journal_mode, "wal");
+        assert_eq!(synchronous, 2, "SQLite FULL synchronous mode");
+        assert_eq!(fullfsync, 1);
+        assert_eq!(checkpoint_fullfsync, 1);
+    }
 
     #[tokio::test]
     async fn test_substrate_kv() {

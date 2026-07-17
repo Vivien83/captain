@@ -26,10 +26,8 @@ pub(crate) fn upsert_channel_config(
         channel.insert(key.clone(), toml_value(value, *field_type));
     }
     channels.insert(channel_name.to_string(), toml::Value::Table(channel));
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
+    let serialized = toml::to_string_pretty(&doc)?;
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes())?;
     Ok(())
 }
 
@@ -70,6 +68,7 @@ pub(crate) fn remove_channel_config(
     {
         channels.remove(channel_name);
     }
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
+    let serialized = toml::to_string_pretty(&doc)?;
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes())?;
     Ok(())
 }

@@ -219,10 +219,8 @@ fn persist_codex_credentials(
         "auth_mode": creds.auth_mode,
         "source": creds.source,
     });
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    std::fs::write(path, serde_json::to_string_pretty(&payload).ok()?).ok()?;
+    let serialized = serde_json::to_string_pretty(&payload).ok()?;
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes()).ok()?;
     Some(access_token)
 }
 

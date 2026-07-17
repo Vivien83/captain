@@ -232,13 +232,13 @@ impl CaptainKernel {
 
         let backup_path = if secrets_path.exists() {
             let backup_dir = self.config.home_dir.join("secrets-backups");
-            std::fs::create_dir_all(&backup_dir)
+            captain_types::durable_fs::create_dir_all(&backup_dir)
                 .map_err(|e| format!("Failed to create secrets-backups dir: {e}"))?;
             let ts = chrono::Utc::now()
                 .format("%Y-%m-%dT%H-%M-%S-%3f")
                 .to_string();
             let backup_path = backup_dir.join(format!("secrets.env.{ts}"));
-            std::fs::copy(&secrets_path, &backup_path)
+            captain_types::durable_fs::atomic_copy(&secrets_path, &backup_path)
                 .map_err(|e| format!("Secret pre-write backup failed: {e}"))?;
             rotate_backups_with_prefix(&backup_dir, "secrets.env.", 20);
             Some(backup_path)
@@ -249,19 +249,15 @@ impl CaptainKernel {
         upsert_secret_line(&mut lines, key, value);
 
         let serialized = lines.join("\n") + "\n";
-        let tmp_path = secrets_path.with_extension("env.tmp");
-        std::fs::write(&tmp_path, serialized)
-            .map_err(|e| format!("Failed to write secrets.env.tmp: {e}"))?;
-        set_secret_file_permissions(&tmp_path)?;
-        std::fs::rename(&tmp_path, &secrets_path)
-            .map_err(|e| format!("Failed to rename temp secrets.env: {e}"))?;
+        captain_types::durable_fs::atomic_write(&secrets_path, serialized.as_bytes())
+            .map_err(|e| format!("Failed to persist secrets.env: {e}"))?;
         set_secret_file_permissions(&secrets_path)?;
 
         match self.handle_secret_read(key)? {
             Some(saved) if saved == value => {}
             _ => {
                 if let Some(bp) = &backup_path {
-                    let _ = std::fs::copy(bp, &secrets_path);
+                    let _ = captain_types::durable_fs::atomic_copy(bp, &secrets_path);
                 }
                 return Err(format!(
                     "Secret roundtrip validation failed for '{key}'.{}",
@@ -293,14 +289,14 @@ fn read_config_document(config_path: &Path) -> Result<(String, DocumentMut), Str
 
 fn create_config_backup(config_path: &Path, home_dir: &Path) -> Result<PathBuf, String> {
     let backup_dir = home_dir.join("config-backups");
-    if let Err(e) = std::fs::create_dir_all(&backup_dir) {
+    if let Err(e) = captain_types::durable_fs::create_dir_all(&backup_dir) {
         warn!(error = %e, "Could not create config-backups dir");
     }
     let ts = chrono::Utc::now()
         .format("%Y-%m-%dT%H-%M-%S-%3f")
         .to_string();
     let backup_path = backup_dir.join(format!("config.toml.{ts}"));
-    if let Err(e) = std::fs::copy(config_path, &backup_path) {
+    if let Err(e) = captain_types::durable_fs::atomic_copy(config_path, &backup_path) {
         warn!(error = %e, "Config pre-write backup failed — aborting write for safety");
         return Err(format!("Pre-write backup failed: {e}"));
     }
@@ -385,11 +381,8 @@ fn write_config_and_validate_roundtrip(
     old_top_keys: &BTreeSet<String>,
     backup_path: &Path,
 ) -> Result<(), String> {
-    let tmp_path = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, serialized)
-        .map_err(|e| format!("Failed to write config.toml.tmp: {e}"))?;
-    std::fs::rename(&tmp_path, config_path)
-        .map_err(|e| format!("Failed to rename temp config: {e}"))?;
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes())
+        .map_err(|e| format!("Failed to persist config.toml: {e}"))?;
 
     let reparsed = std::fs::read_to_string(config_path)
         .map_err(|e| e.to_string())
@@ -397,7 +390,7 @@ fn write_config_and_validate_roundtrip(
     match reparsed {
         Ok(value) => validate_roundtrip_top_keys(config_path, old_top_keys, backup_path, &value),
         Err(e) => {
-            let _ = std::fs::copy(backup_path, config_path);
+            let _ = captain_types::durable_fs::atomic_copy(backup_path, config_path);
             Err(format!(
                 "Roundtrip re-parse failed ({e}). Rolled back from {}",
                 backup_path.display()
@@ -418,7 +411,7 @@ fn validate_roundtrip_top_keys(
         .unwrap_or_default();
     let lost: Vec<&String> = old_top_keys.difference(&rt_keys).collect();
     if !lost.is_empty() {
-        let _ = std::fs::copy(backup_path, config_path);
+        let _ = captain_types::durable_fs::atomic_copy(backup_path, config_path);
         return Err(format!(
             "Roundtrip validation failed, keys lost after write: {lost:?}. \
              Rolled back from {}",

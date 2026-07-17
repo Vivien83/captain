@@ -295,12 +295,11 @@ impl WorkspaceState {
 
     /// Save state to the workspace's `.captain/workspace-state.json`.
     pub fn save(&self, workspace_root: &Path) -> Result<(), String> {
-        let dir = workspace_root.join(".captain");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .captain dir: {e}"))?;
-        let path = dir.join("workspace-state.json");
+        let path = workspace_root.join(".captain").join("workspace-state.json");
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize state: {e}"))?;
-        std::fs::write(&path, json).map_err(|e| format!("Failed to write state: {e}"))
+        captain_types::durable_fs::atomic_write(&path, json.as_bytes())
+            .map_err(|e| format!("Failed to persist workspace state: {e}"))
     }
 }
 

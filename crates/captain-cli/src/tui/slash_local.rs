@@ -209,13 +209,7 @@ pub(crate) fn undo_last_exchange(chat: &mut ChatState) -> bool {
 }
 
 pub(crate) fn clear_chat_preserving_identity(chat: &mut ChatState) {
-    let name = chat.agent_name.clone();
-    let model = chat.model_label.clone();
-    let mode = chat.mode_label.clone();
-    chat.reset();
-    chat.agent_name = name;
-    chat.model_label = model;
-    chat.mode_label = mode;
+    chat.reset_preserving_chat_identity();
 }
 
 #[cfg(test)]

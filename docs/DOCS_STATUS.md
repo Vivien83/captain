@@ -4,31 +4,45 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Current Public Release
+## Current Release Candidate
 
-`v0.1.0-alpha.6` is the current public prerelease. It adds native Telegram Rich
-Messages, tool-wave activity boards, ephemeral idle progress, and stateful
-`ask_user` and error cards. Its annotated GitHub source tag dereferences to
-commit `797d093b44a93850b40f058691931c25f1701900`, and the reviewed GitHub
-Release contains 20 host/installer/manifest assets:
+`v0.1.0-alpha.7` is the current candidate. It keeps kernel-backed tools
+available in direct TUI/CLI turns, supervises the macOS service after unexpected
+exits, follows the active model catalog window, and gives committed SQLite and
+file state an explicit power-loss boundary. Its intended immutable surfaces
+are:
+
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7`
+- host assets: five platforms, checksums, manifests, and four installers
+
+Public source commit, asset count, OCI digest, anonymous access, and platform
+inventory remain unclaimed until the live publication audit completes. The
+candidate must be built and published locally; GitHub Actions are a manual
+fallback only.
+
+Known `alpha.7` limitation: an explicit per-turn memory write opt-out suppresses
+the post-turn graph, MemPalace, reflection, and learning paths, but the core
+agent-loop finalizer still writes its local episodic interaction fragment. The
+normal transcript and audit remain intentional; this extra semantic fragment
+does not. Treat the opt-out as incomplete until a later immutable release
+closes the core finalizer path.
+
+## Last Verified Public Release
+
+`v0.1.0-alpha.6` remains the last fully verified public provenance while the
+candidate is being prepared. Its annotated source tag dereferences to commit
+`797d093b44a93850b40f058691931c25f1701900`; its 20-asset GitHub Release and
+anonymous AMD64/ARM64 OCI image are pinned by:
 
 - release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.6>
-- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6`
 - OCI index digest:
   `sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318`
 
-The public OCI index is anonymously readable and contains both `linux/amd64`
-and `linux/arm64`. The moving `:alpha` channel resolved to the same digest at
-publication time. The release was built and published locally, and the GitHub
-Actions API returned zero runs. Production automation should still pin the
-version tag or the digest explicitly.
-
-Known `alpha.6` limitation: an explicit per-turn memory write opt-out suppresses
-the post-turn graph, MemPalace, reflection, and learning paths, but the core
-agent-loop finalizer still writes its local episodic interaction fragment. The
-normal transcript and audit were always expected to remain; this extra semantic
-fragment was not. Treat the opt-out as incomplete in `alpha.6` until a later
-immutable release closes the core finalizer path.
+At publication time, `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6` and
+the moving `:alpha` channel resolved to that digest, and the GitHub Actions API
+returned zero runs. Production automation must pin an immutable version tag or
+digest explicitly.
 
 ## Current Contract Docs
 
@@ -165,6 +179,13 @@ decisions, and exposes them through authenticated Control/API plus configured
 Telegram delivery. Availability never changes an active model by itself:
 keeping is explicit, and switching requires an agent and a provider-portable
 session strategy (`new_session` or `compact_session`).
+
+Context capacity is model-scoped live metadata. Every turn resolves the
+configured provider/model from the runtime catalog; compaction, agent/session
+APIs, restored sessions, and the TUI use that same effective window. Codex
+uses the active `context_window`, never the optional `max_context_window`
+override ceiling. Capacity, approximate active transcript occupancy, and
+cumulative usage are distinct values and must remain distinct in docs and UI.
 
 Each agent's configured provider/model is authoritative for every normal turn.
 Captain does not substitute a cheaper or larger model from message complexity,

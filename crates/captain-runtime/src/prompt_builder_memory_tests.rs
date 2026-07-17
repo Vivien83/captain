@@ -38,6 +38,8 @@ fn test_memory_section_empty() {
     assert!(section.contains("prior sessions together"));
     assert!(!section.contains("Before starting any task"));
     assert!(!section.contains("Recalled memories"));
+    assert!(section.contains("Confirm only after memory_save succeeds"));
+    assert!(section.contains("say nothing was stored"));
 }
 
 #[test]

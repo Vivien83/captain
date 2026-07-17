@@ -140,7 +140,8 @@ async fn start_test_server_with_config(tmp: tempfile::TempDir, config: KernelCon
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route(
             "/api/agents/{id}",
-            axum::routing::delete(routes::kill_agent)
+            axum::routing::get(routes::get_agent)
+                .delete(routes::kill_agent)
                 .put(routes::update_agent)
                 .patch(routes::patch_agent),
         )
@@ -390,6 +391,8 @@ async fn test_detached_session_is_globally_listed_and_loadable() {
     assert_eq!(detail["session_id"], session_id);
     assert_eq!(detail["agent_id"], captain.id.to_string());
     assert_eq!(detail["message_count"], 0);
+    assert_eq!(detail["estimated_context_tokens"], 0);
+    assert!(detail["context_window_tokens"].as_u64().unwrap_or_default() > 0);
 }
 
 #[tokio::test]
@@ -423,6 +426,28 @@ async fn test_spawn_list_kill_agent() {
     let test_agent = agents.iter().find(|a| a["name"] == "test-agent").unwrap();
     assert_eq!(test_agent["id"], agent_id);
     assert_eq!(test_agent["model_provider"], "ollama");
+    assert!(
+        test_agent["context_window_tokens"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+
+    let resp = client
+        .get(format!("{}/api/agents/{}", server.base_url, agent_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    let parsed_agent_id =
+        captain_types::agent::AgentId(uuid::Uuid::parse_str(&agent_id).expect("valid agent UUID"));
+    let expected_context = server
+        .state
+        .kernel
+        .effective_context_window_for_agent(parsed_agent_id)
+        .expect("effective context window");
+    assert_eq!(detail["context_window_tokens"], expected_context);
 
     // --- Kill ---
     let resp = client
@@ -473,6 +498,8 @@ async fn test_agent_session_empty() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["message_count"], 0);
+    assert_eq!(body["estimated_context_tokens"], 0);
+    assert!(body["context_window_tokens"].as_u64().unwrap_or_default() > 0);
     assert_eq!(body["messages"].as_array().unwrap().len(), 0);
 }
 
@@ -1286,7 +1313,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route(
             "/api/agents/{id}",
-            axum::routing::delete(routes::kill_agent),
+            axum::routing::get(routes::get_agent).delete(routes::kill_agent),
         )
         .route(
             "/api/triggers",

@@ -254,10 +254,11 @@ api_key_env = "{api_key_env}"
 decay_rate = 0.05
 "#
         );
-        std::fs::write(&config_path, &default_config).unwrap_or_else(|e| {
-            ui::error_with_fix("Failed to write config", &e.to_string());
-            std::process::exit(1);
-        });
+        captain_types::durable_fs::atomic_write(&config_path, default_config.as_bytes())
+            .unwrap_or_else(|e| {
+                ui::error_with_fix("Failed to write config", &e.to_string());
+                std::process::exit(1);
+            });
         restrict_file_permissions(&config_path);
         ui::success(&format!("Created: {}", config_path.display()));
     }

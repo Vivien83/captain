@@ -49,8 +49,8 @@ pub fn seed_captain_project_rules_file(
     }
 
     let body = default_captain_project_rules(project_name, project_slug, project_goal);
-    match std::fs::write(&path, body) {
-        Ok(()) => ProjectRulesFileStatus::ok(path, false, true),
+    match captain_types::durable_fs::create_new(&path, body.as_bytes()) {
+        Ok(created) => ProjectRulesFileStatus::ok(path, !created, created),
         Err(err) => ProjectRulesFileStatus::err(path, err.to_string()),
     }
 }

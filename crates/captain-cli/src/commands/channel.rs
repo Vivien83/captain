@@ -261,7 +261,7 @@ fn maybe_write_channel_config(channel: &str, config_block: &str) {
     if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
         let mut content = existing;
         content.push_str(config_block);
-        if std::fs::write(&config_path, &content).is_ok() {
+        if captain_types::durable_fs::atomic_write(&config_path, content.as_bytes()).is_ok() {
             restrict_file_permissions(&config_path);
             ui::check_ok(&format!("Added {section_header} to config.toml"));
         } else {

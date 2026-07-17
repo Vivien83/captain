@@ -308,15 +308,11 @@ impl CredentialVault {
         let content = serde_json::to_string_pretty(&vault_file)
             .map_err(|e| ExtensionError::Vault(format!("Vault file serialization failed: {e}")))?;
 
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
         // Prepend OFV1 magic bytes for format detection
         let mut output = Vec::with_capacity(VAULT_MAGIC.len() + content.len());
         output.extend_from_slice(VAULT_MAGIC);
         output.extend_from_slice(content.as_bytes());
-        std::fs::write(&self.path, output)?;
+        captain_types::durable_fs::atomic_write(&self.path, &output)?;
         Ok(())
     }
 
@@ -434,9 +430,6 @@ fn store_keyring_key(key_b64: &str) -> Result<(), String> {
             .unwrap_or_else(std::env::temp_dir)
             .join("captain")
             .join(".keyring");
-        std::fs::create_dir_all(keyring_path.parent().unwrap())
-            .map_err(|e| format!("mkdir: {e}"))?;
-
         // Store encrypted with a machine-specific key
         let machine_id = machine_fingerprint();
         let mut hasher = Sha256::new();
@@ -452,7 +445,8 @@ fn store_keyring_key(key_b64: &str) -> Result<(), String> {
             .collect();
         let encoded =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &obfuscated);
-        std::fs::write(&keyring_path, encoded).map_err(|e| format!("write: {e}"))?;
+        captain_types::durable_fs::atomic_write(&keyring_path, encoded.as_bytes())
+            .map_err(|e| format!("write: {e}"))?;
         Ok(())
     }
     #[cfg(test)]

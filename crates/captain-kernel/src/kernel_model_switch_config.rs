@@ -153,7 +153,7 @@ fn backup_existing_model_switch_config(
     home_dir: &Path,
 ) -> KernelResult<Option<PathBuf>> {
     let backup_dir = home_dir.join("config-backups");
-    std::fs::create_dir_all(&backup_dir).map_err(|e| {
+    captain_types::durable_fs::create_dir_all(&backup_dir).map_err(|e| {
         model_switch_internal(format!("Failed to create config backup directory: {e}"))
     })?;
     if !config_path.exists() {
@@ -164,7 +164,7 @@ fn backup_existing_model_switch_config(
         .format("%Y-%m-%dT%H-%M-%S-%3f")
         .to_string();
     let path = backup_dir.join(format!("config.toml.{ts}"));
-    std::fs::copy(config_path, &path)
+    captain_types::durable_fs::atomic_copy(config_path, &path)
         .map_err(|e| model_switch_internal(format!("Config pre-write backup failed: {e}")))?;
     rotate_config_backups(&backup_dir, 20);
     Ok(Some(path))
@@ -225,15 +225,9 @@ fn serialize_guarded_model_switch_config(
 }
 
 fn write_model_switch_config(config_path: &Path, serialized: &str) -> KernelResult<()> {
-    let tmp_path = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, serialized).map_err(|e| {
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes()).map_err(|e| {
         model_switch_internal(format!(
-            "Failed to write config.toml.tmp for model switch: {e}"
-        ))
-    })?;
-    std::fs::rename(&tmp_path, config_path).map_err(|e| {
-        model_switch_internal(format!(
-            "Failed to atomically replace config.toml for model switch: {e}"
+            "Failed to persist config.toml for model switch: {e}"
         ))
     })
 }
@@ -251,7 +245,7 @@ fn validate_model_switch_config_roundtrip(
         })
     {
         if let Some(path) = backup_path {
-            let _ = std::fs::copy(path, config_path);
+            let _ = captain_types::durable_fs::atomic_copy(path, config_path);
         }
         return Err(model_switch_internal(format!(
             "Roundtrip validation failed after model switch ({e}); config rollback attempted"

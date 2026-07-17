@@ -296,7 +296,15 @@ side-effecting calls remain sequential.
 
 ### Block-Aware Compaction
 
-The session compactor handles all content block types (Text, ToolUse, ToolResult, Image) rather than assuming text-only messages. Auto-compaction triggers when the session exceeds the configured threshold (default 80% of context window), keeping the most recent messages (default 20).
+The session compactor handles all content block types (Text, ToolUse,
+ToolResult, Image) rather than assuming text-only messages. Before every turn,
+the kernel resolves the agent's configured provider/model in the live catalog
+and stores that effective context capacity on the session. Provider profiles
+then apply their own message and token ratios to that capacity; Codex uses an
+economy profile while other providers use the general profile. Model switches
+and hourly Codex catalog refreshes therefore change the next turn's budget
+without a daemon restart. Session usage totals remain separate from the active
+prompt estimate used for context pressure.
 
 ---
 
@@ -328,7 +336,11 @@ Entity-relation storage for structured knowledge. Agents can store entities (wit
 
 ### 4. Session Manager
 
-Conversation history storage. Each agent has a session containing its message history (user, assistant, tool use, tool result, image). Sessions track context window token counts. Sessions are persisted to SQLite and restored on kernel reboot.
+Conversation history storage. Each agent has a session containing its message
+history (user, assistant, tool use, tool result, image). Sessions persist the
+last effective context capacity for recovery, but the next turn refreshes it
+from the owning agent's currently configured model and live catalog. Sessions
+are persisted to SQLite and restored on kernel reboot.
 
 ### 5. Task Board
 
@@ -365,6 +377,31 @@ All memory operations go through `Arc<Mutex<Connection>>` with Tokio's
 automatically at boot. They cover current durable contracts such as canonical
 sessions, projects, checkpoints, and detached tool runs; operators should not
 couple integrations to a hard-coded schema version.
+
+A file-backed database opens in WAL mode with `synchronous=FULL`, a five-second
+busy timeout, and both `fullfsync` and `checkpoint_fullfsync` enabled. A
+successful SQLite commit is therefore the durability boundary for memory,
+sessions, agents, projects, usage, and run history. In-memory test databases do
+not apply this disk policy.
+
+Captain-managed state outside SQLite uses one filesystem commit protocol: a
+private sibling temporary file is written and flushed, the file is synchronized
+(`F_FULLFSYNC` after `fsync` on macOS), the final name is replaced atomically,
+and the containing directory is synchronized on Unix. Windows keeps the file
+flush and atomic replacement boundary but has no directory-sync primitive in
+this implementation. This covers configuration, secrets, queues, goals,
+schedules, checkpoints, model caches, agent workspaces, and cross-surface
+session mirrors. Successful deletion synchronizes the parent directory on
+Unix too.
+
+These guarantees apply to state Captain has reported as committed. A tool call
+or external side effect that was still in flight at power loss can instead be
+recovered as interrupted, retried according to its idempotency contract, or
+require operator review. Arbitrary project-file edits and remote systems keep
+their own durability semantics. The repository's
+`scripts/persistence-power-loss-smoke.sh` boots an isolated daemon, commits
+memory/project/config state, sends the process `SIGKILL`, restarts the same
+home, and checks the recovered values plus SQLite `integrity_check`.
 
 ---
 

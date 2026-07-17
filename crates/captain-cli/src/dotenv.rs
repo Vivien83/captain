@@ -267,42 +267,8 @@ fn write_env_file(path: &PathBuf, entries: &BTreeMap<String, String>) -> Result<
         }
     }
 
-    // Write atomically to avoid a TOCTOU window where the file is briefly
-    // world-readable under the default umask: write to a temp file in the
-    // same directory, lock down its permissions BEFORE any content is
-    // visible under the final name, then rename (atomic on the same
-    // filesystem) instead of writing then chmod'ing the real path in place.
-    let tmp_file_name = match path.file_name() {
-        Some(name) => {
-            let mut tmp_name = name.to_os_string();
-            tmp_name.push(".tmp");
-            tmp_name
-        }
-        None => return Err("Invalid .env file path".to_string()),
-    };
-    let tmp_path = path.with_file_name(tmp_file_name);
-
-    std::fs::write(&tmp_path, &content)
-        .map_err(|e| format!("Failed to write temporary .env file: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600))
-        {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(format!(
-                "Failed to set permissions on temporary .env file: {e}"
-            ));
-        }
-    }
-
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("Failed to finalize .env file: {e}")
-    })?;
-
-    Ok(())
+    captain_types::durable_fs::atomic_write(path, content.as_bytes())
+        .map_err(|e| format!("Failed to persist .env file: {e}"))
 }
 
 #[cfg(test)]

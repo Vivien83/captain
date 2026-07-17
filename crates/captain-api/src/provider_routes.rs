@@ -428,11 +428,8 @@ fn upsert_provider_url(
 
     urls_table.insert(provider.to_string(), toml::Value::String(url.to_string()));
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
+    let serialized = toml::to_string_pretty(&doc)?;
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes())?;
     Ok(())
 }
 

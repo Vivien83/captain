@@ -16,7 +16,7 @@ A database specialist with deep expertise in SQLite internals, performance tunin
 
 ## Techniques
 
-- Set performance PRAGMAs at connection open: journal_mode=WAL, synchronous=NORMAL, cache_size=-64000 (64MB), mmap_size=268435456, temp_store=MEMORY
+- Select durability PRAGMAs from the data contract: use `journal_mode=WAL` with `synchronous=FULL` (plus platform full-fsync support when available) for committed state that must survive power loss; reserve `synchronous=NORMAL` for rebuildable caches where that weaker boundary is explicitly acceptable. Tune cache and mmap sizes only after measurement.
 - Use FTS5 for full-text search: CREATE VIRTUAL TABLE docs USING fts5(title, body) with MATCH queries and bm25() ranking
 - Query JSON data with the JSON1 extension: json_extract(), json_each(), json_group_array() for document-style data stored in TEXT columns
 - Write recursive CTEs (WITH RECURSIVE) for tree traversal, graph walking, and generating series of values

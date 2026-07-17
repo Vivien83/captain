@@ -71,7 +71,8 @@ List all running agents.
     "state": "Running",
     "created_at": "2025-01-15T10:30:00Z",
     "model_provider": "groq",
-    "model_name": "llama-3.3-70b-versatile"
+    "model_name": "llama-3.3-70b-versatile",
+    "context_window_tokens": 131072
   }
 ]
 ```
@@ -93,6 +94,7 @@ Returns detailed information about a single agent.
     "provider": "groq",
     "model": "llama-3.3-70b-versatile"
   },
+  "context_window_tokens": 131072,
   "capabilities": {
     "tools": ["file_read", "file_list", "web_fetch"],
     "network": []
@@ -355,7 +357,8 @@ Returns the agent's conversation history.
   "session_id": "s1b2c3d4-...",
   "agent_id": "a1b2c3d4-...",
   "message_count": 4,
-  "context_window_tokens": 1250,
+  "context_window_tokens": 131072,
+  "estimated_context_tokens": 1250,
   "messages": [
     {
       "role": "User",
@@ -368,6 +371,11 @@ Returns the agent's conversation history.
   ]
 }
 ```
+
+`context_window_tokens` is the effective capacity of the owning agent's
+currently configured model, resolved from the live catalog. It is not a usage
+counter. `estimated_context_tokens` approximates the stored transcript's
+current occupancy; cumulative provider usage is reported separately.
 
 ### DELETE /api/agents/{id}
 
@@ -834,7 +842,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.6"
+  "version": "0.1.0-alpha.7"
 }
 ```
 
@@ -849,7 +857,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.6",
+  "version": "0.1.0-alpha.7",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -1108,6 +1116,11 @@ Load the public transcript and metadata for one persisted session without
 switching the agent. A missing UUID returns `404`. The bundled clients expose
 the same operation as `client.sessions.get(sessionId)` in JavaScript and
 `client.sessions.get(session_id)` in Python.
+
+The response uses the same transcript shape as the per-agent session endpoint,
+including live `context_window_tokens` and approximate
+`estimated_context_tokens`. If the owning agent is no longer registered, the
+last capacity persisted with the session is returned.
 
 ### POST /api/agents/{id}/session/reset
 

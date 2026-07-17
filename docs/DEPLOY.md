@@ -2,7 +2,7 @@
 
 Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
 container image. The current public release is the prerelease
-`v0.1.0-alpha.6`; pin it explicitly because GitHub's `/releases/latest`
+`v0.1.0-alpha.7`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 
 ## Host Install
@@ -10,8 +10,8 @@ endpoint excludes prereleases.
 macOS, Linux, or a Linux VPS:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.6 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.7 CAPTAIN_PROFILE=desktop bash
 ```
 
 Use `CAPTAIN_PROFILE=vps` for a service-oriented server install. The installer
@@ -19,6 +19,39 @@ selects the architecture, verifies the archive checksum and manifest, runs
 setup, installs a supported launchd/systemd service, starts Captain, and checks
 health. See [GitHub + VPS Install](deployment/github-vps-install.md) for Codex
 device login and non-interactive options.
+
+The native service is the production path for restart recovery. Launchd starts
+Captain at login and keeps it alive after unexpected exits; systemd uses
+`Restart=on-failure`. `captain service stop` is an intentional administrative
+stop and disables the active launchd job until `captain service start` is run.
+Use `captain service status` after a host restart to verify both the manager and
+daemon health.
+
+## Durability and Sudden Power Loss
+
+Keep `CAPTAIN_HOME` on durable local storage. Captain commits its SQLite state
+with WAL and `synchronous=FULL`; Captain-managed configuration, credentials,
+queues, checkpoints, and registries use synchronized atomic replacement. On
+macOS the file commit path also requests `F_FULLFSYNC`. Once Captain reports a
+state mutation as successful, the local commit is designed to survive process
+termination or sudden power loss, and the native service restarts the daemon
+after the host returns.
+
+This does not make an unfinished external side effect transactional. A shell,
+SSH, browser, project-file, provider, webhook, or other remote operation that
+was in flight can require inspection or idempotent retry after recovery. It
+also does not replace backups or protect against disk failure, filesystem
+corruption, or storage that ignores flush requests. Avoid network filesystems
+with unknown `fsync` semantics for the live Captain home.
+
+Maintainers can reproduce the local crash contract from a source checkout:
+
+```bash
+scripts/persistence-power-loss-smoke.sh
+```
+
+The script uses an isolated temporary home and sends the candidate daemon a
+real `SIGKILL`; never aim an ad-hoc kill test at a personal or production home.
 
 The macOS alpha binary is ad-hoc signed but not Apple-notarized. The Windows
 CLI zip is not Authenticode-signed. Verify the published SHA-256 sidecar before
@@ -29,14 +62,14 @@ approving first launch.
 The immutable image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
 
 docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
 ```
 
 The moving prerelease channel is `ghcr.io/vivien83/captain-agent-os:alpha`.
@@ -44,9 +77,10 @@ Production or reproducible deployments should use the immutable version tag.
 Public image pulls require no registry login.
 
 The named volume contains configuration, credentials, sessions, memory,
-projects, and audit state. The release image includes the checksum-pinned local
-embedding model and installs the architecture-specific ONNX Runtime during
-image assembly.
+projects, and audit state. Its durability ultimately depends on the Docker
+volume driver and host storage honoring flush requests. The release image
+includes the checksum-pinned local embedding model and installs the
+architecture-specific ONNX Runtime during image assembly.
 
 ## Compose
 
@@ -62,8 +96,8 @@ docker compose up -d --build
 To consume the published image without rebuilding:
 
 ```bash
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.6 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.6 docker compose up -d --no-build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.7 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.7 docker compose up -d --no-build
 ```
 
 The optional `personal`, `trusted`, and `yolo` overlays progressively grant
@@ -103,7 +137,7 @@ reviewing the target version. Container installs should pull the desired
 immutable tag and recreate the container:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
 docker rm -f captain
 # Re-run the same docker run command; captain-data preserves state.
 ```

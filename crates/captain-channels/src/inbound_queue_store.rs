@@ -7,7 +7,7 @@
 use crate::inbound_queue_types::{PendingInboundMessage, INBOUND_DEAD_LETTER_RETENTION_SECS};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const FORMAT_VERSION: u32 = 1;
 
@@ -99,35 +99,18 @@ impl InboundQueueStore {
 
     pub(crate) fn save_records(&self, records: &[PendingInboundRecord]) -> std::io::Result<()> {
         if records.is_empty() {
-            match std::fs::remove_file(&self.path) {
-                Ok(()) => return Ok(()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(err) => return Err(err),
-            }
-        }
-
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            captain_types::durable_fs::remove_file(&self.path)?;
+            return Ok(());
         }
 
         let payload = PersistedInboundQueue {
             version: FORMAT_VERSION,
             pending: records.iter().take(self.max_entries).cloned().collect(),
         };
-        let tmp = tmp_path(&self.path);
         let json = serde_json::to_string_pretty(&payload)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, &self.path)?;
-        Ok(())
+        captain_types::durable_fs::atomic_write(&self.path, json.as_bytes())
     }
-}
-
-fn tmp_path(path: &Path) -> PathBuf {
-    path.with_extension(match path.extension().and_then(|ext| ext.to_str()) {
-        Some(ext) if !ext.is_empty() => format!("{ext}.tmp"),
-        _ => "tmp".to_string(),
-    })
 }
 
 fn dead_letter_expired(dead_letter: &DeadInboundRecord) -> bool {

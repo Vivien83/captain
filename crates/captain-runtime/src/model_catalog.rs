@@ -398,8 +398,8 @@ impl ModelCatalog {
             .collect();
         let json = serde_json::to_string_pretty(&custom)
             .map_err(|e| format!("Failed to serialize custom models: {e}"))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write custom models file: {e}"))?;
+        captain_types::durable_fs::atomic_write(path, json.as_bytes())
+            .map_err(|e| format!("Failed to persist custom models file: {e}"))?;
         Ok(())
     }
 }

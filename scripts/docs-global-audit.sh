@@ -50,6 +50,7 @@ CONTRACT_DOCS=(
   docs/deployment/vps-web-terminal.md
   docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.5.md
+  docs/releases/v0.1.0-alpha.7.md
   docs/releases/v0.1.0-alpha.6.md
   docs/releases/v0.1.0-alpha.3.md
   docs/releases/v0.1.0-alpha.2.md
@@ -305,9 +306,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.6"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.6/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.7/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -326,9 +327,10 @@ require_contains "English README documents proactive Codex discovery" README.md 
 require_contains "French README documents proactive Codex discovery" README.fr.md "une actualisation horaire signale les nouveaux modèles"
 require_contains "Spanish README documents proactive Codex discovery" README.es.md "una actualización cada hora muestra los modelos nuevos"
 require_contains "Chinese README documents proactive Codex discovery" README.zh.md "每小时刷新一次目录"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.6"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.6] - 2026-07-16"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.6.md "# Captain 0.1.0-alpha.6"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.7"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.7] - 2026-07-17"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
+require_contains "historical alpha.6 release notes remain available" docs/releases/v0.1.0-alpha.6.md "# Captain 0.1.0-alpha.6"
 require_contains "historical alpha.5 release notes remain available" docs/releases/v0.1.0-alpha.5.md "# Captain 0.1.0-alpha.5"
 require_contains "Telegram docs pin Rich-first transport" docs/channel-adapters.md "Telegram is Rich-first for normal Captain replies"
 require_contains "channel family docs pin stateful ask_user" docs/captain-tools/channel.md '`ask_user` questions are stateful Rich cards'
@@ -337,8 +339,9 @@ require_contains "historical alpha.3 release notes remain available" docs/releas
 require_contains "DOC2 records the published alpha provenance" docs/DOCS_STATUS.md "797d093b44a93850b40f058691931c25f1701900"
 require_contains "DOC2 records the published multi-arch digest" docs/DOCS_STATUS.md "sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318"
 require_contains "agent changelog records the published multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318"
-require_contains "DOC2 discloses the alpha.6 memory opt-out limitation" docs/DOCS_STATUS.md "agent-loop finalizer still writes its local episodic interaction fragment"
-require_contains "memory docs disclose the alpha.6 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
+require_contains "DOC2 identifies the alpha.7 release candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the current candidate'
+require_contains "DOC2 discloses the alpha.7 memory opt-out limitation" docs/DOCS_STATUS.md "agent-loop finalizer still writes its local episodic interaction fragment"
+require_contains "memory docs disclose the alpha.7 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
 require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"
@@ -356,6 +359,18 @@ require_contains "runtime changelog pins Codex model consent" docs/captain-tools
 require_contains "provider guide pins hourly Codex refresh" docs/providers.md "then once per hour"
 require_contains "provider guide pins safe Codex session choices" docs/providers.md "Nouvelle session"
 require_contains "provider guide pins Codex catalog protocol" docs/providers.md '`client_version=1.0.0`'
+require_contains "provider guide pins dynamic model context" docs/providers.md 'Every turn resolves the configured provider/model against the live runtime'
+require_contains "provider guide distinguishes Codex active and maximum windows" docs/providers.md '`max_context_window` is an upper bound'
+require_contains "API distinguishes context capacity from occupancy" docs/api-reference.md '`estimated_context_tokens` approximates the stored transcript'
+require_contains "architecture resolves context on every turn" docs/architecture.md "Before every turn"
+require_contains "runtime uses the active Codex context field first" crates/captain-runtime/src/model_catalog_codex.rs '.context_window'
+require_contains "architecture pins power-loss-safe SQLite commits" docs/architecture.md '`synchronous=FULL`'
+require_contains "architecture pins macOS full-fsync state files" docs/architecture.md '`F_FULLFSYNC` after `fsync` on macOS'
+require_contains "deployment documents the isolated SIGKILL proof" docs/DEPLOY.md 'scripts/persistence-power-loss-smoke.sh'
+require_contains "runtime changelog exposes the durable commit boundary" docs/captain-tools/runtime-changelog.md 'explicit power-loss commit boundary'
+require_contains "public changelog exposes the durable commit boundary" CHANGELOG.md 'explicit power-loss commit boundary'
+require_contains "SQLite runtime enables full synchronous commits" crates/captain-memory/src/substrate.rs 'PRAGMA synchronous=FULL'
+require_contains "Captain state files use a central durable primitive" crates/captain-types/src/durable_fs.rs 'pending.persist(path)'
 require_contains "provider guide pins configured-model authority" docs/providers.md 'Every normal agent turn uses the provider and model declared on that agent.'
 require_contains "provider guide routes specialization through explicit sub-agents" docs/providers.md 'explicit specialist sub-agent'
 require_contains "provider guide rejects inferred fallback models" docs/providers.md 'never infers them from credentials present on the host.'

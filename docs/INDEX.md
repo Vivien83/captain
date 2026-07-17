@@ -22,6 +22,7 @@ Use this index to find the right document quickly.
 | [Deployment](DEPLOY.md) | Deployment guidance for local machines and VPS hosts |
 | [GitHub + VPS Install](deployment/github-vps-install.md) | Pinned public prerelease install and service setup |
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS considerations |
+| [0.1.0-alpha.7 Release Notes](releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
 | [0.1.0-alpha.6 Release Notes](releases/v0.1.0-alpha.6.md) | Telegram Rich Messages, live tool boards, ephemeral progress, and reliable controls |
 | [0.1.0-alpha.5 Release Notes](releases/v0.1.0-alpha.5.md) | Clean daemon shutdown and explicit memory write opt-out |
 | [0.1.0-alpha.4 Release Notes](releases/v0.1.0-alpha.4.md) | Authoritative corrections, complete active recall, and CLI continuation |

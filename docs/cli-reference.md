@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.6 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.7 bash
 ```
 
 ## Global Options
@@ -76,6 +76,11 @@ may remain callable by an exact name for existing operators, but they are not
 listed as primary product paths.
 
 Use `F1`-`F6` or `Tab`/`Shift+Tab` to switch primary hubs. Inside a hub, use `Alt+1`..`Alt+N` or `Alt+Left`/`Alt+Right` to switch subviews. In Chat, `Tab` still completes slash commands when the current draft starts with `/`.
+
+The Chat footer renders `ctx used/window` from the active agent's live model
+catalog entry. `used` follows the latest provider-reported prompt rather than
+the cumulative session bill; the denominator refreshes after model switches
+and cross-surface session restores.
 
 Press `Ctrl+C` to exit. A second `Ctrl+C` force-exits the process.
 

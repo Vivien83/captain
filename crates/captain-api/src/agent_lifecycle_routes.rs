@@ -71,7 +71,6 @@ pub async fn fleet_metrics(
 
 /// GET /api/agents - List all agents.
 pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let catalog = state.kernel.model_catalog.read().ok();
     let default_model = state.kernel.effective_default_model();
 
     let mut agents: Vec<serde_json::Value> = state
@@ -82,6 +81,11 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .map(|entry| {
             let provider = resolved_provider(&entry, default_model.provider.as_str());
             let model = resolved_model(&entry, default_model.model.as_str());
+            let context_window_tokens = state
+                .kernel
+                .effective_context_window_for_agent(entry.id)
+                .unwrap_or_default();
+            let catalog = state.kernel.model_catalog.read().ok();
             let (tier, auth_status) = catalog
                 .as_ref()
                 .map(|catalog| {
@@ -108,6 +112,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "model_provider": provider,
                 "model_name": model,
                 "model_tier": tier,
+                "context_window_tokens": context_window_tokens,
                 "auth_status": auth_status,
                 "ready": ready,
                 "profile": entry.manifest.profile,
@@ -148,6 +153,10 @@ pub async fn get_agent(
     let declared_capabilities = entry.manifest.capabilities.clone();
     let effective_capabilities = effective_manifest_capabilities(&entry.manifest);
     let resources = entry.manifest.resources.clone();
+    let context_window_tokens = state
+        .kernel
+        .effective_context_window_for_agent(agent_id)
+        .unwrap_or_default();
 
     (
         StatusCode::OK,
@@ -163,6 +172,7 @@ pub async fn get_agent(
                 "provider": entry.manifest.model.provider,
                 "model": entry.manifest.model.model,
             },
+            "context_window_tokens": context_window_tokens,
             "capabilities": declared_capabilities,
             "capabilities_effective": effective_capabilities,
             "resources": resources,

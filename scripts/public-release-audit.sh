@@ -35,6 +35,7 @@ required_files=(
   Cargo.toml
   README.md
   SECURITY.md
+  docs/releases/v0.1.0-alpha.7.md
   docs/releases/v0.1.0-alpha.6.md
   docs/releases/v0.1.0-alpha.5.md
   docs/releases/v0.1.0-alpha.4.md
@@ -51,11 +52,11 @@ done
 pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
-  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.6' \
+  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7' \
     "$ROOT_DIR/$readme" || fail "$readme does not link the immutable alpha"
-  grep -Fq 'releases/download/v0.1.0-alpha.6/install.sh' \
+  grep -Fq 'releases/download/v0.1.0-alpha.7/install.sh' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the prerelease installer"
-  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6' \
+  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable alpha image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
@@ -64,7 +65,7 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
     fail "$readme still exposes the private release candidate"
   fi
 done
-grep -Fq '### 0.1.0-alpha.6' \
+grep -Fq '### 0.1.0-alpha.7' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
   || fail "agent-facing changelog does not identify the public alpha"
 grep -Fq 'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873' \

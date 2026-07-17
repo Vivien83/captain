@@ -203,13 +203,13 @@ fn document_top_keys(doc: &toml_edit::DocumentMut) -> BTreeSet<String> {
 
 fn create_web_credentials_backup(home: &Path, config_path: &Path) -> Result<PathBuf, String> {
     let backup_dir = home.join("config-backups");
-    std::fs::create_dir_all(&backup_dir)
+    captain_types::durable_fs::create_dir_all(&backup_dir)
         .map_err(|e| format!("Failed to create config-backups dir: {e}"))?;
     let ts = chrono::Utc::now()
         .format("%Y-%m-%dT%H-%M-%S-%3f")
         .to_string();
     let backup_path = backup_dir.join(format!("config.toml.web-auth.{ts}"));
-    std::fs::copy(config_path, &backup_path)
+    captain_types::durable_fs::atomic_copy(config_path, &backup_path)
         .map_err(|e| format!("Config pre-write backup failed: {e}"))?;
     Ok(backup_path)
 }
@@ -278,12 +278,8 @@ fn write_web_credentials_config_atomically(
     config_path: &Path,
     serialized: &str,
 ) -> Result<(), String> {
-    let tmp_path = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, serialized)
-        .map_err(|e| format!("Failed to write config.toml.tmp: {e}"))?;
-    set_private_file_permissions(&tmp_path)?;
-    std::fs::rename(&tmp_path, config_path)
-        .map_err(|e| format!("Failed to rename temp config: {e}"))?;
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes())
+        .map_err(|e| format!("Failed to persist config.toml: {e}"))?;
     set_private_file_permissions(config_path)
 }
 
@@ -296,7 +292,7 @@ fn validate_web_credentials_roundtrip(
         .map_err(|e| format!("Failed to re-read config.toml: {e}"))?
         .parse()
         .map_err(|e| {
-            let _ = std::fs::copy(backup_path, config_path);
+            let _ = captain_types::durable_fs::atomic_copy(backup_path, config_path);
             format!(
                 "Roundtrip re-parse failed ({e}). Rolled back from {}",
                 backup_path.display()
@@ -307,7 +303,7 @@ fn validate_web_credentials_roundtrip(
     if lost.is_empty() {
         return Ok(());
     }
-    let _ = std::fs::copy(backup_path, config_path);
+    let _ = captain_types::durable_fs::atomic_copy(backup_path, config_path);
     Err(format!(
         "Roundtrip validation failed, keys lost after write: {lost:?}. Rolled back from {}",
         backup_path.display()

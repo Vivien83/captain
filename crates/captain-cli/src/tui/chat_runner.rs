@@ -240,6 +240,8 @@ impl StandaloneChat {
                 self.chat.tool_use_end(&id, &name, &input_str);
             }
             StreamEvent::ContentComplete { usage, .. } => {
+                self.chat
+                    .record_context_usage(usage.input_tokens, usage.output_tokens);
                 self.chat.last_tokens = Some((usage.input_tokens, usage.output_tokens));
                 self.chat.last_cached_input_tokens = usage.cached_input_tokens;
                 self.chat.last_cache_creation_tokens = usage.cache_creation_tokens;
@@ -312,6 +314,12 @@ impl StandaloneChat {
                     self.chat.push_message(Role::Agent, r.response);
                 }
                 if r.total_usage.input_tokens > 0 || r.total_usage.output_tokens > 0 {
+                    if self.chat.context_stream_checkpoint_chars.is_none() {
+                        self.chat.record_context_usage(
+                            r.total_usage.input_tokens,
+                            r.total_usage.output_tokens,
+                        );
+                    }
                     self.chat.last_tokens =
                         Some((r.total_usage.input_tokens, r.total_usage.output_tokens));
                     self.chat.last_cached_input_tokens = r.total_usage.cached_input_tokens;
@@ -354,11 +362,7 @@ impl StandaloneChat {
                 let Ok(body) = resp.json::<serde_json::Value>() else {
                     return;
                 };
-                if let Some(label) =
-                    crate::tui::screens::chat_model_label::model_label_from_agent_metadata(&body)
-                {
-                    self.chat.model_label = label;
-                }
+                self.chat.apply_agent_runtime_metadata(&body);
             }
             Backend::InProcess { kernel } => {
                 let Some(agent_id) = self.agent_id_inprocess else {
@@ -369,6 +373,9 @@ impl StandaloneChat {
                         "{}/{}",
                         entry.manifest.model.provider, entry.manifest.model.model
                     );
+                }
+                if let Some(context_window) = kernel.effective_context_window_for_agent(agent_id) {
+                    self.chat.set_context_window_tokens(context_window as u64);
                 }
             }
             Backend::None => {}
@@ -531,6 +538,7 @@ impl StandaloneChat {
         self.chat.is_streaming = true;
         self.chat.thinking = true;
         self.chat.streaming_chars = 0;
+        self.chat.begin_context_stream();
         self.chat.last_tokens = None;
         self.chat.last_cached_input_tokens = 0;
         self.chat.last_cache_creation_tokens = 0;
@@ -635,7 +643,7 @@ impl StandaloneChat {
 
     fn start_fresh_local_chat_session(&mut self) {
         let key = self.chat_session_prefix();
-        self.chat.reset();
+        self.chat.reset_preserving_chat_identity();
         if let Some(key) = key {
             let new_key = format!(
                 "{key}-{}",
@@ -1182,6 +1190,9 @@ impl StandaloneChat {
                                             .to_string(),
                                         provider: m["provider"].as_str().unwrap_or("").to_string(),
                                         tier: m["tier"].as_str().unwrap_or("Balanced").to_string(),
+                                        context_window: m["context_window"]
+                                            .as_u64()
+                                            .unwrap_or_default(),
                                     })
                                     .collect()
                             })
@@ -1201,6 +1212,7 @@ impl StandaloneChat {
                         display_name: e.display_name.clone(),
                         provider: e.provider.clone(),
                         tier: format!("{:?}", e.tier),
+                        context_window: e.context_window,
                     })
                     .collect()
             }
@@ -1317,7 +1329,9 @@ impl StandaloneChat {
                     if let Some(label) = label {
                         self.chat.model_label = label;
                     }
+                    self.chat.apply_model_context_window(model_id);
                     self.chat.push_message(Role::System, message);
+                    self.refresh_active_chat_metadata();
                 }
             }
             Ok(r) => self.chat.push_message(
@@ -1371,7 +1385,9 @@ impl StandaloneChat {
                     "{}/{}",
                     result.plan.target_provider, result.plan.target_model
                 );
+                self.chat.apply_model_context_window(model_id);
                 self.chat.push_message(Role::System, result.message);
+                self.refresh_active_chat_metadata();
             }
             Err(e) => self
                 .chat
@@ -1861,6 +1877,8 @@ mod tests {
         state.chat.scroll_offset = 7;
         let detail = serde_json::json!({
             "label": " Web session ",
+            "context_window_tokens": 272000,
+            "estimated_context_tokens": 1234,
             "messages": [
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "   "},
@@ -1885,6 +1903,8 @@ mod tests {
         assert!(matches!(state.chat.messages[1].role, Role::Agent));
         assert!(matches!(state.chat.messages[2].role, Role::Tool));
         assert_eq!(state.chat.messages[0].text, "hello");
+        assert_eq!(state.chat.context_window_tokens, 272_000);
+        assert_eq!(state.chat.current_context_tokens, 1_234);
         assert!(state.chat.messages[1].text.contains("[Image: image/png]"));
         assert!(state.chat.messages[2].text.contains("[Tool: read_file]"));
         assert_eq!(public_session_label(&detail), " Web session ");

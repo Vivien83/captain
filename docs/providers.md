@@ -45,6 +45,28 @@ curl -sS -H "Authorization: Bearer $CAPTAIN_API_KEY" \
   http://127.0.0.1:50051/api/models/updates
 ```
 
+## Context Window Authority
+
+Every turn resolves the configured provider/model against the live runtime
+catalog. That model entry supplies the effective context capacity used by
+pre-loop compaction, post-loop compaction, session metadata, API responses,
+and the TUI `ctx used/window` meter. A model switch changes the budget without
+requiring a Captain restart, and reopening a session refreshes its capacity
+from the model currently configured on its owning agent.
+
+For Codex, Captain reads the official cache's active `context_window` field.
+`max_context_window` is an upper bound for an explicit Codex override, not the
+default active window, so Captain does not promote it to the normal budget.
+When an older cache omits active metadata, Captain uses a conservative bounded
+fallback instead of assuming the largest advertised ceiling. Inspect the
+installed truth with `captain models list` or `GET /api/models`; do not copy a
+context size from an old release note.
+
+Session token totals are billing/usage counters, not current context pressure.
+The TUI uses the latest provider-reported prompt usage and adds only unreported
+stream output. Session APIs expose `context_window_tokens` for capacity and
+`estimated_context_tokens` for approximate transcript occupancy.
+
 ## API-Key Providers
 
 Captain also supports native and OpenAI-compatible providers. Set only the

@@ -161,7 +161,7 @@ pub async fn setup_integration(
         if let Err(e) = vault_set(&full_key, value) {
             // Best-effort rollback: restore backup if we created one.
             if let Some(ref bp) = backup_path {
-                let _ = std::fs::copy(bp, config_path);
+                let _ = captain_types::durable_fs::atomic_copy(bp, config_path);
             }
             return Err(format!("vault write failed for {full_key}: {e}"));
         }
@@ -177,7 +177,7 @@ pub async fn setup_integration(
     for (env_name, env_value) in &env_pairs {
         if let Err(e) = vault_set(env_name, env_value) {
             if let Some(ref bp) = backup_path {
-                let _ = std::fs::copy(bp, config_path);
+                let _ = captain_types::durable_fs::atomic_copy(bp, config_path);
             }
             return Err(format!("env-export persistence failed for {env_name}: {e}"));
         }
@@ -199,7 +199,7 @@ pub async fn setup_integration(
 
     if let Err(e) = apply_config_patch(config_path, &patches) {
         if let Some(ref bp) = backup_path {
-            let _ = std::fs::copy(bp, config_path);
+            let _ = captain_types::durable_fs::atomic_copy(bp, config_path);
         }
         return Err(format!("config patch failed: {e}"));
     }
@@ -241,7 +241,8 @@ pub fn backup_config(config_path: &Path) -> Result<Option<PathBuf>, String> {
     let mut bak = config_path.as_os_str().to_owned();
     bak.push(format!(".bak.{ts}"));
     let bak_path = PathBuf::from(bak);
-    std::fs::copy(config_path, &bak_path).map_err(|e| format!("backup copy failed: {e}"))?;
+    captain_types::durable_fs::atomic_copy(config_path, &bak_path)
+        .map_err(|e| format!("backup copy failed: {e}"))?;
     Ok(Some(bak_path))
 }
 
@@ -282,11 +283,8 @@ pub fn apply_config_patch(config_path: &Path, patches: &[ConfigPatch]) -> Result
         leaf_table.insert(&patch.key, patch.value.clone());
     }
 
-    // Atomic write: write to sibling tmp + rename.
-    let tmp = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp, doc.to_string()).map_err(|e| format!("write tmp: {e}"))?;
-    std::fs::rename(&tmp, config_path).map_err(|e| format!("rename tmp -> config: {e}"))?;
-    Ok(())
+    captain_types::durable_fs::atomic_write(config_path, doc.to_string().as_bytes())
+        .map_err(|e| format!("persist config: {e}"))
 }
 
 #[cfg(test)]

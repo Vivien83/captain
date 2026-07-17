@@ -20,38 +20,42 @@ pub(crate) fn cmd_start(config: Option<PathBuf>, yolo: bool) {
     println!("  Starting daemon...");
     ui::blank();
 
+    // MemPalace installation uses blocking HTTP/process work. Keep the whole
+    // preflight outside Tokio: dropping reqwest's blocking runtime from inside
+    // an async context panics and can prevent a fresh home from ever booting.
+    let mut kernel_config = captain_kernel::config::load_config(config.as_deref());
+    set_daemon_working_directory(&kernel_config.home_dir);
+    std::env::set_var("CAPTAIN_HOME", &kernel_config.home_dir);
+    let memory_is_required =
+        kernel_config.memory.backend == captain_types::config::MemoryBackend::Mempalace;
+    let memory_was_ready = captain_runtime::native_mempalace::status().ready;
+    if memory_is_required && !memory_was_ready {
+        ui::hint("Managed MemPalace is missing or degraded; checking it before boot.");
+    }
+    match super::memory_native::ensure_native_mempalace_for_config(&kernel_config) {
+        Ok(NativeMempalaceStartOutcome::Repaired) => {
+            ui::success("Managed MemPalace was repaired and verified");
+        }
+        Ok(NativeMempalaceStartOutcome::Ready | NativeMempalaceStartOutcome::NotRequired) => {}
+        Ok(NativeMempalaceStartOutcome::Disabled) => ui::warn_with_fix(
+            "Managed MemPalace installation was explicitly disabled; semantic memory is degraded.",
+            "Unset CAPTAIN_MEMPALACE_INSTALL or run `captain memory install` before production use.",
+        ),
+        Err(error) => {
+            ui::error_with_fix(
+                &format!("Managed MemPalace is not production-ready: {error}"),
+                "Run `captain memory doctor`, then `captain memory install --force`.",
+            );
+            std::process::exit(1);
+        }
+    }
+    if yolo {
+        kernel_config.approval.auto_approve = true;
+        kernel_config.approval.apply_shorthands();
+    }
+
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let mut kernel_config = captain_kernel::config::load_config(config.as_deref());
-        set_daemon_working_directory(&kernel_config.home_dir);
-        std::env::set_var("CAPTAIN_HOME", &kernel_config.home_dir);
-        let memory_is_required = kernel_config.memory.backend
-            == captain_types::config::MemoryBackend::Mempalace;
-        let memory_was_ready = captain_runtime::native_mempalace::status().ready;
-        if memory_is_required && !memory_was_ready {
-            ui::hint("Managed MemPalace is missing or degraded; checking it before boot.");
-        }
-        match super::memory_native::ensure_native_mempalace_for_config(&kernel_config) {
-            Ok(NativeMempalaceStartOutcome::Repaired) => {
-                ui::success("Managed MemPalace was repaired and verified");
-            }
-            Ok(NativeMempalaceStartOutcome::Ready | NativeMempalaceStartOutcome::NotRequired) => {}
-            Ok(NativeMempalaceStartOutcome::Disabled) => ui::warn_with_fix(
-                "Managed MemPalace installation was explicitly disabled; semantic memory is degraded.",
-                "Unset CAPTAIN_MEMPALACE_INSTALL or run `captain memory install` before production use.",
-            ),
-            Err(error) => {
-                ui::error_with_fix(
-                    &format!("Managed MemPalace is not production-ready: {error}"),
-                    "Run `captain memory doctor`, then `captain memory install --force`.",
-                );
-                std::process::exit(1);
-            }
-        }
-        if yolo {
-            kernel_config.approval.auto_approve = true;
-            kernel_config.approval.apply_shorthands();
-        }
+    rt.block_on(async move {
         let kernel = match CaptainKernel::boot_with_config(kernel_config) {
             Ok(k) => k,
             Err(e) => {

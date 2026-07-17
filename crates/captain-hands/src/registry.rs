@@ -68,7 +68,7 @@ impl HandRegistry {
             .collect();
         let json = serde_json::to_string_pretty(&entries)
             .map_err(|e| HandError::Config(format!("serialize hand state: {e}")))?;
-        std::fs::write(path, json)
+        captain_types::durable_fs::atomic_write(path, json.as_bytes())
             .map_err(|e| HandError::Config(format!("write hand state: {e}")))?;
         Ok(())
     }
@@ -716,6 +716,24 @@ mod tests {
         let removed = reg.deactivate(instance.instance_id).unwrap();
         assert_eq!(removed.hand_id, "clip");
         assert!(reg.list_instances().is_empty());
+    }
+
+    #[test]
+    fn active_hand_state_persists_into_a_new_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("nested/hands.json");
+        let reg = HandRegistry::new();
+        reg.load_bundled();
+        let instance = reg.activate("clip", HashMap::new()).unwrap();
+        let agent_id = AgentId::new();
+        reg.set_agent(instance.instance_id, agent_id).unwrap();
+
+        reg.persist_state(&path).unwrap();
+
+        let restored = HandRegistry::load_state(&path);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].0, "clip");
+        assert_eq!(restored[0].2, Some(agent_id));
     }
 
     #[test]

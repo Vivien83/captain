@@ -289,7 +289,10 @@ impl CaptainKernel {
         if let Some(ref workspace) = entry.manifest.workspace {
             let mem_dir = workspace.join("memory");
             let filename = format!("{date}-{slug}.md");
-            let _ = std::fs::write(mem_dir.join(&filename), &summary);
+            let _ = captain_types::durable_fs::atomic_write(
+                &mem_dir.join(&filename),
+                summary.as_bytes(),
+            );
         }
 
         debug!(

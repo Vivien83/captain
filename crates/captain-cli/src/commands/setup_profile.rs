@@ -292,7 +292,8 @@ pub(crate) fn write_first_run_user_profile(
         format!("{}\n\n{}", existing.trim_end(), block)
     };
 
-    std::fs::write(&path, updated).map_err(|e| format!("write {}: {e}", path.display()))?;
+    captain_types::durable_fs::atomic_write(&path, updated.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     restrict_file_permissions(&path);
     Ok(())
 }

@@ -26,6 +26,7 @@ pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
             chat.tool_use_end(&id, &name, &input_str);
         }
         StreamEvent::ContentComplete { usage, .. } => {
+            chat.record_context_usage(usage.input_tokens, usage.output_tokens);
             chat.last_tokens = Some((usage.input_tokens, usage.output_tokens));
             chat.last_cached_input_tokens = usage.cached_input_tokens;
             chat.last_cache_creation_tokens = usage.cache_creation_tokens;

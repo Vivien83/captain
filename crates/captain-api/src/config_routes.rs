@@ -148,14 +148,14 @@ fn create_config_snapshot(
     config_path: &Path,
     backup_dir: &Path,
 ) -> Result<std::path::PathBuf, String> {
-    std::fs::create_dir_all(backup_dir)
+    captain_types::durable_fs::create_dir_all(backup_dir)
         .map_err(|error| format!("Failed to create config backup dir: {error}"))?;
     let ts = chrono::Utc::now()
         .format("%Y-%m-%dT%H-%M-%S-%3f")
         .to_string();
     let snapshot_path = backup_dir.join(format!("config.toml.raw-editor.{ts}"));
     if config_path.exists() {
-        std::fs::copy(config_path, &snapshot_path)
+        captain_types::durable_fs::atomic_copy(config_path, &snapshot_path)
             .map_err(|error| format!("Failed to create config snapshot: {error}"))?;
         tracing::info!("Config snapshot saved to {}", snapshot_path.display());
     }
@@ -163,14 +163,8 @@ fn create_config_snapshot(
 }
 
 fn write_raw_config_atomically(config_path: &Path, content: &str) -> Result<(), String> {
-    let tmp_path = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, content)
-        .map_err(|error| format!("Failed to write config temp file: {error}"))
-        .and_then(|_| set_config_file_permissions(&tmp_path))
-        .and_then(|_| {
-            std::fs::rename(&tmp_path, config_path)
-                .map_err(|error| format!("Failed to replace config.toml: {error}"))
-        })
+    captain_types::durable_fs::atomic_write(config_path, content.as_bytes())
+        .map_err(|error| format!("Failed to persist config.toml: {error}"))
         .and_then(|_| set_config_file_permissions(config_path))
         .and_then(|_| {
             let written = std::fs::read_to_string(config_path)
@@ -183,7 +177,7 @@ fn rollback_config_snapshot(config_path: &Path, snapshot_path: &Path) -> bool {
     if !snapshot_path.exists() {
         return false;
     }
-    let _ = std::fs::copy(snapshot_path, config_path);
+    let _ = captain_types::durable_fs::atomic_copy(snapshot_path, config_path);
     let _ = set_config_file_permissions(config_path);
     true
 }
@@ -498,10 +492,10 @@ fn validate_and_write_config_table(
             format!("serialize failed: {error}"),
         )
     })?;
-    std::fs::write(config_path, &toml_string).map_err(|error| {
+    captain_types::durable_fs::atomic_write(config_path, toml_string.as_bytes()).map_err(|error| {
         config_set_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("write failed: {error}"),
+            format!("persist failed: {error}"),
         )
     })
 }

@@ -46,8 +46,8 @@ export PATH="$HOME/.captain/bin:$PATH"
 GitHub's `/releases/latest` route excludes prereleases. Pin the alpha tag:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.6 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.7 bash
 ```
 
 No GitHub token is required for the official public repository. A token is
@@ -203,8 +203,8 @@ should not be the first production integration.
 The public alpha image supports Linux AMD64 and ARM64:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
-docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6 --version
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
+docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7 --version
 docker logs captain
 ```
 
@@ -230,6 +230,25 @@ captain reset --factory
 
 Do not use `rm -rf ~/.captain` as routine troubleshooting. It bypasses the
 snapshot, service shutdown, and preservation safeguards.
+
+## After an Abrupt Shutdown
+
+After a power cut or forced process termination, let launchd/systemd restart
+Captain and inspect the live state before changing files:
+
+```bash
+captain service status
+captain status
+captain doctor --full
+```
+
+Committed memory, sessions, configuration, queues, and control-plane state use
+the durable storage contract described in
+[Architecture](architecture.md#sqlite-architecture). Work that was still in
+flight can be marked interrupted or require a safe retry. Do not delete
+`captain.db-wal`, `captain.db-shm`, temporary state files, or session data by
+hand; collect a snapshot and sanitized diagnostics if integrity or recovery
+still fails.
 
 ## Performance
 

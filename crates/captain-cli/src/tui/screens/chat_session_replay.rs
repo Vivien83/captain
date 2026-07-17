@@ -31,6 +31,9 @@ fn apply_loaded_session(state: &mut ChatState, key: &str, path: &Path, loaded: P
     state.authoritative_session_id = loaded.session_id;
     state.authoritative_agent_id = loaded.agent_id;
     state.session_created_at = loaded.created_at;
+    state.current_context_tokens = loaded.current_context_tokens;
+    state.context_window_tokens = loaded.context_window_tokens;
+    state.context_stream_checkpoint_chars = None;
     state.session_input_tokens = loaded.session_input_tokens;
     state.session_output_tokens = loaded.session_output_tokens;
     state.session_cached_input_tokens = loaded.session_cached_input_tokens;

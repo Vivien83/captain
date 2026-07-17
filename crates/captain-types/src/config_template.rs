@@ -92,7 +92,8 @@ pub fn reconcile_file(
     if added.added_keys.is_empty() {
         return Ok(Vec::new());
     }
-    std::fs::write(path, &added.reconciled).map_err(ReconcileError::Io)?;
+    crate::durable_fs::atomic_write(path, added.reconciled.as_bytes())
+        .map_err(ReconcileError::Io)?;
     Ok(added.added_keys)
 }
 

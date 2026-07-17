@@ -238,16 +238,9 @@ fn write_secret_env_safe(path: &FsPath, key: &str, value: &str) -> Result<(), St
     };
     lines.retain(|line| !line.starts_with(&format!("{key}=")));
     lines.push(format!("{key}={value}"));
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create secrets directory: {error}"))?;
-    }
-    let tmp_path = path.with_extension("env.tmp");
-    std::fs::write(&tmp_path, lines.join("\n") + "\n")
-        .map_err(|error| format!("failed to write temp secrets.env: {error}"))?;
-    set_secret_file_permissions(&tmp_path)?;
-    std::fs::rename(&tmp_path, path)
-        .map_err(|error| format!("failed to commit secrets.env: {error}"))?;
+    let serialized = lines.join("\n") + "\n";
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes())
+        .map_err(|error| format!("failed to persist secrets.env: {error}"))?;
     set_secret_file_permissions(path)?;
     Ok(())
 }
@@ -262,12 +255,9 @@ fn remove_secret_env_safe(path: &FsPath, key: &str) -> Result<(), String> {
         .filter(|line| !line.starts_with(&format!("{key}=")))
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let tmp_path = path.with_extension("env.tmp");
-    std::fs::write(&tmp_path, lines.join("\n") + "\n")
-        .map_err(|error| format!("failed to write temp secrets.env: {error}"))?;
-    set_secret_file_permissions(&tmp_path)?;
-    std::fs::rename(&tmp_path, path)
-        .map_err(|error| format!("failed to commit secrets.env: {error}"))?;
+    let serialized = lines.join("\n") + "\n";
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes())
+        .map_err(|error| format!("failed to persist secrets.env: {error}"))?;
     set_secret_file_permissions(path)?;
     Ok(())
 }

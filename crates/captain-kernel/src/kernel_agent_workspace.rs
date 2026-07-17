@@ -5,8 +5,14 @@ use std::path::Path;
 
 /// Create workspace directory structure for an agent.
 pub(crate) fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
+    captain_types::durable_fs::create_dir_all(workspace).map_err(|e| {
+        KernelError::Captain(CaptainError::Internal(format!(
+            "Failed to create workspace {}: {e}",
+            workspace.display()
+        )))
+    })?;
     for subdir in &["data", "output", "sessions", "skills", "logs", "memory"] {
-        std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
+        captain_types::durable_fs::create_dir_all(&workspace.join(subdir)).map_err(|e| {
             KernelError::Captain(CaptainError::Internal(format!(
                 "Failed to create workspace dir {}/{subdir}: {e}",
                 workspace.display()
@@ -18,9 +24,10 @@ pub(crate) fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
         "created_at": chrono::Utc::now().to_rfc3339(),
         "workspace": workspace.display().to_string(),
     });
-    let _ = std::fs::write(
-        workspace.join("AGENT.json"),
-        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    let serialized = serde_json::to_string_pretty(&meta).unwrap_or_default();
+    let _ = captain_types::durable_fs::atomic_write(
+        &workspace.join("AGENT.json"),
+        serialized.as_bytes(),
     );
     Ok(())
 }
@@ -31,9 +38,6 @@ pub(crate) fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
 /// copies caused agent-specific placeholders to shadow the real user profile.
 /// Uses `create_new` to never overwrite existing files (preserves user edits).
 pub(crate) fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
     let soul_content = format!(
         "# Soul\n\
          You are {}. {}\n\
@@ -86,34 +90,14 @@ pub(crate) fn generate_identity_files(workspace: &Path, manifest: &AgentManifest
     };
 
     for (filename, content) in files {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(workspace.join(filename))
-        {
-            Ok(mut f) => {
-                let _ = f.write_all(content.as_bytes());
-            }
-            Err(_) => {
-                // File already exists — preserve user edits
-            }
-        }
+        let _ =
+            captain_types::durable_fs::create_new(&workspace.join(filename), content.as_bytes());
     }
 
     // Write HEARTBEAT.md for autonomous agents.
     if let Some(ref hb) = heartbeat_content {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(workspace.join("HEARTBEAT.md"))
-        {
-            Ok(mut f) => {
-                let _ = f.write_all(hb.as_bytes());
-            }
-            Err(_) => {
-                // File already exists — preserve user edits
-            }
-        }
+        let _ =
+            captain_types::durable_fs::create_new(&workspace.join("HEARTBEAT.md"), hb.as_bytes());
     }
 }
 

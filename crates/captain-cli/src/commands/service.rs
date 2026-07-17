@@ -436,10 +436,20 @@ fn launchd_restart() -> Result<(), String> {
 
 fn launchd_stop() -> Result<(), String> {
     let domain = launchd_domain()?;
-    run_checked(
-        "launchctl",
-        &["kill", "TERM", &format!("{domain}/{CAPTAIN_LAUNCHD_LABEL}")],
-    )
+    let target = format!("{domain}/{CAPTAIN_LAUNCHD_LABEL}");
+    match run_checked("launchctl", &["bootout", &target]) {
+        Ok(()) => Ok(()),
+        Err(_) if find_daemon().is_none() => Ok(()),
+        Err(bootout_error) => {
+            if cmd_stop_result() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Failed to unload launchd service ({bootout_error}) and the daemon did not stop"
+                ))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

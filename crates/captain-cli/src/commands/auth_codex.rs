@@ -207,9 +207,11 @@ fn codex_auth_payload(creds: &CodexCredentials) -> serde_json::Value {
 }
 
 fn write_codex_auth_file_or_exit(auth_path: &Path, payload: &serde_json::Value) {
-    match std::fs::write(
+    match captain_types::durable_fs::atomic_write(
         auth_path,
-        serde_json::to_string_pretty(payload).unwrap_or_default(),
+        serde_json::to_string_pretty(payload)
+            .unwrap_or_default()
+            .as_bytes(),
     ) {
         Ok(()) => {
             restrict_file_permissions(auth_path);

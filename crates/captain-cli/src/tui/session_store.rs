@@ -44,6 +44,12 @@ pub struct PersistedSession {
     pub model_label: String,
     pub mode_label: String,
     pub messages: Vec<PersistedMessage>,
+    /// Approximate active prompt size reported by the latest provider call.
+    #[serde(default)]
+    pub current_context_tokens: u64,
+    /// Effective model window from the live catalog when this snapshot was written.
+    #[serde(default)]
+    pub context_window_tokens: u64,
     /// Cumul tokens input sur la session (toutes itérations confondues).
     #[serde(default)]
     pub session_input_tokens: u64,
@@ -113,7 +119,7 @@ pub fn to_kernel_messages(persisted: &PersistedSession) -> Vec<captain_types::me
         .collect()
 }
 
-/// Sauvegarde une session sur disque (création atomique via fichier .tmp + rename).
+/// Sauvegarde une session sur disque via remplacement atomique durable.
 /// Retourne le chemin écrit en cas de succès.
 pub fn save_session(
     agent_key: &str,
@@ -121,7 +127,7 @@ pub fn save_session(
     session: &PersistedSession,
 ) -> Option<PathBuf> {
     let dir = agent_dir(agent_key)?;
-    if std::fs::create_dir_all(&dir).is_err() {
+    if captain_types::durable_fs::create_dir_all(&dir).is_err() {
         return None;
     }
 
@@ -137,10 +143,8 @@ pub fn save_session(
         to_write.messages.drain(0..cut);
     }
 
-    let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(&to_write).ok()?;
-    std::fs::write(&tmp, json).ok()?;
-    std::fs::rename(&tmp, &path).ok()?;
+    captain_types::durable_fs::atomic_write(&path, json.as_bytes()).ok()?;
     Some(path)
 }
 
@@ -345,6 +349,8 @@ mod tests {
                 text: "salut".into(),
                 tool: None,
             }],
+            current_context_tokens: 10,
+            context_window_tokens: 200_000,
             session_input_tokens: 12,
             session_output_tokens: 34,
             session_cached_input_tokens: 8,
@@ -359,6 +365,8 @@ mod tests {
         assert_eq!(loaded_path, path);
         assert_eq!(loaded.messages.len(), 1);
         assert_eq!(loaded.messages[0].text, "salut");
+        assert_eq!(loaded.current_context_tokens, 10);
+        assert_eq!(loaded.context_window_tokens, 200_000);
         assert_eq!(loaded.session_input_tokens, 12);
         assert_eq!(loaded.session_cached_input_tokens, 8);
         let _ = std::fs::remove_dir_all(agent_dir(&key).unwrap());

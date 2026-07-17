@@ -43,18 +43,11 @@ impl ProcessRegistryStore {
     }
 
     pub(crate) fn save_records(&self, records: &[ProcessRegistryRecord]) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create process registry dir: {e}"))?;
-        }
-        let tmp_path = tmp_path_for(&self.path);
         let records = bounded_records(records);
         let data = serde_json::to_vec_pretty(&records)
             .map_err(|e| format!("failed to encode process registry: {e}"))?;
-        std::fs::write(&tmp_path, data)
-            .map_err(|e| format!("failed to write process registry: {e}"))?;
-        std::fs::rename(&tmp_path, &self.path)
-            .map_err(|e| format!("failed to commit process registry: {e}"))?;
+        captain_types::durable_fs::atomic_write(&self.path, &data)
+            .map_err(|e| format!("failed to persist process registry: {e}"))?;
         Ok(())
     }
 }
@@ -108,17 +101,6 @@ pub(crate) fn pid_is_alive(pid: u32) -> bool {
     {
         false
     }
-}
-
-fn tmp_path_for(path: &Path) -> PathBuf {
-    let mut tmp = path.to_path_buf();
-    let extension = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| format!("{ext}.tmp"))
-        .unwrap_or_else(|| "tmp".to_string());
-    tmp.set_extension(extension);
-    tmp
 }
 
 fn bounded_records(records: &[ProcessRegistryRecord]) -> Vec<ProcessRegistryRecord> {

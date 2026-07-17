@@ -21,7 +21,7 @@ pub(crate) fn codex_models() -> Vec<ModelCatalogEntry> {
             display_name: "GPT-5.4 (Codex)".into(),
             provider: "codex".into(),
             tier: ModelTier::Frontier,
-            context_window: 1_047_576,
+            context_window: 272_000,
             max_output_tokens: 32_768,
             input_cost_per_m: 0.0,
             output_cost_per_m: 0.0,
@@ -174,7 +174,7 @@ mod tests {
 
         assert_eq!(gpt_54.display_name, "GPT-5.4 (Codex)");
         assert_eq!(gpt_54.tier, ModelTier::Frontier);
-        assert_eq!(gpt_54.context_window, 1_047_576);
+        assert_eq!(gpt_54.context_window, 272_000);
         assert_eq!(gpt_54.max_output_tokens, 32_768);
 
         assert_eq!(gpt_41.display_name, "GPT-4.1 (Codex)");

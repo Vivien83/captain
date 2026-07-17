@@ -19,7 +19,7 @@ fn idle_footer_surfaces_context_actions_and_telemetry() {
 
     assert!(text.contains("prêt"));
     assert!(text.contains("ctx"));
-    assert!(text.contains("14k tok"));
+    assert!(text.contains("14k/200k"));
     assert!(text.contains("Enter envoyer"));
     assert!(text.contains("Ctrl+M modèle"));
     assert!(text.contains("$0.0420"));
@@ -49,8 +49,8 @@ fn streaming_footer_surfaces_output_queue_and_running_tools() {
 #[test]
 fn high_context_footer_recommends_compact() {
     let mut s = ChatState::new();
-    s.session_input_tokens = 51_000;
-    s.last_tokens = Some((51_000, 0));
+    s.current_context_tokens = 51_000;
+    s.context_window_tokens = 64_000;
 
     let text = footer_text(&s, 120);
 
@@ -59,30 +59,45 @@ fn high_context_footer_recommends_compact() {
 }
 
 #[test]
-fn footer_context_uses_session_total_not_last_turn() {
+fn footer_context_uses_active_prompt_instead_of_cumulative_session_usage() {
     let mut s = ChatState::new();
     s.session_input_tokens = 30_000;
     s.session_output_tokens = 5_000;
-    s.last_tokens = Some((2_000, 100));
+    s.current_context_tokens = 2_100;
 
     let text = footer_text(&s, 140);
 
-    assert!(text.contains("35k tok"), "{text}");
-    assert!(!text.contains("2.1k tok"), "{text}");
+    assert!(text.contains("2.1k/200k"), "{text}");
+    assert!(!text.contains("35k"), "{text}");
 }
 
 #[test]
-fn streaming_footer_adds_current_turn_to_session_context() {
+fn streaming_footer_adds_only_output_after_latest_usage_checkpoint() {
     let mut s = ChatState::new();
     s.is_streaming = true;
-    s.session_input_tokens = 10_000;
-    s.session_output_tokens = 2_000;
-    s.last_tokens = Some((1_000, 500));
+    s.current_context_tokens = 12_000;
     s.streaming_chars = 2_000;
+    s.context_stream_checkpoint_chars = Some(1_600);
 
     let text = footer_text(&s, 140);
 
-    assert!(text.contains("14k tok"), "{text}");
+    assert!(text.contains("12k/200k"), "{text}");
+}
+
+#[test]
+fn context_pressure_scales_with_the_live_model_window() {
+    let mut s = ChatState::new();
+    s.current_context_tokens = 210_000;
+    s.context_window_tokens = 272_000;
+
+    let standard = footer_text(&s, 140);
+    assert!(standard.contains("210k/272k"), "{standard}");
+    assert!(standard.contains("/compact"), "{standard}");
+
+    s.context_window_tokens = 1_000_000;
+    let long = footer_text(&s, 140);
+    assert!(long.contains("210k/1.0m"), "{long}");
+    assert!(!long.contains("/compact"), "{long}");
 }
 
 #[test]

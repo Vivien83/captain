@@ -761,8 +761,8 @@ fn save_config(state: &mut State) {
             }
         }
     };
-    let _ = std::fs::create_dir_all(captain_dir.join("agents"));
-    let _ = std::fs::create_dir_all(captain_dir.join("data"));
+    let _ = captain_types::durable_fs::create_dir_all(&captain_dir.join("agents"));
+    let _ = captain_types::durable_fs::create_dir_all(&captain_dir.join("data"));
     crate::restrict_dir_permissions(&captain_dir);
 
     let model = if state.model_input.is_empty() {
@@ -774,7 +774,7 @@ fn save_config(state: &mut State) {
     let config_path = captain_dir.join("config.toml");
     let config = render_config(p, model);
 
-    match std::fs::write(&config_path, &config) {
+    match captain_types::durable_fs::atomic_write(&config_path, config.as_bytes()) {
         Ok(()) => {
             crate::restrict_file_permissions(&config_path);
         }

@@ -2590,13 +2590,10 @@ fn save_home_channels(
     path: &std::path::Path,
     map: &std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create home-channels dir: {e}"))?;
-    }
     let data = serde_json::to_string_pretty(map)
         .map_err(|e| format!("Failed to serialize home channels: {e}"))?;
-    std::fs::write(path, data).map_err(|e| format!("Failed to write home channels file: {e}"))
+    captain_types::durable_fs::atomic_write(path, data.as_bytes())
+        .map_err(|e| format!("Failed to persist home channels file: {e}"))
 }
 
 /// Parse a trigger pattern string from chat into a `TriggerPattern`.

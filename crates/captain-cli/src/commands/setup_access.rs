@@ -218,7 +218,8 @@ fn setup_write_initial_credentials(
 
     let path = captain_dir.join("initial-credentials.txt");
     let contents = setup_initial_credentials_contents(access);
-    std::fs::write(&path, contents).map_err(|e| format!("write {}: {e}", path.display()))?;
+    captain_types::durable_fs::atomic_write(&path, contents.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     restrict_file_permissions(&path);
     Ok(Some(path))
 }
@@ -298,8 +299,6 @@ fn setup_store_secret(captain_dir: &Path, key: &str, value: &str) -> Result<(), 
         return Err("secret key/value invalide".to_string());
     }
 
-    std::fs::create_dir_all(captain_dir)
-        .map_err(|e| format!("create {}: {e}", captain_dir.display()))?;
     let path = captain_dir.join("secrets.env");
     let original = std::fs::read_to_string(&path).unwrap_or_default();
     let mut lines: Vec<String> = original.lines().map(str::to_string).collect();
@@ -316,11 +315,9 @@ fn setup_store_secret(captain_dir: &Path, key: &str, value: &str) -> Result<(), 
     if !replaced {
         lines.push(format!("{key}={value}"));
     }
-    let tmp = path.with_extension("env.tmp");
-    std::fs::write(&tmp, lines.join("\n") + "\n")
-        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    restrict_file_permissions(&tmp);
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename {}: {e}", path.display()))?;
+    let serialized = lines.join("\n") + "\n";
+    captain_types::durable_fs::atomic_write(&path, serialized.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     restrict_file_permissions(&path);
     Ok(())
 }

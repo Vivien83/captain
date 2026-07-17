@@ -42,17 +42,17 @@ pub(crate) fn record_restart_processed(
     };
     let path = restart_dedupe_path(home_dir);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create restart dedupe dir: {e}"))?;
+        captain_types::durable_fs::create_dir_all(parent)
+            .map_err(|e| format!("create restart dedupe dir: {e}"))?;
     }
     let marker = RestartDedupeMarker {
         channel: channel.to_string(),
         source_message_id: source_message_id.to_string(),
         requested_at_unix_secs: now_unix_secs(),
     };
-    let tmp = path.with_extension("tmp");
     let raw = serde_json::to_vec_pretty(&marker).map_err(|e| format!("serialize marker: {e}"))?;
-    std::fs::write(&tmp, raw).map_err(|e| format!("write restart dedupe marker: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("commit restart dedupe marker: {e}"))?;
+    captain_types::durable_fs::atomic_write(&path, &raw)
+        .map_err(|e| format!("persist restart dedupe marker: {e}"))?;
     Ok(())
 }
 

@@ -365,7 +365,8 @@ fn persist_codex_credentials(
     let dir = auth_path
         .parent()
         .ok_or("Cannot resolve Codex auth directory")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("Create {}: {e}", dir.display()))?;
+    captain_types::durable_fs::create_dir_all(dir)
+        .map_err(|e| format!("Create {}: {e}", dir.display()))?;
     let payload = serde_json::json!({
         "tokens": {
             "access_token": creds.access_token,
@@ -377,11 +378,9 @@ fn persist_codex_credentials(
         "auth_mode": creds.auth_mode,
         "source": creds.source,
     });
-    std::fs::write(
-        &auth_path,
-        serde_json::to_string_pretty(&payload).unwrap_or_default(),
-    )
-    .map_err(|e| format!("Write {}: {e}", auth_path.display()))?;
+    let serialized = serde_json::to_string_pretty(&payload).unwrap_or_default();
+    captain_types::durable_fs::atomic_write(&auth_path, serialized.as_bytes())
+        .map_err(|e| format!("Persist {}: {e}", auth_path.display()))?;
 
     #[cfg(unix)]
     {

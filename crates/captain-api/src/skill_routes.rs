@@ -470,13 +470,6 @@ pub async fn create_skill(
         );
     }
 
-    if let Err(e) = std::fs::create_dir_all(&skill_dir) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to create skill directory: {e}")})),
-        );
-    }
-
     let toml_content = format!(
         "[skill]\nname = \"{}\"\ndescription = \"{}\"\nruntime = \"prompt_only\"\n\n[prompt]\ncontext = \"\"\"\n{}\n\"\"\"\n",
         name,
@@ -485,10 +478,10 @@ pub async fn create_skill(
     );
 
     let toml_path = skill_dir.join("skill.toml");
-    if let Err(e) = std::fs::write(&toml_path, &toml_content) {
+    if let Err(e) = captain_types::durable_fs::atomic_write(&toml_path, toml_content.as_bytes()) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write skill.toml: {e}")})),
+            Json(serde_json::json!({"error": format!("Failed to persist skill.toml: {e}")})),
         );
     }
 

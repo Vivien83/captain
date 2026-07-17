@@ -74,10 +74,7 @@ impl IntegrationRegistry {
         };
         let content =
             toml::to_string_pretty(&file).map_err(|e| ExtensionError::TomlParse(e.to_string()))?;
-        if let Some(parent) = self.integrations_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&self.integrations_path, content)?;
+        captain_types::durable_fs::atomic_write(&self.integrations_path, content.as_bytes())?;
         Ok(())
     }
 

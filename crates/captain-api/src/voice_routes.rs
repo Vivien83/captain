@@ -90,15 +90,17 @@ fn persist_stt_model(state: &AppState, model: &str) -> Result<&'static str, Resp
         )
     })?;
 
-    std::fs::write(&config_path, toml_string).map_err(|error| {
-        json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({
-                "status": "error",
-                "error": format!("write failed: {error}"),
-            }),
-        )
-    })?;
+    captain_types::durable_fs::atomic_write(&config_path, toml_string.as_bytes()).map_err(
+        |error| {
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "status": "error",
+                    "error": format!("persist failed: {error}"),
+                }),
+            )
+        },
+    )?;
 
     Ok(match state.kernel.reload_config() {
         Ok(plan) if plan.restart_required => "applied_partial",

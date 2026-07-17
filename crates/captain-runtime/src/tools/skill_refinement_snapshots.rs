@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
+    captain_types::durable_fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
@@ -10,10 +10,7 @@ pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> 
         if file_type.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else if file_type.is_file() {
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(&from, &to)?;
+            captain_types::durable_fs::atomic_copy(&from, &to)?;
         }
     }
     Ok(())

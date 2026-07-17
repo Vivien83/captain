@@ -3,10 +3,10 @@ use crate::model_catalog_codex_auth::{
 };
 use captain_types::model_catalog::{ModelCatalogEntry, ModelTier, CODEX_BASE_URL};
 use std::collections::HashMap;
-use std::io::Write;
 
 const CODEX_UA: &str = "codex_cli_rs/0.0.0 (Captain Agent)";
 const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+const CODEX_DEFAULT_ACTIVE_CONTEXT_WINDOW: u64 = 272_000;
 // The catalog gates forward-compatible models by client protocol semver.
 // Captain implements the v1 Responses request shape; this is intentionally
 // independent from Captain's own product version.
@@ -82,10 +82,7 @@ pub fn codex_cached_model_entries() -> Vec<ModelCatalogEntry> {
             ),
             provider: "codex".to_string(),
             tier: infer_codex_model_tier(&model.slug, model.priority),
-            context_window: model
-                .max_context_window
-                .or(model.context_window)
-                .unwrap_or(272_000),
+            context_window: codex_active_context_window(&model),
             // The ChatGPT/Codex backend currently rejects max_output_tokens.
             // Keep this metadata conservative and do not serialize it in the driver.
             max_output_tokens: 32_768,
@@ -130,6 +127,21 @@ fn codex_cached_model_is_usable(model: &CodexCachedModel) -> bool {
     !model.slug.trim().is_empty()
         && model.visibility.as_deref().unwrap_or("list") == "list"
         && model.supported_in_api.unwrap_or(true)
+}
+
+fn codex_active_context_window(model: &CodexCachedModel) -> u64 {
+    // `max_context_window` is the ceiling for an explicit Codex override, not
+    // the active default. Captain currently has no such override, so using the
+    // maximum here would advertise and budget context the provider did not
+    // actually select.
+    model
+        .context_window
+        .or_else(|| {
+            model
+                .max_context_window
+                .map(|maximum| maximum.min(CODEX_DEFAULT_ACTIVE_CONTEXT_WINDOW))
+        })
+        .unwrap_or(CODEX_DEFAULT_ACTIVE_CONTEXT_WINDOW)
 }
 
 fn codex_aliases_for_slug(slug: &str) -> Vec<String> {
@@ -260,18 +272,11 @@ fn write_codex_models_cache(
     raw: &serde_json::Value,
 ) -> Result<(), String> {
     let serialized = serde_json::to_string_pretty(raw).map_err(|e| e.to_string())?;
-    let mut pending = tempfile::Builder::new()
-        .prefix(".models_cache.")
-        .tempfile_in(codex_home)
-        .map_err(|e| e.to_string())?;
-    pending
-        .write_all(serialized.as_bytes())
-        .and_then(|_| pending.as_file().sync_all())
-        .map_err(|e| e.to_string())?;
-    pending
-        .persist(codex_home.join("models_cache.json"))
-        .map_err(|e| e.error.to_string())?;
-    Ok(())
+    captain_types::durable_fs::atomic_write(
+        &codex_home.join("models_cache.json"),
+        serialized.as_bytes(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn parse_codex_models_cache_value(value: &serde_json::Value) -> Result<CodexModelsCache, String> {
@@ -309,6 +314,57 @@ mod tests {
         }]);
         let parsed = parse_codex_models_cache_value(&array).unwrap();
         assert_eq!(parsed.models[0].slug, "gpt-5.2");
+    }
+
+    #[test]
+    fn codex_catalog_uses_active_window_instead_of_override_ceiling() {
+        let model = CodexCachedModel {
+            slug: "gpt-test".to_string(),
+            display_name: None,
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            priority: Some(1),
+            context_window: Some(272_000),
+            max_context_window: Some(1_000_000),
+            input_modalities: vec!["text".to_string()],
+        };
+
+        assert_eq!(codex_active_context_window(&model), 272_000);
+    }
+
+    #[test]
+    fn codex_catalog_falls_back_to_maximum_when_active_window_is_absent() {
+        let model = CodexCachedModel {
+            slug: "gpt-test".to_string(),
+            display_name: None,
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            priority: Some(1),
+            context_window: None,
+            max_context_window: Some(128_000),
+            input_modalities: vec!["text".to_string()],
+        };
+
+        assert_eq!(codex_active_context_window(&model), 128_000);
+    }
+
+    #[test]
+    fn codex_catalog_never_promotes_an_override_ceiling_to_active_context() {
+        let model = CodexCachedModel {
+            slug: "gpt-test".to_string(),
+            display_name: None,
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            priority: Some(1),
+            context_window: None,
+            max_context_window: Some(1_000_000),
+            input_modalities: vec!["text".to_string()],
+        };
+
+        assert_eq!(
+            codex_active_context_window(&model),
+            CODEX_DEFAULT_ACTIVE_CONTEXT_WINDOW
+        );
     }
 
     #[test]

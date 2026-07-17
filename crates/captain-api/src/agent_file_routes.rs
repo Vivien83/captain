@@ -137,18 +137,10 @@ pub async fn set_agent_file(
         return response;
     }
 
-    let tmp_path = workspace.join(format!(".{filename}.tmp"));
-    if let Err(e) = std::fs::write(&tmp_path, &req.content) {
+    if let Err(e) = captain_types::durable_fs::atomic_write(&file_path, req.content.as_bytes()) {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Write failed: {e}"),
-        );
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &file_path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Rename failed: {e}"),
+            &format!("Persist failed: {e}"),
         );
     }
 

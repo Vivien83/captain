@@ -6,7 +6,38 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-No public changes are queued yet.
+## [0.1.0-alpha.7] - 2026-07-17
+
+Early-access reliability release focused on durable committed state, abrupt
+restart recovery, truthful model context, and memory tools that keep working
+when the TUI or CLI runs Captain in process.
+
+### Fixed
+
+- Context budgeting now follows the configured model's live catalog window on
+  every turn and after model switches. Codex uses the active
+  `context_window`, not the larger optional override ceiling. Agent/session
+  APIs and the TUI expose the same effective capacity, while the TUI meter
+  tracks the latest active prompt instead of cumulative lifetime usage.
+- The macOS launchd service now remains supervised after login and restarts
+  Captain after an unexpected exit. A deliberate `captain service stop`
+  unloads the LaunchAgent, so the supervisor does not immediately respawn it.
+- Direct TUI and CLI streaming turns now receive the live in-process kernel
+  handle when no daemon is available. Kernel-backed tools such as
+  `memory_save` no longer fail solely because Captain fell back to local mode.
+- Captain confirms a durable memory write only after `memory_save` succeeds;
+  a failed tool call is reported as not stored instead of being acknowledged.
+- File-backed Captain state now has an explicit power-loss commit boundary.
+  SQLite uses WAL and `synchronous=FULL`; Captain-managed files use a synced
+  sibling temporary file, atomic replacement, and directory synchronization on
+  Unix, including `F_FULLFSYNC` for committed files on macOS.
+- A reproducible full-daemon test commits memory, project, and configuration
+  state, terminates Captain with `SIGKILL`, restarts the same home, and verifies
+  the values plus SQLite integrity. External work that was still in flight
+  remains subject to its own interruption and idempotency contract.
+- Fresh-home MemPalace repair now runs before the asynchronous daemon runtime
+  starts, avoiding a blocking-client runtime-destruction panic during native
+  bootstrap.
 
 ## [0.1.0-alpha.6] - 2026-07-16
 
@@ -220,7 +251,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.6...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.7...HEAD
+[0.1.0-alpha.7]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.6...v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.3...v0.1.0-alpha.4

@@ -35,6 +35,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.7.md
   docs/releases/v0.1.0-alpha.6.md
   docs/releases/v0.1.0-alpha.5.md
   docs/releases/v0.1.0-alpha.4.md
@@ -150,23 +151,23 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.6"
+  "### 0.1.0-alpha.7"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.6'
+  '0.1.0-alpha.7'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.6'
+  '0.1.0-alpha.7'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.6] - 2026-07-16'
+  '## [0.1.0-alpha.7] - 2026-07-17'
 require_contains \
   "reviewed alpha notes exist" \
-  docs/releases/v0.1.0-alpha.6.md \
-  '# Captain 0.1.0-alpha.6'
+  docs/releases/v0.1.0-alpha.7.md \
+  '# Captain 0.1.0-alpha.7'
 require_contains \
   "last published alpha.3 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.3.md \
@@ -215,6 +216,14 @@ require_contains \
   "published alpha.6 notes pin the multi-arch digest" \
   docs/releases/v0.1.0-alpha.6.md \
   'sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318'
+require_not_contains \
+  "alpha.7 notes do not copy the alpha.6 source commit" \
+  docs/releases/v0.1.0-alpha.7.md \
+  '797d093b44a93850b40f058691931c25f1701900'
+require_not_contains \
+  "alpha.7 notes do not copy the alpha.6 OCI digest" \
+  docs/releases/v0.1.0-alpha.7.md \
+  'sha256:1054e053d7f20664c4098db04d653e44b261d6cc4bac092a5fbc10a9e76c9318'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
@@ -236,6 +245,10 @@ require_contains \
   docs/releases/v0.1.0-alpha.6.md \
   'core agent-loop finalizer'
 require_contains \
+  "alpha.7 notes disclose the retained memory opt-out limitation" \
+  docs/releases/v0.1.0-alpha.7.md \
+  'core agent-loop finalizer'
+require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
   'scripts/release-workflow-audit.sh'
@@ -255,11 +268,11 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the public prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.6/install.sh'
+    'releases/download/v0.1.0-alpha.7/install.sh'
   require_contains \
     "$readme pins the immutable alpha image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \

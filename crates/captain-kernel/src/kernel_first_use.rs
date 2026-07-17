@@ -156,15 +156,9 @@ fn validate_onboarding_config_write(
 }
 
 fn write_onboarding_config_atomic(config_path: &Path, serialized: String) -> KernelResult<()> {
-    let tmp_path = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, serialized).map_err(|e| {
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes()).map_err(|e| {
         KernelError::Captain(CaptainError::Internal(format!(
-            "Failed to write onboarding config tmp: {e}"
-        )))
-    })?;
-    std::fs::rename(&tmp_path, config_path).map_err(|e| {
-        KernelError::Captain(CaptainError::Internal(format!(
-            "Failed to replace config.toml after onboarding: {e}"
+            "Failed to persist onboarding config: {e}"
         )))
     })
 }
@@ -208,7 +202,7 @@ impl CaptainKernel {
     }
 
     fn save_first_use_onboarding_state(&self, state: &FirstUseOnboardingState) -> KernelResult<()> {
-        std::fs::create_dir_all(&self.config.home_dir).map_err(|e| {
+        captain_types::durable_fs::create_dir_all(&self.config.home_dir).map_err(|e| {
             KernelError::Captain(CaptainError::Internal(format!(
                 "Failed to create Captain home for onboarding: {e}"
             )))
@@ -219,9 +213,9 @@ impl CaptainKernel {
                 "Failed to serialize onboarding state: {e}"
             )))
         })?;
-        std::fs::write(&path, serialized).map_err(|e| {
+        captain_types::durable_fs::atomic_write(&path, serialized.as_bytes()).map_err(|e| {
             KernelError::Captain(CaptainError::Internal(format!(
-                "Failed to write onboarding state {}: {e}",
+                "Failed to persist onboarding state {}: {e}",
                 path.display()
             )))
         })
@@ -229,9 +223,8 @@ impl CaptainKernel {
 
     fn clear_first_use_onboarding_state(&self) {
         let path = self.first_use_onboarding_state_path();
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        match captain_types::durable_fs::remove_file(&path) {
+            Ok(_) => {}
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "Failed to remove onboarding state")
             }
@@ -243,7 +236,7 @@ impl CaptainKernel {
         state: &FirstUseOnboardingState,
         skipped: bool,
     ) -> KernelResult<()> {
-        std::fs::create_dir_all(&self.config.home_dir).map_err(|e| {
+        captain_types::durable_fs::create_dir_all(&self.config.home_dir).map_err(|e| {
             KernelError::Captain(CaptainError::Internal(format!(
                 "Failed to create Captain home for USER.md: {e}"
             )))
@@ -294,9 +287,9 @@ impl CaptainKernel {
             format!("{}\n\n{}", existing.trim_end(), block)
         };
 
-        std::fs::write(&path, updated).map_err(|e| {
+        captain_types::durable_fs::atomic_write(&path, updated.as_bytes()).map_err(|e| {
             KernelError::Captain(CaptainError::Internal(format!(
-                "Failed to write global USER.md {}: {e}",
+                "Failed to persist global USER.md {}: {e}",
                 path.display()
             )))
         })

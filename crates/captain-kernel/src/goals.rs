@@ -312,16 +312,13 @@ impl GoalStore {
         Ok(count)
     }
 
-    /// Persist atomically (write to `.tmp`, then rename).
+    /// Persist atomically and synchronize the committed file to disk.
     pub fn persist(&self) -> CaptainResult<()> {
         let goals: Vec<Goal> = self.goals.iter().map(|r| r.value().clone()).collect();
         let data = serde_json::to_string_pretty(&goals)
             .map_err(|e| CaptainError::Internal(format!("serialize goals: {e}")))?;
-        let tmp = self.persist_path.with_extension("json.tmp");
-        std::fs::write(&tmp, data.as_bytes())
-            .map_err(|e| CaptainError::Internal(format!("write goals tmp: {e}")))?;
-        std::fs::rename(&tmp, &self.persist_path)
-            .map_err(|e| CaptainError::Internal(format!("rename goals tmp: {e}")))?;
+        captain_types::durable_fs::atomic_write(&self.persist_path, data.as_bytes())
+            .map_err(|e| CaptainError::Internal(format!("persist goals: {e}")))?;
         debug!(count = goals.len(), "Persisted goals");
         Ok(())
     }

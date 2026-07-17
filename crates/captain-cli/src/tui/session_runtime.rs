@@ -40,18 +40,31 @@ pub fn loaded_session_from_detail(
 pub fn restore_public_session_messages(chat: &mut ChatState, detail: &serde_json::Value) -> usize {
     chat.messages.clear();
     chat.scroll_offset = 0;
+    chat.context_stream_checkpoint_chars = None;
+    if let Some(context_window) = detail
+        .get("context_window_tokens")
+        .and_then(serde_json::Value::as_u64)
+    {
+        chat.set_context_window_tokens(context_window);
+    }
 
     let mut restored = 0usize;
+    let mut restored_chars = 0usize;
     if let Some(messages) = detail.get("messages").and_then(serde_json::Value::as_array) {
         for message in messages {
             let text = public_session_message_text(message);
             if text.trim().is_empty() {
                 continue;
             }
+            restored_chars = restored_chars.saturating_add(text.len() + 16);
             chat.push_message(public_session_message_role(message), text);
             restored += 1;
         }
     }
+    chat.current_context_tokens = detail
+        .get("estimated_context_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or((restored_chars / 4) as u64);
     restored
 }
 
@@ -135,6 +148,11 @@ pub fn native_session_detail(session: &Session) -> serde_json::Value {
         "agent_id": session.agent_id.0.to_string(),
         "message_count": session.messages.len(),
         "context_window_tokens": session.context_window_tokens,
+        "estimated_context_tokens": captain_runtime::compactor::estimate_token_count(
+            &session.messages,
+            None,
+            None,
+        ),
         "label": session.label,
         "messages": session.messages.iter().map(native_message_public).collect::<Vec<_>>(),
     })

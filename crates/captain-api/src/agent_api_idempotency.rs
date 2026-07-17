@@ -139,17 +139,14 @@ fn load_entries(home_dir: &Path) -> Result<Vec<AgentApiIdempotencyEntry>, String
 fn save_entries(home_dir: &Path, entries: &[AgentApiIdempotencyEntry]) -> Result<(), String> {
     let path = store_path(home_dir);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        captain_types::durable_fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create agent API idempotency dir: {err}"))?;
         secure_dir(parent);
     }
     let raw = serde_json::to_vec_pretty(entries)
         .map_err(|err| format!("failed to encode agent API idempotency store: {err}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, raw)
-        .map_err(|err| format!("failed to write agent API idempotency store: {err}"))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|err| format!("failed to commit agent API idempotency store: {err}"))?;
+    captain_types::durable_fs::atomic_write(&path, &raw)
+        .map_err(|err| format!("failed to persist agent API idempotency store: {err}"))?;
     secure_file(&path);
     Ok(())
 }

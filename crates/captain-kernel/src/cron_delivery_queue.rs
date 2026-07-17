@@ -88,7 +88,7 @@ pub fn write_payload_file(
     now: DateTime<Utc>,
 ) -> Result<String, String> {
     let dir = payload_dir(home_dir);
-    std::fs::create_dir_all(&dir)
+    captain_types::durable_fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create redelivery queue dir: {e}"))?;
     secure_dir(&dir);
 
@@ -99,11 +99,8 @@ pub fn write_payload_file(
         Uuid::new_v4().simple()
     );
     let final_path = dir.join(file_name);
-    let tmp_path = final_path.with_extension("tmp");
-    std::fs::write(&tmp_path, payload.as_bytes())
-        .map_err(|e| format!("failed to write redelivery payload: {e}"))?;
-    std::fs::rename(&tmp_path, &final_path)
-        .map_err(|e| format!("failed to commit redelivery payload: {e}"))?;
+    captain_types::durable_fs::atomic_write(&final_path, payload.as_bytes())
+        .map_err(|e| format!("failed to persist redelivery payload: {e}"))?;
     secure_file(&final_path);
     Ok(final_path.to_string_lossy().to_string())
 }
@@ -113,7 +110,7 @@ pub fn read_payload_file(path: &str) -> Result<String, String> {
 }
 
 pub fn remove_payload_file(path: &str) {
-    let _ = std::fs::remove_file(path);
+    let _ = captain_types::durable_fs::remove_file(Path::new(path));
 }
 
 pub fn push_redelivery(queue: &mut Vec<CronRedelivery>, entry: CronRedelivery) -> Vec<String> {

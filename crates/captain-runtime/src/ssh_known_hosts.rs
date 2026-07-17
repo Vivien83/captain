@@ -132,11 +132,8 @@ pub fn current_mode() -> KhVerificationMode {
 /// Pure-fn version of persistence: writes `mode` to `path`. Used by the
 /// process-level `set_mode()` and directly by tests (no env races).
 pub fn write_mode(mode: KhVerificationMode, path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
-    }
-    std::fs::write(path, mode.as_str()).map_err(|e| format!("write {}: {e}", path.display()))
+    captain_types::durable_fs::atomic_write(path, mode.as_str().as_bytes())
+        .map_err(|e| format!("persist {}: {e}", path.display()))
 }
 
 /// Persist `mode` to the sidecar `mode_path()`.

@@ -38,10 +38,10 @@ app, Telegram, or Discord.
 
 <table>
 <tr><td width="220"><b>One binary, one daemon</b></td><td>A compiled Rust core orchestrates agents, tools, memory, channels, schedules, and approvals. Starts in seconds, idles light, survives reboots as a native service (launchd/systemd), and updates itself — ask it to in chat, approve, done.</td></tr>
-<tr><td><b>Durable work</b></td><td>Projects, goals, checkpoints, workflows, and detached tool runs are persisted. After a restart, incomplete detached work becomes inspectable as <code>interrupted</code> instead of disappearing or being replayed blindly.</td></tr>
+<tr><td><b>Durable work</b></td><td>Projects, goals, checkpoints, workflows, and detached tool runs are persisted. Committed control-plane state uses SQLite WAL/FULL or synchronized atomic files; after a restart, incomplete detached work becomes inspectable as <code>interrupted</code> instead of disappearing or being replayed blindly.</td></tr>
 <tr><td><b>Real execution, guarded</b></td><td>Shell, files, SSH, browser automation, web research, code execution, documents, and media. Sensitive calls use approvals; critical shell patterns are blocked; budgets limit tokens, cost, and tool-call rate. Independent read-only tools may run concurrently, while dependent or side-effecting work remains ordered.</td></tr>
 <tr><td><b>Memory that follows the conversation</b></td><td>Session recall, durable user facts, project state, a knowledge graph, and optional local ONNX embeddings provide bounded context without dumping raw history into every turn. Accepted facts enter a local continuity journal first, remain available during a MemPalace outage, and resynchronize automatically with bounded backoff.</td></tr>
-<tr><td><b>Any model, no lock-in</b></td><td>Codex through your ChatGPT subscription, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter, and local models through Ollama. Captain discovers the live catalog and configured credentials instead of relying on fixed provider or model counts. For Codex, an hourly refresh surfaces newly listed models in Control and, when configured, Telegram; Captain never switches without your explicit decision and session strategy.</td></tr>
+<tr><td><b>Any model, no lock-in</b></td><td>Codex through your ChatGPT subscription, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter, and local models through Ollama. Captain discovers the live catalog and configured credentials instead of relying on fixed provider or model counts; context budgeting follows the selected model's live window. For Codex, an hourly refresh surfaces newly listed models in Control and, when configured, Telegram; Captain never switches without your explicit decision and session strategy.</td></tr>
 <tr><td><b>Six operational hubs</b></td><td>Chat, Projects, Automation, Learning, Capabilities, and Status are the shared primary surface in the TUI and Control web app. Automation groups Workflows, Triggers, Crons, Approvals, and Webhooks.</td></tr>
 <tr><td><b>Agents as services</b></td><td>Each agent can receive authenticated external ingress and emit signed HTTP callbacks. Captain provisions ingress automatically and reports the exact external callback URL still required before egress can be ready.</td></tr>
 <tr><td><b>Operable like real software</b></td><td><code>captain doctor</code> explains what's broken and how to fix it. Snapshots and factory reset (backup first, always). Hash-chained audit trail. Health endpoints. A setup wizard that ends with a running, verified daemon — not a wall of next steps.</td></tr>
@@ -52,15 +52,15 @@ app, Telegram, or Discord.
 ## Quick Install
 
 Current public early-access prerelease:
-[v0.1.0-alpha.6](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.6).
-Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6`;
+[v0.1.0-alpha.7](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7).
+Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.6 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.7 bash
 ```
 
 The official repository, release assets, checksums, and container image are
@@ -94,8 +94,8 @@ Unix installers.
 ```bash
 export ANTHROPIC_API_KEY=...       # or any supported provider key
 export TELEGRAM_BOT_TOKEN=...      # optional — see below
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.6 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.7 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 The `vps` profile installs a systemd service, starts it, and validates
@@ -112,8 +112,8 @@ installs everything (binary, systemd service) without starting the daemon
 yet, so the readiness check below doesn't run before you've logged in:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.6/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.6 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.7 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # prints a URL + code — open it on your phone, no local browser needed
 systemctl start captain    # non-root install: systemctl --user start captain
@@ -129,7 +129,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.6
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
 ```
 
 First boot generates the daemon API key and persists it — along with all
@@ -145,8 +145,8 @@ or privileged mode. Pull and run the immutable image with:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.6 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.6 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.7 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.7 docker compose up -d
 ```
 
 Configure the chosen model provider after first boot. Add host access only as
@@ -232,6 +232,7 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Headless installs, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | External tool servers and transport contract |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and their fixes |
+| [0.1.0-alpha.7 Release Notes](docs/releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
 | [0.1.0-alpha.6 Release Notes](docs/releases/v0.1.0-alpha.6.md) | Telegram Rich Messages, live tool boards, ephemeral progress, and reliable controls |
 | [0.1.0-alpha.5 Release Notes](docs/releases/v0.1.0-alpha.5.md) | Clean shutdown, memory privacy, live model identity, and single-agent first boot |
 | [0.1.0-alpha.4 Release Notes](docs/releases/v0.1.0-alpha.4.md) | Authoritative corrections, complete active recall, and CLI continuation |

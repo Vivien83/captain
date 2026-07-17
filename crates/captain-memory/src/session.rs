@@ -5,7 +5,6 @@ use captain_types::error::{CaptainError, CaptainResult};
 use captain_types::message::{ContentBlock, Message, MessageContent, Role};
 use chrono::Utc;
 use rusqlite::Connection;
-use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -725,9 +724,8 @@ impl SessionStore {
         session: &Session,
         sessions_dir: &Path,
     ) -> Result<(), std::io::Error> {
-        std::fs::create_dir_all(sessions_dir)?;
         let path = sessions_dir.join(format!("{}.jsonl", session.id.0));
-        let mut file = std::fs::File::create(&path)?;
+        let mut contents = Vec::new();
         let now = Utc::now().to_rfc3339();
 
         for msg in &session.messages {
@@ -799,11 +797,11 @@ impl SessionStore {
                 },
             };
 
-            serde_json::to_writer(&mut file, &line).map_err(std::io::Error::other)?;
-            file.write_all(b"\n")?;
+            serde_json::to_writer(&mut contents, &line).map_err(std::io::Error::other)?;
+            contents.push(b'\n');
         }
 
-        Ok(())
+        captain_types::durable_fs::atomic_write(&path, &contents)
     }
 }
 

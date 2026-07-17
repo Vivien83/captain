@@ -52,7 +52,7 @@ pub(crate) fn cmd_config_init_full(force: bool) {
             std::process::exit(1);
         }
     };
-    if let Err(e) = std::fs::write(&config_path, &body) {
+    if let Err(e) = captain_types::durable_fs::atomic_write(&config_path, body.as_bytes()) {
         ui::error(&format!("write {}: {e}", config_path.display()));
         std::process::exit(1);
     }
@@ -72,7 +72,7 @@ fn backup_existing_config(home: &std::path::Path, config_path: &std::path::Path)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let backup = home.join(format!("config.toml.bak-{ts}"));
-    if let Err(e) = std::fs::copy(config_path, &backup) {
+    if let Err(e) = captain_types::durable_fs::atomic_copy(config_path, &backup) {
         ui::error(&format!("backup failed: {e}"));
         std::process::exit(1);
     }
@@ -365,11 +365,16 @@ fn write_config_table(config_path: &std::path::Path, table: &toml::Value) {
         ui::error(&format!("Failed to serialize config: {e}"));
         std::process::exit(1);
     });
-    let _ = std::fs::copy(config_path, config_path.with_extension("toml.bak"));
-    std::fs::write(config_path, &serialized).unwrap_or_else(|e| {
-        ui::error(&format!("Failed to write config: {e}"));
-        std::process::exit(1);
-    });
+    let _ = captain_types::durable_fs::atomic_copy(
+        config_path,
+        &config_path.with_extension("toml.bak"),
+    );
+    captain_types::durable_fs::atomic_write(config_path, serialized.as_bytes()).unwrap_or_else(
+        |e| {
+            ui::error(&format!("Failed to write config: {e}"));
+            std::process::exit(1);
+        },
+    );
     restrict_file_permissions(config_path);
 }
 

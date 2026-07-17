@@ -26,6 +26,51 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.7 — durable state, supervised restart, and truthful context
+
+Agent-facing changes:
+
+- Context capacity follows the provider/model configured on the active agent.
+  Captain resolves it from the live model catalog for every turn, model
+  switch, API detail, session restore, and TUI footer refresh. For Codex, the
+  active `context_window` is authoritative; `max_context_window` is only an
+  override ceiling and is never advertised as the active budget.
+- `context_window_tokens` is capacity. `estimated_context_tokens` is the
+  approximate transcript occupancy returned by session detail endpoints. Do
+  not confuse either value with cumulative token usage or another agent's
+  model.
+- On macOS, an installed launchd service now keeps Captain supervised after
+  login and restarts it after an unexpected process exit. A deliberate
+  `captain service stop` unloads the LaunchAgent and remains stopped until the
+  next explicit service start.
+- A streaming turn started directly by the TUI or CLI now receives the live
+  in-process kernel handle when no daemon is reachable. Kernel-backed tools,
+  including `memory_save`, use the same runtime contract as Web/API turns.
+- Confirm a memory only after the `memory_save` result reports success. If the
+  tool returns an error, say clearly that nothing was stored and do not claim
+  to have remembered the fact.
+- File-backed Captain state now has an explicit power-loss commit boundary.
+  SQLite uses WAL plus `synchronous=FULL`; Captain-managed non-database state
+  uses synchronized sibling-file replacement and directory synchronization,
+  including `F_FULLFSYNC` on macOS.
+- A real `SIGKILL` recovery test covers structured memory, semantic memory,
+  sessions, session events, project/config state, database integrity, and
+  restart from the same Captain home. State is durable only after the relevant
+  tool/API reports success; an external action still in flight may need
+  inspection or idempotent retry.
+- Fresh-home MemPalace repair runs before Captain enters the asynchronous daemon
+  runtime. The blocking downloader can no longer panic by destroying its helper
+  runtime from an async context, and the same full-daemon smoke verifies native
+  MemPalace bootstrap before the abrupt-stop cycle.
+- This prerelease is distributed through the immutable GitHub release
+  `v0.1.0-alpha.7` and image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7`. Verify the installed
+  version before applying this entry.
+- Known limitation retained from `0.1.0-alpha.6`: the explicit per-turn memory
+  write opt-out still leaves the core agent-loop finalizer's local episodic
+  interaction fragment. The normal transcript and mandatory audit remain
+  intentional; do not claim complete semantic suppression on this version.
+
 ### 0.1.0-alpha.6 — Telegram Rich Messages and reliable controls
 
 Agent-facing changes:

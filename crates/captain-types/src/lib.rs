@@ -10,6 +10,7 @@ pub mod capability;
 pub mod comms;
 pub mod config;
 pub mod config_template;
+pub mod durable_fs;
 pub mod error;
 pub mod event;
 pub mod manifest_signing;

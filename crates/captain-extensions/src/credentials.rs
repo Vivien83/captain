@@ -258,10 +258,6 @@ fn validate_secret_assignment(key: &str, value: &str) -> ExtensionResult<()> {
 }
 
 fn write_dotenv_value(path: &Path, key: &str, value: &str) -> Result<(), std::io::Error> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
     let original = if path.exists() {
         std::fs::read_to_string(path)?
     } else {
@@ -284,15 +280,7 @@ fn write_dotenv_value(path: &Path, key: &str, value: &str) -> Result<(), std::io
     }
 
     let serialized = lines.join("\n") + "\n";
-    let tmp_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| format!("{name}.tmp"))
-        .unwrap_or_else(|| "secrets.env.tmp".to_string());
-    let tmp_path = path.with_file_name(tmp_name);
-    std::fs::write(&tmp_path, serialized)?;
-    set_secret_file_permissions(&tmp_path)?;
-    std::fs::rename(&tmp_path, path)?;
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes())?;
     set_secret_file_permissions(path)?;
     Ok(())
 }

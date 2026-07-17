@@ -20,11 +20,8 @@ pub(crate) fn write_secret_env(
     lines.retain(|line| !line.starts_with(&format!("{key}=")));
     lines.push(format!("{key}={value}"));
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(path, lines.join("\n") + "\n")?;
+    let serialized = lines.join("\n") + "\n";
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes())?;
 
     #[cfg(unix)]
     {
@@ -48,7 +45,8 @@ pub(crate) fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(),
         .map(|line| line.to_string())
         .collect();
 
-    std::fs::write(path, lines.join("\n") + "\n")?;
+    let serialized = lines.join("\n") + "\n";
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes())?;
 
     Ok(())
 }

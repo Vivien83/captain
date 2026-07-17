@@ -793,18 +793,11 @@ impl TriggerEngine {
         let Some(path) = &self.file_trigger_persist_path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create trigger directory: {e}"))?;
-        }
         let triggers = self.list_file_triggers();
         let data = serde_json::to_string_pretty(&triggers)
             .map_err(|e| format!("Failed to serialize file triggers: {e}"))?;
-        let tmp_path = path.with_extension("json.tmp");
-        std::fs::write(&tmp_path, data.as_bytes())
-            .map_err(|e| format!("Failed to write file triggers temp file: {e}"))?;
-        std::fs::rename(&tmp_path, path)
-            .map_err(|e| format!("Failed to rename file triggers file: {e}"))?;
+        captain_types::durable_fs::atomic_write(path, data.as_bytes())
+            .map_err(|e| format!("Failed to persist file triggers: {e}"))?;
         debug!(count = triggers.len(), "Persisted file-change triggers");
         Ok(())
     }

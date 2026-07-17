@@ -330,6 +330,16 @@ impl CaptainKernel {
             .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
     }
 
+    /// Effective context window used by the next turn for this agent.
+    ///
+    /// This reads the live catalog on every call, so provider catalog refreshes
+    /// and explicit model switches are visible without restarting Captain.
+    pub fn effective_context_window_for_agent(&self, agent_id: AgentId) -> Option<usize> {
+        self.registry
+            .get(agent_id)
+            .map(|entry| self.context_window_for_llm_manifest(&entry.manifest))
+    }
+
     pub(super) fn prepare_llm_manifest_for_prompt(
         &self,
         agent_id: AgentId,

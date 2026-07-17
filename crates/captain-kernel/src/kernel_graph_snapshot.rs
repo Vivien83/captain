@@ -25,7 +25,7 @@ impl CaptainKernel {
         let _ = writeln!(out, "\n> Last updated: {now}");
 
         let graph_path = self.config.home_dir.join("GRAPH.md");
-        if let Err(e) = std::fs::write(&graph_path, &out) {
+        if let Err(e) = captain_types::durable_fs::atomic_write(&graph_path, out.as_bytes()) {
             tracing::warn!("Failed to write GRAPH.md: {e}");
         } else {
             tracing::debug!(path = %graph_path.display(), "GRAPH.md snapshot written");

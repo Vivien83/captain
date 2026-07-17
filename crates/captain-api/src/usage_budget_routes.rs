@@ -172,7 +172,9 @@ fn persist_budget_config(state: &Arc<AppState>) {
         "alert_threshold".into(),
         toml::Value::Float(state.kernel.config.budget.alert_threshold),
     );
-    if let Err(err) = std::fs::write(&config_path, doc.to_string()) {
+    if let Err(err) =
+        captain_types::durable_fs::atomic_write(&config_path, doc.to_string().as_bytes())
+    {
         tracing::warn!("Failed to persist budget to config.toml: {err}");
     }
 }

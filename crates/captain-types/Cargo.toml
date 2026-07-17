@@ -20,7 +20,10 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 rmp-serde = { workspace = true }
-tempfile = { workspace = true }

@@ -58,6 +58,7 @@ pub struct ModelEntry {
     pub display_name: String,
     pub provider: String,
     pub tier: String,
+    pub context_window: u64,
 }
 
 /// Tool call metadata for rich rendering.
@@ -246,6 +247,13 @@ pub struct ChatState {
     pub tool_click_zones: Vec<ToolClickZone>,
     /// Token usage from last response.
     pub last_tokens: Option<(u64, u64)>,
+    /// Context occupied by the latest completed provider request/response.
+    /// Unlike session token totals, this approximates the active prompt size.
+    pub current_context_tokens: u64,
+    /// Effective window selected from the live catalog for the active model.
+    pub context_window_tokens: u64,
+    /// Stream character position covered by the latest provider usage event.
+    pub context_stream_checkpoint_chars: Option<usize>,
     /// Cached input tokens reported by the provider for the last response.
     pub last_cached_input_tokens: u64,
     /// Cache creation/write tokens reported by the provider for the last response.
@@ -392,6 +400,9 @@ impl ChatState {
             scroll_offset: 0,
             tool_click_zones: Vec::new(),
             last_tokens: None,
+            current_context_tokens: 0,
+            context_window_tokens: 0,
+            context_stream_checkpoint_chars: None,
             last_cached_input_tokens: 0,
             last_cache_creation_tokens: 0,
             last_cost_usd: None,
@@ -459,6 +470,9 @@ impl ChatState {
         self.scroll_offset = 0;
         self.tool_click_zones.clear();
         self.last_tokens = None;
+        self.current_context_tokens = 0;
+        self.context_window_tokens = 0;
+        self.context_stream_checkpoint_chars = None;
         self.last_cached_input_tokens = 0;
         self.last_cache_creation_tokens = 0;
         self.last_cost_usd = None;
@@ -585,6 +599,44 @@ impl ChatState {
         self.thinking = false;
         self.streaming_text.push_str(text);
         self.streaming_chars += text.len();
+    }
+
+    pub fn record_context_usage(&mut self, input_tokens: u64, output_tokens: u64) {
+        self.current_context_tokens = input_tokens.saturating_add(output_tokens);
+        self.context_stream_checkpoint_chars = Some(self.streaming_chars);
+    }
+
+    pub fn begin_context_stream(&mut self) {
+        self.context_stream_checkpoint_chars = None;
+    }
+
+    pub fn set_context_window_tokens(&mut self, context_window_tokens: u64) {
+        if context_window_tokens > 0 {
+            self.context_window_tokens = context_window_tokens;
+        }
+    }
+
+    pub fn apply_model_context_window(&mut self, model_id: &str) {
+        if let Some(context_window) = self
+            .model_picker_models
+            .iter()
+            .find(|model| model.id.eq_ignore_ascii_case(model_id))
+            .map(|model| model.context_window)
+        {
+            self.set_context_window_tokens(context_window);
+        }
+    }
+
+    pub(crate) fn apply_agent_runtime_metadata(&mut self, body: &serde_json::Value) {
+        if let Some(label) = chat_model_label::model_label_from_agent_metadata(body) {
+            self.model_label = label;
+        }
+        if let Some(context_window) = body
+            .get("context_window_tokens")
+            .and_then(serde_json::Value::as_u64)
+        {
+            self.set_context_window_tokens(context_window);
+        }
     }
 
     /// Phase-i.7: append a ThinkingDelta token to the dedicated buffer.
@@ -910,6 +962,8 @@ impl ChatState {
             model_label: chat_model_label::sanitize_model_label(&self.model_label),
             mode_label: self.mode_label.clone(),
             messages,
+            current_context_tokens: self.current_context_tokens,
+            context_window_tokens: self.context_window_tokens,
             session_input_tokens: self.session_input_tokens,
             session_output_tokens: self.session_output_tokens,
             session_cached_input_tokens: self.session_cached_input_tokens,
@@ -1216,14 +1270,16 @@ impl ChatState {
         }
     }
 
-    fn reset_preserving_chat_identity(&mut self) {
+    pub(crate) fn reset_preserving_chat_identity(&mut self) {
         let name = self.agent_name.clone();
         let model = self.model_label.clone();
         let mode = self.mode_label.clone();
+        let context_window = self.context_window_tokens;
         self.reset();
         self.agent_name = name;
         self.model_label = model;
         self.mode_label = mode;
+        self.context_window_tokens = context_window;
     }
 
     fn delete_word_before_cursor(&mut self) {
@@ -2270,7 +2326,24 @@ mod tests_picker_key_application {
             display_name: id.to_string(),
             provider: "codex".to_string(),
             tier: "frontier".to_string(),
+            context_window: 272_000,
         }
+    }
+
+    #[test]
+    fn runtime_metadata_and_model_picker_refresh_context_capacity() {
+        let mut state = ChatState::new();
+        state.apply_agent_runtime_metadata(&serde_json::json!({
+            "model": {"provider": "codex", "model": "gpt-live"},
+            "context_window_tokens": 128_000
+        }));
+
+        assert_eq!(state.model_label, "codex/gpt-live");
+        assert_eq!(state.context_window_tokens, 128_000);
+
+        state.model_picker_models = vec![model("codex/gpt-next")];
+        state.apply_model_context_window("codex/gpt-next");
+        assert_eq!(state.context_window_tokens, 272_000);
     }
 
     #[test]
@@ -3026,6 +3099,8 @@ mod tests_boot_resume_182 {
                     tool: None,
                 })
                 .collect(),
+            current_context_tokens: 150,
+            context_window_tokens: 200_000,
             session_input_tokens: 100,
             session_output_tokens: 50,
             session_cached_input_tokens: 0,

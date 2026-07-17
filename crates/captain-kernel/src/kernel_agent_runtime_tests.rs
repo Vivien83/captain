@@ -1,5 +1,6 @@
 use super::kernel_agent_runtime::{
-    apply_subagent_lineage_metadata, is_lean_direct_turn, normalize_subagent_tool_scope,
+    apply_subagent_lineage_metadata, context_window_for_model, is_lean_direct_turn,
+    normalize_subagent_tool_scope,
 };
 use super::*;
 use std::collections::HashMap;
@@ -298,6 +299,45 @@ fn codex_background_model_sanitizer_rejects_claude_and_incompatible_codex_names(
     assert_eq!(
         normalize_background_fallbacks_for_provider(&catalog, "codex", "gpt-5.5", &fallbacks,),
         vec!["gpt-5.4".to_string()]
+    );
+}
+
+#[test]
+fn context_window_resolution_follows_live_catalog_metadata() {
+    use captain_types::model_catalog::{ModelCatalogEntry, ModelTier};
+
+    fn model(id: &str, context_window: u64) -> ModelCatalogEntry {
+        ModelCatalogEntry {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            provider: "dynamic-test".to_string(),
+            tier: ModelTier::Custom,
+            context_window,
+            max_output_tokens: 8_192,
+            input_cost_per_m: 0.0,
+            output_cost_per_m: 0.0,
+            supports_tools: true,
+            supports_vision: false,
+            supports_streaming: true,
+            aliases: Vec::new(),
+        }
+    }
+
+    let mut catalog = captain_runtime::model_catalog::ModelCatalog::new();
+    assert!(catalog.add_custom_model(model("dynamic-test/small", 32_768)));
+    assert!(catalog.add_custom_model(model("dynamic-test/large", 1_000_000)));
+
+    assert_eq!(
+        context_window_for_model(&catalog, "dynamic-test", "small"),
+        Some(32_768)
+    );
+    assert_eq!(
+        context_window_for_model(&catalog, "dynamic-test", "dynamic-test/large"),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        context_window_for_model(&catalog, "dynamic-test", "missing"),
+        None
     );
 }
 

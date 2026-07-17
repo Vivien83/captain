@@ -50,6 +50,9 @@ const IDLE_ACTIONS: &[FooterAction] = &[
     ("/", "commandes"),
     ("Ctrl+M", "modèle"),
 ];
+const FALLBACK_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
+const CONTEXT_WARNING_RATIO: f64 = 0.50;
+const CONTEXT_CRITICAL_RATIO: f64 = 0.75;
 
 fn bold(color: Color) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
@@ -133,12 +136,20 @@ fn footer_status_item(state: &ChatState) -> FooterItem {
 
 fn footer_context_item(state: &ChatState) -> FooterItem {
     let current = current_context_tokens_with_stream(state);
-    let style = context_pressure_style(current);
-    let ratio = (current as f64 / 64_000.0).clamp(0.0, 1.0);
+    let context_window = effective_context_window_tokens(state);
+    let ratio = context_ratio(current, context_window);
+    let style = context_pressure_style(ratio);
     let mut spans = vec![
         Span::styled("ctx ", theme::dim_style()),
         Span::styled(pressure_sparkline(ratio), style),
-        Span::styled(format!(" {}", compact_token_count(current)), style),
+        Span::styled(
+            format!(
+                " {}/{}",
+                compact_token_value(current),
+                compact_token_value(context_window)
+            ),
+            style,
+        ),
     ];
 
     if let Some((input, _)) = state.last_tokens {
@@ -151,7 +162,7 @@ fn footer_context_item(state: &ChatState) -> FooterItem {
         }
     }
 
-    if current >= 48_000 {
+    if ratio >= CONTEXT_CRITICAL_RATIO {
         spans.push(Span::styled(
             " /compact",
             Style::default().fg(theme::YELLOW),
@@ -263,7 +274,9 @@ fn footer_action_spec(state: &ChatState) -> (u8, &'static [FooterAction]) {
         return (2, SLASH_PICKER_ACTIONS);
     }
     if state.is_streaming {
-        return (3, STREAMING_ACTIONS);
+        // Interjection is an active control, so keep it visible ahead of
+        // optional queue/tool telemetry when the dynamic context meter grows.
+        return (1, STREAMING_ACTIONS);
     }
 
     (3, IDLE_ACTIONS)
@@ -316,33 +329,40 @@ fn footer_telemetry_item(state: &ChatState) -> Option<FooterItem> {
 }
 
 fn current_context_tokens_with_stream(state: &ChatState) -> u64 {
-    let session_total = state
-        .session_input_tokens
-        .saturating_add(state.session_output_tokens);
-    let current_turn = if state.is_streaming || state.thinking {
+    let reported = if state.current_context_tokens > 0 {
+        state.current_context_tokens
+    } else {
         state
             .last_tokens
             .map(|(input, output)| input.saturating_add(output))
             .unwrap_or(0)
+    };
+    let unreported_stream_chars = if state.is_streaming || state.thinking {
+        state
+            .streaming_chars
+            .saturating_sub(state.context_stream_checkpoint_chars.unwrap_or_default())
     } else {
         0
     };
-    let fallback_last = state
-        .last_tokens
-        .map(|(input, output)| input.saturating_add(output))
-        .unwrap_or(0);
-    let recorded = if session_total > 0 {
-        session_total.saturating_add(current_turn)
-    } else {
-        fallback_last
-    };
-    recorded.saturating_add((state.streaming_chars / 4) as u64)
+    reported.saturating_add((unreported_stream_chars / 4) as u64)
 }
 
-fn context_pressure_style(total_tokens: u64) -> Style {
-    let color = if total_tokens >= 48_000 {
+fn effective_context_window_tokens(state: &ChatState) -> u64 {
+    if state.context_window_tokens > 0 {
+        state.context_window_tokens
+    } else {
+        FALLBACK_CONTEXT_WINDOW_TOKENS
+    }
+}
+
+fn context_ratio(current_tokens: u64, context_window_tokens: u64) -> f64 {
+    (current_tokens as f64 / context_window_tokens.max(1) as f64).clamp(0.0, 1.0)
+}
+
+fn context_pressure_style(ratio: f64) -> Style {
+    let color = if ratio >= CONTEXT_CRITICAL_RATIO {
         theme::RED
-    } else if total_tokens >= 24_000 {
+    } else if ratio >= CONTEXT_WARNING_RATIO {
         theme::YELLOW
     } else {
         theme::GREEN
@@ -380,16 +400,23 @@ fn activity_sparkline(frame: usize) -> &'static str {
     FRAMES[frame % FRAMES.len()]
 }
 
-fn compact_token_count(tokens: u64) -> String {
-    if tokens >= 1_000 {
+fn compact_token_value(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        let value = tokens as f64 / 1_000_000.0;
+        if tokens >= 10_000_000 {
+            format!("{value:.0}m")
+        } else {
+            format!("{value:.1}m")
+        }
+    } else if tokens >= 1_000 {
         let value = tokens as f64 / 1_000.0;
         if tokens >= 10_000 {
-            format!("{value:.0}k tok")
+            format!("{value:.0}k")
         } else {
-            format!("{value:.1}k tok")
+            format!("{value:.1}k")
         }
     } else {
-        format!("{tokens} tok")
+        tokens.to_string()
     }
 }
 

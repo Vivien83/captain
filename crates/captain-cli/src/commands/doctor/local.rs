@@ -183,7 +183,7 @@ fn check_config_file(report: &mut DoctorReport, captain_dir: &std::path::Path) {
             }
         }
     } else if report.repair {
-        repair_config_file(report, &config_path, captain_dir);
+        repair_config_file(report, &config_path);
     } else {
         if !report.json {
             ui::check_fail("Config file not found.");
@@ -193,11 +193,7 @@ fn check_config_file(report: &mut DoctorReport, captain_dir: &std::path::Path) {
     }
 }
 
-fn repair_config_file(
-    report: &mut DoctorReport,
-    config_path: &std::path::Path,
-    captain_dir: &std::path::Path,
-) {
+fn repair_config_file(report: &mut DoctorReport, config_path: &std::path::Path) {
     if !report.json {
         ui::check_fail("Config file not found.");
     }
@@ -226,8 +222,7 @@ api_key_env = "{api_key_env}"
 decay_rate = 0.05
 "#
     );
-    let _ = std::fs::create_dir_all(captain_dir);
-    if std::fs::write(config_path, default_config).is_ok() {
+    if captain_types::durable_fs::atomic_write(config_path, default_config.as_bytes()).is_ok() {
         restrict_file_permissions(config_path);
         if !report.json {
             ui::check_ok("Created default config.toml");
@@ -266,7 +261,7 @@ fn check_daemon_and_port(report: &mut DoctorReport, captain_dir: &std::path::Pat
     let daemon_json_path = captain_dir.join("daemon.json");
     if daemon_json_path.exists() && daemon_running.is_none() {
         if report.repair {
-            let _ = std::fs::remove_file(&daemon_json_path);
+            let _ = captain_types::durable_fs::remove_file(&daemon_json_path);
             if !report.json {
                 ui::check_ok("Removed stale daemon.json");
             }

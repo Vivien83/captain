@@ -359,7 +359,7 @@ async fn summarize_one_if_stale(
         .unwrap_or("?")
         .to_string();
     let content = assemble_checkpoint(&session_id, agent_key, &session, json_mtime, &body);
-    if let Err(e) = std::fs::write(&checkpoint_path, content) {
+    if let Err(e) = captain_types::durable_fs::atomic_write(&checkpoint_path, content.as_bytes()) {
         warn!(error = %e, path = %checkpoint_path.display(), "session summarize: write failed");
         return false;
     }

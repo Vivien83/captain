@@ -216,7 +216,10 @@ fn cacheable_prefix_excludes_turn_dynamic_sections() {
     let prefix = &built.system_prompt[..split];
 
     assert!(prefix.contains("## Memory"));
-    assert!(prefix.contains("Use it proactively"));
+    assert!(prefix.contains(
+        "Use persistent memory only when durable context materially changes the next action"
+    ));
+    assert!(prefix.contains("Confirm only after memory_save succeeds"));
     assert!(!prefix.contains("## Current Turn Context"));
     assert!(!prefix.contains("## Current Date"));
     assert!(!prefix.contains("dynamic memory"));

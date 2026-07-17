@@ -46,6 +46,8 @@ fn loaded_session_replaces_runtime_identity_and_messages() {
                 text: "restored".to_string(),
                 tool: None,
             }],
+            current_context_tokens: 7,
+            context_window_tokens: 200_000,
             session_input_tokens: 3,
             session_output_tokens: 5,
             session_cached_input_tokens: 2,
@@ -64,5 +66,7 @@ fn loaded_session_replaces_runtime_identity_and_messages() {
     assert!(!state.is_streaming);
     assert!(!state.thinking);
     assert!(state.model_label.is_empty());
+    assert_eq!(state.current_context_tokens, 7);
+    assert_eq!(state.context_window_tokens, 200_000);
     assert_eq!(state.session_created_at, 42);
 }

@@ -11,6 +11,7 @@ fn model(id: &str, display_name: &str, tier: &str) -> ModelEntry {
         display_name: display_name.into(),
         provider: "test".into(),
         tier: tier.into(),
+        context_window: 128_000,
     }
 }
 

@@ -509,7 +509,6 @@ fn write_pending_ready_notification(
         return Ok(());
     };
     let dir = pending_ready_dir(kernel);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let id = uuid::Uuid::new_v4().to_string();
     let payload = PendingReadyNotification {
         id: id.clone(),
@@ -522,7 +521,8 @@ fn write_pending_ready_notification(
     };
     let path = dir.join(format!("{id}.json"));
     let raw = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-    std::fs::write(&path, raw).map_err(|e| format!("write {}: {e}", path.display()))
+    captain_types::durable_fs::atomic_write(&path, raw.as_bytes())
+        .map_err(|e| format!("persist {}: {e}", path.display()))
 }
 
 fn schedule_restart(home_dir: PathBuf) -> Result<(), String> {

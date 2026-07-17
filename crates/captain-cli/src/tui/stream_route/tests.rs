@@ -93,6 +93,7 @@ fn tool_end_falls_back_to_json_input_without_buffer() {
 #[test]
 fn content_complete_updates_token_usage() {
     let mut chat = ChatState::new();
+    chat.streaming_chars = 64;
 
     apply_stream_event(
         &mut chat,
@@ -108,6 +109,8 @@ fn content_complete_updates_token_usage() {
     );
 
     assert_eq!(chat.last_tokens, Some((12, 7)));
+    assert_eq!(chat.current_context_tokens, 19);
+    assert_eq!(chat.context_stream_checkpoint_chars, Some(64));
     assert_eq!(chat.last_cached_input_tokens, 5);
     assert_eq!(chat.last_cache_creation_tokens, 3);
 }

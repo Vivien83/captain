@@ -30,7 +30,7 @@ pub(crate) fn write_daemon_info_file(
             }
         }
         info!("Removing stale daemon info file");
-        let _ = std::fs::remove_file(info_path);
+        let _ = captain_types::durable_fs::remove_file(info_path);
     }
 
     let daemon_info = DaemonInfo {
@@ -41,14 +41,14 @@ pub(crate) fn write_daemon_info_file(
         platform: std::env::consts::OS.to_string(),
     };
     if let Ok(json) = serde_json::to_string_pretty(&daemon_info) {
-        let _ = std::fs::write(info_path, json);
+        let _ = captain_types::durable_fs::atomic_write(info_path, json.as_bytes());
         restrict_permissions(info_path);
     }
     Ok(())
 }
 
 pub(crate) fn remove_daemon_info_file(info_path: &Path) {
-    let _ = std::fs::remove_file(info_path);
+    let _ = captain_types::durable_fs::remove_file(info_path);
 }
 
 /// Read daemon info from the standard location.

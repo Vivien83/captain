@@ -386,8 +386,8 @@ impl WizardState {
                 }
             }
         };
-        let _ = std::fs::create_dir_all(captain_dir.join("agents"));
-        let _ = std::fs::create_dir_all(captain_dir.join("data"));
+        let _ = captain_types::durable_fs::create_dir_all(&captain_dir.join("agents"));
+        let _ = captain_types::durable_fs::create_dir_all(&captain_dir.join("data"));
         crate::restrict_dir_permissions(&captain_dir);
 
         let api_key_line = if !self.api_key_input.is_empty() {
@@ -423,7 +423,7 @@ listen_addr = "127.0.0.1:4200"
         );
 
         let config_path = captain_dir.join("config.toml");
-        match std::fs::write(&config_path, &config) {
+        match captain_types::durable_fs::atomic_write(&config_path, config.as_bytes()) {
             Ok(()) => {
                 crate::restrict_file_permissions(&config_path);
                 self.status_msg = format!("Config saved \u{2014} {} / {}", p.name, model);

@@ -208,13 +208,21 @@ pub async fn get_session(
         Ok(Some(session)) => {
             let message_count = session.messages.len();
             let messages = session_messages_public(&session.messages);
+            let context_window_tokens = state
+                .kernel
+                .effective_context_window_for_agent(session.agent_id)
+                .map(|window| window as u64)
+                .unwrap_or(session.context_window_tokens);
+            let estimated_context_tokens =
+                captain_runtime::compactor::estimate_token_count(&session.messages, None, None);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "session_id": session.id.0.to_string(),
                     "agent_id": session.agent_id.0.to_string(),
                     "message_count": message_count,
-                    "context_window_tokens": session.context_window_tokens,
+                    "context_window_tokens": context_window_tokens,
+                    "estimated_context_tokens": estimated_context_tokens,
                     "label": session.label,
                     "messages": messages,
                 })),

@@ -72,7 +72,7 @@ impl CaptainKernel {
     ) -> KernelResult<StreamingLlmTurnResult> {
         let request = StreamingMessageRequest {
             message,
-            kernel_handle,
+            kernel_handle: Some(self.resolve_streaming_kernel_handle(kernel_handle)),
             sender_id,
             sender_name,
             content_blocks,
@@ -131,6 +131,13 @@ impl CaptainKernel {
         })
     }
 
+    fn resolve_streaming_kernel_handle(
+        self: &Arc<Self>,
+        explicit: Option<Arc<dyn KernelHandle>>,
+    ) -> Arc<dyn KernelHandle> {
+        explicit.unwrap_or_else(|| self.clone() as Arc<dyn KernelHandle>)
+    }
+
     fn validate_streaming_capabilities(
         &self,
         entry: &AgentEntry,
@@ -160,6 +167,40 @@ fn streaming_module_kind(manifest: &AgentManifest) -> Option<StreamingModuleKind
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_types::config::KernelConfig;
+
+    #[tokio::test]
+    async fn streaming_kernel_handle_defaults_to_self_and_preserves_explicit_override() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home_dir = tmp.path().join("streaming-kernel-handle");
+        let kernel = Arc::new(
+            CaptainKernel::boot_with_config(KernelConfig {
+                home_dir: home_dir.clone(),
+                data_dir: home_dir.join("data"),
+                ..KernelConfig::default()
+            })
+            .expect("kernel boot"),
+        );
+        kernel.set_self_handle();
+
+        let fallback = kernel.resolve_streaming_kernel_handle(None);
+        assert!(
+            fallback
+                .list_agents()
+                .iter()
+                .any(|agent| agent.name == "captain"),
+            "an in-process streaming turn must receive the live kernel handle"
+        );
+
+        let explicit: Arc<dyn KernelHandle> = kernel.clone();
+        let resolved = kernel.resolve_streaming_kernel_handle(Some(explicit.clone()));
+        assert!(
+            Arc::ptr_eq(&explicit, &resolved),
+            "an explicit bridge handle must remain authoritative"
+        );
+
+        kernel.shutdown();
+    }
 
     #[test]
     fn streaming_module_kind_detects_non_llm_modules_only() {

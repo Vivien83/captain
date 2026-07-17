@@ -57,11 +57,11 @@ erase the session. It is per-turn and does not retract an older fact. Use
 `memory_forget` when the user asks to remove or correct knowledge already
 stored.
 
-`0.1.0-alpha.6` known limitation: the post-turn paths above honor this opt-out,
-but the core agent-loop finalizer still stores one local episodic interaction
-fragment. This is distinct from the expected transcript and audit retention.
-Do not promise complete per-turn semantic suppression on `alpha.6`; a later
-immutable release must close that finalizer path.
+`0.1.0-alpha.6` and `0.1.0-alpha.7` known limitation: the post-turn paths above
+honor this opt-out, but the core agent-loop finalizer still stores one local episodic interaction
+fragment. This is distinct from the expected transcript
+and audit retention. Do not promise complete per-turn semantic suppression on
+either version; a later immutable release must close that finalizer path.
 
 ### `memory_save`
 
@@ -75,6 +75,9 @@ Captain-native declarative learning. Use **spontaneously** when the user states 
 | `category` | yes | One of `info`, `skill`, `error_success`, `solution`, `other` (case-sensitive). |
 
 Side effect: a `MemoryStored` event is broadcast on the kernel bus → 🧠 notice surfaces in the active chat (Telegram, TUI, API/SSE, …) so the user sees the fact landed. Captain does not need to guess the `channel` field during a live turn: the runtime propagates the current origin channel to `memory_save` automatically.
+Daemon-backed Web/API turns and direct TUI/CLI streaming turns both provide a
+live kernel handle to the tool. Captain must confirm persistence only after a
+successful receipt; on any tool error, it must state that nothing was stored.
 The tool receipt distinguishes `index=sync` from
 `local=durable · index=pending/retry-auto` or
 `index=degraded/retry-auto`; Captain must not claim remote synchronization

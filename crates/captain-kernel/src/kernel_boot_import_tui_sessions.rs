@@ -102,8 +102,8 @@ fn processed_marker_path(path: &Path) -> PathBuf {
 }
 
 fn mark_legacy_file_processed(path: &Path) -> Result<(), std::io::Error> {
-    std::fs::write(
-        processed_marker_path(path),
+    captain_types::durable_fs::atomic_write(
+        &processed_marker_path(path),
         b"Imported into Captain's canonical session store.\n",
     )
 }

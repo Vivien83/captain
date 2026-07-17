@@ -756,12 +756,8 @@ where
     let mut endpoints = read_endpoint_tables(&doc)?;
     edit(&mut endpoints)?;
     write_endpoint_tables(&mut doc, &endpoints)?;
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
-    let tmp = config_path.with_extension("toml.tmp");
-    std::fs::write(&tmp, doc.to_string()).map_err(|e| format!("write tmp: {e}"))?;
-    std::fs::rename(&tmp, config_path).map_err(|e| format!("replace config.toml: {e}"))?;
+    captain_types::durable_fs::atomic_write(config_path, doc.to_string().as_bytes())
+        .map_err(|e| format!("persist config.toml: {e}"))?;
     Ok(())
 }
 

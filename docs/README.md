@@ -49,6 +49,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
+| [0.1.0-alpha.7 release notes](releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
 | [0.1.0-alpha.6 release notes](releases/v0.1.0-alpha.6.md) | Telegram Rich Messages, live tool boards, ephemeral progress, and reliable controls |
 | [0.1.0-alpha.5 release notes](releases/v0.1.0-alpha.5.md) | Clean daemon shutdown and explicit memory write opt-out |
 | [0.1.0-alpha.4 release notes](releases/v0.1.0-alpha.4.md) | Authoritative corrections, complete active recall, and CLI continuation |

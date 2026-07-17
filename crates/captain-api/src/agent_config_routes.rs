@@ -367,7 +367,7 @@ fn copy_workspace_identity_files(
                     let src_file = src_can.join(filename);
                     let dst_file = dst_can.join(filename);
                     if src_file.exists() {
-                        let _ = std::fs::copy(&src_file, &dst_file);
+                        let _ = captain_types::durable_fs::atomic_copy(&src_file, &dst_file);
                     }
                 }
             }

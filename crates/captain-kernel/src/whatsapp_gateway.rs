@@ -51,8 +51,8 @@ fn write_if_changed(path: &std::path::Path, content: &str) -> std::io::Result<bo
         }
     }
 
-    std::fs::write(path, content)?;
-    std::fs::write(&hash_path, &new_hash)?;
+    captain_types::durable_fs::atomic_write(path, content.as_bytes())?;
+    captain_types::durable_fs::atomic_write(&hash_path, new_hash.as_bytes())?;
     Ok(true)
 }
 
@@ -61,7 +61,8 @@ fn write_if_changed(path: &std::path::Path, content: &str) -> std::io::Result<bo
 /// Returns the gateway directory path on success, or an error message.
 async fn ensure_gateway_installed() -> Result<PathBuf, String> {
     let dir = gateway_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create gateway dir: {e}"))?;
+    captain_types::durable_fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create gateway dir: {e}"))?;
 
     let index_path = dir.join("index.js");
     let package_path = dir.join("package.json");

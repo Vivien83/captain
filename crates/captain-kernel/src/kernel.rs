@@ -1245,8 +1245,8 @@ impl KernelHandle for CaptainKernel {
             return Ok(());
         }
         arr.push(canon_str);
-        std::fs::write(&config_path, doc.to_string())
-            .map_err(|e| format!("write config.toml: {e}"))?;
+        captain_types::durable_fs::atomic_write(&config_path, doc.to_string().as_bytes())
+            .map_err(|e| format!("persist config.toml: {e}"))?;
         info!(path = %canon.display(), "workspace path added to config");
         Ok(())
     }

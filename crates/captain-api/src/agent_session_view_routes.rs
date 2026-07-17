@@ -34,17 +34,24 @@ pub async fn get_agent_session(
             );
         }
     };
+    let effective_context_window = state
+        .kernel
+        .effective_context_window_for_agent(agent_id)
+        .unwrap_or_default() as u64;
 
     match state.kernel.memory.get_session(entry.session_id) {
         Ok(Some(session)) => {
             let messages = build_session_messages(&session.messages);
+            let estimated_context_tokens =
+                captain_runtime::compactor::estimate_token_count(&session.messages, None, None);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "session_id": session.id.0.to_string(),
                     "agent_id": session.agent_id.0.to_string(),
                     "message_count": session.messages.len(),
-                    "context_window_tokens": session.context_window_tokens,
+                    "context_window_tokens": effective_context_window,
+                    "estimated_context_tokens": estimated_context_tokens,
                     "label": session.label,
                     "messages": messages,
                 })),
@@ -56,7 +63,8 @@ pub async fn get_agent_session(
                 "session_id": entry.session_id.0.to_string(),
                 "agent_id": agent_id.to_string(),
                 "message_count": 0,
-                "context_window_tokens": 0,
+                "context_window_tokens": effective_context_window,
+                "estimated_context_tokens": 0,
                 "messages": [],
             })),
         ),

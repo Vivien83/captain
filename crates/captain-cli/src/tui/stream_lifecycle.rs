@@ -5,6 +5,7 @@ pub(crate) fn prepare_stream_start(chat: &mut ChatState) {
     chat.is_streaming = true;
     chat.thinking = true;
     chat.streaming_chars = 0;
+    chat.begin_context_stream();
     chat.last_tokens = None;
     chat.last_cached_input_tokens = 0;
     chat.last_cache_creation_tokens = 0;
@@ -30,6 +31,12 @@ fn apply_success(chat: &mut ChatState, result: AgentLoopResult) {
     }
 
     if result.total_usage.input_tokens > 0 || result.total_usage.output_tokens > 0 {
+        if chat.context_stream_checkpoint_chars.is_none() {
+            chat.record_context_usage(
+                result.total_usage.input_tokens,
+                result.total_usage.output_tokens,
+            );
+        }
         chat.last_tokens = Some((
             result.total_usage.input_tokens,
             result.total_usage.output_tokens,

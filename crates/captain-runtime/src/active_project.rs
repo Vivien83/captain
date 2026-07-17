@@ -146,19 +146,13 @@ fn save_to_disk(
     path: &Path,
     entries: &std::collections::HashMap<String, String>,
 ) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let payload = Persistent {
         version: 1,
         entries: entries.clone(),
     };
     let raw = serde_json::to_string_pretty(&payload)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, raw)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    captain_types::durable_fs::atomic_write(path, raw.as_bytes())
 }
 
 // ---------------------------------------------------------------------------

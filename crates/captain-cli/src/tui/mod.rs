@@ -2667,9 +2667,7 @@ impl App {
                 let Ok(body) = resp.json::<serde_json::Value>() else {
                     return;
                 };
-                if let Some(label) = chat::ChatState::model_label_from_agent_metadata(&body) {
-                    self.chat.model_label = label;
-                }
+                self.chat.apply_agent_runtime_metadata(&body);
             }
             (Backend::InProcess { kernel }, Some(target)) => {
                 let Some(agent_id) = target.agent_id_inprocess else {
@@ -2680,6 +2678,9 @@ impl App {
                         "{}/{}",
                         entry.manifest.model.provider, entry.manifest.model.model
                     );
+                }
+                if let Some(context_window) = kernel.effective_context_window_for_agent(agent_id) {
+                    self.chat.set_context_window_tokens(context_window as u64);
                 }
             }
             _ => {}
@@ -3646,7 +3647,7 @@ impl App {
 
     fn start_fresh_local_chat_session(&mut self) {
         let key = self.chat_session_prefix();
-        self.chat.reset();
+        self.chat.reset_preserving_chat_identity();
         if let Some(key) = key {
             let new_key = format!(
                 "{key}-{}",
@@ -4139,6 +4140,9 @@ impl App {
                                             .to_string(),
                                         provider: m["provider"].as_str().unwrap_or("").to_string(),
                                         tier: m["tier"].as_str().unwrap_or("Balanced").to_string(),
+                                        context_window: m["context_window"]
+                                            .as_u64()
+                                            .unwrap_or_default(),
                                     })
                                     .collect()
                             })
@@ -4158,6 +4162,7 @@ impl App {
                         display_name: e.display_name.clone(),
                         provider: e.provider.clone(),
                         tier: format!("{:?}", e.tier),
+                        context_window: e.context_window,
                     })
                     .collect()
             }
@@ -4353,7 +4358,9 @@ impl App {
                     if let Some(label) = label {
                         self.chat.model_label = label;
                     }
+                    self.chat.apply_model_context_window(model_id);
                     self.chat.push_message(chat::Role::System, message);
+                    self.refresh_active_chat_metadata();
                 }
             }
             Ok(r) => self.chat.push_message(
@@ -4405,7 +4412,9 @@ impl App {
                     "{}/{}",
                     result.plan.target_provider, result.plan.target_model
                 );
+                self.chat.apply_model_context_window(model_id);
                 self.chat.push_message(chat::Role::System, result.message);
+                self.refresh_active_chat_metadata();
             }
             Err(e) => self
                 .chat

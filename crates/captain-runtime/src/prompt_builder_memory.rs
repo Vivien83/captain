@@ -35,8 +35,7 @@ pub fn build_memory_section(memories: &[(String, String)]) -> String {
 pub fn build_memory_protocol_section() -> String {
     let mut out = String::from("## Memory Protocol\n\n");
     out.push_str(
-        "Use persistent memory for durable context, not as a reflex before every task. \
-         Use it proactively when durable context materially changes the next action.\n\n\
+        "Use persistent memory only when durable context materially changes the next action.\n\n\
          ### When to store (memory_save)\n\
          - User states a preference or personal info\n\
          - You discover a workaround or fix for a recurring problem\n\
@@ -44,12 +43,13 @@ pub fn build_memory_protocol_section() -> String {
          Store declarative triples: subject, predicate, object, category.\n\n\
          ### When to recall (memory_context_batch / memory_recall / session_recall)\n\
          - When the user references something from a previous conversation\n\
-         - When a durable preference, project fact, prior error, or known workaround would materially change the next action\n\
+         - When a durable fact, prior error, or workaround changes the next action\n\
          - \"tu te souviens\", \"on avait dit\", \"l'autre fois\", or named old topics mean retrieve before answering\n\
          - Prefer memory_context_batch for multi-fact/past-exchange questions; it checks memory and prior sessions together\n\
          - Use memory_recall for one durable fact; session_recall for one prior conversation\n\n\
          ### Rules\n\
          - Never say \"noted\" or \"I'll remember\" without actually calling memory_save\n\
+         - Confirm only after memory_save succeeds; on error, say nothing was stored\n\
          - After solving a recurring bug: store the reusable solution without being told\n\
          - Correction: latest user message is authoritative; never substitute a recalled value. Recall the exact old triple, memory_forget it and await success, then memory_save the exact replacement\n\n\
          ### Privacy and disclosure\n\

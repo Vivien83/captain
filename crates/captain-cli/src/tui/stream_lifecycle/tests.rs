@@ -17,6 +17,7 @@ fn agent_result(response: &str, usage: TokenUsage, cost_usd: Option<f64>) -> Age
 fn prepare_stream_start_resets_turn_telemetry() {
     let mut chat = ChatState::new();
     chat.streaming_chars = 42;
+    chat.context_stream_checkpoint_chars = Some(21);
     chat.last_tokens = Some((10, 20));
     chat.last_cached_input_tokens = 5;
     chat.last_cache_creation_tokens = 3;
@@ -28,6 +29,7 @@ fn prepare_stream_start_resets_turn_telemetry() {
     assert!(chat.is_streaming);
     assert!(chat.thinking);
     assert_eq!(chat.streaming_chars, 0);
+    assert!(chat.context_stream_checkpoint_chars.is_none());
     assert!(chat.last_tokens.is_none());
     assert_eq!(chat.last_cached_input_tokens, 0);
     assert_eq!(chat.last_cache_creation_tokens, 0);
@@ -81,6 +83,8 @@ fn success_records_tokens_cache_and_cost() {
     apply_stream_result(&mut chat, Ok(agent_result("", usage, Some(0.12))));
 
     assert_eq!(chat.last_tokens, Some((100, 40)));
+    assert_eq!(chat.current_context_tokens, 140);
+    assert_eq!(chat.context_stream_checkpoint_chars, Some(0));
     assert_eq!(chat.last_cached_input_tokens, 30);
     assert_eq!(chat.last_cache_creation_tokens, 7);
     assert_eq!(chat.last_cost_usd, Some(0.12));

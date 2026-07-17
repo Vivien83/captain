@@ -121,10 +121,8 @@ fn write_secret_env_value(
     };
     lines.retain(|line| !line.starts_with(&format!("{key}=")));
     lines.push(format!("{key}={value}"));
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, lines.join("\n") + "\n")?;
+    let serialized = lines.join("\n") + "\n";
+    captain_types::durable_fs::atomic_write(path, serialized.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

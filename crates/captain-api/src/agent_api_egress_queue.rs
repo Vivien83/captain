@@ -341,17 +341,14 @@ fn load_queue(home_dir: &Path) -> Result<Vec<AgentApiQueuedCallback>, String> {
 fn save_queue(home_dir: &Path, queue: &[AgentApiQueuedCallback]) -> Result<(), String> {
     let path = queue_path(home_dir);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        captain_types::durable_fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create agent API queue dir: {err}"))?;
         secure_dir(parent);
     }
     let raw = serde_json::to_vec_pretty(queue)
         .map_err(|err| format!("failed to encode agent API egress queue: {err}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, raw)
-        .map_err(|err| format!("failed to write agent API egress queue: {err}"))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|err| format!("failed to commit agent API egress queue: {err}"))?;
+    captain_types::durable_fs::atomic_write(&path, &raw)
+        .map_err(|err| format!("failed to persist agent API egress queue: {err}"))?;
     secure_file(&path);
     Ok(())
 }

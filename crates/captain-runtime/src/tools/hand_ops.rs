@@ -146,7 +146,8 @@ pub(crate) async fn tool_scaffold_hand(
     let hand_dir = home
         .join("hands")
         .join(id.replace("-hand", "").replace("_hand", ""));
-    std::fs::create_dir_all(&hand_dir).map_err(|e| format!("mkdir hands: {e}"))?;
+    captain_types::durable_fs::create_dir_all(&hand_dir)
+        .map_err(|e| format!("mkdir hands: {e}"))?;
 
     let tools_toml = tools
         .iter()
@@ -156,24 +157,26 @@ pub(crate) async fn tool_scaffold_hand(
     let hand_toml = format!(
         "[hand]\nid = \"{id}\"\nname = \"{name}\"\ndescription = \"{description}\"\ncategory = \"{category}\"\nicon = \"{icon}\"\ntools = [{tools_toml}]\n"
     );
-    std::fs::write(hand_dir.join("HAND.toml"), &hand_toml)
-        .map_err(|e| format!("write HAND.toml: {e}"))?;
+    captain_types::durable_fs::atomic_write(&hand_dir.join("HAND.toml"), hand_toml.as_bytes())
+        .map_err(|e| format!("persist HAND.toml: {e}"))?;
 
     let ws_dir = home.join("workspaces").join(name);
-    std::fs::create_dir_all(&ws_dir).map_err(|e| format!("mkdir workspace: {e}"))?;
+    captain_types::durable_fs::create_dir_all(&ws_dir)
+        .map_err(|e| format!("mkdir workspace: {e}"))?;
     for sub in &["data", "logs", "skills", "sessions", "output", "memory"] {
-        let _ = std::fs::create_dir_all(ws_dir.join(sub));
+        let _ = captain_types::durable_fs::create_dir_all(&ws_dir.join(sub));
     }
 
     let soul = format!(
         "# Soul\nYou are **{name}**, an autonomous agent.\n{description}\n\n## Personality\n- Be helpful, proactive, and organized.\n- Respond in French by default.\n\n## Capabilities\n- Use your tools to accomplish tasks autonomously.\n- Persist durable facts through the memory tools, not workspace markdown snapshots.\n"
     );
-    let _ = std::fs::write(ws_dir.join("SOUL.md"), &soul);
+    let _ = captain_types::durable_fs::atomic_write(&ws_dir.join("SOUL.md"), soul.as_bytes());
 
     let identity = format!(
         "---\nname: {name}\narchetype: {category}\nvibe: helpful\nemoji: {icon}\navatar_url:\ngreeting_style: warm\ncolor: #D4A853\n---\n# Identity\n{description}\n"
     );
-    let _ = std::fs::write(ws_dir.join("IDENTITY.md"), &identity);
+    let _ =
+        captain_types::durable_fs::atomic_write(&ws_dir.join("IDENTITY.md"), identity.as_bytes());
 
     Ok(format!(
         "Hand '{name}' scaffolded:\n- HAND.toml: {}\n- Workspace: {}\n\nFiles created: SOUL.md, IDENTITY.md\nSubdirs: data/, logs/, skills/, sessions/, output/, memory/\n\nNext: customize SOUL.md/IDENTITY.md if needed, then activate via the Hands page.",

@@ -140,7 +140,11 @@ pub(super) fn launchd_plist_content(binary: &Path, home_dir: &Path) -> String {
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <false/>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
   <key>StandardOutPath</key>
   <string>{}</string>
   <key>StandardErrorPath</key>
@@ -229,6 +233,10 @@ mod tests {
         assert!(plist.contains("<string>start</string>"));
         assert!(plist.contains("<key>CAPTAIN_HOME</key>"));
         assert!(plist.contains("<key>StandardOutPath</key>"));
+        assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
+        assert!(plist.contains("<key>KeepAlive</key>\n  <true/>"));
+        assert!(plist.contains("<key>ThrottleInterval</key>\n  <integer>5</integer>"));
+        assert!(plist.contains("<key>ProcessType</key>\n  <string>Background</string>"));
     }
 
     #[test]

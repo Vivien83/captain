@@ -64,8 +64,6 @@ pub(crate) async fn tool_scaffold_skill(
 
     let ws = workspace_root.ok_or("No workspace root — agent must have a workspace")?;
     let skill_dir = ws.join("skills").join(name);
-    std::fs::create_dir_all(&skill_dir).map_err(|e| format!("mkdir skill: {e}"))?;
-
     let caps = capabilities
         .iter()
         .map(|c| {
@@ -93,8 +91,8 @@ pub(crate) async fn tool_scaffold_skill(
          ## Capabilities\n\n\
          {caps}"
     );
-    std::fs::write(skill_dir.join("SKILL.md"), &skill_md)
-        .map_err(|e| format!("write SKILL.md: {e}"))?;
+    captain_types::durable_fs::atomic_write(&skill_dir.join("SKILL.md"), skill_md.as_bytes())
+        .map_err(|e| format!("persist SKILL.md: {e}"))?;
 
     Ok(format!(
         "Skill '{name}' scaffolded at {}/SKILL.md\nCapabilities: {}\n\nNext: implement the bash blocks in each capability section.",
