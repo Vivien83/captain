@@ -57,6 +57,12 @@ erase the session. It is per-turn and does not retract an older fact. Use
 `memory_forget` when the user asks to remove or correct knowledge already
 stored.
 
+`0.1.0-alpha.6` known limitation: the post-turn paths above honor this opt-out,
+but the core agent-loop finalizer still stores one local episodic interaction
+fragment. This is distinct from the expected transcript and audit retention.
+Do not promise complete per-turn semantic suppression on `alpha.6`; a later
+immutable release must close that finalizer path.
+
 ### `memory_save`
 
 Captain-native declarative learning. Use **spontaneously** when the user states a preference, a personal fact, a project decision, or asks you to remember something.

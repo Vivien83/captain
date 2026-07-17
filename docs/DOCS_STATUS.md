@@ -23,6 +23,13 @@ publication time. The release was built and published locally, and the GitHub
 Actions API returned zero runs. Production automation should still pin the
 version tag or the digest explicitly.
 
+Known `alpha.6` limitation: an explicit per-turn memory write opt-out suppresses
+the post-turn graph, MemPalace, reflection, and learning paths, but the core
+agent-loop finalizer still writes its local episodic interaction fragment. The
+normal transcript and audit were always expected to remain; this extra semantic
+fragment was not. Treat the opt-out as incomplete in `alpha.6` until a later
+immutable release closes the core finalizer path.
+
 ## Current Contract Docs
 
 These files are maintained as current operator or runtime-facing references:

@@ -34,6 +34,13 @@ tool activity, ephemeral long-run presence, and reliable interactive controls.
 - Explicit unsupported-endpoint responses may use the legacy HTML/plain path,
   while ambiguous network or server failures never trigger a duplicate send.
 
+### Known issues
+
+- The per-turn memory write opt-out does not yet suppress the core agent-loop
+  finalizer's local episodic interaction fragment. Post-turn graph, MemPalace,
+  reflection, and learning paths are suppressed, while the normal transcript
+  and mandatory audit remain intentionally retained.
+
 ## [0.1.0-alpha.5] - 2026-07-16
 
 Early-access reliability release focused on clean runtime lifecycle, explicit

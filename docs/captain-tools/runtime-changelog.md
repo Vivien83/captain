@@ -59,6 +59,12 @@ Agent-facing changes:
   behavior and caches that capability result. A network ambiguity or server
   failure is not retried through another send path because Telegram may already
   have accepted the first request.
+- Known `0.1.0-alpha.6` limitation: the explicit per-turn memory write opt-out
+  suppresses post-turn graph, MemPalace, reflection, and learning writes, but
+  the core agent-loop finalizer still writes its local episodic interaction
+  fragment. The normal transcript and mandatory audit remain intentional; the
+  extra semantic fragment is not. Do not claim complete opt-out protection on
+  this version.
 
 How to answer the user:
 

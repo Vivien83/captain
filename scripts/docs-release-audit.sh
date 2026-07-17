@@ -232,6 +232,10 @@ require_contains \
   docs/releases/v0.1.0-alpha.6.md \
   'server failures never trigger a second send'
 require_contains \
+  "alpha.6 notes disclose the memory opt-out limitation" \
+  docs/releases/v0.1.0-alpha.6.md \
+  'core agent-loop finalizer'
+require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
   'scripts/release-workflow-audit.sh'
