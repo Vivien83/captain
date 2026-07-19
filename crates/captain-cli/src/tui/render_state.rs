@@ -202,16 +202,16 @@ pub(crate) fn learning_hub_draw_route_for_view(view: LearningView) -> LearningHu
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CapabilitiesHubDrawRoute {
+    Native,
     Skills,
-    Hands,
 }
 
 pub(crate) fn capabilities_hub_draw_route_for_view(
     view: CapabilitiesView,
 ) -> CapabilitiesHubDrawRoute {
     match view {
+        CapabilitiesView::Native => CapabilitiesHubDrawRoute::Native,
         CapabilitiesView::Skills => CapabilitiesHubDrawRoute::Skills,
-        CapabilitiesView::Hands => CapabilitiesHubDrawRoute::Hands,
     }
 }
 

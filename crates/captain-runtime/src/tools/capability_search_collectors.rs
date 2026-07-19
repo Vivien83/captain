@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use captain_skills::{registry::SkillRegistry, SkillToolDef};
@@ -88,6 +89,61 @@ pub(super) fn collect_builtin_capabilities(
             serde_json::json!({
                 "core": core,
                 "surface": crate::surface_gates::tool_surface(&tool.name).unwrap_or("core"),
+            }),
+            include_schemas,
+        ));
+    }
+}
+
+pub(super) fn collect_capfile_capabilities(
+    results: &mut Vec<serde_json::Value>,
+    source_notes: &mut Vec<serde_json::Value>,
+    exact_names: Option<&[String]>,
+    tokens: &[String],
+    include_schemas: bool,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    workspace_root: Option<&Path>,
+) {
+    let Some(kernel) = kernel else {
+        source_notes.push(serde_json::json!({
+            "source": "capfile",
+            "status": "unavailable",
+            "hint": "No Captain kernel was provided in this execution context."
+        }));
+        return;
+    };
+    let tools = match kernel.capspec_tool_definitions(workspace_root) {
+        Ok(tools) => tools,
+        Err(error) => {
+            source_notes.push(serde_json::json!({
+                "source": "capfile",
+                "status": "error",
+                "hint": error,
+            }));
+            return;
+        }
+    };
+    for tool in tools {
+        let is_exact = exact_name_matches(exact_names, &tool.name);
+        let score = if is_exact {
+            975
+        } else {
+            lexical_tool_score(tokens, &tool)
+        };
+        if score == 0 {
+            continue;
+        }
+        results.push(capability_candidate(
+            "capfile_tool",
+            tool.name,
+            tool.description,
+            score,
+            "active_native",
+            "Call this hot-reloaded native capability directly. Every step remains subject to the caller's grants and Captain's central ToolRunner policies.",
+            Some(tool.input_schema),
+            serde_json::json!({
+                "format": "capspec",
+                "hot_reload": true,
             }),
             include_schemas,
         ));

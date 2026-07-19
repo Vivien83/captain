@@ -14,6 +14,7 @@ captain-hands = { path = "../captain-hands" }
 captain-extensions = { path = "../captain-extensions" }
 captain-wire = { path = "../captain-wire" }
 captain-channels = { path = "../captain-channels" }
+captain-capspec = { path = "../captain-capspec" }
 hora-graph-core = { path = "../captain-graph" }
 tokio = { workspace = true }
 notify-debouncer-mini = { workspace = true }

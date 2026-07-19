@@ -25,6 +25,11 @@ pub(crate) async fn run_pre_dispatch_checks(
     if let Some(result) = enforce_lineage_depth(tool_use_id, tool_name) {
         return Some(result);
     }
+    if let Some(result) =
+        enforce_kernel_tool_blocklist(tool_use_id, tool_name, kernel, caller_agent_id)
+    {
+        return Some(result);
+    }
     if let Some(result) = enforce_allowed_tools(tool_use_id, tool_name, allowed_tools) {
         return Some(result);
     }
@@ -37,6 +42,28 @@ pub(crate) async fn run_pre_dispatch_checks(
         workspace_root,
     )
     .await
+}
+
+fn enforce_kernel_tool_blocklist(
+    tool_use_id: &str,
+    tool_name: &str,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Option<ToolResult> {
+    let kernel = kernel?;
+    if !kernel.tool_is_blocked_for_agent(caller_agent_id, tool_name) {
+        return None;
+    }
+    warn!(
+        tool = %tool_name,
+        caller_agent_id,
+        "Tool denied by the agent's hard blocklist"
+    );
+    Some(denied_tool_result(
+        tool_use_id,
+        tool_name,
+        &format!("Permission denied: tool '{tool_name}' is in this agent's tool_blocklist"),
+    ))
 }
 
 pub(crate) async fn cached_tool_result(

@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 23;
+const SCHEMA_VERSION: u32 = 24;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -101,6 +101,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 23 {
         migrate_v23(conn)?;
+    }
+
+    if current_version < 24 {
+        migrate_v24(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -843,6 +847,41 @@ fn migrate_v23(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 24: Persist provider-owned subscription quota observations.
+fn migrate_v24(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS provider_quota_snapshots (
+            provider TEXT NOT NULL,
+            limit_id TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            alert_level TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (provider, limit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_quota_snapshots_observed
+            ON provider_quota_snapshots(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS provider_quota_events (
+            id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            limit_id TEXT NOT NULL,
+            change_kind TEXT NOT NULL,
+            alert_level TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            observed_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_quota_events_observed
+            ON provider_quota_events(observed_at DESC);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (24, datetime('now'), 'Add provider subscription quota snapshots and events');
+        ",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,6 +917,8 @@ mod tests {
         assert!(tables.contains(&"skill_proposals".to_string()));
         assert!(tables.contains(&"todos".to_string()));
         assert!(tables.contains(&"detached_tool_runs".to_string()));
+        assert!(tables.contains(&"provider_quota_snapshots".to_string()));
+        assert!(tables.contains(&"provider_quota_events".to_string()));
     }
 
     #[test]
@@ -930,6 +971,6 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(operation, "add");
-        assert_eq!(get_schema_version(&conn), 23);
+        assert_eq!(get_schema_version(&conn), 24);
     }
 }

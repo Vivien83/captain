@@ -4,6 +4,7 @@ import htm from 'htm';
 import { api } from '../api.js';
 import { toast } from '../store.js';
 import { CAPABILITY_TABS, capabilityTabForRoute } from '../control_contract.mjs';
+import { NativeCapabilitiesTab } from './NativeCapabilities.js';
 
 const html = htm.bind(h);
 const PAGE_SIZE = 40;
@@ -15,14 +16,18 @@ export function Capabilities({ route }) {
     <div class="page">
       <div class="page-inner">
         <h1 class="page-title">Capabilities</h1>
-        <p class="page-sub">Skills chargées à la demande et outils disponibles dans le runtime.</p>
+        <p class="page-sub">Capacités natives lisibles, skills à la demande et outils du runtime.</p>
         <div class="hub-tabs">
           ${CAPABILITY_TABS.map((tab) => html`
             <a key=${tab.route} class="hub-tab ${tab.route === current.route ? 'active' : ''}"
               href="#/${tab.route}">${tab.label}</a>
           `)}
         </div>
-        ${current.route === 'tools' ? html`<${ToolsTab} />` : html`<${SkillsTab} />`}
+        ${current.route === 'native-capabilities'
+          ? html`<${NativeCapabilitiesTab} />`
+          : current.route === 'tools'
+            ? html`<${ToolsTab} />`
+            : html`<${SkillsTab} />`}
       </div>
     </div>
   `;

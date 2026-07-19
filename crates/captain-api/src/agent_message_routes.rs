@@ -5,13 +5,14 @@ use crate::types::{MessageRequest, MessageResponse, ToolCallSummary};
 use crate::upload_routes::resolve_attachments;
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header::RETRY_AFTER, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
-use captain_kernel::CaptainKernel;
+use captain_kernel::{error::KernelError, CaptainKernel};
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_types::agent::{AgentId, SessionId};
+use captain_types::quota::QuotaExceededInfo;
 use std::sync::Arc;
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
@@ -166,23 +167,7 @@ pub async fn send_message(
         }
         Err(e) => {
             tracing::warn!("send_message failed for agent {id}: {e}");
-            let message = format!("{e}");
-            let status = if message.contains("Agent not found") {
-                StatusCode::NOT_FOUND
-            } else if message.contains("Requested session was not found") {
-                StatusCode::NOT_FOUND
-            } else if message.contains("Requested session belongs") {
-                StatusCode::CONFLICT
-            } else if message.contains("quota") || message.contains("Quota") {
-                StatusCode::TOO_MANY_REQUESTS
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (
-                status,
-                Json(serde_json::json!({"error": format!("Message delivery failed: {e}")})),
-            )
-                .into_response()
+            agent_message_error_response(&e)
         }
     }
 }
@@ -266,15 +251,7 @@ pub async fn send_message_stream(
         Ok(pair) => pair,
         Err(e) => {
             tracing::warn!("Streaming message failed for agent {id}: {e}");
-            let message = e.to_string();
-            let status = if message.contains("Requested session was not found") {
-                StatusCode::NOT_FOUND
-            } else if message.contains("Requested session belongs") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            return error(status, "Streaming message failed");
+            return agent_message_error_response(&e);
         }
     };
 
@@ -462,6 +439,61 @@ fn error(status: StatusCode, message: &str) -> axum::response::Response {
     (status, Json(serde_json::json!({"error": message}))).into_response()
 }
 
+fn agent_message_error_response(error_value: &KernelError) -> axum::response::Response {
+    if let KernelError::Captain(captain_error) = error_value {
+        if let Some(quota) = captain_error.quota_info() {
+            return quota_error_response(quota);
+        }
+    }
+
+    let message = error_value.to_string();
+    let status = if message.contains("Agent not found")
+        || message.contains("Requested session was not found")
+    {
+        StatusCode::NOT_FOUND
+    } else if message.contains("Requested session belongs") {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "error": format!("Message delivery failed: {message}"),
+            "code": "message_delivery_failed",
+        })),
+    )
+        .into_response()
+}
+
+fn quota_error_response(quota: &QuotaExceededInfo) -> axum::response::Response {
+    tracing::warn!(
+        quota_code = %quota.code,
+        quota_scope = ?quota.scope,
+        provider = quota.provider.as_deref().unwrap_or("captain"),
+        agent_id = quota.agent_id.as_deref().unwrap_or("global"),
+        used = quota.used,
+        limit = quota.limit,
+        resets_at = ?quota.resets_at,
+        "Quota enforced"
+    );
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(serde_json::json!({
+            "error": quota.message,
+            "code": quota.code,
+            "quota": quota,
+        })),
+    )
+        .into_response();
+    if let Some(seconds) = quota.retry_after_seconds {
+        if let Ok(value) = HeaderValue::from_str(&seconds.max(1).to_string()) {
+            response.headers_mut().insert(RETRY_AFTER, value);
+        }
+    }
+    response
+}
+
 fn stream_event_to_sse(
     event: captain_runtime::llm_driver::StreamEvent,
 ) -> axum::response::sse::Event {
@@ -556,6 +588,9 @@ fn stream_event_to_sse(
 mod tests {
     use super::*;
     use captain_types::config::{DefaultModelConfig, KernelConfig};
+    use captain_types::error::CaptainError;
+    use captain_types::quota::QuotaExceededInfo;
+    use chrono::{Duration as ChronoDuration, Utc};
     use std::time::Instant;
 
     fn test_state() -> (tempfile::TempDir, Arc<AppState>) {
@@ -648,5 +683,29 @@ mod tests {
 
         let current = state.ask_user_channels.get(&key).expect("replacement kept");
         assert!(current.same_channel(&replacement_tx));
+    }
+
+    #[tokio::test]
+    async fn structured_quota_failure_is_http_429_with_retry_metadata() {
+        let quota = QuotaExceededInfo::agent_hourly_tokens(
+            "agent-1",
+            228_733,
+            200_000,
+            Some(Utc::now() + ChronoDuration::minutes(10)),
+        );
+        let error = KernelError::Captain(CaptainError::quota_exceeded(quota));
+
+        let response = agent_message_error_response(&error);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(RETRY_AFTER));
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["code"], "captain_agent_hourly_token_quota");
+        assert_eq!(payload["quota"]["used"], 228_733.0);
+        assert!(payload["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("Reprise estimée")));
     }
 }

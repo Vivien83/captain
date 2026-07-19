@@ -6,6 +6,15 @@ import { getState, setState, subscribe, toast } from '../store.js';
 import { Markdown } from '../components/Markdown.js';
 import { ToolCard } from '../components/ToolCard.js';
 import { AskUserPrompt } from '../components/AskUserPrompt.js';
+import {
+  PROVIDER_QUOTA_REFRESH_MS,
+  providerDurationLabel,
+  providerQuotaGroups,
+  providerQuotaMeta,
+  providerQuotaTone,
+  providerResetLabel,
+  providerSubscriptionFromBudget,
+} from '../provider_quota_model.mjs';
 
 const html = htm.bind(h);
 
@@ -19,6 +28,8 @@ export function Chat() {
   const [busy, setBusy] = useState(false);
   const [canvas, setCanvas] = useState(null); // {title, html}
   const [agentId, setAgentId] = useState(getState().currentAgentId);
+  const [activeModel, setActiveModel] = useState(activeModelIdentity(getState()));
+  const [providerQuota, setProviderQuota] = useState(providerSubscriptionFromBudget(null));
   const wsRef = useRef(null);
   const scrollRef = useRef(null);
   const itemsRef = useRef(items);
@@ -26,7 +37,28 @@ export function Chat() {
 
   useEffect(() => subscribe((s) => {
     if (s.currentAgentId !== agentId) setAgentId(s.currentAgentId);
+    setActiveModel(activeModelIdentity(s));
   }), [agentId]);
+
+  // Captain's daemon owns provider calls and persistence. Web/desktop only
+  // poll the local budget snapshot, exactly like the Ratatui status line.
+  useEffect(() => {
+    let dead = false;
+    let timer = null;
+    const refresh = async () => {
+      try {
+        const budget = await api.budget();
+        if (!dead) setProviderQuota(providerSubscriptionFromBudget(budget));
+      } catch {
+        // Preserve the last provider-owned observation across a transient
+        // daemon error; never turn missing data into an unlimited allowance.
+      } finally {
+        if (!dead) timer = setTimeout(refresh, PROVIDER_QUOTA_REFRESH_MS);
+      }
+    };
+    refresh();
+    return () => { dead = true; if (timer) clearTimeout(timer); };
+  }, []);
 
   const mutate = useCallback((fn) => {
     setItems((prev) => {
@@ -255,6 +287,7 @@ export function Chat() {
           </div>
         </div>
         <${Composer} disabled=${!connected} busy=${busy} onSend=${send} onUpload=${onUpload} />
+        <${ProviderQuotaBar} status=${providerQuota} activeModel=${activeModel} />
       </div>
       ${canvas && html`
         <div class="canvas-pane">
@@ -268,6 +301,79 @@ export function Chat() {
       `}
     </div>
   `;
+}
+
+function ProviderQuotaBar({ status, activeModel }) {
+  const groups = providerQuotaGroups(status, activeModel);
+  const activeProvider = (activeModel || '').split('/')[0];
+  const hasObservation = groups.hasProviderObservation;
+  const codexActive = ['codex', 'openai-codex'].includes(activeProvider.toLowerCase());
+  if (!hasObservation && !codexActive) return null;
+  if (!hasObservation) {
+    return html`
+      <div class="provider-quota-bar unavailable" role="status">
+        <strong>Codex</strong><span>quotas d'abonnement non observés</span>
+      </div>
+    `;
+  }
+
+  const meta = providerQuotaMeta(status, activeModel);
+  const allWindows = groups.windows;
+  const windows = allWindows.slice(0, 8);
+  const alternativePressure = groups.alternativeTone === 'err'
+    ? ' critique'
+    : groups.alternativeTone === 'warn' ? ' sous tension' : '';
+  return html`
+    <div class="provider-quota-bar" role="status" aria-label="Quotas applicables au modèle actif ${meta.activeModel || meta.provider}">
+      <div class="provider-quota-meta">
+        <strong>${meta.activeModel ? `Actif : ${meta.activeModel}` : meta.provider}</strong>
+        ${meta.activeModel && html`<span>${meta.provider}</span>`}
+        ${meta.planType && html`<span class="provider-quota-plan">${meta.planType}</span>`}
+        ${meta.creditsLabel && html`<span>${meta.creditsLabel}</span>`}
+      </div>
+      ${windows.map((window) => {
+        const tone = providerQuotaTone(window);
+        const duration = providerDurationLabel(
+          window.windowSeconds,
+          window.kind === 'primary' ? 'court' : 'long',
+        );
+        const percent = Number.isInteger(window.usedPercent)
+          ? window.usedPercent.toFixed(0)
+          : window.usedPercent.toFixed(1);
+        return html`
+          <div class="provider-quota-window ${tone}" key=${`${window.limitId}:${window.kind}`}>
+            <span class="provider-quota-label">${window.limitName} · ${duration}</span>
+            <span class="provider-quota-gauge" role="progressbar"
+              aria-label="${window.limitName} ${duration}"
+              aria-valuemin="0" aria-valuemax="100" aria-valuenow=${window.usedPercent}>
+              <span style=${{ width: `${window.usedPercent}%` }}></span>
+            </span>
+            <strong>${percent}%</strong>
+            <span class="provider-quota-reset">↻ ${providerResetLabel(window)}</span>
+            ${window.stale && html`<span class="provider-quota-flag">stale</span>`}
+            ${window.blocked && html`<span class="provider-quota-flag">bloqué</span>`}
+          </div>
+        `;
+      })}
+      ${allWindows.length > windows.length && html`
+        <span class="provider-quota-more">+${allWindows.length - windows.length} fenêtre(s) applicable(s) dans Statut</span>
+      `}
+      ${groups.alternativeLimitCount > 0 && html`
+        <span class="provider-quota-more ${groups.alternativeTone}">
+          +${groups.alternativeLimitCount} quota${groups.alternativeLimitCount > 1 ? 's' : ''} annexe${groups.alternativeLimitCount > 1 ? 's' : ''}
+          ${alternativePressure} · hors modèle actif · Statut
+        </span>
+      `}
+    </div>
+  `;
+}
+
+function activeModelIdentity(state) {
+  const active = (state.agents || []).find((agent) => agent.id === state.currentAgentId);
+  if (!active) return '';
+  const provider = active.model_provider || '';
+  const model = active.model_name || '';
+  return provider && model ? `${provider}/${model}` : provider || model;
 }
 
 function Message({ item, onAnswer }) {

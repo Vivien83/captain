@@ -12,17 +12,21 @@ use crate::media_understanding::MediaEngine;
 use crate::process_manager::ProcessManager;
 use crate::tools::{
     dispatch_a2a_tool, dispatch_agent_tool, dispatch_automation_tool, dispatch_browser_tool,
-    dispatch_canvas_tool, dispatch_channel_tool, dispatch_config_tool, dispatch_coordination_tool,
-    dispatch_discovery_tool, dispatch_docker_tool, dispatch_document_tool, dispatch_fallback_tool,
-    dispatch_file_tool, dispatch_goal_tool, dispatch_hand_tool, dispatch_improvement_tool,
-    dispatch_knowledge_tool, dispatch_location_tool, dispatch_media_tool, dispatch_memory_tool,
-    dispatch_package_tool, dispatch_peer_tool, dispatch_process_tool, dispatch_project_tool,
-    dispatch_shell_exec, dispatch_skill_runtime_tool, dispatch_ssh_tool, dispatch_system_update,
-    dispatch_tool_run_tool, dispatch_web_tool, tool_execute_code, tool_screenshot,
-    ShellDispatchOutcome, WebDispatchOutcome,
+    dispatch_canvas_tool, dispatch_capspec_management_tool, dispatch_channel_tool,
+    dispatch_config_tool, dispatch_coordination_tool, dispatch_discovery_tool,
+    dispatch_docker_tool, dispatch_document_tool, dispatch_fallback_tool, dispatch_file_tool,
+    dispatch_goal_tool, dispatch_hand_tool, dispatch_improvement_tool, dispatch_knowledge_tool,
+    dispatch_location_tool, dispatch_media_tool, dispatch_memory_tool, dispatch_package_tool,
+    dispatch_peer_tool, dispatch_process_tool, dispatch_project_tool, dispatch_shell_exec,
+    dispatch_skill_runtime_tool, dispatch_ssh_tool, dispatch_system_update, dispatch_tool_run_tool,
+    dispatch_web_tool, tool_execute_code, tool_screenshot, ShellDispatchOutcome,
+    WebDispatchOutcome,
 };
 use crate::tts::TtsEngine;
 use crate::web_search::WebToolsContext;
+
+#[path = "tool_runner_capspec.rs"]
+mod capspec;
 
 pub(super) struct ToolDispatchRequest<'a> {
     pub tool_use_id: &'a str,
@@ -61,6 +65,9 @@ pub(super) async fn dispatch_tool(request: ToolDispatchRequest<'_>) -> ToolDispa
         return outcome;
     }
     if let Some(outcome) = dispatch_runtime_capability_tool(&request).await {
+        return outcome;
+    }
+    if let Some(outcome) = capspec::dispatch_capspec_tool(&request).await {
         return outcome;
     }
 
@@ -303,6 +310,7 @@ async fn dispatch_operator_channel_tool(
                 request.skill_registry,
                 request.mcp_connections,
                 request.kernel,
+                request.workspace_root,
             )
             .await
         }
@@ -397,6 +405,15 @@ async fn dispatch_project_state_tool(
 async fn dispatch_runtime_capability_tool(
     request: &ToolDispatchRequest<'_>,
 ) -> Option<ToolDispatchOutcome> {
+    if let Some(result) = dispatch_capspec_management_tool(
+        request.tool_name,
+        request.input,
+        request.kernel,
+        request.workspace_root,
+        request.caller_agent_id,
+    ) {
+        return Some(ToolDispatchOutcome::Dispatched(result));
+    }
     if let Some(outcome) = dispatch_tool_run_supervision_tool(request).await {
         return Some(outcome);
     }

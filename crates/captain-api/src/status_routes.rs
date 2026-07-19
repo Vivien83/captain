@@ -123,6 +123,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         &consciousness_status,
         &disk_status,
         &shutdown_status,
+        &budget_status,
     );
 
     let mut status_payload = serde_json::json!({

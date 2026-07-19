@@ -13,6 +13,9 @@ pub mod builtin_definitions;
 pub mod canvas_dispatch;
 pub mod canvas_ops;
 pub mod capability_search;
+pub mod capspec_definitions;
+pub mod capspec_dispatch;
+pub mod capspec_ops;
 pub mod channel_definitions;
 pub mod channel_dispatch;
 pub mod channel_ops;
@@ -154,6 +157,9 @@ pub(crate) use canvas_dispatch::dispatch_canvas_tool;
 pub(crate) use canvas_ops::sanitize_canvas_html;
 pub(crate) use canvas_ops::tool_canvas_present;
 pub use capability_search::search_capabilities;
+pub use capspec_definitions::capspec_management_tool_definitions;
+pub(crate) use capspec_dispatch::dispatch_capspec_management_tool;
+pub(crate) use capspec_ops::tool_capability_forge;
 pub use channel_definitions::channel_tool_definitions;
 pub(crate) use channel_dispatch::dispatch_channel_tool;
 pub(crate) use channel_ops::{
@@ -202,10 +208,9 @@ pub(crate) use document_ops::tool_document_pipeline;
 pub(crate) use errors::{
     is_retryable_tool, is_write_tool_that_must_not_be_masked, render_error_with_suggestion,
 };
+pub use execution_context::current_agent_lineage_depth;
 pub use execution_context::{current_agent_depth, with_agent_lineage_depth, CANVAS_MAX_BYTES};
-pub(crate) use execution_context::{
-    current_agent_lineage_depth, AGENT_CALL_DEPTH, MAX_AGENT_CALL_DEPTH,
-};
+pub(crate) use execution_context::{AGENT_CALL_DEPTH, MAX_AGENT_CALL_DEPTH};
 pub use file_definitions::file_tool_definitions;
 pub(crate) use file_dispatch::dispatch_file_tool;
 pub(crate) use file_ops::{

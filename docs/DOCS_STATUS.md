@@ -4,6 +4,23 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Current Release Candidate
+
+`v0.1.0-alpha.8` is the candidate being certified for local publication. It
+combines Captain Forge's readable native capabilities with durable internal
+hourly token guards and provider-reported Codex subscription windows. The
+candidate URLs and immutable image name are already fixed so bundles and
+documentation can be audited before publication:
+
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8`
+- host asset contract: exactly 20 files covering five platforms, checksums,
+  manifests, and four installers
+
+The public source commit, OCI index digest, anonymous download/pull evidence,
+and zero-Actions proof remain intentionally unset until those surfaces exist
+and have been verified live. They must never be copied from an older release.
+
 ## Current Public Release
 
 `v0.1.0-alpha.7` is the current public prerelease. It keeps kernel-backed tools
@@ -32,6 +49,30 @@ normal transcript and audit remain intentional; this extra semantic fragment
 does not. Treat the opt-out as incomplete until a later immutable release
 closes the core finalizer path.
 
+## Alpha 8 Candidate Contract
+
+Captain Forge / CapSpec is implemented and process-level certified in the
+current source tree. The reproducible harness passed 130 checks across 14
+durable runs on implementation commit
+`38ecebaf4e34fcf955c99ee13682b54a70e1c938`. This source status does not alter
+the immutable `v0.1.0-alpha.7` release; it belongs to the alpha.8 candidate.
+The human-readable certificate is
+`docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md`; the raw transcripts,
+temporary homes, and fixture credentials are regenerated locally and remain
+outside the public source tree.
+
+The current source tree also separates Captain's durable rolling per-agent
+token guard from provider-owned subscription allowances. Codex allowance
+observations come from its authenticated account usage endpoint, dynamic
+response headers, and `codex.rate_limits` stream events. Provider windows and
+resets are never hard-coded or inferred from local token totals. CLI, TUI,
+Control, `/api/status`, and `/api/budget` expose the same persisted observation;
+missing data is `unavailable`, stale data is explicit, and an exhausted
+provider allowance produces a structured HTTP `429` without retry or silent
+fallback. Compact Chat surfaces identify the configured model and render gauges
+only for provider-wide or matching model-specific families. This contract also
+belongs to the alpha.8 candidate and is not an alpha.7 claim.
+
 ## Previous Verified Public Release
 
 `v0.1.0-alpha.6` remains the preceding verified public provenance. Its
@@ -58,6 +99,8 @@ These files are maintained as current operator or runtime-facing references:
   `docs/troubleshooting.md`, `docs/DEPLOY.md`
 - `docs/cli-reference.md`, `docs/api-reference.md`, `docs/configuration.md`
 - `docs/channel-adapters.md`, `docs/providers.md`, `docs/skill-development.md`
+- `docs/CAPTAIN_FORGE_CAPSPEC.md`
+- `docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md`
 - `docs/architecture.md`, `docs/security.md`, `docs/workflows.md`,
   `docs/agent-templates.md`
 - `docs/captain-tools/*.md`
@@ -155,10 +198,27 @@ bundle.
 The operator experience has exactly six primary hubs on TUI and Control web:
 Chat, Projects, Automation, Learning, Capabilities, and Status. Automation owns
 Workflows, Triggers, Crons, Approbations, and Webhooks. Capabilities promotes
-Skills and Tools; Hands and marketplace-style surfaces remain frozen. Status is
-the operational cockpit backed by `/api/status`, including runtime health,
+Native capabilities, Skills, and Tools; Hands and marketplace-style surfaces
+remain frozen. The Control `Natives` tab validates and installs readable
+`.captain` source, binds approvals to the exact pending hash, restores known
+revisions, disables source without erasing history, and shows public-safe runs.
+The TUI opens the same hub on `Natives`; it selects effective, global, or
+project scope, keeps source opt-in, and sends approval, rejection, rollback, or
+confirmed disable directly to the authenticated daemon API or in-process
+kernel. Those decisions never pass through the LLM.
+Status is the operational cockpit backed by `/api/status`, including runtime health,
 active work, detached tool runs, agent API egress, budgets, channels,
 consciousness, streaming, disk, shutdown, and native media/embedding readiness.
+Its budget surface keeps `Captain internal spend` separate from
+`Provider subscription (reported)` and preserves provider-reported dynamic
+windows and reset times. Full-screen Ratatui Chat and the xterm Web terminal
+share a compact bottom band that names the active model and gives gauges only
+to provider-wide windows and matching model-specific families. Other families
+are summarized as outside the active model; Status and Budget keep every
+primary/secondary window. Control web and the frozen desktop wrapper render the
+equivalent responsive band. All four surfaces refresh from Captain locally
+every five seconds and preserve the last valid observation through transient
+daemon errors; only the daemon talks to the provider.
 
 Persisted chat sessions are durable and independently addressable. New Web/API
 clients create detached sessions, each turn carries its validated `session_id`,

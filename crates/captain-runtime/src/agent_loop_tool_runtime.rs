@@ -98,6 +98,9 @@ pub(crate) fn tool_timeout_guard_secs(
     input: &serde_json::Value,
     exec_policy: Option<&captain_types::config::ExecPolicy>,
 ) -> Option<u64> {
+    if tool_name.starts_with(captain_capspec::CAPABILITY_TOOL_PREFIX) {
+        return None;
+    }
     if explicit_tool_timeout_secs(tool_name, input, exec_policy).is_some() {
         None
     } else {

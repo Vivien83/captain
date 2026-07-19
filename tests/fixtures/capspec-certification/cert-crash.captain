@@ -1,0 +1,23 @@
+format = 1
+name = "cert-crash"
+description = "Delay a bounded external write so SIGKILL recovery can be observed and decided exactly."
+version = "1.0.0"
+tags = ["certification", "crash", "recovery"]
+output = "{{steps.delayed_write.output}}"
+
+[inputs.root]
+type = "string"
+description = "Writable certification directory inside the caller workspace"
+
+[permissions]
+tools = ["shell_exec"]
+shell_commands = ["sleep 12 && printf 'CAPSPEC_CRASH_ONCE\\n' >> {{input.root}}/crash-marker.txt"]
+
+[policy]
+timeout_secs = 60
+
+[[steps]]
+id = "delayed_write"
+tool = "shell_exec"
+timeout_secs = 30
+with = { command = "sleep 12 && printf 'CAPSPEC_CRASH_ONCE\\n' >> {{input.root}}/crash-marker.txt", timeout_seconds = 25 }

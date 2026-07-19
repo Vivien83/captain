@@ -1,0 +1,19 @@
+format = 1
+name = "cert-cargo"
+description = "Run the real test suite of the certification Rust repository."
+version = "1.0.0"
+tags = ["certification", "developer", "test"]
+output = "{{steps.test.output}}"
+
+[permissions]
+tools = ["cargo"]
+shell_commands = ["cargo test --manifest-path cert-repo/Cargo.toml"]
+
+[policy]
+timeout_secs = 180
+
+[[steps]]
+id = "test"
+tool = "cargo"
+timeout_secs = 150
+with = { subcommand = "test", args = ["--manifest-path", "cert-repo/Cargo.toml"], timeout_seconds = 120 }

@@ -41,6 +41,7 @@ CONTRACT_DOCS=(
   docs/channel-adapters.md
   docs/providers.md
   docs/skill-development.md
+  docs/CAPTAIN_FORGE_CAPSPEC.md
   docs/architecture.md
   docs/security.md
   docs/agent-templates.md
@@ -48,6 +49,7 @@ CONTRACT_DOCS=(
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.8.md
   docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.5.md
   docs/releases/v0.1.0-alpha.7.md
@@ -306,9 +308,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.7/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.8/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -327,9 +329,22 @@ require_contains "English README documents proactive Codex discovery" README.md 
 require_contains "French README documents proactive Codex discovery" README.fr.md "une actualisation horaire signale les nouveaux modèles"
 require_contains "Spanish README documents proactive Codex discovery" README.es.md "una actualización cada hora muestra los modelos nuevos"
 require_contains "Chinese README documents proactive Codex discovery" README.zh.md "每小时刷新一次目录"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.7"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.7] - 2026-07-17"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
+require_contains "English README separates provider subscription quotas" README.md "provider-owned subscription windows"
+require_contains "French README separates provider subscription quotas" README.fr.md "fenêtres d'abonnement gérées par le fournisseur"
+require_contains "Spanish README separates provider subscription quotas" README.es.md "ventanas de suscripción gestionadas por el proveedor"
+require_contains "Chinese README separates provider subscription quotas" README.zh.md "供应商管理的订阅窗口"
+require_contains "English README scopes compact provider gauges" README.md "limit matching the active model"
+require_contains "French README scopes compact provider gauges" README.fr.md "hors modèle actif"
+require_contains "Spanish README scopes compact provider gauges" README.es.md "fuera del modelo activo"
+require_contains "Chinese README scopes compact provider gauges" README.zh.md "不属于当前模型"
+require_contains "English README exposes readable native capabilities" README.md "Readable native capabilities"
+require_contains "French README exposes readable native capabilities" README.fr.md "Capacités natives lisibles"
+require_contains "Spanish README exposes readable native capabilities" README.es.md "Capacidades nativas legibles"
+require_contains "Chinese README exposes readable native capabilities" README.zh.md "人类可读的原生能力"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.8"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.8] - 2026-07-19"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
+require_contains "historical alpha.7 release notes remain available" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
 require_contains "historical alpha.6 release notes remain available" docs/releases/v0.1.0-alpha.6.md "# Captain 0.1.0-alpha.6"
 require_contains "historical alpha.5 release notes remain available" docs/releases/v0.1.0-alpha.5.md "# Captain 0.1.0-alpha.5"
 require_contains "Telegram docs pin Rich-first transport" docs/channel-adapters.md "Telegram is Rich-first for normal Captain replies"
@@ -340,6 +355,7 @@ require_contains "DOC2 records the published alpha.7 provenance" docs/DOCS_STATU
 require_contains "DOC2 records the published alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "agent changelog records the published alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "DOC2 identifies the alpha.7 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the current public prerelease'
+require_contains "DOC2 identifies the alpha.8 release candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the candidate being certified for local publication'
 require_contains "DOC2 discloses the alpha.7 memory opt-out limitation" docs/DOCS_STATUS.md "agent-loop finalizer still writes its local episodic interaction fragment"
 require_contains "memory docs disclose the alpha.7 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
@@ -361,6 +377,25 @@ require_contains "provider guide pins safe Codex session choices" docs/providers
 require_contains "provider guide pins Codex catalog protocol" docs/providers.md '`client_version=1.0.0`'
 require_contains "provider guide pins dynamic model context" docs/providers.md 'Every turn resolves the configured provider/model against the live runtime'
 require_contains "provider guide distinguishes Codex active and maximum windows" docs/providers.md '`max_context_window` is an upper bound'
+require_contains "provider guide uses the official Codex account quota endpoint" docs/providers.md '`/backend-api/wham/usage`'
+require_contains "provider guide pins live Codex quota signals" docs/providers.md '`codex.rate_limits` stream events'
+require_contains "provider guide rejects inferred unlimited quota" docs/providers.md 'means that no current official observation exists; it never means unlimited'
+require_contains "CLI status separates provider subscription quota" docs/cli-reference.md 'provider-reported subscription windows'
+require_contains "CLI scopes compact gauges to the active model" docs/cli-reference.md 'limit family matching that model'
+require_contains "API status exposes provider subscription observations" docs/api-reference.md '`provider_subscriptions` has stable states'
+require_contains "API pins local-only quota surface polling" docs/api-reference.md 'cadence does not call the provider'
+require_contains "API documents typed quota failures" docs/api-reference.md '"scope": "agent_hourly_tokens"'
+require_contains "API documents provider subscription scope" docs/api-reference.md '`scope` is `provider_subscription`'
+require_contains "runtime changelog pins durable rolling token quota" docs/captain-tools/runtime-changelog.md 'internal rolling one-hour'
+require_contains "runtime changelog pins official Codex quota SSE" docs/captain-tools/runtime-changelog.md '`codex.rate_limits` stream events'
+require_contains "runtime changelog pins active-model quota gauges" docs/captain-tools/runtime-changelog.md 'compact band names the active model'
+require_contains "DOC2 separates internal and provider quotas" docs/DOCS_STATUS.md "provider-owned subscription allowances"
+require_contains "DOC2 certifies shared quota status surfaces" docs/DOCS_STATUS.md 'surfaces refresh from Captain locally'
+require_contains "public changelog records live provider quota source" CHANGELOG.md "official response-header/SSE signals"
+require_contains "public changelog records active-model quota gauges" CHANGELOG.md 'live gauges only to provider-wide windows'
+require_contains "architecture keeps quota provider calls daemon-owned" docs/architecture.md 'No operator surface calls Codex itself'
+require_contains "Control web renders quota progress bars" crates/captain-api/static/js/app/views/Chat.js 'role="progressbar"'
+require_contains "quota visual smoke covers desktop and mobile" scripts/provider-quota-surfaces-smoke.mjs "name: 'desktop'"
 require_contains "API distinguishes context capacity from occupancy" docs/api-reference.md '`estimated_context_tokens` approximates the stored transcript'
 require_contains "architecture resolves context on every turn" docs/architecture.md "Before every turn"
 require_contains "runtime uses the active Codex context field first" crates/captain-runtime/src/model_catalog_codex.rs '.context_window'
@@ -459,6 +494,38 @@ require_not_contains "workflow guide has no unscoped-history claim" docs/workflo
 require_not_contains "CLI has no Groq fallback claim" docs/cli-reference.md "Falls back to Groq"
 require_contains "tool index points to split live definitions" docs/captain-tools/README.md 'crates/captain-runtime/src/tools/'
 require_not_contains "tool index has no stale monolith source claim" docs/captain-tools/README.md 'description change in `crates/captain-runtime/src/tool_runner.rs`'
+require_contains "DOC2 classifies the CapSpec contract" docs/DOCS_STATUS.md 'docs/CAPTAIN_FORGE_CAPSPEC.md'
+require_contains "DOC2 pins the certified CapSpec implementation commit" docs/DOCS_STATUS.md '38ecebaf4e34fcf955c99ee13682b54a70e1c938'
+require_contains "docs index exposes the CapSpec contract" docs/INDEX.md 'Captain Forge / CapSpec'
+require_file docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md
+require_contains "CapSpec certificate records all process checks" docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md 'Checks: **130 passed**'
+require_contains "CapSpec certificate records all durable runs" docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md 'Durable runs: **14**'
+require_contains "CapSpec certificate pins its implementation commit" docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md '38ecebaf4e34fcf955c99ee13682b54a70e1c938'
+require_contains "CapSpec certificate is reproducible" docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md 'scripts/capspec-real-certification.sh'
+require_contains "CapSpec contract pins native ToolRunner dispatch" docs/CAPTAIN_FORGE_CAPSPEC.md 'Each primitive step re-enters the'
+require_contains "CapSpec contract pins the agent approval boundary" docs/CAPTAIN_FORGE_CAPSPEC.md 'No agent-facing action can approve'
+require_contains "CapSpec contract exposes the authenticated operator API" docs/CAPTAIN_FORGE_CAPSPEC.md 'POST /api/capabilities/native/{name}/decision'
+require_contains "CapSpec contract exposes native Telegram decisions" docs/CAPTAIN_FORGE_CAPSPEC.md 'Telegram is also a native operator surface'
+require_contains "CapSpec Telegram decisions bypass session dispatch" docs/CAPTAIN_FORGE_CAPSPEC.md 'before any session dispatch'
+require_contains "CapSpec contract pins exact uncertain API" docs/CAPTAIN_FORGE_CAPSPEC.md 'POST /api/capabilities/native/runs/{run_id}/decision'
+require_contains "CapSpec resume cannot expand pinned authority" docs/CAPTAIN_FORGE_CAPSPEC.md 'can never expand its pinned'
+require_contains "CapSpec resume intent is atomic and crash recoverable" docs/CAPTAIN_FORGE_CAPSPEC.md 'persist an operator-resume intent in that same'
+require_contains "CapSpec API distinguishes explicit null from omission" docs/api-reference.md 'explicit JSON `null` is valid, but an absent field is not'
+require_contains "CapSpec contract pins native-first TUI" docs/CAPTAIN_FORGE_CAPSPEC.md 'TUI Capabilities hub likewise'
+require_contains "CapSpec TUI decisions are direct" docs/CAPTAIN_FORGE_CAPSPEC.md 'It never delegates an'
+require_contains "CapSpec TUI decisions bypass the model" docs/CAPTAIN_FORGE_CAPSPEC.md 'operator decision to the model'
+require_contains "CapSpec contract pins native-first Control" docs/CAPTAIN_FORGE_CAPSPEC.md 'promotes `Natives` as its first tab'
+require_contains "API reference exposes native CapSpec management" docs/api-reference.md '## Native Capability Endpoints'
+require_contains "API reference pins exact-hash CapSpec decisions" docs/api-reference.md 'A stale or mismatched hash is'
+require_contains "API reference pins exact uncertain-run decisions" docs/api-reference.md 'The run/node status, attempt, and tool-use ID are compared'
+require_contains "meta docs expose controlled CapSpec authoring" docs/captain-tools/meta.md 'capability_forge'
+require_contains "meta docs expose capfile discovery" docs/captain-tools/meta.md '`capfile_tool` and status `active_native`'
+require_contains "runtime changelog exposes native CapSpec dispatch" docs/captain-tools/runtime-changelog.md 'Captain Forge native capability runtime'
+require_contains "runtime changelog records CapSpec process certification" docs/captain-tools/runtime-changelog.md 'passed 130 checks across 14 durable'
+require_contains "architecture includes the CapSpec crate" docs/architecture.md '**captain-capspec**'
+require_contains "security docs pin CapSpec authority intersection" docs/security.md 'The readable `.captain` file cannot grant a'
+require_not_contains "CapSpec contract has no stale open-matrix claim" docs/CAPTAIN_FORGE_CAPSPEC.md 'broad real certification matrix is still open'
+require_not_contains "runtime changelog has no stale open CapSpec gate" docs/captain-tools/runtime-changelog.md 'broad real certification matrix remains required'
 if [ "$SITE_PRESENT" = "1" ]; then
   require_contains "launch site restores the editorial slogan" site/index.html 'aria-label="Unleash the future."'
   require_contains "launch site labels representative terminal data" site/index.html "Interactive demo / representative data"

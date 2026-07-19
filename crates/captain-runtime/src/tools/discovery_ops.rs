@@ -1,5 +1,6 @@
 //! Runtime handlers for capability and tool discovery.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use captain_skills::registry::SkillRegistry;
@@ -18,12 +19,14 @@ pub(crate) async fn tool_capability_search(
     skill_registry: Option<&SkillRegistry>,
     mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     search_capabilities(
         input,
         skill_registry,
         mcp_connections,
         kernel,
+        workspace_root,
         builtin_tool_definitions(),
         is_core_tool,
     )

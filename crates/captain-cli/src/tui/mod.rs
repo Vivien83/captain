@@ -16,6 +16,7 @@ mod error_route;
 pub mod event;
 mod event_memory;
 mod event_messages;
+mod event_native_capabilities;
 mod event_stream;
 mod file_upload;
 mod hub_key_state;
@@ -27,6 +28,7 @@ mod input_state;
 mod list_state;
 pub mod markdown;
 mod navigation_state;
+pub(crate) mod provider_quota;
 mod refresh_state;
 mod render_state;
 mod resource_status;
@@ -111,8 +113,8 @@ use render_state::{
 };
 use screens::{
     agents, approvals, audit, budget, channels, chat, comms, cron, dashboard, extensions, graph,
-    hands, learning, logs, memory, peers, projects, security, sessions, settings, skills,
-    skills_proposed, templates, triggers, usage, welcome, wizard, workflows,
+    hands, learning, logs, memory, native_capabilities, peers, projects, security, sessions,
+    settings, skills, skills_proposed, templates, triggers, usage, welcome, wizard, workflows,
 };
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
@@ -198,6 +200,8 @@ struct App {
     ctrl_c_tick: usize,
     /// Global tick counter for Ctrl+C timeout tracking.
     tick_count: usize,
+    /// One shared five-second observer feeds the chat quota status line.
+    provider_quota_watch_started: bool,
 
     backend: Backend,
     chat_target: Option<ChatTarget>,
@@ -220,6 +224,7 @@ struct App {
     approvals: approvals::ApprovalsState,
     budget: budget::BudgetState,
     graph: graph::GraphState,
+    native_capabilities: native_capabilities::NativeCapabilitiesState,
     skills: skills::SkillsState,
     hands: hands::HandsState,
     extensions: extensions::ExtensionsState,
@@ -271,7 +276,7 @@ impl App {
             active_tab: Tab::Dashboard,
             automation_view: AutomationView::Workflows,
             learning_view: LearningView::Review,
-            capabilities_view: CapabilitiesView::Skills,
+            capabilities_view: CapabilitiesView::Native,
             connections_view: ConnectionsView::Channels,
             pending_resume: None,
             pending_resume_target: None,
@@ -301,6 +306,7 @@ impl App {
             approvals: approvals::ApprovalsState::new(),
             budget: budget::BudgetState::new(),
             graph: graph::GraphState::new(),
+            native_capabilities: native_capabilities::NativeCapabilitiesState::new(),
             skills: skills::SkillsState::new(),
             hands: hands::HandsState::new(),
             extensions: extensions::ExtensionsState::new(),
@@ -321,6 +327,7 @@ impl App {
             ctrl_c_pending: false,
             ctrl_c_tick: 0,
             tick_count: 0,
+            provider_quota_watch_started: false,
             workspace,
         }
     }
@@ -560,7 +567,15 @@ impl App {
                 self.handle_chat_approval_detected(maybe_req);
             }
             AppEvent::VoiceRecorded(result) => self.handle_voice_recorded(result),
-            AppEvent::BudgetLoaded { global, agents } => self.handle_budget_loaded(global, agents),
+            AppEvent::ProviderQuotasLoaded(result) => {
+                self.handle_provider_quotas_loaded(result);
+            }
+            AppEvent::BudgetLoaded {
+                global,
+                provider_state,
+                provider_quotas,
+                agents,
+            } => self.handle_budget_loaded(global, provider_state, provider_quotas, agents),
             AppEvent::GraphLoaded {
                 stats,
                 entities,
@@ -577,6 +592,16 @@ impl App {
 
     fn handle_capability_settings_event(&mut self, ev: AppEvent) -> Option<AppEvent> {
         match ev {
+            AppEvent::NativeCapabilitiesLoaded { capabilities, runs } => {
+                self.native_capabilities.replace(capabilities, runs);
+            }
+            AppEvent::NativeCapabilityInspected(capability) => {
+                self.native_capabilities.replace_inspected(capability);
+            }
+            AppEvent::NativeCapabilityChanged(message) => {
+                self.native_capabilities.status_msg = message;
+                self.refresh_native_capabilities();
+            }
             AppEvent::SkillsLoaded(list) => self.handle_skills_loaded(list),
             AppEvent::ClawHubLoaded(results) => self.handle_clawhub_loaded(results),
             AppEvent::SkillInstalled(name) => self.handle_skill_installed(name),
@@ -679,12 +704,41 @@ impl App {
     fn handle_budget_loaded(
         &mut self,
         global: Option<budget::BudgetGlobal>,
+        provider_state: String,
+        provider_quotas: Vec<provider_quota::ProviderQuota>,
         agents: Vec<budget::AgentSpend>,
     ) {
+        self.chat.provider_quota_status = provider_quota::ProviderQuotaStatus {
+            reported_by_provider: !provider_quotas.is_empty(),
+            state: provider_state.clone(),
+            quotas: provider_quotas.clone(),
+        };
         self.budget.global = global;
+        self.budget.provider_state = provider_state;
+        self.budget.provider_quotas = provider_quotas;
         self.budget.agents = agents;
         self.budget.loading = false;
         select_first_if_unselected(&mut self.budget.list_state, &self.budget.agents);
+    }
+
+    fn handle_provider_quotas_loaded(
+        &mut self,
+        result: Result<provider_quota::ProviderQuotaStatus, String>,
+    ) {
+        match result {
+            Ok(status) => {
+                self.budget.provider_state = status.state.clone();
+                self.budget.provider_quotas = status.quotas.clone();
+                self.chat.provider_quota_status = status;
+            }
+            Err(error) => {
+                if !self.chat.provider_quota_status.has_observation() {
+                    self.chat.provider_quota_status =
+                        provider_quota::ProviderQuotaStatus::default();
+                }
+                tracing::debug!(error = %error, "TUI provider quota refresh unavailable");
+            }
+        }
     }
 
     fn handle_graph_loaded(
@@ -1328,6 +1382,10 @@ impl App {
             error_route::FetchErrorTarget::SkillsProposed => self.skills_proposed.status_msg = err,
             error_route::FetchErrorTarget::Memory => self.memory.status_msg = err,
             error_route::FetchErrorTarget::Graph => self.graph.status_msg = err,
+            error_route::FetchErrorTarget::NativeCapabilities => {
+                self.native_capabilities.loading = false;
+                self.native_capabilities.status_msg = err;
+            }
             error_route::FetchErrorTarget::Skills => self.skills.status_msg = err,
             error_route::FetchErrorTarget::Hands => self.hands.status_msg = err,
             error_route::FetchErrorTarget::Templates => self.templates.status_msg = err,
@@ -1759,13 +1817,13 @@ impl App {
 
     fn handle_capabilities_key(&mut self, key: ratatui::crossterm::event::KeyEvent) {
         match capabilities_key_route_for_view(self.capabilities_view) {
+            CapabilitiesKeyRoute::Native => {
+                let action = self.native_capabilities.handle_key(key);
+                self.handle_native_capabilities_action(action);
+            }
             CapabilitiesKeyRoute::Skills => {
                 let action = self.skills.handle_key(key);
                 self.handle_skills_action(action);
-            }
-            CapabilitiesKeyRoute::Hands => {
-                let action = self.hands.handle_key(key);
-                self.handle_hands_action(action);
             }
         }
     }
@@ -2066,6 +2124,18 @@ impl App {
         for route in plan.routes {
             self.apply_main_phase_entry_route(*route);
         }
+        self.start_provider_quota_watch();
+    }
+
+    fn start_provider_quota_watch(&mut self) {
+        if self.provider_quota_watch_started {
+            return;
+        }
+        let Some(backend) = self.backend.to_ref() else {
+            return;
+        };
+        self.provider_quota_watch_started = true;
+        event::spawn_provider_quota_watch(backend, self.event_tx.clone());
     }
 
     fn apply_main_phase_entry_route(&mut self, route: MainPhaseEntryRoute) {
@@ -2515,6 +2585,18 @@ impl App {
         }
     }
 
+    fn refresh_native_capabilities(&mut self) {
+        if let Some(backend) = self.backend.to_ref() {
+            self.native_capabilities.loading = true;
+            event_native_capabilities::spawn_fetch(
+                backend,
+                self.native_capabilities.scope,
+                self.native_capability_workspace(),
+                self.event_tx.clone(),
+            );
+        }
+    }
+
     fn refresh_capabilities_current(&mut self) {
         self.refresh_capabilities_route(capabilities_refresh_route_for_view(
             self.capabilities_view,
@@ -2523,8 +2605,8 @@ impl App {
 
     fn refresh_capabilities_route(&mut self, route: CapabilitiesRefreshRoute) {
         match route {
+            CapabilitiesRefreshRoute::Native => self.refresh_native_capabilities(),
             CapabilitiesRefreshRoute::Skills => self.refresh_skills(),
-            CapabilitiesRefreshRoute::Hands => self.refresh_hands(),
         }
     }
 
@@ -2694,6 +2776,7 @@ impl App {
         // Phase O.2: subscribe to broadcast events so we surface
         // auto-memorize commits in the chat.
         event::spawn_memory_subscriber(Arc::clone(&kernel), self.event_tx.clone());
+        event::spawn_inprocess_capspec_resume_recovery(Arc::clone(&kernel));
         self.backend = Backend::InProcess { kernel };
         self.agents.reset();
         self.enter_main_phase();
@@ -3417,6 +3500,114 @@ impl App {
                 }
             }
         }
+    }
+
+    fn handle_native_capabilities_action(
+        &mut self,
+        action: native_capabilities::NativeCapabilitiesAction,
+    ) {
+        use event_native_capabilities::NativeMutation;
+
+        let Some(backend) = self.backend.to_ref() else {
+            return;
+        };
+        let workspace = self.native_capability_workspace();
+        match action {
+            native_capabilities::NativeCapabilitiesAction::Continue => {}
+            native_capabilities::NativeCapabilitiesAction::Refresh => {
+                self.refresh_native_capabilities();
+            }
+            native_capabilities::NativeCapabilitiesAction::Inspect {
+                name,
+                scope,
+                include_source,
+            } => {
+                self.native_capabilities.loading = true;
+                event_native_capabilities::spawn_inspect(
+                    backend,
+                    name,
+                    scope,
+                    workspace,
+                    include_source,
+                    self.event_tx.clone(),
+                );
+            }
+            native_capabilities::NativeCapabilitiesAction::Decide {
+                name,
+                scope,
+                expected_hash,
+                approve,
+            } => {
+                self.native_capabilities.loading = true;
+                event_native_capabilities::spawn_mutation(
+                    backend,
+                    NativeMutation::Decide {
+                        name,
+                        scope,
+                        expected_hash,
+                        approve,
+                    },
+                    workspace,
+                    self.event_tx.clone(),
+                );
+            }
+            native_capabilities::NativeCapabilitiesAction::Rollback {
+                name,
+                scope,
+                target_hash,
+            } => {
+                self.native_capabilities.loading = true;
+                event_native_capabilities::spawn_mutation(
+                    backend,
+                    NativeMutation::Rollback {
+                        name,
+                        scope,
+                        target_hash,
+                    },
+                    workspace,
+                    self.event_tx.clone(),
+                );
+            }
+            native_capabilities::NativeCapabilitiesAction::Disable { name, scope } => {
+                self.native_capabilities.loading = true;
+                event_native_capabilities::spawn_mutation(
+                    backend,
+                    NativeMutation::Disable { name, scope },
+                    workspace,
+                    self.event_tx.clone(),
+                );
+            }
+            native_capabilities::NativeCapabilitiesAction::ResolveRun {
+                run_id,
+                node_id,
+                tool_use_id,
+                attempt,
+                decision,
+            } => {
+                self.native_capabilities.loading = true;
+                event_native_capabilities::spawn_mutation(
+                    backend,
+                    NativeMutation::ResolveRun {
+                        run_id,
+                        node_id,
+                        tool_use_id,
+                        attempt,
+                        decision,
+                    },
+                    workspace,
+                    self.event_tx.clone(),
+                );
+            }
+        }
+    }
+
+    fn native_capability_workspace(&self) -> Option<String> {
+        self.workspace
+            .as_ref()
+            .and_then(|workspace| workspace.config_path.parent().map(PathBuf::from))
+            .or_else(|| std::env::current_dir().ok())
+            .and_then(|path| path.canonicalize().ok().or(Some(path)))
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     fn handle_skills_action(&mut self, action: skills::SkillsAction) {
@@ -5213,8 +5404,10 @@ impl App {
             self.capabilities_view.index(),
         );
         match capabilities_hub_draw_route_for_view(self.capabilities_view) {
+            CapabilitiesHubDrawRoute::Native => {
+                native_capabilities::draw(frame, content, &mut self.native_capabilities)
+            }
             CapabilitiesHubDrawRoute::Skills => skills::draw(frame, content, &mut self.skills),
-            CapabilitiesHubDrawRoute::Hands => hands::draw(frame, content, &mut self.hands),
         }
     }
 
@@ -5332,6 +5525,32 @@ mod app_event_route_tests {
         assert_eq!(app.dashboard.model, "gpt-5-codex");
         assert_eq!(app.dashboard.status.runtime_health_state, "ok");
         assert!(!app.dashboard.loading);
+    }
+
+    #[test]
+    fn provider_quota_event_updates_full_tui_and_preserves_last_good_observation() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(None, tx);
+        let status = provider_quota::ProviderQuotaStatus {
+            state: "warning".to_string(),
+            reported_by_provider: true,
+            quotas: vec![provider_quota::ProviderQuota {
+                provider: "codex".to_string(),
+                limit_id: "codex".to_string(),
+                limit_name: "Codex".to_string(),
+                ..Default::default()
+            }],
+        };
+
+        app.handle_event(AppEvent::ProviderQuotasLoaded(Ok(status.clone())));
+        assert_eq!(app.chat.provider_quota_status, status);
+        assert_eq!(app.budget.provider_state, "warning");
+        assert_eq!(app.budget.provider_quotas, status.quotas);
+
+        app.handle_event(AppEvent::ProviderQuotasLoaded(Err(
+            "daemon restarting".to_string()
+        )));
+        assert_eq!(app.chat.provider_quota_status, status);
     }
 
     #[test]

@@ -37,6 +37,17 @@ impl CaptainKernel {
                 RunningTaskCleanup::new(Arc::clone(&kernel_clone), agent_id, run_id);
             send_complete_response(tx, response, usage).await;
             kernel_clone.scheduler.record_usage(agent_id, &usage);
+            if usage.total() > 0 {
+                if let Some(entry) = kernel_clone.registry.get(agent_id) {
+                    kernel_clone.record_usage_metering(
+                        agent_id,
+                        &entry.manifest.model.provider,
+                        &entry.manifest.model.model,
+                        &usage,
+                        result.iterations,
+                    );
+                }
+            }
             let _ = kernel_clone
                 .registry
                 .set_state(agent_id, AgentState::Running);

@@ -1,0 +1,18 @@
+format = 1
+name = "cert-http-denied"
+description = "Prove that a URL outside the declared network host is rejected before dispatch."
+version = "1.0.0"
+tags = ["certification", "http", "denied"]
+output = "{{steps.fetch.output}}"
+
+[permissions]
+tools = ["web_fetch"]
+network_hosts = ["example.com"]
+
+[policy]
+timeout_secs = 60
+
+[[steps]]
+id = "fetch"
+tool = "web_fetch"
+with = { url = "https://www.iana.org/domains/reserved", method = "GET" }

@@ -100,8 +100,22 @@ export function Status() {
               <${StatusMetric} label="Temps total" value=${formatLatency(snapshot.streaming.totalMs)} meta="dernier flux" />
               <${StatusMetric} label="Agent API" value=${snapshot.agentApi.state} meta=${snapshot.agentApi.pending + ' pending · ' + snapshot.agentApi.due + ' due · ' + snapshot.agentApi.deadLetters + ' dead letters'}
                 tone=${snapshot.agentApi.due + snapshot.agentApi.deadLetters > 0 ? 'warn' : stateTone(snapshot.agentApi.state)} />
-              <${StatusMetric} label="Budget" value=${formatNumber(snapshot.budget.totalTokens)} meta=${snapshot.budget.limitedAgents + ' agent(s) limité(s)'}
-                tone=${snapshot.budget.actions.length > 0 ? 'warn' : 'neutral'} />
+            </div>
+          <//>
+
+          <${StatusSection} title="Quotas">
+            <div class="status-grid">
+              <${StatusMetric} label="Captain internal" value=${formatNumber(snapshot.budget.totalTokens)} meta=${snapshot.budget.limitedAgents + ' agent(s) · fenêtre glissante locale'}
+                tone=${snapshot.budget.actions.some((item) => !item.startsWith('Provider subscription')) ? 'warn' : 'neutral'} />
+              ${snapshot.budget.provider.items.length === 0 && html`
+                <${StatusMetric} label="Provider subscription" value="non observé" meta="signaux officiels provider uniquement"
+                  tone="neutral" />
+              `}
+              ${snapshot.budget.provider.items.map((quota) => html`
+                <${StatusMetric} key=${quota.provider + ':' + quota.id} label=${quota.name}
+                  value=${providerQuotaWindows(quota)}
+                  meta=${providerQuotaMeta(quota)} tone=${quotaTone(quota)} />
+              `)}
             </div>
           <//>
 
@@ -191,4 +205,42 @@ function ReadyState({ value }) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('fr-FR');
+}
+
+function providerQuotaWindows(quota) {
+  const windows = [quota.primary, quota.secondary]
+    .filter(Boolean)
+    .map((window) => {
+      const duration = quotaDuration(window.windowSeconds);
+      return `${duration} ${window.usedPercent.toFixed(1)}%`;
+    });
+  return windows.length > 0 ? windows.join(' · ') : quota.alert;
+}
+
+function providerQuotaMeta(quota) {
+  const parts = [quota.provider];
+  if (quota.plan) parts.push(quota.plan);
+  parts.push(quota.alert);
+  if (quota.stale) parts.push('stale');
+  const resets = [quota.primary, quota.secondary]
+    .filter(Boolean)
+    .filter((window) => window.resetsAt)
+    .map((window) => `${quotaDuration(window.windowSeconds)} ${window.resetsAt}`);
+  if (resets.length > 0) parts.push(`reset ${resets.join(' · ')}`);
+  return parts.join(' · ');
+}
+
+function quotaDuration(seconds) {
+  if (!seconds) return 'fenêtre';
+  if (seconds % 604800 === 0) return `${seconds / 604800} sem.`;
+  if (seconds % 86400 === 0) return `${seconds / 86400} j`;
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}
+
+function quotaTone(quota) {
+  if (quota.alert === 'exhausted') return 'err';
+  if (quota.alert === 'critical' || quota.alert === 'warning' || quota.stale) return 'warn';
+  return 'ok';
 }

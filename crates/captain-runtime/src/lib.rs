@@ -57,6 +57,7 @@ pub mod audit;
 pub mod auth_cooldown;
 pub mod browser;
 pub mod cache;
+pub mod capspec_tool_result;
 pub mod captain_docs;
 pub(crate) mod captain_docs_catalog;
 #[cfg(test)]
@@ -179,6 +180,7 @@ pub mod prompt_builder;
 pub mod prompt_sanitizer;
 pub mod proposal_policy;
 pub mod provider_health;
+pub mod provider_quota;
 pub mod pty_session;
 pub mod python_runtime;
 pub mod reflection_job;

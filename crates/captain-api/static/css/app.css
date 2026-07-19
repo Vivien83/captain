@@ -447,6 +447,55 @@ input:focus, textarea:focus {
 }
 .drop-active .composer { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-dim); }
 
+.provider-quota-bar {
+  min-height: 40px;
+  padding: 7px 20px 9px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  flex-shrink: 0;
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.provider-quota-bar.unavailable { color: var(--warn); gap: 8px; }
+.provider-quota-meta, .provider-quota-window { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.provider-quota-meta strong { color: var(--gold-bright); }
+.provider-quota-plan {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  color: var(--text-1);
+  text-transform: uppercase;
+  font-size: 9.5px;
+}
+.provider-quota-window strong { min-width: 34px; text-align: right; color: var(--ok); }
+.provider-quota-window.warn strong, .provider-quota-window.warn .provider-quota-flag { color: var(--warn); }
+.provider-quota-window.err strong, .provider-quota-window.err .provider-quota-flag { color: var(--err); }
+.provider-quota-label { color: var(--text-1); }
+.provider-quota-gauge {
+  width: 68px;
+  height: 7px;
+  overflow: hidden;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.provider-quota-gauge > span { display: block; height: 100%; background: var(--ok); }
+.provider-quota-window.warn .provider-quota-gauge > span { background: var(--warn); }
+.provider-quota-window.err .provider-quota-gauge > span { background: var(--err); }
+.provider-quota-reset { color: var(--text-2); }
+.provider-quota-flag { text-transform: uppercase; font-size: 9.5px; }
+.provider-quota-more { color: var(--text-2); flex-shrink: 0; }
+.provider-quota-more.warn { color: var(--warn); }
+.provider-quota-more.err { color: var(--err); }
+
 /* canvas pane */
 .split { display: flex; flex: 1; min-height: 0; }
 .split .chat-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -834,6 +883,117 @@ input:focus, textarea:focus {
 .tool-catalog-name { font-family: var(--font-mono); font-size: 12.5px; }
 .capability-more { display: block; margin: 18px auto 0; }
 
+.native-capability-toolbar { align-items: center; }
+.native-toolbar-actions,
+.native-scope-bar,
+.native-forge-controls,
+.native-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.native-scope-bar { margin: 0 0 16px; }
+.native-scope-bar select,
+.native-forge-controls select {
+  min-height: 36px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 7px 10px;
+}
+.native-scope-bar input { flex: 1 1 220px; min-width: 0; }
+.native-forge {
+  margin: 4px 0 22px;
+  padding: 16px 0 20px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.native-forge-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.native-forge-head h2,
+.native-runs h2 { margin: 0; font-size: 14px; }
+.native-forge-controls { margin-bottom: 8px; }
+.native-forge-controls input { flex: 1 1 260px; min-width: 0; }
+.native-source-editor {
+  width: 100%;
+  min-height: 310px;
+  resize: vertical;
+  margin-bottom: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.native-capability-entry {
+  border: 1px solid var(--border);
+  background: var(--glass);
+  border-radius: var(--radius-s);
+}
+.native-capability-entry > .item-row { border: 0; background: transparent; }
+.native-row-toggle {
+  flex: 1 1 360px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+.native-row-toggle:hover { border-color: transparent; background: transparent; }
+.native-row-title { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.native-row-title strong { overflow-wrap: anywhere; }
+.native-capability-detail {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+.native-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+.native-detail-grid > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.native-detail-grid span,
+.native-revision span,
+.native-run span { color: var(--text-2); font-size: 11.5px; }
+.native-detail-grid strong { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.native-permissions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.native-detail-actions { justify-content: flex-end; margin: 12px 0; }
+.native-revisions { margin-top: 18px; border-top: 1px solid var(--border); }
+.native-revisions h3 { margin: 14px 0 6px; font-size: 13px; }
+.native-revision,
+.native-run {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.native-revision > div,
+.native-run > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.native-revision strong,
+.native-run strong { font-size: 12.5px; overflow-wrap: anywhere; }
+.native-runs { margin-top: 30px; }
+.native-runs h2 { margin-bottom: 8px; }
+.native-run-entry { border-bottom: 1px solid var(--border); }
+.native-run-entry .native-run { border-bottom: 0; }
+.native-run-actions { align-items: flex-end; flex-direction: row !important; gap: 8px !important; }
+.native-run-decision { padding: 2px 0 12px; }
+.native-run-decision-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, .55fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+.native-run-decision-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: var(--text-2); }
+.native-run-decision-fields textarea { min-height: 70px; resize: vertical; font-family: var(--font-mono); }
+
 /* --------------------------------------------------------------- status */
 
 .status-page { padding-bottom: 60px; }
@@ -944,11 +1104,17 @@ input:focus, textarea:focus {
   .model-update-notice { align-items: flex-start; flex-direction: column; padding: 12px 14px; }
   .model-update-copy, .model-update-actions { width: 100%; flex-wrap: wrap; justify-content: flex-start; }
   .model-update-actions select { max-width: 100%; }
+  .provider-quota-bar { padding-inline: 14px; gap: 14px; }
+  .provider-quota-gauge { width: 54px; }
   .status-banner-meta { justify-content: flex-start; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .status-columns { grid-template-columns: 1fr; gap: 20px; }
   .capability-toolbar { flex-direction: column; }
   .capability-toolbar input { width: 100%; }
+  .native-toolbar-actions { width: 100%; }
+  .native-scope-bar { align-items: stretch; flex-direction: column; }
+  .native-scope-bar input { flex: 0 0 auto; width: 100%; }
+  .native-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workflow-form-grid { grid-template-columns: 1fr; }
   .workflow-run { grid-template-columns: 90px minmax(0, 1fr); }
   .workflow-run > :nth-child(3), .workflow-run > :nth-child(4) { grid-column: 2; }
@@ -959,4 +1125,12 @@ input:focus, textarea:focus {
   .status-cell { min-height: 100px; }
   .workflow-run-form { grid-template-columns: 1fr; }
   .workflow-run-form button { width: 100%; }
+  .native-detail-grid { grid-template-columns: 1fr; }
+  .native-row-toggle { align-items: flex-start; flex-direction: column; }
+  .native-capability-entry > .item-row { align-items: stretch; }
+  .native-capability-entry .item-row-actions { width: 100%; }
+  .native-capability-entry .item-row-actions button { flex: 1; }
+  .native-revision, .native-run { align-items: flex-start; flex-direction: column; }
+  .native-run-actions { width: 100%; align-items: center; justify-content: space-between; }
+  .native-run-decision-fields { grid-template-columns: 1fr; }
 }

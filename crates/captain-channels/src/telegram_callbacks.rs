@@ -3,6 +3,52 @@
 use crate::types::{ChannelContent, ChannelMessage, ChannelType, ChannelUser};
 use std::collections::HashMap;
 
+const CAPSPEC_CALLBACK_TOKEN_LEN: usize = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapSpecTelegramAction {
+    Approve,
+    Reject,
+    Retry,
+    ConfirmSucceeded,
+    MarkFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapSpecTelegramCallback {
+    pub action: CapSpecTelegramAction,
+    pub token: String,
+}
+
+/// Parse a compact Captain Forge operator callback.
+///
+/// The token is a deterministic 80-bit lookup key. The kernel never trusts it
+/// as the decision identity: it resolves the token against the current pending
+/// records and then applies a compare-and-set using the complete source hash or
+/// run/node/tool-use/attempt tuple.
+pub fn parse_capspec_callback(data: &str) -> Option<CapSpecTelegramCallback> {
+    let rest = data.strip_prefix("capspec:")?;
+    let mut parts = rest.splitn(2, ':');
+    let action = match parts.next()? {
+        "approve" => CapSpecTelegramAction::Approve,
+        "reject" => CapSpecTelegramAction::Reject,
+        "retry" => CapSpecTelegramAction::Retry,
+        "confirm" => CapSpecTelegramAction::ConfirmSucceeded,
+        "fail" => CapSpecTelegramAction::MarkFailed,
+        _ => return None,
+    };
+    let token = parts.next()?.trim();
+    if token.len() != CAPSPEC_CALLBACK_TOKEN_LEN
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(CapSpecTelegramCallback {
+        action,
+        token: token.to_ascii_lowercase(),
+    })
+}
+
 /// Parse an `approval:<action>:<id>` callback payload into a slash command.
 ///
 /// Q.11.b.2 — 4 distinct routes:
@@ -214,6 +260,31 @@ pub fn build_skill_refinement_keyboard(refinement_id: &str) -> serde_json::Value
     })
 }
 
+/// Human approval controls for one exact pending CapSpec revision.
+pub fn build_capspec_approval_keyboard(token: &str) -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [[
+            {"text": "✅ Approuver", "callback_data": format!("capspec:approve:{token}")},
+            {"text": "❌ Refuser",   "callback_data": format!("capspec:reject:{token}")},
+        ]]
+    })
+}
+
+/// Recovery controls for one exact uncertain CapSpec node attempt.
+pub fn build_capspec_uncertain_keyboard(token: &str) -> serde_json::Value {
+    serde_json::json!({
+        "inline_keyboard": [
+            [
+                {"text": "🔁 Réessayer", "callback_data": format!("capspec:retry:{token}")},
+                {"text": "✅ Confirmer (null)", "callback_data": format!("capspec:confirm:{token}")},
+            ],
+            [
+                {"text": "⛔ Marquer en échec", "callback_data": format!("capspec:fail:{token}")},
+            ]
+        ]
+    })
+}
+
 /// Parse an `ask_user:<short_id>:<zero_based_option_index>` callback payload.
 ///
 /// Unlike `parse_project_ask_callback`, this doesn't resolve to a slash
@@ -376,9 +447,91 @@ pub(crate) fn ask_user_answer_callback_message(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn capspec_operator_callback_message(
+    callback_data: &str,
+    chat_id: i64,
+    from_id: i64,
+    from_name: &str,
+    thread_id: Option<String>,
+    original_message_id: Option<i64>,
+    original_text: &str,
+) -> ChannelMessage {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "capspec_callback_data".to_string(),
+        serde_json::json!(callback_data),
+    );
+    metadata.insert("sender_user_id".to_string(), serde_json::json!(from_id));
+    metadata.insert("chat_id".to_string(), serde_json::json!(chat_id));
+    metadata.insert(
+        "original_text".to_string(),
+        serde_json::json!(original_text),
+    );
+
+    ChannelMessage {
+        channel: ChannelType::Telegram,
+        platform_message_id: original_message_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        sender: ChannelUser {
+            platform_id: chat_id.to_string(),
+            display_name: from_name.to_string(),
+            captain_user: None,
+        },
+        content: ChannelContent::Text("[Captain Forge operator decision]".to_string()),
+        target_agent: None,
+        timestamp: chrono::Utc::now(),
+        is_group: false,
+        thread_id,
+        metadata,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capspec_callbacks_are_compact_and_strict() {
+        let token = "a".repeat(CAPSPEC_CALLBACK_TOKEN_LEN);
+        let callback = parse_capspec_callback(&format!("capspec:retry:{token}")).unwrap();
+        assert_eq!(callback.action, CapSpecTelegramAction::Retry);
+        assert_eq!(callback.token, token);
+        assert!(parse_capspec_callback("capspec:retry:short").is_none());
+        assert!(parse_capspec_callback("capspec:retry:0123456789abcdefabc!").is_none());
+        assert!(parse_capspec_callback(&format!("capspec:unknown:{token}")).is_none());
+
+        for keyboard in [
+            build_capspec_approval_keyboard(&token),
+            build_capspec_uncertain_keyboard(&token),
+        ] {
+            for row in keyboard["inline_keyboard"].as_array().unwrap() {
+                for button in row.as_array().unwrap() {
+                    assert!(button["callback_data"].as_str().unwrap().len() <= 64);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capspec_callback_envelope_preserves_human_and_original_message() {
+        let callback = "capspec:approve:0123456789abcdefabcd";
+        let message = capspec_operator_callback_message(
+            callback,
+            -1001,
+            42,
+            "Vivien",
+            Some("7".to_string()),
+            Some(99),
+            "Captain Forge prompt",
+        );
+        assert_eq!(message.platform_message_id, "99");
+        assert_eq!(message.metadata["capspec_callback_data"], callback);
+        assert_eq!(message.metadata["sender_user_id"], 42);
+        assert_eq!(message.metadata["original_text"], "Captain Forge prompt");
+        assert!(matches!(message.content, ChannelContent::Text(_)));
+    }
 
     #[test]
     fn telegram_callbacks_parse_approval_session_and_deny() {

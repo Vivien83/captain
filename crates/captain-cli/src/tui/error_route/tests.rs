@@ -82,9 +82,9 @@ fn capability_errors_follow_active_subview() {
             AutomationView::Workflows,
             ConnectionsView::Channels,
             LearningView::Review,
-            CapabilitiesView::Hands,
+            CapabilitiesView::Native,
         ),
-        Some(FetchErrorTarget::Hands)
+        Some(FetchErrorTarget::NativeCapabilities)
     );
 }
 

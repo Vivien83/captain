@@ -271,9 +271,19 @@ fn subagent_scope_normalization_keeps_explicit_tools_and_adds_defaults() {
 
 #[test]
 fn codex_background_model_sanitizer_rejects_claude_and_incompatible_codex_names() {
-    let catalog = captain_runtime::model_catalog::ModelCatalog::new();
+    let mut catalog = captain_runtime::model_catalog::ModelCatalog::new();
+    let mut compatible_fixture = catalog
+        .models_by_provider("codex")
+        .into_iter()
+        .next()
+        .expect("Codex catalog entry")
+        .clone();
+    compatible_fixture.id = "codex/test-background-compatible".to_string();
+    compatible_fixture.display_name = "Background-compatible test model".to_string();
+    compatible_fixture.aliases.clear();
+    assert!(catalog.add_custom_model(compatible_fixture));
+
     let expected_primary = kernel_agent_runtime::default_codex_background_model(&catalog);
-    assert_eq!(expected_primary, "gpt-5.5");
     assert_eq!(
         normalize_background_model_for_provider(&catalog, "codex", "claude-haiku-4-5"),
         expected_primary
@@ -287,18 +297,27 @@ fn codex_background_model_sanitizer_rejects_claude_and_incompatible_codex_names(
         expected_primary
     );
     assert_eq!(
-        normalize_background_model_for_provider(&catalog, "codex", "codex/gpt-5.4"),
-        "gpt-5.4"
+        normalize_background_model_for_provider(
+            &catalog,
+            "codex",
+            "codex/test-background-compatible"
+        ),
+        "test-background-compatible"
     );
     let fallbacks = vec![
         "claude-sonnet-4-6".to_string(),
         "codex/gpt-5.3-codex".to_string(),
-        "codex/gpt-5.4".to_string(),
-        "codex/gpt-5.5".to_string(),
+        "codex/test-background-compatible".to_string(),
+        format!("codex/{expected_primary}"),
     ];
     assert_eq!(
-        normalize_background_fallbacks_for_provider(&catalog, "codex", "gpt-5.5", &fallbacks,),
-        vec!["gpt-5.4".to_string()]
+        normalize_background_fallbacks_for_provider(
+            &catalog,
+            "codex",
+            &expected_primary,
+            &fallbacks,
+        ),
+        vec!["test-background-compatible".to_string()]
     );
 }
 

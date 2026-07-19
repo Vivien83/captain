@@ -98,16 +98,16 @@ pub(crate) fn learning_refresh_route_for_view(view: LearningView) -> LearningRef
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CapabilitiesRefreshRoute {
+    Native,
     Skills,
-    Hands,
 }
 
 pub(crate) fn capabilities_refresh_route_for_view(
     view: CapabilitiesView,
 ) -> CapabilitiesRefreshRoute {
     match view {
+        CapabilitiesView::Native => CapabilitiesRefreshRoute::Native,
         CapabilitiesView::Skills => CapabilitiesRefreshRoute::Skills,
-        CapabilitiesView::Hands => CapabilitiesRefreshRoute::Hands,
     }
 }
 

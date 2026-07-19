@@ -39,6 +39,12 @@ pub use crate::approval_routes::{
 };
 pub use crate::audit_routes::{audit_recent, audit_repair, audit_verify, logs_stream};
 pub use crate::binding_routes::{add_binding, list_bindings, remove_binding};
+pub use crate::capspec_routes::{
+    decide_native_capability, disable_native_capability, inspect_native_capability,
+    inspect_native_capability_run, install_native_capability, list_native_capabilities,
+    list_native_capability_runs, resolve_uncertain_native_capability_run,
+    rollback_native_capability, validate_native_capability,
+};
 pub use crate::channel_routes::{
     clear_inbound_dead_letters, configure_channel, list_channels, reload_channels, remove_channel,
     test_channel,

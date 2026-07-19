@@ -1,6 +1,7 @@
 use super::*;
 use crate::llm_driver::CompletionResponse;
 use captain_types::message::{ContentBlock, StopReason, TokenUsage};
+use captain_types::quota::{QuotaExceededInfo, QuotaScope, QuotaUnit};
 
 struct FailDriver;
 
@@ -72,6 +73,41 @@ impl LlmDriver for BadRequestDriver {
             status: 400,
             message: "Unsupported parameter: max_output_tokens".to_string(),
         })
+    }
+}
+
+struct SubscriptionQuotaFailDriver;
+
+fn subscription_quota_error() -> LlmError {
+    LlmError::SubscriptionQuotaExceeded {
+        info: Box::new(QuotaExceededInfo {
+            code: "provider_subscription_quota".to_string(),
+            scope: QuotaScope::ProviderSubscription,
+            provider: Some("codex".to_string()),
+            agent_id: None,
+            used: 100.0,
+            limit: 100.0,
+            unit: QuotaUnit::Percent,
+            window_seconds: Some(18_000),
+            resets_at: None,
+            retry_after_seconds: Some(60),
+            message: "Codex subscription exhausted".to_string(),
+        }),
+    }
+}
+
+#[async_trait]
+impl LlmDriver for SubscriptionQuotaFailDriver {
+    async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        Err(subscription_quota_error())
+    }
+
+    async fn stream(
+        &self,
+        _req: CompletionRequest,
+        _tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> Result<CompletionResponse, LlmError> {
+        Err(subscription_quota_error())
     }
 }
 
@@ -178,6 +214,21 @@ async fn stream_bad_request_does_not_emit_fallback_notice() {
             "request-contract errors must not look like a normal fallback hop"
         );
     }
+}
+
+#[tokio::test]
+async fn subscription_quota_does_not_fall_through() {
+    let driver = FallbackDriver::new(vec![
+        Arc::new(SubscriptionQuotaFailDriver) as Arc<dyn LlmDriver>,
+        Arc::new(OkDriver) as Arc<dyn LlmDriver>,
+    ]);
+
+    let result = driver.complete(test_request()).await;
+
+    assert!(matches!(
+        result,
+        Err(LlmError::SubscriptionQuotaExceeded { .. })
+    ));
 }
 
 #[tokio::test]

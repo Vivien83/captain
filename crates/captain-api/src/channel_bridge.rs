@@ -1177,6 +1177,16 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         }
     }
 
+    async fn try_resolve_capspec_callback(
+        &self,
+        callback_data: &str,
+        actor: &str,
+    ) -> Result<String, String> {
+        self.kernel
+            .capspec_resolve_telegram_callback(callback_data, actor)
+            .await
+    }
+
     async fn send_message_with_blocks(
         &self,
         agent_id: AgentId,
@@ -2771,6 +2781,11 @@ fn push_telegram_adapter(
             );
             captain_kernel::channel_routing::spawn_telegram_project_ask_routing(
                 kernel.event_bus.clone(),
+                adapter.clone(),
+                chat_id_int,
+            );
+            captain_kernel::channel_routing::spawn_telegram_capspec_routing(
+                Arc::clone(kernel),
                 adapter.clone(),
                 chat_id_int,
             );

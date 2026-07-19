@@ -1,0 +1,22 @@
+format = 1
+name = "cert-traversal"
+description = "Attempt a parent-directory read outside the declared input root."
+version = "1.0.0"
+tags = ["certification", "security", "traversal"]
+output = "{{steps.escape.output}}"
+
+[inputs.root]
+type = "string"
+description = "Allowed read root"
+
+[permissions]
+tools = ["file_read"]
+read_paths = ["{{input.root}}/**"]
+
+[policy]
+timeout_secs = 30
+
+[[steps]]
+id = "escape"
+tool = "file_read"
+with = { path = "{{input.root}}/../escape.txt" }

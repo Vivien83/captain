@@ -2,7 +2,7 @@
 
 use captain_types::agent::AgentId;
 use captain_types::error::{CaptainError, CaptainResult};
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -73,6 +73,17 @@ pub struct DailyBreakdown {
     pub calls: u64,
 }
 
+/// Durable usage in Captain's rolling one-hour token window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HourlyTokenUsage {
+    /// Input and output tokens recorded in the window.
+    pub total_tokens: u64,
+    /// Tool calls recorded in the same window.
+    pub tool_calls: u64,
+    /// Next event expiry, or the first expiry that brings usage below `limit`.
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
 /// Usage store backed by SQLite.
 #[derive(Clone)]
 pub struct UsageStore {
@@ -122,12 +133,83 @@ impl UsageStore {
         let cost: f64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE agent_id = ?1 AND timestamp > datetime('now', '-1 hour')",
+                 WHERE agent_id = ?1 AND datetime(timestamp) > datetime('now', '-1 hour')",
                 rusqlite::params![agent_id.0.to_string()],
                 |row| row.get(0),
             )
             .map_err(|e| CaptainError::Memory(e.to_string()))?;
         Ok(cost)
+    }
+
+    /// Query Captain's durable rolling token window for an agent.
+    ///
+    /// When `limit` is reached, `resets_at` is the first event expiry that
+    /// makes the recorded total strictly lower than that limit. Below the
+    /// limit it is the next event expiry, useful for status displays.
+    pub fn query_hourly_tokens(
+        &self,
+        agent_id: AgentId,
+        limit: u64,
+    ) -> CaptainResult<HourlyTokenUsage> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Internal(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT timestamp, input_tokens, output_tokens, tool_calls
+                 FROM usage_events
+                 WHERE agent_id = ?1
+                   AND datetime(timestamp) > datetime('now', '-1 hour')
+                 ORDER BY datetime(timestamp) ASC, timestamp ASC",
+            )
+            .map_err(|e| CaptainError::Memory(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id.0.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?.max(0) as u64,
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                    row.get::<_, i64>(3)?.max(0) as u64,
+                ))
+            })
+            .map_err(|e| CaptainError::Memory(e.to_string()))?;
+
+        let mut events = Vec::new();
+        let mut total_tokens = 0_u64;
+        let mut tool_calls = 0_u64;
+        for row in rows {
+            let (timestamp, input, output, tools) =
+                row.map_err(|e| CaptainError::Memory(e.to_string()))?;
+            let timestamp = DateTime::parse_from_rfc3339(&timestamp)
+                .map_err(|e| CaptainError::Memory(format!("invalid usage timestamp: {e}")))?
+                .with_timezone(&Utc);
+            let tokens = input.saturating_add(output);
+            total_tokens = total_tokens.saturating_add(tokens);
+            tool_calls = tool_calls.saturating_add(tools);
+            events.push((timestamp, tokens));
+        }
+
+        let resets_at = if events.is_empty() {
+            None
+        } else if limit > 0 && total_tokens >= limit {
+            let tokens_to_expire = total_tokens.saturating_sub(limit).saturating_add(1);
+            let mut expired = 0_u64;
+            events.iter().find_map(|(timestamp, tokens)| {
+                expired = expired.saturating_add(*tokens);
+                (expired >= tokens_to_expire).then_some(*timestamp + Duration::hours(1))
+            })
+        } else {
+            events
+                .first()
+                .map(|(timestamp, _)| *timestamp + Duration::hours(1))
+        };
+
+        Ok(HourlyTokenUsage {
+            total_tokens,
+            tool_calls,
+            resets_at,
+        })
     }
 
     /// Query total cost today for an agent.
@@ -139,7 +221,7 @@ impl UsageStore {
         let cost: f64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE agent_id = ?1 AND timestamp > datetime('now', 'start of day')",
+                 WHERE agent_id = ?1 AND datetime(timestamp) > datetime('now', 'start of day')",
                 rusqlite::params![agent_id.0.to_string()],
                 |row| row.get(0),
             )
@@ -156,7 +238,7 @@ impl UsageStore {
         let cost: f64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE agent_id = ?1 AND timestamp > datetime('now', 'start of month')",
+                 WHERE agent_id = ?1 AND datetime(timestamp) > datetime('now', 'start of month')",
                 rusqlite::params![agent_id.0.to_string()],
                 |row| row.get(0),
             )
@@ -173,7 +255,7 @@ impl UsageStore {
         let cost: f64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE timestamp > datetime('now', '-1 hour')",
+                 WHERE datetime(timestamp) > datetime('now', '-1 hour')",
                 [],
                 |row| row.get(0),
             )
@@ -190,7 +272,7 @@ impl UsageStore {
         let cost: f64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE timestamp > datetime('now', 'start of month')",
+                 WHERE datetime(timestamp) > datetime('now', 'start of month')",
                 [],
                 |row| row.get(0),
             )
@@ -286,7 +368,7 @@ impl UsageStore {
                             COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
                             COUNT(*)
                      FROM usage_events
-                     WHERE timestamp > datetime('now', ?1 || ' days')
+                     WHERE datetime(timestamp) > datetime('now', ?1 || ' days')
                      GROUP BY day
                      ORDER BY day ASC",
             )
@@ -334,7 +416,7 @@ impl UsageStore {
         let cost: f64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE timestamp > datetime('now', 'start of day')",
+                 WHERE datetime(timestamp) > datetime('now', 'start of day')",
                 [],
                 |row| row.get(0),
             )
@@ -351,7 +433,7 @@ impl UsageStore {
         let offset = format!("-{days}");
         let deleted = conn
             .execute(
-                "DELETE FROM usage_events WHERE timestamp < datetime('now', ?1 || ' days')",
+                "DELETE FROM usage_events WHERE datetime(timestamp) < datetime('now', ?1 || ' days')",
                 rusqlite::params![offset],
             )
             .map_err(|e| CaptainError::Memory(e.to_string()))?;
@@ -507,6 +589,82 @@ mod tests {
 
         let hourly = store.query_hourly(agent_id).unwrap();
         assert!((hourly - 0.05).abs() < 0.001);
+    }
+
+    #[test]
+    fn hourly_tokens_ignore_expired_rfc3339_events() {
+        let store = setup();
+        let agent_id = AgentId::new();
+
+        for model in ["expired", "current"] {
+            store
+                .record(&UsageRecord {
+                    agent_id,
+                    model: model.to_string(),
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cached_input_tokens: 0,
+                    cache_creation_tokens: 0,
+                    cost_usd: 0.01,
+                    tool_calls: 1,
+                })
+                .unwrap();
+        }
+        let expired_at = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE usage_events SET timestamp = ?1 WHERE model = 'expired'",
+                rusqlite::params![expired_at],
+            )
+            .unwrap();
+
+        let usage = store.query_hourly_tokens(agent_id, 200).unwrap();
+        assert_eq!(usage.total_tokens, 150);
+        assert_eq!(usage.tool_calls, 1);
+        assert!(usage.resets_at.is_some());
+        assert!((store.query_hourly(agent_id).unwrap() - 0.01).abs() < 0.001);
+    }
+
+    #[test]
+    fn hourly_token_reset_is_first_expiry_that_unblocks_agent() {
+        let store = setup();
+        let agent_id = AgentId::new();
+        for (model, tokens) in [("oldest", 120), ("newest", 100)] {
+            store
+                .record(&UsageRecord {
+                    agent_id,
+                    model: model.to_string(),
+                    input_tokens: tokens,
+                    output_tokens: 0,
+                    cached_input_tokens: 0,
+                    cache_creation_tokens: 0,
+                    cost_usd: 0.0,
+                    tool_calls: 0,
+                })
+                .unwrap();
+        }
+        let oldest = Utc::now() - Duration::minutes(40);
+        let newest = Utc::now() - Duration::minutes(10);
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE usage_events SET timestamp = ?1 WHERE model = 'oldest'",
+            rusqlite::params![oldest.to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE usage_events SET timestamp = ?1 WHERE model = 'newest'",
+            rusqlite::params![newest.to_rfc3339()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let usage = store.query_hourly_tokens(agent_id, 200).unwrap();
+        assert_eq!(usage.total_tokens, 220);
+        let reset = usage.resets_at.unwrap();
+        assert!((reset - (oldest + Duration::hours(1))).num_seconds().abs() <= 1);
     }
 
     #[test]

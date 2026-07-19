@@ -28,6 +28,12 @@ pub enum LlmError {
         /// How long to wait before retrying.
         retry_after_ms: u64,
     },
+    /// A provider-owned subscription allowance is exhausted.
+    #[error("{info}")]
+    SubscriptionQuotaExceeded {
+        /// Structured provider quota details for API and UI surfaces.
+        info: Box<captain_types::quota::QuotaExceededInfo>,
+    },
     /// Response parsing failed.
     #[error("Parse error: {0}")]
     Parse(String),

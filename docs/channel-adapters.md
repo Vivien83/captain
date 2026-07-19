@@ -63,7 +63,12 @@ inactivity, so the durable transcript does not fill with heartbeat notices.
 
 Interactive `ask_user` prompts are stateful Rich cards. Buttons and freeform
 replies unblock the active turn; answer and expiry edits remove the inline
-keyboard. User-visible errors are sanitized before rendering. If a Telegram
+keyboard. Captain Forge approvals and uncertain-run recovery use a separate
+control-plane card: the adapter acknowledges the click, the bridge resolves it
+before session dispatch, and the kernel validates the exact durable identity
+without asking the model. Pending cards are rebuilt from state after restart;
+accepted and stale decisions edit the original message and remove its buttons.
+User-visible errors are sanitized before rendering. If a Telegram
 server explicitly lacks the Rich endpoints, Captain caches that result and
 uses the existing HTML/plain fallback. Ambiguous network or server failures do
 not trigger a second send that could duplicate a message.

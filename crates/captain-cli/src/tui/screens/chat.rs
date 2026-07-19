@@ -20,7 +20,7 @@ use super::{
     chat_slash_picker::{self, slash_picker_key_action_for_key, SlashPickerKeyAction},
     chat_tool_message::should_render_tool_expanded,
 };
-use crate::tui::theme;
+use crate::tui::{provider_quota::ProviderQuotaStatus, theme};
 use ratatui::crossterm::event::KeyEvent;
 #[cfg(test)]
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -219,6 +219,9 @@ pub struct ChatState {
     pub model_label: String,
     /// Connection mode label.
     pub mode_label: String,
+    /// Latest provider-owned subscription quota observation. This is global
+    /// runtime state and deliberately survives chat/session resets.
+    pub provider_quota_status: ProviderQuotaStatus,
     /// Full chat history.
     pub messages: Vec<ChatMessage>,
     /// Operator-only live notices. These are rendered but never persisted in
@@ -388,6 +391,7 @@ impl ChatState {
             agent_name: String::new(),
             model_label: String::new(),
             mode_label: String::new(),
+            provider_quota_status: ProviderQuotaStatus::default(),
             messages: Vec::new(),
             operator_notices: Vec::new(),
             streaming_text: String::new(),

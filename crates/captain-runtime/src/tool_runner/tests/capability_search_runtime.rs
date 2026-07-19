@@ -28,6 +28,7 @@ async fn capability_search_finds_deferred_builtin_and_next_step() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect("capability_search must succeed");
@@ -60,6 +61,7 @@ async fn capability_search_hides_frozen_builtin_surfaces_by_default() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect("capability_search must succeed");
@@ -78,6 +80,7 @@ async fn capability_search_finds_document_create_for_pdf_requests() {
             "sources": ["builtin"],
             "max_results": 5
         }),
+        None,
         None,
         None,
         None,
@@ -101,6 +104,7 @@ async fn capability_search_finds_pdf_source_intake_tools() {
             "sources": ["builtin"],
             "max_results": 10
         }),
+        None,
         None,
         None,
         None,
@@ -130,6 +134,7 @@ async fn capability_search_finds_grouped_p0_p1_rails() {
             "sources": ["builtin"],
             "max_results": 10
         }),
+        None,
         None,
         None,
         None,
@@ -165,6 +170,7 @@ async fn capability_search_finds_docs_family_for_recovery() {
             "sources": ["docs"],
             "max_results": 3
         }),
+        None,
         None,
         None,
         None,
@@ -215,6 +221,7 @@ input_schema = { type = "object", properties = { service = { type = "string" } }
             "max_results": 5
         }),
         Some(&registry),
+        None,
         None,
         None,
     )
@@ -375,6 +382,7 @@ async fn capability_search_unmatched_query_guides_autonomy() {
             "sources": ["builtin"],
             "max_results": 3
         }),
+        None,
         None,
         None,
         None,

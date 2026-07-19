@@ -47,12 +47,12 @@ fn learning_view_key_routes_match_hub_views() {
 #[test]
 fn capabilities_view_key_routes_match_hub_views() {
     assert_eq!(
-        capabilities_key_route_for_view(CapabilitiesView::Skills),
-        CapabilitiesKeyRoute::Skills
+        capabilities_key_route_for_view(CapabilitiesView::Native),
+        CapabilitiesKeyRoute::Native
     );
     assert_eq!(
-        capabilities_key_route_for_view(CapabilitiesView::Hands),
-        CapabilitiesKeyRoute::Hands
+        capabilities_key_route_for_view(CapabilitiesView::Skills),
+        CapabilitiesKeyRoute::Skills
     );
 }
 
@@ -123,22 +123,22 @@ fn learning_shortcut_selects_wrapped_or_indexed_view() {
 #[test]
 fn capabilities_shortcut_selects_wrapped_or_indexed_view() {
     assert!(matches!(
-        capabilities_view_after_shortcut(CapabilitiesView::Skills, hub_nav::ShortcutAction::Prev),
-        Some(CapabilitiesView::Hands)
-    ));
-    assert!(matches!(
-        capabilities_view_after_shortcut(CapabilitiesView::Hands, hub_nav::ShortcutAction::Next),
+        capabilities_view_after_shortcut(CapabilitiesView::Native, hub_nav::ShortcutAction::Prev),
         Some(CapabilitiesView::Skills)
     ));
     assert!(matches!(
+        capabilities_view_after_shortcut(CapabilitiesView::Skills, hub_nav::ShortcutAction::Next),
+        Some(CapabilitiesView::Native)
+    ));
+    assert!(matches!(
         capabilities_view_after_shortcut(
-            CapabilitiesView::Skills,
+            CapabilitiesView::Native,
             hub_nav::ShortcutAction::Index(1)
         ),
-        Some(CapabilitiesView::Hands)
+        Some(CapabilitiesView::Skills)
     ));
     assert!(capabilities_view_after_shortcut(
-        CapabilitiesView::Skills,
+        CapabilitiesView::Native,
         hub_nav::ShortcutAction::Index(9)
     )
     .is_none());

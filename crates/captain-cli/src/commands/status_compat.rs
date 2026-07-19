@@ -39,6 +39,12 @@ pub(super) fn ensure_status_observability(body: &mut serde_json::Value) {
             .get("consciousness")
             .cloned()
             .unwrap_or_else(clean_consciousness_status);
+        let budget = body.get("budget").cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "provider_subscriptions": {"state": "unavailable"},
+                "operator_actions": []
+            })
+        });
         let llm_ready = body["llm_driver_ready"].as_bool().unwrap_or(true);
         body["runtime_health"] = captain_api::status_runtime_health::build_runtime_health_status(
             llm_ready,
@@ -48,6 +54,7 @@ pub(super) fn ensure_status_observability(body: &mut serde_json::Value) {
             &consciousness,
             &body["disk"],
             &body["shutdown"],
+            &budget,
         );
     }
 }

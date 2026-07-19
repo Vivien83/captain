@@ -16,6 +16,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [System Endpoints](#system-endpoints)
 - [Model Catalog Endpoints](#model-catalog-endpoints)
 - [Provider Configuration Endpoints](#provider-configuration-endpoints)
+- [Native Capability Endpoints](#native-capability-endpoints)
 - [Skills Endpoints](#skills-endpoints)
 - [MCP Protocol Endpoints](#mcp-protocol-endpoints)
 - [Audit & Security Endpoints](#audit--security-endpoints)
@@ -236,6 +237,39 @@ for independent browser tabs and external clients.
   "iterations": 1
 }
 ```
+
+When either Captain's internal rolling guard or the configured provider's
+subscription allowance blocks the turn, this endpoint returns `429` rather
+than a generic `500`. The payload and `Retry-After` header identify the actual
+owner and reset when known:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 600
+Content-Type: application/json
+
+{
+  "error": "Quota horaire Captain atteint pour l'agent captain: 228733 / 200000 tokens.",
+  "code": "captain_agent_hourly_token_quota",
+  "quota": {
+    "code": "captain_agent_hourly_token_quota",
+    "scope": "agent_hourly_tokens",
+    "agent_id": "792a2b4e-20bd-495f-bcfa-819818c15911",
+    "used": 228733,
+    "limit": 200000,
+    "unit": "tokens",
+    "window_seconds": 3600,
+    "resets_at": "2026-07-18T12:00:00Z",
+    "retry_after_seconds": 600,
+    "message": "Quota horaire Captain atteint pour l'agent captain: 228733 / 200000 tokens."
+  }
+}
+```
+
+For a Codex subscription limit, `scope` is `provider_subscription`,
+`provider` is `codex`, and the window/reset values come from Codex's live
+account, response-header, or stream signal. Captain does not infer them from
+local token usage.
 
 ### Agent-as-service API
 
@@ -842,7 +876,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.7"
+  "version": "0.1.0-alpha.8"
 }
 ```
 
@@ -857,7 +891,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-alpha.8",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -883,16 +917,16 @@ provider, uptime, path, deployment, and access fields:
 | `tool_runs` | Counts for running/completed/failed/cancelled/interrupted plus payload-free recent metadata |
 | `workload` | Projects, goals, crons, triggers, and automation delivery/dead-letter state |
 | `agent_api` | Agent-as-service egress queue/readiness summary |
-| `budget` | Global and per-agent token/cost quota status with operator actions |
+| `budget` | Captain internal token/cost guards plus separately persisted provider-reported subscription windows and operator actions |
 | `channels` | Active channel readiness and inbound queue summary |
 | `consciousness` | Operational awareness state, signals, and actions |
 | `streaming` | Active/completed stream timing telemetry |
+| `disk`, `shutdown` | Free-space policy and graceful-drain state |
+| `native_voice`, `native_embeddings`, `media`, `tts` | Native capability readiness |
 
 `consciousness.supervisor.failure_count` counts recoverable turn failures since
 the daemon started. `panic_count` is reserved for actual caught task panics;
 historical failures alone do not keep operational awareness in warning state.
-| `disk`, `shutdown` | Free-space policy and graceful-drain state |
-| `native_voice`, `native_embeddings`, `media`, `tts` | Native capability readiness |
 
 **Representative response** `200 OK` (fields are intentionally abbreviated):
 
@@ -920,9 +954,44 @@ historical failures alone do not keep operational awareness in warning state.
     "interrupted": 0,
     "recent": []
   },
+  "budget": {
+    "total_tokens_used": 12000,
+    "limited_agents": 2,
+    "provider_subscriptions": {
+      "state": "ok",
+      "reported_by_provider": true,
+      "contract": "official_provider_signals",
+      "stale_after_seconds": 900,
+      "items": [
+        {
+          "provider": "codex",
+          "limit_id": "codex",
+          "primary": {
+            "used_percent": 28.0,
+            "window_seconds": 18000,
+            "resets_at": "2026-07-18T15:00:00Z"
+          },
+          "secondary": {
+            "used_percent": 47.0,
+            "window_seconds": 604800,
+            "resets_at": "2026-07-22T10:00:00Z"
+          },
+          "source": "account_status",
+          "alert_level": "normal",
+          "stale": false
+        }
+      ]
+    }
+  },
   "agents": []
 }
 ```
+
+The example window durations are illustrative values returned by the provider,
+not Captain defaults. With no official observation,
+`budget.provider_subscriptions.state` is `unavailable` and
+`reported_by_provider` is `false`; Captain never turns absence into an
+"unlimited" claim. Observations older than 900 seconds are marked `stale`.
 
 ### GET /api/version
 
@@ -1430,6 +1499,169 @@ Test provider connectivity by making a minimal API call. Verifies that the confi
 
 ---
 
+## Native Capability Endpoints
+
+Captain Forge compiles readable `*.captain` CapSpecs into typed native tools.
+These authenticated operator endpoints manage their sources, exact-hash
+approvals, revision history, and public-safe run metadata. Agent-facing
+authoring is deliberately narrower: Captain may validate or propose a source,
+but only an authenticated operator can approve, reject, roll back, or disable
+it.
+
+The Control web `Capabilities > Natives` view is the reference operator client
+for these routes. It sends the full pending hash for every decision, requests
+source only when explicitly opened, and does not ask the conversation model to
+mediate an approval.
+
+Scopes are `global`, `project`, `effective`, and `all`. `all` means global plus
+the explicitly selected project, never every registered project. Mutations
+require an explicit `global` or `project` scope. Project operations also
+require a canonical `workspace`; reads default to `effective`, where an active
+project definition overrides the global definition with the same name.
+
+### GET /api/capabilities/native
+
+List native capabilities. Optional query parameters are `scope` and
+`workspace`. The default scope is `effective`.
+
+```http
+GET /api/capabilities/native?scope=effective&workspace=/srv/project
+```
+
+The response contains `status`, `ready`, `active_hash`, `pending_hash`, the
+permission fingerprint, approval requirements, revision metadata, and the
+next operator action. Runtime inputs, step arguments, outputs, and errors are
+not exposed.
+
+### GET /api/capabilities/native/{name}
+
+Inspect one capability. Supports the same `scope` and `workspace` query
+parameters. Add `include_source=true` only when the authenticated operator
+explicitly needs the selected revision source; source text is omitted by
+default. The `all` scope is invalid for a single-name inspection.
+
+### POST /api/capabilities/native/validate
+
+Compile a source without installing it or changing runtime state.
+
+```json
+{
+  "name": "project-summary",
+  "source": "format = 1\nname = \"project-summary\"\n..."
+}
+```
+
+`name` is optional, but when present it must match the source name. A valid
+response includes the source hash, permission fingerprint, input schema,
+sanitized step metadata, and whether human approval would be required. Step
+payloads are never echoed.
+
+### POST /api/capabilities/native/install
+
+Validate and durably install a global or project source.
+
+```json
+{
+  "scope": "project",
+  "workspace": "/srv/project",
+  "name": "project-summary",
+  "source": "format = 1\nname = \"project-summary\"\n..."
+}
+```
+
+A first read-only revision can return `ready: true` immediately. A revision
+that expands authority returns `human_action_required: true` and a
+`pending_hash`; it cannot execute until that exact hash is approved.
+
+### POST /api/capabilities/native/{name}/decision
+
+Approve or reject the exact pending revision. A stale or mismatched hash is
+rejected with `409 Conflict`.
+
+```json
+{
+  "decision": "approve",
+  "expected_hash": "exact-source-hash-from-the-pending-revision",
+  "scope": "global"
+}
+```
+
+`decision` is `approve` or `reject`. Project decisions also require
+`workspace`. The audit actor is fixed by the server to `control-web`; request
+bodies cannot impersonate another operator or an agent.
+
+### POST /api/capabilities/native/{name}/rollback
+
+Restore a known revision by exact source hash. Rollback preserves the complete
+history and applies the ordinary approval boundary.
+
+```json
+{
+  "target_hash": "exact-source-hash-from-revisions",
+  "scope": "global"
+}
+```
+
+### DELETE /api/capabilities/native/{name}
+
+Remove the selected source and disable new runs without deleting revision or
+run history. Pass `scope=global`, or `scope=project&workspace=/srv/project`.
+Deleting a project override reveals the active global capability again.
+
+### GET /api/capabilities/native/runs
+
+List recent CapSpec runs, newest first. `limit` defaults to 100 and is clamped
+to 1-500. The response exposes source hash, status, timestamps, and node states,
+not decrypted runtime payloads.
+
+### GET /api/capabilities/native/runs/{run_id}
+
+Inspect public-safe metadata for one durable run, including each node's status,
+attempt count, and current tool-use ID. Runtime inputs, outputs, errors, and the
+encrypted authority snapshot remain private.
+
+### POST /api/capabilities/native/runs/{run_id}/decision
+
+Resolve one exact `uncertain` node without passing through the conversation
+model. The caller must copy all three identity fields from the current run
+projection:
+
+```json
+{
+  "node_id": "publish",
+  "expected_tool_use_id": "capspec-run-id:publish:2",
+  "expected_attempt": 2,
+  "decision": "retry"
+}
+```
+
+`decision` is one of:
+
+- `retry`, with neither `output` nor `reason`;
+- `confirm_succeeded`, with the observed tool result in required field
+  `output`; explicit JSON `null` is valid, but an absent field is not;
+- `mark_failed`, with a non-empty `reason` and no `output`.
+
+The run/node status, attempt, and tool-use ID are compared in the same SQLite
+transaction that applies the decision. A duplicate or stale request returns
+`409 Conflict`. Retry and confirmation first reload the encrypted authority
+captured when the run started and intersect it with the caller agent's current
+mode, grants, blocklist, environment boundary, execution policy, and lineage.
+Current policy can revoke a resume but can never grant more authority than the
+run originally had. An accepted retry or confirmation writes its resume intent
+in the same durable transaction as the exact decision and returns immediately.
+The kernel claims that intent and recovers an abandoned claim after restart;
+ordinary interrupted runs have no such intent and are not auto-resumed.
+`mark_failed` terminates the run without invoking a tool. The audit actor is
+fixed to `control-web` by the server.
+
+All request bodies reject unknown fields. Common errors are `400` for invalid
+source/scope/workspace, `404` for an unknown capability, revision, or run,
+`409` for an exact-hash conflict, and `500` for a durable storage or reload
+failure.
+
+---
+
 ## Skills Endpoints
 
 Manage the skill registry. Skills extend agent capabilities with Python, Node.js, WASM, or prompt-only modules. All skill installations go through SHA256 verification and prompt injection scanning.
@@ -1695,47 +1927,41 @@ Security status overview showing the state of runtime security systems.
 
 ## Usage & Analytics Endpoints
 
-Track token usage, costs, and model utilization across all agents. Powered by the metering engine with cost estimation from the model catalog.
+Track persisted token usage, costs, model utilization, Captain-owned guards,
+and separately observed provider-owned subscription limits.
 
 ### GET /api/usage
 
-Get overall usage statistics.
-
-**Query Parameters:**
-- `period` (optional): Time period (`hour`, `day`, `week`, `month`; default: `day`)
+Get lifetime scheduler counters for each registered agent.
 
 **Response** `200 OK`:
 
 ```json
 {
-  "period": "day",
-  "total_input_tokens": 125000,
-  "total_output_tokens": 87000,
-  "total_cost_usd": 0.42,
-  "request_count": 156,
-  "active_agents": 5
+  "agents": [
+    {
+      "agent_id": "792a2b4e-20bd-495f-bcfa-819818c15911",
+      "name": "captain",
+      "total_tokens": 212000,
+      "tool_calls": 18
+    }
+  ]
 }
 ```
 
 ### GET /api/usage/summary
 
-Get a high-level usage summary with quota information.
+Get the persisted aggregate usage summary.
 
 **Response** `200 OK`:
 
 ```json
 {
-  "today": {
-    "input_tokens": 125000,
-    "output_tokens": 87000,
-    "cost_usd": 0.42,
-    "requests": 156
-  },
-  "quota": {
-    "hourly_token_limit": 1000000,
-    "hourly_tokens_used": 45000,
-    "hourly_reset_at": "2025-01-15T11:00:00Z"
-  }
+  "total_input_tokens": 125000,
+  "total_output_tokens": 87000,
+  "total_cost_usd": 0.42,
+  "call_count": 156,
+  "total_tool_calls": 18
 }
 ```
 
@@ -1750,23 +1976,90 @@ Get usage breakdown by model.
   "models": [
     {
       "model": "llama-3.3-70b-versatile",
-      "provider": "groq",
-      "input_tokens": 80000,
-      "output_tokens": 55000,
-      "cost_usd": 0.09,
-      "request_count": 120
-    },
-    {
-      "model": "gemini-2.5-flash",
-      "provider": "gemini",
-      "input_tokens": 45000,
-      "output_tokens": 32000,
-      "cost_usd": 0.33,
-      "request_count": 36
+      "total_cost_usd": 0.09,
+      "total_input_tokens": 80000,
+      "total_output_tokens": 55000,
+      "call_count": 120
     }
   ]
 }
 ```
+
+### GET /api/usage/daily
+
+Get the last seven daily usage buckets plus today's cost and the first stored
+event date.
+
+```json
+{
+  "days": [
+    {"date": "2026-07-18", "cost_usd": 0.42, "tokens": 212000, "calls": 156}
+  ],
+  "today_cost_usd": 0.42,
+  "first_event_date": "2026-07-01"
+}
+```
+
+### GET /api/budget
+
+Return Captain's global cost-budget snapshot and the latest persisted
+provider-subscription observations. The top-level cost fields are
+`hourly_spend`, `hourly_limit`, `hourly_pct`, `daily_*`, `monthly_*`,
+`alert_threshold`, and `default_max_llm_tokens_per_hour`.
+
+`provider_subscriptions` has stable states `unavailable`, `stale`, `ok`,
+`warning`, `critical`, or `exhausted`. Each item carries the provider's limit
+family, primary/secondary windows, optional plan/credits, observation source,
+age, and alert level. Window durations and reset timestamps are live
+provider-reported values.
+
+Ratatui Chat, the xterm Web terminal, Control web, and its retained desktop
+compatibility wrapper poll this authenticated local endpoint every five
+seconds while visible. Compact Chat bands name the active model, render gauges
+for provider-wide windows and matching model-specific families, and summarize
+other families as outside the active model. Status and Budget remain exhaustive
+and render every supplied primary/secondary window independently. All surfaces
+preserve the last valid observation across a transient daemon error. This UI
+cadence does not call the provider; provider refresh remains daemon-owned and
+persisted.
+
+### PUT /api/budget
+
+Update any supplied global fields: `max_hourly_usd`, `max_daily_usd`,
+`max_monthly_usd`, `alert_threshold`, or
+`default_max_llm_tokens_per_hour`. The authenticated route persists every
+supplied limit to `config.toml` and returns the current budget snapshot.
+
+### GET /api/budget/agents
+
+Return per-agent cost ranking plus durable rolling token usage. Each row
+includes `tokens_used`, `tokens_reset_at`, and
+`max_llm_tokens_per_hour`; restarting the daemon does not reset this ledger.
+
+### GET /api/budget/agents/{id}
+
+Return one agent's hourly/daily/monthly spend and its `tokens` object:
+
+```json
+{
+  "agent_id": "792a2b4e-20bd-495f-bcfa-819818c15911",
+  "agent_name": "captain",
+  "tokens": {
+    "used": 228733,
+    "limit": 200000,
+    "window_seconds": 3600,
+    "resets_at": "2026-07-18T12:00:00Z",
+    "pct": 1.143665
+  }
+}
+```
+
+### PUT /api/budget/agents/{id}
+
+Update at least one of `max_cost_per_hour_usd`, `max_cost_per_day_usd`,
+`max_cost_per_month_usd`, or `max_llm_tokens_per_hour`. Setting the token
+limit to `0` is an explicit opt-out from Captain's internal token guard; it
+does not change the provider subscription allowance.
 
 ---
 
@@ -2176,7 +2469,7 @@ All error responses use a consistent JSON format:
 | `400` | Bad request (invalid UUID, missing required fields, malformed TOML/JSON) |
 | `401` | Unauthorized (missing or invalid `Authorization: Bearer` header) |
 | `404` | Not found (agent, workflow, trigger, template, model, skill, or KV key does not exist) |
-| `429` | Too many requests (GCRA rate limit exceeded) |
+| `429` | GCRA request throttling, Captain internal quota, or provider subscription quota; inspect `code`, `quota.scope`, and `Retry-After` |
 | `500` | Internal server error (agent loop failure, database error, driver error) |
 
 ### Request IDs
@@ -2203,7 +2496,10 @@ Every response includes security headers:
 
 ### Rate Limiting
 
-The GCRA (Generic Cell Rate Algorithm) rate limiter provides cost-aware token bucket rate limiting with per-IP tracking and automatic stale entry cleanup. Different endpoints consume different token costs (e.g., `/api/agents/{id}/message` costs more than `/api/health`). When the limit is exceeded, the server returns `429 Too Many Requests`:
+The GCRA (Generic Cell Rate Algorithm) rate limiter provides cost-aware token
+bucket throttling with per-IP tracking and automatic stale entry cleanup.
+Different endpoints consume different token costs. That transport-level limit
+returns a simple `429`:
 
 ```
 HTTP/1.1 429 Too Many Requests
@@ -2212,7 +2508,12 @@ Retry-After: 60
 {"error": "Rate limit exceeded"}
 ```
 
-The `Retry-After` header indicates the window duration in seconds.
+The `Retry-After` header indicates the remaining wait in seconds.
+
+Agent message endpoints also use `429` for enforced resource quotas, but return
+the structured `code` and `quota` object shown above. Captain-owned scopes and
+`provider_subscription` are deliberately distinct; clients must not assume
+that changing a Captain budget can reset an allowance owned by Codex.
 
 ---
 
@@ -2291,10 +2592,30 @@ as source of truth when validating exact route availability.
 | GET | `/api/models/{id}` | Model details |
 | GET | `/api/models/aliases` | List model aliases |
 | GET | `/api/providers` | Provider list with auth status |
+| **Usage and budgets** | | |
+| GET | `/api/usage` | Per-agent lifetime scheduler counters |
+| GET | `/api/usage/summary` | Persisted aggregate usage |
+| GET | `/api/usage/by-model` | Persisted usage grouped by model |
+| GET | `/api/usage/daily` | Seven-day usage buckets |
+| GET | `/api/budget` | Global Captain budget and provider-reported subscriptions |
+| PUT | `/api/budget` | Update global Captain budget limits |
+| GET | `/api/budget/agents` | Per-agent cost and rolling token ranking |
+| GET, PUT | `/api/budget/agents/{id}` | Inspect or update one agent's budget |
 | **Provider Config** | | |
 | POST | `/api/providers/{name}/key` | Set provider API key |
 | DELETE | `/api/providers/{name}/key` | Remove provider API key |
 | POST | `/api/providers/{name}/test` | Test provider connectivity |
+| **Native Capabilities** | | |
+| GET | `/api/capabilities/native` | List effective, global, project, or all CapSpecs |
+| GET | `/api/capabilities/native/{name}` | Inspect one CapSpec and its revision metadata |
+| POST | `/api/capabilities/native/validate` | Compile a CapSpec without installing it |
+| POST | `/api/capabilities/native/install` | Durably install or propose a CapSpec revision |
+| POST | `/api/capabilities/native/{name}/decision` | Approve or reject the exact pending hash |
+| POST | `/api/capabilities/native/{name}/rollback` | Restore a known revision by exact hash |
+| DELETE | `/api/capabilities/native/{name}` | Disable new runs while retaining history |
+| GET | `/api/capabilities/native/runs` | List public-safe durable run metadata |
+| GET | `/api/capabilities/native/runs/{run_id}` | Inspect one public-safe durable run |
+| POST | `/api/capabilities/native/runs/{run_id}/decision` | Resolve an exact uncertain node and resume or fail the run |
 | **Skills** | | |
 | GET | `/api/skills` | List installed/bundled/generated skills |
 | POST | `/api/skills/install` | Install skill |

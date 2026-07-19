@@ -19,6 +19,7 @@ export const AUTOMATION_TABS = Object.freeze([
 ]);
 
 export const CAPABILITY_TABS = Object.freeze([
+  { route: 'native-capabilities', label: 'Natives' },
   { route: 'skills', label: 'Skills' },
   { route: 'tools', label: 'Tools' },
 ]);
@@ -29,6 +30,7 @@ export const ROUTE_HUB = Object.freeze({
   crons: 'automation',
   approvals: 'automation',
   webhooks: 'automation',
+  'native-capabilities': 'capabilities',
   skills: 'capabilities',
   tools: 'capabilities',
   // Frozen Hands links remain non-breaking but resolve to the safe default

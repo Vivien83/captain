@@ -8,11 +8,14 @@ files=(
   crates/captain-api/static/js/app/api.js
   crates/captain-api/static/js/app/control_contract.mjs
   crates/captain-api/static/js/app/status_model.mjs
+  crates/captain-api/static/js/app/provider_quota_model.mjs
   crates/captain-api/static/js/app/components/Shell.js
+  crates/captain-api/static/js/app/views/Chat.js
   crates/captain-api/static/js/app/views/Automation.js
   crates/captain-api/static/js/app/views/Workflows.js
   crates/captain-api/static/js/app/views/Triggers.js
   crates/captain-api/static/js/app/views/Capabilities.js
+  crates/captain-api/static/js/app/views/NativeCapabilities.js
   crates/captain-api/static/js/app/views/Status.js
   crates/captain-api/static/js/pages/terminal.js
 )

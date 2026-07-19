@@ -26,6 +26,108 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.8 — Captain Forge and truthful provider quotas
+
+Agent-facing changes:
+
+- Captain's per-agent `max_llm_tokens_per_hour` is an internal rolling one-hour
+  safety guard backed by the durable SQLite usage ledger. A daemon restart does
+  not clear it. `0` remains an explicit opt-out; absence of live provider data
+  never changes this internal policy.
+- For an authenticated Codex subscription, Captain refreshes the provider's
+  official account usage status immediately after startup and every five
+  minutes. It also observes dynamic `x-codex-*` response-header families and
+  `codex.rate_limits` stream events from real model calls.
+- Window duration, used percentage, reset time, plan label, credits, additional
+  metered limit families, and the reached-limit reason are provider-reported
+  values. Captain does not assume a five-hour, daily, or weekly schedule and
+  does not derive subscription allowance from locally counted tokens.
+- Status in CLI, TUI, Control, `/api/status`, and `/api/budget` presents
+  `Provider subscription (reported)` separately from `Captain internal spend`.
+  A missing observation is `unavailable`, an observation older than fifteen
+  minutes is `stale`, and neither state is described as unlimited.
+- Full-screen Ratatui Chat and the xterm Web terminal share a bottom quota
+  band; Control web and the frozen desktop wrapper share its graphical
+  equivalent. The compact band names the active model and gives a live gauge,
+  percentage, dynamic duration, and local reset only to provider-wide windows
+  and matching model-specific families. Other families are summarized as
+  outside the active model, with pressure still visible; Status and Budget keep
+  every reported primary/secondary window. The interfaces poll only Captain's
+  persisted local snapshot every five seconds and preserve the last valid
+  observation across a transient daemon error.
+- Exhaustion reported by Codex becomes a typed provider-subscription quota
+  error with the reported reset. Captain neither retries the blocked request
+  nor silently changes provider. Agent message APIs return HTTP `429`, include
+  structured quota metadata, and set `Retry-After` when a reset delay is known.
+- The compact quota band always identifies the configured active model before
+  rendering provider-wide or matching model-specific gauges. A limit for a
+  different model remains visible as outside the active model and never becomes
+  a false gauge for the configured model.
+
+#### Captain Forge native capability runtime
+
+Agent-facing changes:
+
+- Active `.captain` CapSpecs are compiled into typed `cap_*` tools and added to
+  the normal workspace-aware agent catalog without a daemon restart.
+- `capability_search` returns those definitions with source `capfile_tool`,
+  status `active_native`, and their input schema. The model can surface only a
+  definition that also exists in its filtered available-tool catalog.
+- Calling a `cap_*` tool enters the durable CapSpec executor. Every primitive
+  step then re-enters Captain's central ToolRunner with the original caller,
+  workspace, channel origin, tool grants, hard blocklist, sandbox, and approval
+  policies. A CapSpec never grants access to a primitive denied to its caller.
+- Stop, task abort, or channel closure immediately persists the run as
+  interrupted and replayable, or waiting for a decision when an external
+  mutation may have happened. The capability's own durable deadline controls
+  that transition instead of the generic short tool timeout.
+- The compiler, registry, watcher, executor, and native dispatch are present in
+  this development tree. The deferred `capability_forge` tool can list,
+  inspect, validate, and propose a readable source; only the principal Captain
+  agent may persist a proposal and the tool has no approval action.
+- The authenticated operator API can install, approve or reject an exact hash,
+  roll back a known revision, disable without erasing history, and inspect
+  public-safe run state. Its audit actor is fixed by the server, not accepted
+  from the request. A read-only first revision may be ready immediately; a
+  sensitive revision remains visibly pending.
+- Project source roots reject symbolic `.captain` ancestors before creating
+  directories, and deleting a project override restores the matching global
+  capability in the effective catalog.
+- The authenticated Control Capabilities hub now opens on `Natives`. It can
+  validate and install readable source, approve or reject the full pending
+  hash, inspect revisions and source on demand, roll back, disable with
+  history, and list public-safe runs.
+- The TUI Capabilities hub also opens on `Natives`, before Skills. It can switch
+  between effective, global, and project views; order pending decisions first;
+  reveal source only on request; approve or reject the full hash; roll back an
+  explicitly selected approved revision; and disable only after confirmation.
+  It calls the authenticated daemon API or in-process kernel directly rather
+  than asking the model to make an operator decision.
+- Control, the authenticated API, and the TUI now resolve an uncertain node by
+  its exact run, node, attempt, and tool-use ID. Retry grants one explicit
+  persisted permit, and the resume intersects encrypted initial authority with
+  current authority before each primitive call; policy can revoke but never
+  expand an in-flight run. Retry and confirmation persist their resume intent
+  atomically with the decision; a kernel scanner recovers an abandoned claim
+  after restart without auto-resuming ordinary interrupted runs.
+- Telegram periodically surfaces durable CapSpec approvals and uncertain runs
+  as Rich cards, so pending decisions reappear after restart. Compact callbacks
+  are lookup keys only: the kernel resolves a unique current record, applies
+  the full exact identity with compare-and-set, records the allowlisted human
+  actor, removes the keyboard, and refuses duplicate, stale, or colliding
+  callbacks before any model turn.
+- The process-level certification matrix passed 130 checks across 14 durable
+  runs on implementation commit
+  `38ecebaf4e34fcf955c99ee13682b54a70e1c938`. It exercised real daemon state,
+  data/file/repository/HTTP/memory workflows, ordered and parallel execution,
+  approval and refusal, hot reload and rollback, global/project precedence, a
+  fresh home, security denials, CLI/TUI, Control/API, Telegram, and an actual
+  `SIGKILL` recovery. The checked-in certificate preserves run/source
+  identities and the raw bundle digest.
+- Publication provenance is filled only after the public tag, 20 release assets,
+  and multi-platform OCI image have been verified live. Never copy a commit or
+  digest from an older release into this entry.
+
 ### 0.1.0-alpha.7 — durable state, supervised restart, and truthful context
 
 Agent-facing changes:

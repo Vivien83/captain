@@ -113,7 +113,7 @@ pub(crate) fn expand_visible_tools_from_discovery(
                         .pointer("/metadata/core")
                         .and_then(|v| v.as_bool())
                         .is_some_and(|core| !core)));
-        let is_dynamic_tool = matches!(source, "skill_tool" | "mcp_tool");
+        let is_dynamic_tool = matches!(source, "skill_tool" | "mcp_tool" | "capfile_tool");
         if (is_deferred_builtin || is_dynamic_tool) && !wanted.contains(&name) {
             wanted.push(name);
         }

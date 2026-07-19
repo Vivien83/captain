@@ -65,6 +65,8 @@ mod kernel_agent_workspace;
 mod kernel_autonomy_runtime;
 #[path = "kernel_background_startup.rs"]
 mod kernel_background_startup;
+#[path = "kernel_boot_capspec.rs"]
+mod kernel_boot_capspec;
 #[path = "kernel_boot_default_agent.rs"]
 mod kernel_boot_default_agent;
 #[path = "kernel_boot_devices.rs"]
@@ -83,6 +85,18 @@ mod kernel_boot_registries;
 mod kernel_boot_restore_agents;
 #[path = "kernel_boot_restore_tool_runs.rs"]
 mod kernel_boot_restore_tool_runs;
+#[path = "kernel_capspec_management.rs"]
+mod kernel_capspec_management;
+#[path = "kernel_capspec_projection.rs"]
+mod kernel_capspec_projection;
+#[path = "kernel_capspec_resume.rs"]
+mod kernel_capspec_resume;
+#[path = "kernel_capspec_resume_recovery.rs"]
+mod kernel_capspec_resume_recovery;
+#[path = "kernel_capspec_runtime.rs"]
+mod kernel_capspec_runtime;
+#[path = "kernel_capspec_telegram.rs"]
+mod kernel_capspec_telegram;
 #[path = "kernel_compaction_runtime.rs"]
 mod kernel_compaction_runtime;
 #[path = "kernel_config_reload.rs"]
@@ -206,6 +220,7 @@ mod kernel_workspace_security;
 use kernel_agent_runtime::{
     normalize_background_fallbacks_for_provider, normalize_background_model_for_provider,
 };
+use kernel_boot_capspec::build_boot_capspec;
 use kernel_boot_default_agent::ensure_default_captain;
 use kernel_boot_devices::build_boot_devices;
 use kernel_boot_embedding::build_boot_embedding_driver;
@@ -215,6 +230,7 @@ use kernel_boot_llm::build_boot_llm_driver;
 use kernel_boot_registries::build_boot_registries;
 use kernel_boot_restore_agents::restore_persisted_agents;
 use kernel_boot_restore_tool_runs::restore_persisted_tool_runs;
+pub use kernel_capspec_telegram::{CapSpecTelegramPrompt, CapSpecTelegramPromptKind};
 pub use kernel_delivery_tracker::DeliveryTracker;
 #[cfg(test)]
 pub(crate) use kernel_fleet_autoscale::worker_tools_for_domain;
@@ -270,6 +286,12 @@ pub struct CaptainKernel {
     pub(crate) codex_model_update_lock: std::sync::Mutex<()>,
     /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
     pub skill_registry: std::sync::RwLock<captain_skills::registry::SkillRegistry>,
+    /// Versioned readable capability registry.
+    pub capspec_registry: Arc<captain_capspec::CapabilityRegistry>,
+    /// Durable encrypted executor for compiled capability DAGs.
+    pub capspec_executor: Arc<captain_capspec::CapabilityExecutor>,
+    /// Owned filesystem watcher; dropping the kernel stops hot reload cleanly.
+    pub(crate) capspec_watcher: Option<captain_capspec::CapabilityWatcher>,
     /// Tracks running agent tasks for cancellation support.
     pub running_tasks: dashmap::DashMap<AgentId, RunningTaskHandle>,
     /// MCP server connections (lazily initialized at start_background_agents).
@@ -662,6 +684,7 @@ impl CaptainKernel {
         let llm_driver_error = boot_driver.error;
 
         let boot_registries = build_boot_registries(&config);
+        let boot_capspec = build_boot_capspec(&config)?;
         let skill_registry = boot_registries.skill_registry;
         let hand_registry = boot_registries.hand_registry;
         let extension_registry = boot_registries.extension_registry;
@@ -681,7 +704,7 @@ impl CaptainKernel {
             registry: AgentRegistry::new(),
             capabilities: CapabilityManager::new(),
             event_bus: EventBus::new(),
-            scheduler: AgentScheduler::new(),
+            scheduler: AgentScheduler::with_usage_store(boot_core.memory.usage().clone()),
             memory: boot_core.memory.clone(),
             supervisor: boot_core.supervisor,
             workflows: WorkflowEngine::new(),
@@ -697,6 +720,9 @@ impl CaptainKernel {
             model_catalog: std::sync::RwLock::new(boot_core.model_catalog),
             codex_model_update_lock: std::sync::Mutex::new(()),
             skill_registry: std::sync::RwLock::new(skill_registry),
+            capspec_registry: boot_capspec.registry,
+            capspec_executor: boot_capspec.executor,
+            capspec_watcher: boot_capspec.watcher,
             running_tasks: dashmap::DashMap::new(),
             mcp_connections: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             mcp_tools: std::sync::Mutex::new(Vec::new()),
@@ -1213,6 +1239,47 @@ impl KernelHandle for CaptainKernel {
 
     fn blocked_workspace_paths(&self) -> Vec<std::path::PathBuf> {
         default_blocked_workspace_paths(&self.config.home_dir)
+    }
+
+    fn tool_is_blocked_for_agent(&self, caller_agent_id: Option<&str>, tool_name: &str) -> bool {
+        let Some(agent_id) = caller_agent_id.and_then(|value| value.parse::<AgentId>().ok()) else {
+            return false;
+        };
+        self.registry.get(agent_id).is_some_and(|entry| {
+            entry
+                .manifest
+                .tool_blocklist
+                .iter()
+                .any(|blocked| blocked == tool_name)
+        })
+    }
+
+    fn capspec_executor_for_workspace(
+        &self,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Option<std::sync::Arc<captain_capspec::CapabilityExecutor>>, String> {
+        self.active_capspecs_for_workspace(workspace);
+        Ok(Some(std::sync::Arc::clone(&self.capspec_executor)))
+    }
+
+    fn capspec_tool_definitions(
+        &self,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Vec<captain_types::tool::ToolDefinition>, String> {
+        Ok(self
+            .active_capspecs_for_workspace(workspace)
+            .into_iter()
+            .map(|capability| capability.tool_definition())
+            .collect())
+    }
+
+    fn capspec_forge(
+        &self,
+        request: &captain_runtime::kernel_handle::CapSpecForgeRequest,
+        workspace: Option<&std::path::Path>,
+        caller_agent_id: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        self.handle_capspec_forge(request, workspace, caller_agent_id)
     }
 
     fn add_workspace_path(&self, path: &std::path::Path) -> Result<(), String> {

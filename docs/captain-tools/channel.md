@@ -134,6 +134,7 @@ parse function (mirror Telegram/Discord). Don't try to enforce it in
 `bridge::handle_command` — by then the parse layer already accepted the
 message and the sender context may not be precise enough.
 - **Telegram callbacks share RBAC** — inline-button `callback_query` updates are gated by the same `allowed_users` list as text messages.
+- **Captain Forge callbacks bypass the model** — CapSpec approval and uncertain-run buttons become structured control-plane envelopes. The bridge resolves them against the exact durable hash or run/node/attempt/tool-use identity before session routing, edits away the keyboard, and reports stale or duplicate clicks directly. Never reinterpret these callbacks as user prose or slash commands.
 - **Per-channel watch (A.1)** — `BridgeManager` keeps one private `watch::Sender<bool>` per adapter. `channel_reconfigure` signals only that channel; the others keep dispatching messages.
 
 ## Limites

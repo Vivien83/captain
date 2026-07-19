@@ -114,7 +114,7 @@ fn captain_docs_tool_definition() -> ToolDefinition {
 fn capability_search_tool_definition() -> ToolDefinition {
     tool_definition(
         "capability_search",
-        "[RESOLVEUR DE CAPACITÉ] Cherche quoi utiliser dans le cœur actif Captain : outils builtin CORE/différés, tools de skills installés, tools MCP connectés, et familles captain_docs. Les surfaces gelées (Hands, A2A, peers, fleets) restent compilées mais ne sont pas proposées par défaut. À utiliser avant de dire \"je ne peux pas\", avant de demander à l'utilisateur quel outil utiliser, ou quand plusieurs surfaces se ressemblent. Retourne des candidats avec source, statut, usage recommandé, schéma quand disponible, et prochaine action. Pour récupérer le schéma exact d'un builtin différé connu, utiliser ensuite tool_search({\"query\":\"select:<nom>\"}) si nécessaire.",
+        "[RESOLVEUR DE CAPACITÉ] Cherche quoi utiliser dans le cœur actif Captain : outils builtin CORE/différés, capacités natives CapSpec déposées en fichier .captain, tools de skills installés, tools MCP connectés, et familles captain_docs. Les surfaces gelées (Hands, A2A, peers, fleets) restent compilées mais ne sont pas proposées par défaut. À utiliser avant de dire \"je ne peux pas\", avant de demander à l'utilisateur quel outil utiliser, ou quand plusieurs surfaces se ressemblent. Retourne des candidats avec source, statut, usage recommandé, schéma quand disponible, et prochaine action. Pour récupérer le schéma exact d'un builtin différé connu, utiliser ensuite tool_search({\"query\":\"select:<nom>\"}) si nécessaire.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -124,7 +124,7 @@ fn capability_search_tool_definition() -> ToolDefinition {
                 },
                 "sources": {
                     "type": "array",
-                    "items": { "type": "string", "enum": ["builtin", "skill", "mcp", "docs"] },
+                    "items": { "type": "string", "enum": ["builtin", "capfile", "skill", "mcp", "docs"] },
                     "description": "Sources optionnelles à limiter. Par défaut: toutes."
                 },
                 "max_results": {
@@ -420,7 +420,7 @@ mod tests {
                     .get("items")
                     .expect("sources should define array items")
             ),
-            vec!["builtin", "skill", "mcp", "docs"]
+            vec!["builtin", "capfile", "skill", "mcp", "docs"]
         );
         assert_eq!(
             integer_default(property(capability, "max_results")),

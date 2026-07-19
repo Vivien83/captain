@@ -37,6 +37,7 @@ pub mod milestone_alerts;
 pub mod model_switch;
 pub mod operational_awareness;
 pub mod pairing;
+mod provider_quota_monitor;
 pub mod registry;
 pub mod scheduler;
 pub mod supervisor;

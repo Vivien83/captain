@@ -48,7 +48,15 @@ fn learning_slash_commands_route_to_views() {
 fn capabilities_slash_commands_route_to_views() {
     assert_eq!(
         hub_slash_route_for_command("/capabilities"),
-        Some(HubSlashRoute::Capabilities(CapabilitiesView::Skills))
+        Some(HubSlashRoute::Capabilities(CapabilitiesView::Native))
+    );
+    assert_eq!(
+        hub_slash_route_for_command("/native"),
+        Some(HubSlashRoute::Capabilities(CapabilitiesView::Native))
+    );
+    assert_eq!(
+        hub_slash_route_for_command("/capspec"),
+        Some(HubSlashRoute::Capabilities(CapabilitiesView::Native))
     );
     assert_eq!(
         hub_slash_route_for_command("/skills"),

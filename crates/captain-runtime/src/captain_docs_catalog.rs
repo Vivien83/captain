@@ -270,13 +270,15 @@ pub const SESSION_WORKSPACE_FAMILY_TOOLS: &[&str] = &[
 /// D.14 — Tools that belong to the `meta` family. Audit prose lives in
 /// `docs/captain-tools/meta.md`. The reflexive layer Captain uses to look
 /// at itself — current time, UI panels, `capability_search` (CR.1) for
-/// cross-surface routing, `captain_docs` (C.2) for RTFM-style lookups, and
-/// `tool_search` (TS.1) for exact deferred builtin schemas.
+/// cross-surface routing, `capability_forge` for controlled native capability
+/// authoring, `captain_docs` (C.2) for RTFM-style lookups, and `tool_search`
+/// (TS.1) for exact deferred builtin schemas.
 pub const META_FAMILY_TOOLS: &[&str] = &[
     "system_time",
     "system_update",
     "canvas_present",
     "capability_search",
+    "capability_forge",
     "captain_docs",
     "self_improvement_review",
     "system_bug_report",

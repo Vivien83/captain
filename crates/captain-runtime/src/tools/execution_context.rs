@@ -28,6 +28,6 @@ where
     AGENT_LINEAGE_DEPTH.scope(depth, fut).await
 }
 
-pub(crate) fn current_agent_lineage_depth() -> u32 {
+pub fn current_agent_lineage_depth() -> u32 {
     AGENT_LINEAGE_DEPTH.try_with(|d| *d).unwrap_or(0)
 }

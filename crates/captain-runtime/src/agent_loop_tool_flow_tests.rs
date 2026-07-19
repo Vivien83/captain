@@ -109,6 +109,32 @@ fn discovery_expands_dynamic_mcp_tools_from_available_catalog() {
 }
 
 #[test]
+fn discovery_expands_dynamic_capfile_tools_from_available_catalog() {
+    let catalog = vec![
+        tool_def("capability_search"),
+        tool_def("cap_project_summary"),
+    ];
+    let mut visible = vec![catalog[0].clone()];
+    let result = serde_json::json!({
+        "results": [{
+            "name": "cap_project_summary",
+            "source": "capfile_tool",
+            "status": "active_native",
+            "input_schema": {"type": "object"}
+        }]
+    })
+    .to_string();
+
+    let added =
+        expand_visible_tools_from_discovery(&mut visible, &catalog, "capability_search", &result);
+
+    assert_eq!(added, 1);
+    assert!(visible
+        .iter()
+        .any(|tool| tool.name == "cap_project_summary"));
+}
+
+#[test]
 fn discovery_result_wrapper_expands_and_reports_added_count() {
     let mut visible = crate::tool_runner::builtin_tool_definitions()
         .into_iter()

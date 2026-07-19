@@ -260,6 +260,14 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
 /// - `chutes` — Chutes.ai (serverless open-source model inference)
 /// - Any custom provider with `base_url` set uses OpenAI-compatible format
 pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmError> {
+    create_driver_with_quota_observer(config, None)
+}
+
+/// Create a driver and attach provider-owned quota telemetry when supported.
+pub fn create_driver_with_quota_observer(
+    config: &DriverConfig,
+    quota_observer: Option<crate::provider_quota::ProviderQuotaObserver>,
+) -> Result<Arc<dyn LlmDriver>, LlmError> {
     let provider = config.provider.as_str();
 
     // Anthropic uses a different API format — special case
@@ -315,7 +323,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                     .base_url
                     .clone()
                     .unwrap_or_else(|| CODEX_BASE_URL.to_string());
-                return Ok(Arc::new(codex::CodexDriver::new(token, base_url)));
+                return Ok(Arc::new(codex::CodexDriver::new_with_quota_observer(
+                    token,
+                    base_url,
+                    quota_observer,
+                )));
             }
             None => {
                 if let Some(reason) = crate::model_catalog::codex_oauth_readiness_error() {

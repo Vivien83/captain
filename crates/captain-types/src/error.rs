@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::quota::QuotaExceededInfo;
+
 /// Top-level error type for the Captain system.
 #[derive(Error, Debug)]
 pub enum CaptainError {
@@ -19,7 +21,7 @@ pub enum CaptainError {
 
     /// A resource quota was exceeded.
     #[error("Resource quota exceeded: {0}")]
-    QuotaExceeded(String),
+    QuotaExceeded(Box<QuotaExceededInfo>),
 
     /// The agent is in an invalid state for the requested operation.
     #[error("Agent is in invalid state '{current}' for operation '{operation}'")]
@@ -98,6 +100,21 @@ pub enum CaptainError {
     /// Invalid user input.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+}
+
+impl CaptainError {
+    /// Construct a structured quota failure without inflating the enum size.
+    pub fn quota_exceeded(info: QuotaExceededInfo) -> Self {
+        Self::QuotaExceeded(Box::new(info))
+    }
+
+    /// Return structured quota details when this is a quota failure.
+    pub fn quota_info(&self) -> Option<&QuotaExceededInfo> {
+        match self {
+            Self::QuotaExceeded(info) => Some(info),
+            _ => None,
+        }
+    }
 }
 
 /// Alias for Result with CaptainError.

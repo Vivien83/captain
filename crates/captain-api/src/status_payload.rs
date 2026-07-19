@@ -83,10 +83,21 @@ pub(crate) fn build_status_budget(state: &AppState) -> serde_json::Value {
     let mut total_tokens_used = 0u64;
     let mut limited_agents = 0usize;
     let mut agents = Vec::new();
+    let provider_subscriptions = crate::provider_quota_status::build_provider_subscription_status(
+        state.kernel.memory.provider_quotas(),
+    );
 
     for entry in state.kernel.registry.list() {
-        let (tokens_used, tool_calls) =
-            state.kernel.scheduler.get_usage(entry.id).unwrap_or((0, 0));
+        let hourly_usage = state.kernel.scheduler.get_hourly_usage(entry.id);
+        let tokens_used = hourly_usage
+            .as_ref()
+            .map(|usage| usage.total_tokens)
+            .unwrap_or(0);
+        let tool_calls = hourly_usage
+            .as_ref()
+            .map(|usage| usage.tool_calls)
+            .unwrap_or(0);
+        let resets_at = hourly_usage.and_then(|usage| usage.resets_at);
         total_tokens_used = total_tokens_used.saturating_add(tokens_used);
         if entry.manifest.resources.max_llm_tokens_per_hour > 0 {
             limited_agents += 1;
@@ -97,16 +108,18 @@ pub(crate) fn build_status_budget(state: &AppState) -> serde_json::Value {
             &entry.manifest.resources,
             tokens_used,
             tool_calls,
+            resets_at,
         ));
     }
 
-    let operator_actions = budget_operator_actions(&global, &agents);
+    let operator_actions = budget_operator_actions(&global, &agents, &provider_subscriptions);
 
     serde_json::json!({
         "global": global,
         "agents": agents,
         "total_tokens_used": total_tokens_used,
         "limited_agents": limited_agents,
+        "provider_subscriptions": provider_subscriptions,
         "operator_actions": operator_actions,
     })
 }
@@ -117,6 +130,7 @@ fn agent_budget_status_entry(
     quota: &ResourceQuota,
     tokens_used: u64,
     tool_calls: u64,
+    resets_at: Option<DateTime<Utc>>,
 ) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent_id,
@@ -124,6 +138,8 @@ fn agent_budget_status_entry(
         "tokens": {
             "used": tokens_used,
             "limit": quota.max_llm_tokens_per_hour,
+            "window_seconds": 3600,
+            "resets_at": resets_at,
             "pct": ratio_u64(tokens_used, quota.max_llm_tokens_per_hour),
         },
         "tool_calls": {
@@ -152,6 +168,7 @@ fn ratio_u64(used: u64, limit: u64) -> f64 {
 fn budget_operator_actions(
     global: &serde_json::Value,
     agents: &[serde_json::Value],
+    provider_subscriptions: &serde_json::Value,
 ) -> Vec<String> {
     let threshold = global["alert_threshold"].as_f64().unwrap_or(0.8);
     let mut actions = Vec::new();
@@ -181,7 +198,66 @@ fn budget_operator_actions(
             ));
         }
     }
+    match provider_subscriptions["state"].as_str().unwrap_or("unavailable") {
+        "exhausted" => {
+            let item = most_severe_provider_quota(provider_subscriptions);
+            let name = item
+                .and_then(|value| value["limit_name"].as_str())
+                .or_else(|| item.and_then(|value| value["limit_id"].as_str()))
+                .unwrap_or("provider");
+            let reset = item
+                .and_then(provider_quota_reset)
+                .map(|value| format!(" Retry after {value}."))
+                .unwrap_or_default();
+            actions.push(format!(
+                "Provider subscription quota {name} is exhausted.{reset} Captain cannot reset this provider-owned allowance."
+            ));
+        }
+        "critical" | "warning" => {
+            if let Some(item) = most_severe_provider_quota(provider_subscriptions) {
+                let name = item["limit_name"]
+                    .as_str()
+                    .or_else(|| item["limit_id"].as_str())
+                    .unwrap_or("provider");
+                let used = provider_quota_max_used(item);
+                actions.push(format!(
+                    "Provider subscription quota {name} is at {used:.1}%; inspect the provider-reported reset before starting long work."
+                ));
+            }
+        }
+        "stale" => actions.push(
+            "Provider subscription quota data is stale; verify the Codex session and network before relying on the displayed allowance."
+                .to_string(),
+        ),
+        _ => {}
+    }
     actions
+}
+
+fn most_severe_provider_quota(status: &serde_json::Value) -> Option<&serde_json::Value> {
+    status["items"].as_array()?.iter().max_by_key(|item| {
+        match item["alert_level"].as_str().unwrap_or("normal") {
+            "exhausted" => 3,
+            "critical" => 2,
+            "warning" => 1,
+            _ => 0,
+        }
+    })
+}
+
+fn provider_quota_max_used(item: &serde_json::Value) -> f64 {
+    ["primary", "secondary"]
+        .iter()
+        .filter_map(|window| item[*window]["used_percent"].as_f64())
+        .fold(0.0, f64::max)
+}
+
+fn provider_quota_reset(item: &serde_json::Value) -> Option<&str> {
+    ["primary", "secondary"]
+        .iter()
+        .filter(|window| item[**window]["used_percent"].as_f64().unwrap_or(0.0) >= 100.0)
+        .filter_map(|window| item[*window]["resets_at"].as_str())
+        .min()
 }
 
 pub(crate) fn build_active_runs(state: &AppState, now: DateTime<Utc>) -> Vec<serde_json::Value> {
@@ -499,11 +575,14 @@ mod tests {
             ..Default::default()
         };
 
-        let entry = agent_budget_status_entry("agent-1", "worker", &quota, 250, 7);
+        let reset = Utc::now();
+        let entry = agent_budget_status_entry("agent-1", "worker", &quota, 250, 7, Some(reset));
 
         assert_eq!(entry["tokens"]["used"], serde_json::json!(250));
         assert_eq!(entry["tokens"]["limit"], serde_json::json!(1_000));
         assert_eq!(entry["tokens"]["pct"], serde_json::json!(0.25));
+        assert_eq!(entry["tokens"]["window_seconds"], serde_json::json!(3600));
+        assert_eq!(entry["tokens"]["resets_at"], serde_json::json!(reset));
         assert_eq!(entry["tool_calls"]["used"], serde_json::json!(7));
         assert_eq!(
             entry["tool_calls"]["limit_per_minute"],
@@ -517,7 +596,7 @@ mod tests {
             max_llm_tokens_per_hour: 100,
             ..Default::default()
         };
-        let agent = agent_budget_status_entry("agent-1", "worker", &quota, 95, 0);
+        let agent = agent_budget_status_entry("agent-1", "worker", &quota, 95, 0, None);
         let global = serde_json::json!({
             "hourly_pct": 0.0,
             "hourly_limit": 0.0,
@@ -528,9 +607,31 @@ mod tests {
             "alert_threshold": 0.8
         });
 
-        let actions = budget_operator_actions(&global, &[agent]);
+        let provider = serde_json::json!({"state": "unavailable", "items": []});
+        let actions = budget_operator_actions(&global, &[agent], &provider);
 
         assert_eq!(actions.len(), 1);
         assert!(actions[0].contains("captain agent caps agent-1"));
+    }
+
+    #[test]
+    fn budget_operator_actions_report_provider_exhaustion_and_reset() {
+        let global = serde_json::json!({"alert_threshold": 0.8});
+        let provider = serde_json::json!({
+            "state": "exhausted",
+            "items": [{
+                "limit_id": "codex",
+                "limit_name": "Codex",
+                "alert_level": "exhausted",
+                "primary": {"used_percent": 100.0, "resets_at": "2026-07-18T18:00:00Z"}
+            }]
+        });
+
+        let actions = budget_operator_actions(&global, &[], &provider);
+
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].contains("Codex is exhausted"));
+        assert!(actions[0].contains("2026-07-18T18:00:00Z"));
+        assert!(actions[0].contains("cannot reset"));
     }
 }

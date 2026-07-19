@@ -20,7 +20,10 @@ pub(crate) fn hub_slash_route_for_command(command: &str) -> Option<HubSlashRoute
         }
         "/memory" => Some(HubSlashRoute::Learning(LearningView::Memory)),
         "/graph" => Some(HubSlashRoute::Learning(LearningView::Graph)),
-        "/skills" | "/capabilities" => Some(HubSlashRoute::Capabilities(CapabilitiesView::Skills)),
+        "/capabilities" | "/native" | "/capspec" => {
+            Some(HubSlashRoute::Capabilities(CapabilitiesView::Native))
+        }
+        "/skills" => Some(HubSlashRoute::Capabilities(CapabilitiesView::Skills)),
         "/channels" => Some(HubSlashRoute::Connections(ConnectionsView::Channels)),
         _ => None,
     }

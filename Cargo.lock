@@ -909,6 +909,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "captain-capspec",
  "captain-channels",
  "captain-extensions",
  "captain-hands",
@@ -941,6 +942,33 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "captain-capspec"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "async-trait",
+ "blake3",
+ "captain-types",
+ "chrono",
+ "futures",
+ "globset",
+ "libc",
+ "notify-debouncer-mini",
+ "rand 0.8.6",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -989,6 +1017,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "captain-api",
+ "captain-capspec",
  "captain-extensions",
  "captain-kernel",
  "captain-memory",
@@ -1104,6 +1133,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "blake3",
+ "captain-capspec",
  "captain-channels",
  "captain-extensions",
  "captain-hands",
@@ -1173,6 +1203,7 @@ dependencies = [
  "bincode",
  "blake3",
  "bytes",
+ "captain-capspec",
  "captain-extensions",
  "captain-memory",
  "captain-skills",

@@ -7,6 +7,7 @@ description = "HTTP/WebSocket API server for the Captain Agent OS daemon"
 
 [dependencies]
 captain-types = { path = "../captain-types" }
+captain-capspec = { path = "../captain-capspec" }
 captain-kernel = { path = "../captain-kernel", default-features = false }
 captain-runtime = { path = "../captain-runtime", default-features = false }
 captain-memory = { path = "../captain-memory" }

@@ -53,17 +53,23 @@ const testPage = `<!doctype html>
   term.unicode.activeVersion = '11';
   term.open(document.getElementById('terminal'));
   const thumbsUp = '\\u{1F44D}';
+  const quotaGlyphs = '\\u2588\\u2591\\u21BB';
   term.write('xp', () => {
     term.write('\\r' + thumbsUp, () => {
-      const line = term.buffer.active.getLine(0);
-      term.select(0, 0, 2);
-      window.__captainUnicodeResult = {
-        activeVersion: term.unicode.activeVersion,
-        text: line.translateToString(true),
-        firstWidth: line.getCell(0).getWidth(),
-        continuationWidth: line.getCell(1).getWidth(),
-        selection: term.getSelection(),
-      };
+      term.write('\\r\\n' + quotaGlyphs, () => {
+        const line = term.buffer.active.getLine(0);
+        const quotaLine = term.buffer.active.getLine(1);
+        term.select(0, 0, 2);
+        window.__captainUnicodeResult = {
+          activeVersion: term.unicode.activeVersion,
+          text: line.translateToString(true),
+          firstWidth: line.getCell(0).getWidth(),
+          continuationWidth: line.getCell(1).getWidth(),
+          quotaText: quotaLine.translateToString(true),
+          quotaWidths: [0, 1, 2].map((column) => quotaLine.getCell(column).getWidth()),
+          selection: term.getSelection(),
+        };
+      });
     });
   });
 </script></body></html>`;
@@ -106,6 +112,8 @@ try {
     || result.text !== thumbsUp
     || result.firstWidth !== 2
     || result.continuationWidth !== 0
+    || result.quotaText !== "\u2588\u2591\u21BB"
+    || result.quotaWidths.join(",") !== "1,1,1"
     || result.selection !== thumbsUp
   ) {
     throw new Error(`Unicode width regression: ${JSON.stringify(result)}`);

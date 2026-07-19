@@ -76,6 +76,7 @@ struct StandaloneChat {
     /// from `AppEvent::StreamStarted` and used to answer a pending
     /// `ask_user` without going through HTTP (in-process mode only).
     current_stream_input_tx: Option<tokio::sync::mpsc::Sender<String>>,
+    provider_quota_watch_started: bool,
 }
 
 impl StandaloneChat {
@@ -95,6 +96,7 @@ impl StandaloneChat {
             spinner_frame: 0,
             mouse_capture_enabled: false,
             current_stream_input_tx: None,
+            provider_quota_watch_started: false,
         }
     }
 
@@ -157,6 +159,15 @@ impl StandaloneChat {
                     }
                 }
             }
+            AppEvent::ProviderQuotasLoaded(result) => match result {
+                Ok(status) => self.chat.provider_quota_status = status,
+                Err(error) => {
+                    if !self.chat.provider_quota_status.has_observation() {
+                        self.chat.provider_quota_status = Default::default();
+                    }
+                    tracing::debug!(error = %error, "TUI provider quota refresh unavailable");
+                }
+            },
             AppEvent::FetchError(error) => self.chat.status_msg = Some(error),
             // All other events (tab-specific data loads) are irrelevant in
             // standalone chat mode — silently ignore.
@@ -388,6 +399,7 @@ impl StandaloneChat {
         self.booting = false;
         self.boot_error = None;
         self.backend = Backend::InProcess { kernel };
+        self.start_provider_quota_watch();
         // Spawn or find the agent
         self.resolve_inprocess_agent();
     }
@@ -1480,6 +1492,7 @@ impl StandaloneChat {
             self.backend = Backend::Daemon {
                 base_url: base_url.to_string(),
             };
+            self.start_provider_quota_watch();
             self.enter_chat_daemon(id, name);
             return;
         }
@@ -1497,6 +1510,7 @@ impl StandaloneChat {
                 self.backend = Backend::Daemon {
                     base_url: base_url.to_string(),
                 };
+                self.start_provider_quota_watch();
                 event::spawn_daemon_agent(
                     base_url.to_string(),
                     t.content.clone(),
@@ -1654,6 +1668,17 @@ impl StandaloneChat {
         }
     }
 
+    fn start_provider_quota_watch(&mut self) {
+        if self.provider_quota_watch_started {
+            return;
+        }
+        let Some(backend) = self.backend_ref() else {
+            return;
+        };
+        self.provider_quota_watch_started = true;
+        event::spawn_provider_quota_watch(backend, self.event_tx.clone());
+    }
+
     // ── Drawing ──────────────────────────────────────────────────────────────
 
     fn draw(&mut self, frame: &mut ratatui::Frame) {
@@ -1768,6 +1793,29 @@ mod tests {
         let msg = state.chat.messages.last().expect("system message pushed");
         assert!(matches!(msg.role, Role::System));
         &msg.text
+    }
+
+    #[test]
+    fn provider_quota_event_updates_chat_and_keeps_last_good_observation() {
+        let mut state = standalone_chat();
+        let status = crate::tui::provider_quota::ProviderQuotaStatus {
+            state: "warning".to_string(),
+            reported_by_provider: true,
+            quotas: vec![crate::tui::provider_quota::ProviderQuota {
+                provider: "codex".to_string(),
+                limit_id: "codex".to_string(),
+                limit_name: "Codex".to_string(),
+                ..Default::default()
+            }],
+        };
+
+        state.handle_event(AppEvent::ProviderQuotasLoaded(Ok(status.clone())));
+        assert_eq!(state.chat.provider_quota_status, status);
+
+        state.handle_event(AppEvent::ProviderQuotasLoaded(Err(
+            "daemon restarting".to_string()
+        )));
+        assert_eq!(state.chat.provider_quota_status, status);
     }
 
     #[test]

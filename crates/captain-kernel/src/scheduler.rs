@@ -1,8 +1,10 @@
 //! Agent scheduler — manages agent execution and resource tracking.
 
+use captain_memory::usage::{HourlyTokenUsage, UsageStore};
 use captain_types::agent::{AgentId, ResourceQuota};
 use captain_types::error::{CaptainError, CaptainResult};
 use captain_types::message::TokenUsage;
+use captain_types::quota::QuotaExceededInfo;
 use dashmap::DashMap;
 use std::time::Instant;
 use tokio::task::JoinHandle;
@@ -48,6 +50,8 @@ pub struct AgentScheduler {
     usage: DashMap<AgentId, UsageTracker>,
     /// Active task handles per agent.
     tasks: DashMap<AgentId, JoinHandle<()>>,
+    /// Durable source of truth used by production kernels.
+    usage_store: Option<UsageStore>,
 }
 
 impl AgentScheduler {
@@ -57,6 +61,15 @@ impl AgentScheduler {
             quotas: DashMap::new(),
             usage: DashMap::new(),
             tasks: DashMap::new(),
+            usage_store: None,
+        }
+    }
+
+    /// Create a scheduler backed by Captain's durable usage ledger.
+    pub fn with_usage_store(usage_store: UsageStore) -> Self {
+        Self {
+            usage_store: Some(usage_store),
+            ..Self::new()
         }
     }
 
@@ -80,20 +93,20 @@ impl AgentScheduler {
             Some(q) => q.clone(),
             None => return Ok(()), // No quota = no limit
         };
-        let mut tracker = match self.usage.get_mut(&agent_id) {
-            Some(t) => t,
-            None => return Ok(()),
-        };
+        if quota.max_llm_tokens_per_hour == 0 {
+            return Ok(());
+        }
 
-        // Reset the window if an hour has passed
-        tracker.reset_if_expired();
-
-        if quota.max_llm_tokens_per_hour > 0 && tracker.total_tokens > quota.max_llm_tokens_per_hour
-        {
-            return Err(CaptainError::QuotaExceeded(format!(
-                "Token limit exceeded: {} / {}",
-                tracker.total_tokens, quota.max_llm_tokens_per_hour
-            )));
+        let window = self.hourly_usage(agent_id, quota.max_llm_tokens_per_hour)?;
+        if window.total_tokens >= quota.max_llm_tokens_per_hour {
+            return Err(CaptainError::quota_exceeded(
+                QuotaExceededInfo::agent_hourly_tokens(
+                    agent_id.to_string(),
+                    window.total_tokens,
+                    quota.max_llm_tokens_per_hour,
+                    window.resets_at,
+                ),
+            ));
         }
 
         Ok(())
@@ -101,13 +114,18 @@ impl AgentScheduler {
 
     /// Get current token usage for an agent. Returns (input, output) approximation.
     pub fn get_agent_usage(&self, agent_id: AgentId) -> Option<captain_types::message::TokenUsage> {
-        self.usage
+        let limit = self
+            .quotas
             .get(&agent_id)
-            .map(|t| captain_types::message::TokenUsage {
-                input_tokens: t.total_tokens / 2,
-                output_tokens: t.total_tokens / 2,
+            .map(|quota| quota.max_llm_tokens_per_hour)
+            .unwrap_or(0);
+        self.hourly_usage_for_status(agent_id, limit).map(|usage| {
+            captain_types::message::TokenUsage {
+                input_tokens: usage.total_tokens / 2,
+                output_tokens: usage.total_tokens - (usage.total_tokens / 2),
                 ..Default::default()
-            })
+            }
+        })
     }
 
     /// Set (or update) the hourly token quota for a specific agent.
@@ -126,7 +144,10 @@ impl AgentScheduler {
         }
     }
 
-    /// Reset usage tracking for an agent (e.g. on session reset).
+    /// Reset the process-local approximation for an agent.
+    ///
+    /// The durable hourly ledger is deliberately preserved: session resets,
+    /// model switches, and daemon restarts must not bypass a safety quota.
     pub fn reset_usage(&self, agent_id: AgentId) {
         if let Some(mut tracker) = self.usage.get_mut(&agent_id) {
             tracker.total_tokens = 0;
@@ -152,9 +173,23 @@ impl AgentScheduler {
 
     /// Get usage stats for an agent.
     pub fn get_usage(&self, agent_id: AgentId) -> Option<(u64, u64)> {
-        self.usage
+        let limit = self
+            .quotas
             .get(&agent_id)
-            .map(|t| (t.total_tokens, t.tool_calls))
+            .map(|quota| quota.max_llm_tokens_per_hour)
+            .unwrap_or(0);
+        self.hourly_usage_for_status(agent_id, limit)
+            .map(|usage| (usage.total_tokens, usage.tool_calls))
+    }
+
+    /// Return the durable rolling window used by status surfaces.
+    pub fn get_hourly_usage(&self, agent_id: AgentId) -> Option<HourlyTokenUsage> {
+        let limit = self
+            .quotas
+            .get(&agent_id)
+            .map(|quota| quota.max_llm_tokens_per_hour)
+            .unwrap_or(0);
+        self.hourly_usage_for_status(agent_id, limit)
     }
 
     /// Returns remaining token headroom before quota is hit.
@@ -164,10 +199,47 @@ impl AgentScheduler {
         if quota.max_llm_tokens_per_hour == 0 {
             return None;
         }
-        let mut tracker = self.usage.get_mut(&agent_id)?;
-        tracker.reset_if_expired();
-        let used = tracker.total_tokens;
+        let used = self
+            .hourly_usage_for_status(agent_id, quota.max_llm_tokens_per_hour)?
+            .total_tokens;
         Some(quota.max_llm_tokens_per_hour.saturating_sub(used))
+    }
+
+    fn hourly_usage(&self, agent_id: AgentId, limit: u64) -> CaptainResult<HourlyTokenUsage> {
+        if let Some(store) = &self.usage_store {
+            return store.query_hourly_tokens(agent_id, limit);
+        }
+        Ok(self.local_hourly_usage(agent_id))
+    }
+
+    fn hourly_usage_for_status(&self, agent_id: AgentId, limit: u64) -> Option<HourlyTokenUsage> {
+        match self.hourly_usage(agent_id, limit) {
+            Ok(usage) => Some(usage),
+            Err(error) => {
+                tracing::warn!(agent = %agent_id, error = %error, "Durable quota usage unavailable");
+                self.usage
+                    .contains_key(&agent_id)
+                    .then(|| self.local_hourly_usage(agent_id))
+            }
+        }
+    }
+
+    fn local_hourly_usage(&self, agent_id: AgentId) -> HourlyTokenUsage {
+        self.usage
+            .get_mut(&agent_id)
+            .map(|mut tracker| {
+                tracker.reset_if_expired();
+                HourlyTokenUsage {
+                    total_tokens: tracker.total_tokens,
+                    tool_calls: tracker.tool_calls,
+                    resets_at: None,
+                }
+            })
+            .unwrap_or(HourlyTokenUsage {
+                total_tokens: 0,
+                tool_calls: 0,
+                resets_at: None,
+            })
     }
 }
 
@@ -180,6 +252,10 @@ impl Default for AgentScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_memory::migration::run_migrations;
+    use captain_memory::usage::UsageRecord;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_record_usage() {
@@ -216,5 +292,42 @@ mod tests {
             },
         );
         assert!(scheduler.check_quota(id).is_err());
+    }
+
+    #[test]
+    fn durable_quota_survives_reset_and_scheduler_restart() {
+        let connection = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        run_migrations(&connection.lock().unwrap()).unwrap();
+        let store = UsageStore::new(connection);
+        let id = AgentId::new();
+        store
+            .record(&UsageRecord {
+                agent_id: id,
+                model: "codex:test".to_string(),
+                input_tokens: 70,
+                output_tokens: 30,
+                cached_input_tokens: 0,
+                cache_creation_tokens: 0,
+                cost_usd: 0.0,
+                tool_calls: 0,
+            })
+            .unwrap();
+        let quota = ResourceQuota {
+            max_llm_tokens_per_hour: 100,
+            ..Default::default()
+        };
+
+        let scheduler = AgentScheduler::with_usage_store(store.clone());
+        scheduler.register(id, quota.clone());
+        scheduler.reset_usage(id);
+        let error = scheduler.check_quota(id).unwrap_err();
+        assert_eq!(
+            error.quota_info().map(|info| info.code.as_str()),
+            Some("captain_agent_hourly_token_quota")
+        );
+
+        let restarted = AgentScheduler::with_usage_store(store);
+        restarted.register(id, quota);
+        assert!(restarted.check_quota(id).is_err());
     }
 }

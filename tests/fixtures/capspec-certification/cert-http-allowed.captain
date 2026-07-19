@@ -1,0 +1,18 @@
+format = 1
+name = "cert-http-allowed"
+description = "Fetch the public example.com document through the bounded network tool."
+version = "1.0.0"
+tags = ["certification", "http", "allowed"]
+output = "{{steps.fetch.output}}"
+
+[permissions]
+tools = ["web_fetch"]
+network_hosts = ["example.com"]
+
+[policy]
+timeout_secs = 60
+
+[[steps]]
+id = "fetch"
+tool = "web_fetch"
+with = { url = "https://example.com/", method = "GET" }

@@ -1,0 +1,29 @@
+format = 1
+name = "cert-write"
+description = "Write a bounded customer status file, then read it through a dependency barrier."
+version = "1.0.0"
+tags = ["certification", "file", "dependency"]
+output = "{{steps.verify.output}}"
+
+[inputs.root]
+type = "string"
+description = "Writable certification directory inside the caller workspace"
+
+[permissions]
+tools = ["file_write", "file_read"]
+read_paths = ["{{input.root}}/**"]
+write_paths = ["{{input.root}}/**"]
+
+[policy]
+timeout_secs = 60
+
+[[steps]]
+id = "write"
+tool = "file_write"
+with = { path = "{{input.root}}/customer-status.txt", content = "customer=Acme\nstatus=verified\n" }
+
+[[steps]]
+id = "verify"
+tool = "file_read"
+needs = ["write"]
+with = { path = "{{input.root}}/customer-status.txt" }

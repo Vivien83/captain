@@ -1,0 +1,18 @@
+format = 1
+name = "cert-transform"
+description = "Transform realistic invoice rows into a compact structured EUR summary."
+version = "1.0.0"
+tags = ["certification", "data", "text"]
+output = "{{steps.transform.output}}"
+
+[permissions]
+tools = ["execute_code"]
+shell_commands = ['const invoices=[{customer:"Acme",quantity:2,unit_cents:1250},{customer:"Nova",quantity:1,unit_cents:499}];const total_cents=invoices.reduce((sum,row)=>sum+row.quantity*row.unit_cents,0);console.log(JSON.stringify({currency:"EUR",customer_count:invoices.length,total_cents}));']
+
+[policy]
+timeout_secs = 60
+
+[[steps]]
+id = "transform"
+tool = "execute_code"
+with = { language = "node", code = 'const invoices=[{customer:"Acme",quantity:2,unit_cents:1250},{customer:"Nova",quantity:1,unit_cents:499}];const total_cents=invoices.reduce((sum,row)=>sum+row.quantity*row.unit_cents,0);console.log(JSON.stringify({currency:"EUR",customer_count:invoices.length,total_cents}));' }

@@ -184,6 +184,36 @@ The `host_agent_spawn()` function in `host_functions.rs` calls
 `kernel.spawn_agent_checked(manifest_toml, Some(&state.agent_id), &state.capabilities)`
 which invokes this validation before the child is created.
 
+### 2.5 Native Tool and CapSpec Enforcement
+
+Native tools also have a fail-closed dispatch boundary. An agent manifest may
+constrain its surface with top-level `tool_allowlist`, `[capabilities].tools`,
+and `tool_blocklist`. The kernel filters the catalog shown to the model, and the
+central ToolRunner applies the effective allowlist and hard blocklist again
+immediately before execution. A hidden or composed call therefore cannot use
+catalog visibility as an authorization bypass.
+
+Captain Forge CapSpecs use the reserved `cap_*` namespace. Their effective
+authority is the intersection of the caller's native tool grants, the CapSpec's
+declared tools and scopes, Captain policy, and exact-revision human approval.
+Every primitive DAG node re-enters the central ToolRunner with the original
+caller identity and workspace. The readable `.captain` file cannot grant a
+primitive that the caller lacks or remove a caller blocklist entry. A durable
+run encrypts its initial tool grants, environment boundary, execution policy,
+and subagent lineage. Resume intersects that snapshot with current authority,
+so a later policy may revoke access but cannot expand the run. Uncertain-node
+decisions compare the full run/node/attempt/tool-use identity atomically; stale
+Control, API, TUI, or Telegram decisions are rejected. Telegram callback
+tokens are only bounded lookup keys, remain behind the channel allowlist, and
+must uniquely resolve to the complete current identity before any state change.
+Retry and confirmation persist a resume intent in the decision transaction.
+Only that intent is recovered at boot; an unrelated interrupted run is never
+promoted into authorized work. An abandoned `in_progress` claim returns to
+`requested`, while the executor's run lease still prevents duplicate dispatch.
+The callback bridge handles Telegram decisions before model/session dispatch. See
+[Captain Forge / CapSpec](CAPTAIN_FORGE_CAPSPEC.md) for activation, recovery,
+the authority boundary, and process-level certification evidence.
+
 ---
 
 ## 3. WASM Dual Metering

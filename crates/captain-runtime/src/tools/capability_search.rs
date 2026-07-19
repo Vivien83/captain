@@ -1,6 +1,7 @@
 //! Unified capability discovery across active builtins, skills, MCP, and docs.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use captain_skills::registry::SkillRegistry;
@@ -15,8 +16,9 @@ use super::query_tokens;
 mod collectors;
 
 use self::collectors::{
-    collect_builtin_capabilities, collect_docs_capabilities, collect_hand_capabilities,
-    collect_mcp_capabilities, collect_skill_capabilities, finish_capability_response,
+    collect_builtin_capabilities, collect_capfile_capabilities, collect_docs_capabilities,
+    collect_hand_capabilities, collect_mcp_capabilities, collect_skill_capabilities,
+    finish_capability_response,
 };
 
 const CAPABILITY_SEARCH_EMPTY_QUERY_HINT: &str =
@@ -36,11 +38,12 @@ fn source_enabled(filter: &Option<HashSet<String>>, source: &str) -> bool {
         || filter.contains(source)
         || (source == "skill_tool" && filter.contains("skill"))
         || (source == "mcp_tool" && filter.contains("mcp"))
+        || (source == "capfile_tool" && filter.contains("capfile"))
         || (source == "docs_family" && filter.contains("docs"))
 }
 
 fn capability_searched_sources(filter: &Option<HashSet<String>>) -> Vec<&'static str> {
-    ["builtin", "skill", "mcp", "hand", "docs"]
+    ["builtin", "capfile", "skill", "mcp", "hand", "docs"]
         .into_iter()
         .filter(|source| source_enabled(filter, source))
         .collect()
@@ -55,6 +58,7 @@ fn parse_capability_sources(input: &serde_json::Value) -> Option<HashSet<String>
             "builtins" | "tools" => "builtin".to_string(),
             "skills" => "skill".to_string(),
             "mcp_tool" | "mcp_tools" => "mcp".to_string(),
+            "capspec" | "capability" | "capabilities" | "capfile_tool" => "capfile".to_string(),
             "hands" => "hand".to_string(),
             "doc" | "docs_family" | "families" => "docs".to_string(),
             other => other.to_string(),
@@ -82,6 +86,7 @@ pub async fn search_capabilities(
     skill_registry: Option<&SkillRegistry>,
     mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    workspace_root: Option<&Path>,
     builtin_definitions: Vec<ToolDefinition>,
     is_core_tool: impl Fn(&str) -> bool,
 ) -> Result<String, String> {
@@ -126,6 +131,18 @@ pub async fn search_capabilities(
             include_schemas,
             builtin_definitions,
             &is_core_tool,
+        );
+    }
+
+    if source_enabled(&source_filter, "capfile") || source_enabled(&source_filter, "capfile_tool") {
+        collect_capfile_capabilities(
+            &mut results,
+            &mut source_notes,
+            exact_names,
+            &tokens,
+            include_schemas,
+            kernel,
+            workspace_root,
         );
     }
 

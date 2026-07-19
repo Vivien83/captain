@@ -17,9 +17,9 @@ fn switch_views_refresh_current_hub() {
         }
     );
     assert_eq!(
-        capabilities_view_state_after_switch(CapabilitiesView::Hands),
+        capabilities_view_state_after_switch(CapabilitiesView::Native),
         HubViewState {
-            view: CapabilitiesView::Hands,
+            view: CapabilitiesView::Native,
             effect: HubViewEffect::RefreshCapabilitiesCurrent,
         }
     );
@@ -49,9 +49,9 @@ fn open_views_switch_to_the_family_root_tab() {
         }
     );
     assert_eq!(
-        capabilities_view_state_after_open(CapabilitiesView::Hands),
+        capabilities_view_state_after_open(CapabilitiesView::Native),
         HubViewState {
-            view: CapabilitiesView::Hands,
+            view: CapabilitiesView::Native,
             effect: HubViewEffect::SwitchTab(Tab::Skills),
         }
     );

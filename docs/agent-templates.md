@@ -46,6 +46,12 @@ Use a top-level `tool_allowlist` or `[capabilities] tools = [...]`. Do not use
 child agent must have an explicit, non-wildcard tool allowlist. Captain adds
 only the minimal discovery tools automatically.
 
+When an agent may call an active Captain Forge capability, its effective tool
+surface must include both the `cap_<name>` tool and every primitive that the
+CapSpec declares. The CapSpec is composition, not delegated authority: a
+primitive omitted from the caller's grants or present in `tool_blocklist` is
+denied again by the central ToolRunner.
+
 ## Creation Contract
 
 In daemon mode, successful creation is persistent and follows

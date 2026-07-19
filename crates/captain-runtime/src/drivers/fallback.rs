@@ -131,7 +131,10 @@ fn request_for_target(request: &CompletionRequest, target: &FallbackTarget) -> C
 fn is_fallback_terminal_error(error: &LlmError) -> bool {
     matches!(
         error,
-        LlmError::MissingApiKey(_) | LlmError::AuthenticationFailed(_) | LlmError::ModelNotFound(_)
+        LlmError::MissingApiKey(_)
+            | LlmError::AuthenticationFailed(_)
+            | LlmError::ModelNotFound(_)
+            | LlmError::SubscriptionQuotaExceeded { .. }
     ) || matches!(error, LlmError::Api { status, .. } if is_client_request_error(*status))
 }
 
@@ -139,7 +142,10 @@ fn log_fallback_error(index: usize, target: &FallbackTarget, error: &LlmError, s
     let mode = if streaming { "stream" } else { "complete" };
     let message = if matches!(
         error,
-        LlmError::MissingApiKey(_) | LlmError::AuthenticationFailed(_) | LlmError::ModelNotFound(_)
+        LlmError::MissingApiKey(_)
+            | LlmError::AuthenticationFailed(_)
+            | LlmError::ModelNotFound(_)
+            | LlmError::SubscriptionQuotaExceeded { .. }
     ) {
         "Driver authentication/configuration failed; refusing silent fallback"
     } else if matches!(error, LlmError::Api { status, .. } if is_client_request_error(*status)) {

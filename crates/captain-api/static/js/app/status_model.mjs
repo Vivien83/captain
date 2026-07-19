@@ -22,6 +22,29 @@ export function statusSnapshot(payload = {}) {
   const embeddings = objectAt(body.native_embeddings);
   const voice = objectAt(body.native_voice);
   const budget = objectAt(body.budget);
+  const providerSubscriptions = objectAt(budget.provider_subscriptions);
+  const providerQuotaItems = arrayAt(providerSubscriptions.items).map((item) => {
+    const quota = objectAt(item);
+    const window = (value) => {
+      const entry = objectAt(value);
+      return Object.keys(entry).length === 0 ? null : {
+        usedPercent: numberAt(entry.used_percent),
+        windowSeconds: optionalNumber(entry.window_seconds),
+        resetsAt: stringAt(entry.resets_at),
+      };
+    };
+    return {
+      provider: stringAt(quota.provider, 'provider'),
+      id: stringAt(quota.limit_id, 'quota'),
+      name: stringAt(quota.limit_name, stringAt(quota.limit_id, 'quota')),
+      plan: stringAt(quota.plan_type),
+      alert: stringAt(quota.alert_level, 'normal'),
+      stale: quota.stale === true,
+      source: stringAt(quota.source, 'unknown'),
+      primary: window(quota.primary),
+      secondary: window(quota.secondary),
+    };
+  });
   const workload = objectAt(body.workload);
   const projects = objectAt(workload.projects);
   const goals = objectAt(workload.goals);
@@ -99,6 +122,11 @@ export function statusSnapshot(payload = {}) {
       totalTokens: numberAt(budget.total_tokens_used),
       limitedAgents: numberAt(budget.limited_agents),
       actions: stringsAt(budget.operator_actions),
+      provider: {
+        state: stringAt(providerSubscriptions.state, 'unavailable'),
+        reported: providerSubscriptions.reported_by_provider === true,
+        items: providerQuotaItems,
+      },
     },
     workload: {
       projectAttention: numberAt(projects.attention_count),

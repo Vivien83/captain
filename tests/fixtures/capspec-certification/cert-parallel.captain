@@ -1,0 +1,30 @@
+format = 1
+name = "cert-parallel"
+description = "Inspect a real Rust repository by reading its manifest and README in parallel."
+version = "1.0.0"
+tags = ["certification", "repository", "parallel"]
+output = { readme = "{{steps.readme.output}}", manifest = "{{steps.manifest.output}}" }
+
+[inputs.root]
+type = "string"
+description = "Canonical repository root inside the caller workspace"
+
+[permissions]
+tools = ["file_read"]
+read_paths = ["{{input.root}}/**"]
+
+[policy]
+timeout_secs = 60
+max_parallel = 2
+
+[[steps]]
+id = "readme"
+tool = "file_read"
+needs = []
+with = { path = "{{input.root}}/README.md" }
+
+[[steps]]
+id = "manifest"
+tool = "file_read"
+needs = []
+with = { path = "{{input.root}}/Cargo.toml" }

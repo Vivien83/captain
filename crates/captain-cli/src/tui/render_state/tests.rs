@@ -231,8 +231,8 @@ fn learning_hub_views_route_to_renderers() {
 #[test]
 fn capabilities_hub_views_route_to_renderers() {
     let cases = [
+        (CapabilitiesView::Native, CapabilitiesHubDrawRoute::Native),
         (CapabilitiesView::Skills, CapabilitiesHubDrawRoute::Skills),
-        (CapabilitiesView::Hands, CapabilitiesHubDrawRoute::Hands),
     ];
 
     for (view, route) in cases {

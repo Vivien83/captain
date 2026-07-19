@@ -378,8 +378,12 @@ pub enum AppEvent {
     /// Phase-h.5: budget data loaded (global + per-agent).
     BudgetLoaded {
         global: Option<crate::tui::screens::budget::BudgetGlobal>,
+        provider_state: String,
+        provider_quotas: Vec<crate::tui::provider_quota::ProviderQuota>,
         agents: Vec<crate::tui::screens::budget::AgentSpend>,
     },
+    /// Provider-owned subscription quota refresh used by every chat surface.
+    ProviderQuotasLoaded(Result<crate::tui::provider_quota::ProviderQuotaStatus, String>),
     /// Phase-h.6: knowledge graph data loaded (stats + entities + facts).
     GraphLoaded {
         stats: Option<crate::tui::screens::graph::GraphStats>,
@@ -404,6 +408,15 @@ pub enum AppEvent {
     SkillUninstalled(String),
     /// MCP servers loaded.
     McpServersLoaded(Vec<McpServerInfo>),
+    /// Native CapSpecs and recent public-safe runs loaded.
+    NativeCapabilitiesLoaded {
+        capabilities: Vec<crate::tui::screens::native_capabilities::NativeCapabilityInfo>,
+        runs: Vec<crate::tui::screens::native_capabilities::NativeRunInfo>,
+    },
+    /// One native CapSpec was inspected, optionally with source.
+    NativeCapabilityInspected(crate::tui::screens::native_capabilities::NativeCapabilityInfo),
+    /// A native CapSpec operator mutation completed.
+    NativeCapabilityChanged(String),
     /// Templates providers loaded (auth status).
     TemplateProvidersLoaded(Vec<ProviderAuth>),
     /// Security features loaded.
@@ -776,6 +789,28 @@ pub fn spawn_kernel_boot(config: Option<std::path::PathBuf>, tx: mpsc::Sender<Ap
     });
 }
 
+/// Keep the exact CapSpec operator-resume queue alive for the TUI's local
+/// kernel fallback. This intentionally starts no agent/autonomy background
+/// loops and exits once the App releases its last kernel reference.
+pub fn spawn_inprocess_capspec_resume_recovery(kernel: Arc<CaptainKernel>) {
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                tracing::warn!(%error, "cannot start local CapSpec resume runtime");
+                return;
+            }
+        };
+        runtime.block_on(async move {
+            let task = kernel.spawn_capspec_operator_resume_recovery();
+            drop(kernel);
+            if let Err(error) = task.await {
+                tracing::warn!(%error, "local CapSpec resume runtime stopped unexpectedly");
+            }
+        });
+    });
+}
+
 /// Spawn a background thread for in-process streaming.
 pub fn spawn_inprocess_stream(
     kernel: Arc<CaptainKernel>,
@@ -879,16 +914,24 @@ pub fn spawn_daemon_stream(
 
         let resp = match resp {
             Ok(r) if r.status().is_success() => r,
-            Ok(response) if scoped_session.is_some() => {
-                let _ = tx.send(AppEvent::StreamDone(Err(format!(
-                    "Session persistée refusée par le daemon: HTTP {}",
-                    response.status()
-                ))));
-                return;
-            }
-            Ok(_) => {
+            Ok(response)
+                if scoped_session.is_none()
+                    && matches!(
+                        response.status(),
+                        reqwest::StatusCode::NOT_FOUND
+                            | reqwest::StatusCode::METHOD_NOT_ALLOWED
+                            | reqwest::StatusCode::NOT_IMPLEMENTED
+                    ) =>
+            {
                 let fallback = daemon_fallback(&base_url, &agent_id, &message);
                 let _ = tx.send(AppEvent::StreamDone(fallback));
+                return;
+            }
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().unwrap_or_default();
+                let detail = daemon_http_error_message(status, &body, scoped_session.is_some());
+                let _ = tx.send(AppEvent::StreamDone(Err(detail)));
                 return;
             }
             Err(e) => {
@@ -941,6 +984,65 @@ pub fn spawn_daemon_stream(
             tool_calls: vec![],
         })));
     });
+}
+
+fn daemon_http_error_message(
+    status: reqwest::StatusCode,
+    body: &str,
+    persisted_session: bool,
+) -> String {
+    let payload = serde_json::from_str::<serde_json::Value>(body).ok();
+    let detail = payload
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| body.trim())
+        .trim();
+    let detail = if detail.is_empty() {
+        "Le daemon n'a fourni aucun détail d'erreur."
+    } else {
+        detail
+    };
+    let is_session_error = matches!(
+        status,
+        reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::CONFLICT
+    );
+    if persisted_session && is_session_error {
+        format!("Session persistée refusée par le daemon (HTTP {status}): {detail}")
+    } else {
+        format!("Requête refusée par le daemon (HTTP {status}): {detail}")
+    }
+}
+
+#[cfg(test)]
+mod daemon_http_error_tests {
+    use super::daemon_http_error_message;
+
+    #[test]
+    fn quota_body_is_not_misreported_as_persisted_session_failure() {
+        let message = daemon_http_error_message(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":"Quota horaire Captain atteint. Reprise estimée à 2026-07-18T12:00:00Z.","code":"captain_agent_hourly_token_quota"}"#,
+            true,
+        );
+
+        assert!(message.contains("Quota horaire Captain atteint"));
+        assert!(message.contains("HTTP 429"));
+        assert!(!message.contains("Session persistée refusée"));
+    }
+
+    #[test]
+    fn actual_session_conflict_keeps_session_diagnostic() {
+        let message = daemon_http_error_message(
+            reqwest::StatusCode::CONFLICT,
+            r#"{"error":"Requested session belongs to another agent"}"#,
+            true,
+        );
+
+        assert!(message.contains("Session persistée refusée"));
+        assert!(message.contains("belongs to another agent"));
+    }
 }
 
 /// Blocking fallback for daemon chat (non-streaming).
@@ -3313,26 +3415,87 @@ pub fn spawn_poll_chat_approval(
     });
 }
 
+const PROVIDER_QUOTA_TUI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Keep every Ratatui chat surface synchronized with the daemon's persisted
+/// provider observations. This never calls the provider directly.
+pub fn spawn_provider_quota_watch(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
+    std::thread::spawn(move || {
+        let client = daemon_client();
+        let mut previous = None;
+        loop {
+            let current = load_provider_quota_status(&backend, &client);
+            if previous.as_ref() != Some(&current) {
+                if tx
+                    .send(AppEvent::ProviderQuotasLoaded(current.clone()))
+                    .is_err()
+                {
+                    return;
+                }
+                previous = Some(current);
+            }
+            std::thread::sleep(PROVIDER_QUOTA_TUI_REFRESH_INTERVAL);
+        }
+    });
+}
+
+fn load_provider_quota_status(
+    backend: &BackendRef,
+    client: &reqwest::blocking::Client,
+) -> Result<crate::tui::provider_quota::ProviderQuotaStatus, String> {
+    use crate::tui::provider_quota::ProviderQuotaStatus;
+
+    match backend {
+        BackendRef::Daemon(base_url) => {
+            let response = client
+                .get(format!("{base_url}/api/budget"))
+                .send()
+                .map_err(|error| format!("quota status request failed: {error}"))?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(format!("quota status returned HTTP {status}"));
+            }
+            let payload = response
+                .json::<serde_json::Value>()
+                .map_err(|error| format!("quota status payload is invalid: {error}"))?;
+            Ok(ProviderQuotaStatus::from_budget_payload(&payload))
+        }
+        BackendRef::InProcess(kernel) => {
+            let payload = captain_api::provider_quota_status::build_provider_subscription_status(
+                kernel.memory.provider_quotas(),
+            );
+            Ok(ProviderQuotaStatus::from_provider_payload(&payload))
+        }
+    }
+}
+
 /// Phase-h.5: fetch budget snapshot (global + per-agent ranking).
 pub fn spawn_fetch_budget(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    use crate::tui::screens::budget::{AgentSpend, BudgetGlobal};
+    use crate::tui::{
+        provider_quota::ProviderQuotaStatus,
+        screens::budget::{AgentSpend, BudgetGlobal},
+    };
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = daemon_client();
-            let global = client
+            let budget = client
                 .get(format!("{base_url}/api/budget"))
                 .send()
                 .ok()
-                .and_then(|r| r.json::<serde_json::Value>().ok())
-                .map(|v| BudgetGlobal {
-                    hourly_usd: v["hourly_spend"].as_f64().unwrap_or(0.0),
-                    daily_usd: v["daily_spend"].as_f64().unwrap_or(0.0),
-                    monthly_usd: v["monthly_spend"].as_f64().unwrap_or(0.0),
-                    hourly_limit: v["hourly_limit"].as_f64().unwrap_or(0.0),
-                    daily_limit: v["daily_limit"].as_f64().unwrap_or(0.0),
-                    monthly_limit: v["monthly_limit"].as_f64().unwrap_or(0.0),
-                    alert_threshold: v["alert_threshold"].as_f64().unwrap_or(0.8),
-                });
+                .and_then(|response| response.json::<serde_json::Value>().ok());
+            let global = budget.as_ref().map(|v| BudgetGlobal {
+                hourly_usd: v["hourly_spend"].as_f64().unwrap_or(0.0),
+                daily_usd: v["daily_spend"].as_f64().unwrap_or(0.0),
+                monthly_usd: v["monthly_spend"].as_f64().unwrap_or(0.0),
+                hourly_limit: v["hourly_limit"].as_f64().unwrap_or(0.0),
+                daily_limit: v["daily_limit"].as_f64().unwrap_or(0.0),
+                monthly_limit: v["monthly_limit"].as_f64().unwrap_or(0.0),
+                alert_threshold: v["alert_threshold"].as_f64().unwrap_or(0.8),
+            });
+            let provider_status = budget
+                .as_ref()
+                .map(ProviderQuotaStatus::from_budget_payload)
+                .unwrap_or_default();
             let agents: Vec<AgentSpend> = client
                 .get(format!("{base_url}/api/budget/agents"))
                 .send()
@@ -3356,7 +3519,12 @@ pub fn spawn_fetch_budget(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                     })
                 })
                 .unwrap_or_default();
-            let _ = tx.send(AppEvent::BudgetLoaded { global, agents });
+            let _ = tx.send(AppEvent::BudgetLoaded {
+                global,
+                provider_state: provider_status.state,
+                provider_quotas: provider_status.quotas,
+                agents,
+            });
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError(

@@ -490,8 +490,9 @@ fn learning_views_keep_order_and_labels() {
 fn capabilities_views_keep_order_and_labels() {
     let labels: Vec<_> = CAPABILITIES_VIEWS.iter().map(|view| view.label()).collect();
 
-    assert_eq!(labels, vec!["Skills", "Hands"]);
-    assert_eq!(CapabilitiesView::Hands.index(), 1);
+    assert_eq!(labels, vec!["Natives", "Skills"]);
+    assert_eq!(CapabilitiesView::Native.index(), 0);
+    assert_eq!(CapabilitiesView::Skills.index(), 1);
 }
 
 #[test]

@@ -97,7 +97,10 @@ impl CaptainKernel {
             skip_permissions: true,
         };
 
-        match drivers::create_driver(&driver_config) {
+        match drivers::create_driver_with_quota_observer(
+            &driver_config,
+            self.quota_observer_for(agent_provider),
+        ) {
             Ok(driver) => Ok(driver),
             Err(e) => {
                 if should_use_boot_default_driver(manifest, effective_default) {
@@ -188,7 +191,10 @@ impl CaptainKernel {
                 .or_else(|| self.lookup_provider_url(&fallback_model.provider)),
             skip_permissions: true,
         };
-        match drivers::create_driver(&config) {
+        match drivers::create_driver_with_quota_observer(
+            &config,
+            self.quota_observer_for(&fallback_model.provider),
+        ) {
             Ok(driver) => Some((
                 driver,
                 fallback_runtime_model(fallback_model),
@@ -202,6 +208,17 @@ impl CaptainKernel {
                 None
             }
         }
+    }
+
+    fn quota_observer_for(
+        &self,
+        provider: &str,
+    ) -> Option<captain_runtime::provider_quota::ProviderQuotaObserver> {
+        matches!(provider, "codex" | "openai-codex").then(|| {
+            crate::provider_quota_monitor::provider_quota_observer(
+                self.memory.provider_quotas().clone(),
+            )
+        })
     }
 }
 

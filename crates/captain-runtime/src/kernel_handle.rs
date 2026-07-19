@@ -6,6 +6,7 @@
 //! it into the agent loop.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::memory_retractions::{load_retractions, MemoryRetraction, MEMORY_RETRACTIONS_KEY};
 
@@ -85,6 +86,38 @@ pub struct AgentInfo {
     pub tools: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapSpecForgeAction {
+    List,
+    Inspect,
+    Validate,
+    Propose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapSpecForgeScope {
+    Effective,
+    All,
+    Global,
+    Project,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapSpecForgeRequest {
+    pub action: CapSpecForgeAction,
+    #[serde(default)]
+    pub scope: Option<CapSpecForgeScope>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub include_source: bool,
+}
+
 /// Handle to kernel operations, passed into the agent loop so agents
 /// can interact with each other via tools.
 #[allow(clippy::too_many_arguments)]
@@ -135,6 +168,40 @@ pub trait KernelHandle: Send + Sync {
     /// of raw file_read / file_write.
     fn blocked_workspace_paths(&self) -> Vec<std::path::PathBuf> {
         Vec::new()
+    }
+
+    /// Hard per-agent tool blocklist. This is enforced again at dispatch so
+    /// hidden or composed calls cannot bypass catalog visibility.
+    fn tool_is_blocked_for_agent(&self, _caller_agent_id: Option<&str>, _tool_name: &str) -> bool {
+        false
+    }
+
+    /// Return the durable CapSpec executor after refreshing the workspace
+    /// scope. Stub kernels expose no native capability runtime.
+    fn capspec_executor_for_workspace(
+        &self,
+        _workspace: Option<&std::path::Path>,
+    ) -> Result<Option<std::sync::Arc<captain_capspec::CapabilityExecutor>>, String> {
+        Ok(None)
+    }
+
+    /// Return active CapSpec tool definitions visible in this workspace.
+    fn capspec_tool_definitions(
+        &self,
+        _workspace: Option<&std::path::Path>,
+    ) -> Result<Vec<captain_types::tool::ToolDefinition>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Validate, inspect, list or propose a native CapSpec. Deliberately no
+    /// approval action is available through this agent-facing boundary.
+    fn capspec_forge(
+        &self,
+        _request: &CapSpecForgeRequest,
+        _workspace: Option<&std::path::Path>,
+        _caller_agent_id: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        Err("Captain Forge is not available on this kernel".to_string())
     }
 
     /// Persist a new authorized workspace path for the principal agent.

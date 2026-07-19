@@ -39,6 +39,7 @@ operator surfaces
   captain-kernel       lifecycle, orchestration, recovery, budgets, automation
         |
   +-- captain-runtime      agent loop, LLM drivers, tools, checkpoints, MCP/A2A
+  +-- captain-capspec      typed native capability compiler, registry, DAG runs
   +-- captain-memory       SQLite state, sessions, detached runs, semantic memory
   +-- captain-channels     active channels plus frozen compatibility adapters
   +-- captain-skills       governed skills plus frozen format compatibility
@@ -55,6 +56,7 @@ operator surfaces
 | Crate | Description |
 |-------|-------------|
 | **captain-types** | Shared contracts for agents, capabilities, events, tools, configuration, taint/signing, model catalog, MCP/A2A compatibility, web, and agent-as-service. Config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
+| **captain-capspec** | Captain Forge compiler, versioned capability registry, hot-reload watcher, encrypted durable DAG executor, approval boundary, run recovery, and rollback state for readable `.captain` files. Primitive steps are invoked only through `captain-runtime`'s central ToolRunner. |
 | **captain-memory** | SQLite-backed durable substrate for KV memory, semantic search, graph entities/relations, sessions, tasks, usage, canonical cross-channel context, projects, and detached tool-run history. Ordered migrations upgrade existing databases to the current schema at boot. |
 | **captain-runtime** | Agent execution engine for streaming/non-streaming LLM turns, fail-closed native tool parallelism, durable tool-use boundaries, loop guards, session repair, compaction, detached tool supervision, built-in tools, WASM, MCP/A2A compatibility, web access, audit, and embeddings. Defines `KernelHandle` to avoid circular dependencies. |
 | **captain-kernel** | Central coordinator for registry, scheduler, capabilities, event bus, supervisor, workflows/triggers/crons, metering/budgets, configured model selection, authentication, background work, project/goals, agent API provisioning, checkpoint recovery, and graceful shutdown. Boot reconciles interrupted detached work and restores persistent agents/sessions. |
@@ -218,7 +220,7 @@ When the daemon wraps the kernel in `Arc`, additional steps occur:
    b. Load canonical context summary (cross-channel memory) into system prompt.
    c. Append stability guidelines to system prompt.
    d. Resolve LLM driver (per-agent override or kernel default).
-   e. Gather available tools (filtered by capabilities + skill tools + MCP tools).
+   e. Gather available tools (filtered builtins + active CapSpecs + skill tools + MCP tools).
    f. Initialize loop guard (tool loop detection).
    g. Run session repair (validate and fix message history).
    h. Run iterative loop: send messages to LLM, execute tool calls, accumulate results.
@@ -281,6 +283,33 @@ Native parallel execution is fail-closed. Only explicitly classified
 independent read-only calls can overlap during their EXEC phase; PRE and POST
 remain ordered. Unknown, MCP, skill, custom, dependent, overlapping-path, and
 side-effecting calls remain sequential.
+
+Captain Forge adds a second, durable DAG scheduler only for active `cap_*`
+tools. The source is compiled before activation, and every DAG node re-enters
+the same ToolRunner checks above with the original caller and workspace. Runs
+are persisted before dispatch, pinned to the active source hash, and classify
+an in-flight node as replayable or uncertain on timeout, Stop, task abort, or
+restart. The principal agent can list, inspect, validate, or propose source
+through `capability_forge`, but cannot approve it. Authenticated operator routes
+own exact-hash decisions, revision rollback, durable disable, and public-safe
+run inspection. The Control Capabilities hub calls those routes directly from
+its native-first operator view; it never routes approval through the LLM and
+never requests source unless the operator opens it. The TUI Capabilities hub
+uses the same native-first contract through either the authenticated daemon
+API or the in-process kernel. It binds decisions to the full pending hash,
+requires a second key for disable, and rejects mutation of the synthetic
+`effective` scope. Uncertain runs are resolved by exact node, attempt, and
+tool-use identity; resume uses the encrypted initial-authority snapshot
+intersected with current policy. The decision transaction also queues an exact
+operator-resume intent. Daemon, Desktop, and the TUI's in-process fallback run
+the same lifecycle-bound weak scanner, which recovers abandoned claims but
+never enrolls an ordinary interrupted run. Telegram runs a lifecycle-bound
+state scanner for pending revisions and uncertain attempts, then resolves allowlisted button
+clicks in the bridge/kernel before any model turn. Its compact callback token
+must map uniquely to the current full identity, so restart, replay, duplicate
+clicks, and token collision fail safely. See
+[Captain Forge / CapSpec](CAPTAIN_FORGE_CAPSPEC.md) for the exact runtime
+contract and its process-level certification evidence.
 
 ### Max Continuations
 
@@ -842,7 +871,15 @@ surfaces:
 CLI and external channels call the same kernel. Agent-as-service clients use
 the per-agent ingress/egress API. The `captain-desktop` Tauri crate is retained
 as frozen compatibility code and is not packaged or promoted by the active
-release workflow.
+release workflow. When built, it opens the exact embedded Control app, so the
+responsive provider-quota status band has no desktop-specific fork. The Web
+terminal launches the same standalone Ratatui Chat as `captain chat`; terminal
+and xterm therefore share one renderer, one `ChatState`, and one local
+five-second `/api/budget` watcher. In-process Ratatui reads the equivalent
+persisted quota store directly. Compact Chat bands classify provider-wide,
+active-model, and alternative-model limit families before rendering: only the
+first two receive gauges, while Status and Budget preserve the complete
+provider observation. No operator surface calls Codex itself.
 
 ---
 

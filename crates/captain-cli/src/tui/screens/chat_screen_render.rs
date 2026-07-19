@@ -10,7 +10,7 @@ use super::{
     chat_screen_layout::{chat_screen_areas, draw_separator, reasoning_areas, ChatScreenAreas},
     chat_session_picker::draw_session_picker,
     chat_slash_picker::draw_slash_picker_live,
-    chat_status_line::build_status_line,
+    chat_status_line::{build_provider_quota_lines, build_status_line, draw_provider_quota_status},
     chat_thinking_block::draw_thinking,
     chat_transcript_render::draw_messages,
 };
@@ -33,7 +33,8 @@ pub(super) fn draw_chat_screen(
     image_cache: &mut ImagePreviewCache,
 ) {
     let inner = draw_chat_frame(f, area, state);
-    let areas = draw_chat_body(f, inner, state, image_cache);
+    let provider_quota_lines = build_provider_quota_lines(state, inner.width as usize);
+    let areas = draw_chat_body(f, inner, state, image_cache, provider_quota_lines);
     draw_chat_overlays(f, inner, areas.input, state);
 }
 
@@ -59,9 +60,11 @@ fn draw_chat_body(
     inner: Rect,
     state: &mut ChatState,
     image_cache: &mut ImagePreviewCache,
+    provider_quota_lines: Vec<Line<'static>>,
 ) -> ChatScreenAreas {
     let preview_rows = staged_image_preview_rows(state);
-    let areas = chat_screen_areas(inner, &state.input, preview_rows);
+    let quota_rows = provider_quota_lines.len() as u16;
+    let areas = chat_screen_areas(inner, &state.input, preview_rows, quota_rows);
 
     if preview_rows > 0 {
         draw_staged_image_previews(f, areas.preview, state, image_cache);
@@ -71,6 +74,7 @@ fn draw_chat_body(
     draw_separator(f, areas.separator);
     draw_chat_input(f, areas.input, state);
     draw_input_footer(f, areas.footer, state);
+    draw_provider_quota_status(f, areas.provider_quota, provider_quota_lines);
     areas
 }
 

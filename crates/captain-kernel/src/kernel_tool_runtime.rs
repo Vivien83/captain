@@ -19,11 +19,20 @@ impl CaptainKernel {
     /// available (backwards compatible).
     pub(super) fn available_tools(&self, agent_id: AgentId) -> Vec<ToolDefinition> {
         let entry = self.registry.get(agent_id);
+        let workspace = entry
+            .as_ref()
+            .and_then(|entry| entry.manifest.workspace.as_deref());
         let selection = AgentToolSelection::from_entry(entry.as_ref());
         let mut all_tools = super::filter_builtins_for_agent(
             builtin_tool_definitions(),
             &selection.declared_tools,
             &selection.tool_profile,
+        );
+
+        append_visible_capspec_tools(
+            &mut all_tools,
+            self.active_capspecs_for_workspace(workspace),
+            &selection,
         );
 
         append_visible_skill_tools(
@@ -245,6 +254,19 @@ fn append_visible_skill_tools(
     );
 }
 
+fn append_visible_capspec_tools(
+    all_tools: &mut Vec<ToolDefinition>,
+    capabilities: Vec<std::sync::Arc<captain_capspec::CompiledCapability>>,
+    selection: &AgentToolSelection,
+) {
+    all_tools.extend(
+        capabilities
+            .into_iter()
+            .filter(|capability| selection.declares_tool(&capability.tool_name))
+            .map(|capability| capability.tool_definition()),
+    );
+}
+
 fn skill_tool_definition(skill_tool: SkillToolDef) -> ToolDefinition {
     ToolDefinition {
         name: skill_tool.name,
@@ -422,6 +444,28 @@ mod tests {
         }
     }
 
+    fn capspec(source_name: &str) -> std::sync::Arc<captain_capspec::CompiledCapability> {
+        std::sync::Arc::new(
+            captain_capspec::compile(&format!(
+                r#"
+format = 1
+name = "{source_name}"
+description = "Test native capability."
+
+[permissions]
+tools = ["file_read"]
+read_paths = ["**"]
+
+[[steps]]
+id = "read"
+tool = "file_read"
+with = {{ path = "README.md" }}
+"#
+            ))
+            .unwrap(),
+        )
+    }
+
     #[test]
     fn declared_tool_helpers_treat_empty_and_wildcard_as_unrestricted() {
         assert!(tools_unrestricted(&[]));
@@ -456,6 +500,24 @@ mod tests {
 
         let names: Vec<&str> = all_tools.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, vec!["skill_lookup"]);
+    }
+
+    #[test]
+    fn capspec_tools_are_filtered_by_declared_agent_grants() {
+        let selection = AgentToolSelection {
+            declared_tools: vec!["cap_allowed".to_string()],
+            ..Default::default()
+        };
+        let mut tools = Vec::new();
+
+        append_visible_capspec_tools(
+            &mut tools,
+            vec![capspec("allowed"), capspec("hidden")],
+            &selection,
+        );
+
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, vec!["cap_allowed"]);
     }
 
     #[test]

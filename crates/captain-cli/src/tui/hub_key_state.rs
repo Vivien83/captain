@@ -56,14 +56,14 @@ pub(crate) fn learning_view_after_shortcut(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CapabilitiesKeyRoute {
+    Native,
     Skills,
-    Hands,
 }
 
 pub(crate) fn capabilities_key_route_for_view(view: CapabilitiesView) -> CapabilitiesKeyRoute {
     match view {
+        CapabilitiesView::Native => CapabilitiesKeyRoute::Native,
         CapabilitiesView::Skills => CapabilitiesKeyRoute::Skills,
-        CapabilitiesView::Hands => CapabilitiesKeyRoute::Hands,
     }
 }
 

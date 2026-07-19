@@ -33,9 +33,9 @@ use crate::tools::{
     NPM_SUBCOMMANDS, PIP_SUBCOMMANDS, SKILL_REFINEMENTS_KEY, SYSTEM_BUGS_KEY,
 };
 pub use crate::tools::{
-    current_agent_depth, current_origin_channel, progress_sink, with_agent_lineage_depth,
-    with_origin_channel, with_progress_sink, ProgressThrottle, ToolProgressEvent, ToolStreamCtx,
-    CANVAS_MAX_BYTES, TOOL_STREAM,
+    current_agent_depth, current_agent_lineage_depth, current_origin_channel, progress_sink,
+    with_agent_lineage_depth, with_origin_channel, with_progress_sink, ProgressThrottle,
+    ToolProgressEvent, ToolStreamCtx, CANVAS_MAX_BYTES, TOOL_STREAM,
 };
 #[cfg(test)]
 use crate::tools::{ensure_extension_for_mime, sanitize_download_filename};
@@ -180,6 +180,7 @@ mod tests {
     mod agent_scope;
     mod canvas_runtime;
     mod capability_search_runtime;
+    mod capspec_runtime;
     mod channel_reconfigure_runtime;
     mod depth_schedule;
     mod dispatch_contracts;

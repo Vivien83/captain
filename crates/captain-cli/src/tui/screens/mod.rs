@@ -41,6 +41,7 @@ pub mod init_wizard;
 pub mod learning;
 pub mod logs;
 pub mod memory;
+pub mod native_capabilities;
 pub mod peers;
 pub mod projects;
 pub mod security;

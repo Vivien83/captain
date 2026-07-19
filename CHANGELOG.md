@@ -6,6 +6,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.8] - 2026-07-19
+
+Early-access extensibility and observability release focused on governed,
+human-readable native capabilities and truthful live subscription limits.
+
+### Added
+
+- Captain Forge compiles reviewed `*.captain` TOML files from global or
+  project `.captain/` directories into typed, hot-reloaded `cap_*` tools.
+- CapSpec executions are durable dependency-aware DAGs. Primitive steps always
+  re-enter the central ToolRunner with intersected caller authority, approvals,
+  audit, deadlines, interruption state, exact uncertain-node recovery, revision
+  history, disablement, and rollback.
+- Authenticated API, Control, TUI, and Telegram surfaces expose source review,
+  exact-hash approvals, revision control, run inspection, and recovery without
+  model-mediated operator decisions.
+- Codex subscription allowances are observed from the authenticated account
+  usage endpoint and from official response-header/SSE signals. Captain
+  persists every provider-reported window, percentage, reset, plan label, and
+  credit state without hard-coding hourly, five-hour, or weekly limits.
+- `captain status`, the TUI Budget view, Control Status, `/api/status`, and
+  `/api/budget` now separate provider-owned subscription allowances from
+  Captain's internal token and cost guards. Missing observations are reported
+  as unavailable, never as unlimited.
+- Full-screen Ratatui chat, the xterm web terminal, Web Control, and the
+  retained desktop compatibility wrapper now keep a compact bottom status
+  band synchronized from Captain's local snapshot. It names the active model
+  first and gives live gauges only to provider-wide windows and limit families
+  matching that model. Other model-specific families are summarized as outside
+  the active model; Status and Budget retain the exhaustive provider report.
+
+### Fixed
+
+- Per-agent hourly token enforcement now uses the durable SQLite usage ledger
+  as a rolling one-hour window, so restarting Captain cannot reset or bypass
+  the guard.
+- Quota rejections from agent message endpoints return structured HTTP `429`
+  responses with a stable code, scope, usage, limit, and provider-reported
+  reset metadata when available. Subscription exhaustion is not retried and
+  cannot silently fall through to another provider.
+
 ## [0.1.0-alpha.7] - 2026-07-17
 
 Early-access reliability release focused on durable committed state, abrupt
@@ -251,7 +292,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.7...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.8...HEAD
+[0.1.0-alpha.8]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.7...v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.6...v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.4...v0.1.0-alpha.5

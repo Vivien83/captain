@@ -436,18 +436,18 @@ impl LearningView {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CapabilitiesView {
+    Native,
     Skills,
-    Hands,
 }
 
 pub(crate) const CAPABILITIES_VIEWS: &[CapabilitiesView] =
-    &[CapabilitiesView::Skills, CapabilitiesView::Hands];
+    &[CapabilitiesView::Native, CapabilitiesView::Skills];
 
 impl CapabilitiesView {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            CapabilitiesView::Native => "Natives",
             CapabilitiesView::Skills => "Skills",
-            CapabilitiesView::Hands => "Hands",
         }
     }
 

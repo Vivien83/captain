@@ -20,6 +20,15 @@ async function request(path, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+export function withQuery(path, params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+  });
+  const encoded = query.toString();
+  return encoded ? `${path}?${encoded}` : path;
+}
+
 export const api = {
   get: (path) => request(path),
   post: (path, body) => request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
@@ -31,6 +40,7 @@ export const api = {
   agents: () => request('/api/agents'),
   status: () => request('/api/status'),
   usage: () => request('/api/usage/summary'),
+  budget: () => request('/api/budget'),
   modelUpdates: () => request('/api/models/updates'),
   decideModelUpdate: (body) => request('/api/models/updates/decision', { method: 'POST', body: JSON.stringify(body) }),
 
@@ -99,6 +109,35 @@ export const api = {
 
   skills: () => request('/api/skills'),
   tools: () => request('/api/tools'),
+  nativeCapabilities: (params = {}) => request(withQuery('/api/capabilities/native', params)),
+  nativeCapability: (name, params = {}) => request(withQuery(
+    `/api/capabilities/native/${encodeURIComponent(name)}`,
+    params,
+  )),
+  validateNativeCapability: (body) => request('/api/capabilities/native/validate', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  installNativeCapability: (body) => request('/api/capabilities/native/install', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  decideNativeCapability: (name, body) => request(
+    `/api/capabilities/native/${encodeURIComponent(name)}/decision`,
+    { method: 'POST', body: JSON.stringify(body) },
+  ),
+  rollbackNativeCapability: (name, body) => request(
+    `/api/capabilities/native/${encodeURIComponent(name)}/rollback`,
+    { method: 'POST', body: JSON.stringify(body) },
+  ),
+  disableNativeCapability: (name, params = {}) => request(withQuery(
+    `/api/capabilities/native/${encodeURIComponent(name)}`,
+    params,
+  ), { method: 'DELETE' }),
+  nativeCapabilityRuns: (limit = 40) => request(withQuery('/api/capabilities/native/runs', { limit })),
+  nativeCapabilityRun: (runId) => request(`/api/capabilities/native/runs/${encodeURIComponent(runId)}`),
+  resolveNativeCapabilityRun: (runId, body) => request(
+    `/api/capabilities/native/runs/${encodeURIComponent(runId)}/decision`,
+    { method: 'POST', body: JSON.stringify(body) },
+  ),
 
   healthDetail: () => request('/api/health/detail'),
   security: () => request('/api/security'),

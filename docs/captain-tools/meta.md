@@ -6,7 +6,7 @@
 
 ## Tools
 
-The meta family is Captain's reflexive layer — the tools that operate on Captain itself rather than on the user's domain data. Today it covers the wall-clock, approximate location context, canvas presentations, unified capability routing (`capability_search`), the RTFM surface that lets Captain reread its own manual (`captain_docs`), deferred-tool discovery (`tool_search`), the learning-review queue, and the system-bug register.
+The meta family is Captain's reflexive layer — the tools that operate on Captain itself rather than on the user's domain data. Today it covers the wall-clock, approximate location context, canvas presentations, unified capability routing (`capability_search`), controlled native capability authoring (`capability_forge`), the RTFM surface that lets Captain reread its own manual (`captain_docs`), deferred-tool discovery (`tool_search`), the learning-review queue, and the system-bug register.
 
 ### `system_time`
 
@@ -73,12 +73,12 @@ Returns the saved file path. Use this for rich data visualisations, structured r
 
 ### `capability_search`
 
-Resolve which active Captain capability should handle a task before guessing or giving up. This is the first stop when the agent is unsure whether the answer is a builtin tool, an installed skill, a connected MCP tool, or a `captain_docs` family.
+Resolve which active Captain capability should handle a task before guessing or giving up. This is the first stop when the agent is unsure whether the answer is a builtin tool, an active `.captain` CapSpec, an installed skill, a connected MCP tool, or a `captain_docs` family.
 
 | Field | Required | Notes |
 |---|---|---|
 | `query` | yes | Capability keywords or `select:name1,name2` for exact lookup. |
-| `sources` | no | Optional filter: `builtin`, `skill`, `mcp`, `docs`. Defaults to all active sources. |
+| `sources` | no | Optional filter: `builtin`, `capfile`, `skill`, `mcp`, `docs`. `capspec` is accepted as an alias for `capfile`. Defaults to all active sources. |
 | `max_results` | no | Default 8, clamped to 30. |
 | `include_schemas` | no | Default true. Include input schemas when the candidate is callable. |
 
@@ -111,10 +111,46 @@ Decision workflow:
 1. Call `capability_search` when the capability surface is unclear.
 2. If the best result is `docs_family`, call `captain_docs({family, query})`.
 3. If the best result is a deferred builtin and the schema is not already visible enough, call `tool_search({"query":"select:<name>"})`.
-4. If the best result is `skill_tool` or `mcp_tool`, call that tool directly.
-5. Surfaces frozen for the current product phase (Hands, A2A, peers, fleets) are not proposed by default. Prefer explicit builtin tools, skills, MCP tools, projects, or sub-agents in the active core.
+4. If the best result is `capfile_tool`, call that active native capability directly. Its primitive steps still pass through the caller's normal grants and central ToolRunner policies.
+5. If the best result is `skill_tool` or `mcp_tool`, call that tool directly.
+6. Surfaces frozen for the current product phase (Hands, A2A, peers, fleets) are not proposed by default. Prefer explicit builtin tools, CapSpecs, skills, MCP tools, projects, or sub-agents in the active core.
 
 Learning link: successful runs that used `capability_search`, `skill_search`, `tool_search`, or `captain_docs` are summarized in the end-of-run learning signal. The Haiku reflection pass should retain only reusable, generic capability routes; it must skip private aliases, secrets, one-off file paths, and user-specific infrastructure names.
+
+### `capability_forge`
+
+Validate, inspect, list, or propose a readable native `.captain` capability.
+This is a deferred builtin: discover it through
+`tool_search({"query":"select:capability_forge"})` when the user explicitly
+asks Captain to make a workflow native, or when a reusable workflow has been
+clearly established.
+
+| Field | Required | Notes |
+|---|---|---|
+| `action` | yes | Exactly `list`, `inspect`, `validate`, or `propose`. There is deliberately no approval action. |
+| `scope` | no | `effective`, `all`, `global`, or `project`. A proposal defaults to the active project when a workspace exists, otherwise global. |
+| `name` | inspect: yes | Optional for validate/propose; if provided it must exactly match the source `name`. |
+| `source` | validate/propose: yes | Complete strict TOML `.captain` source, capped and compiled before any write. |
+| `include_source` | no | For inspect only. Returns the exact versioned source when explicitly requested. |
+
+`propose` is reserved for the principal Captain agent. It writes the source
+durably, reloads the registered scope immediately, records an audit entry, and
+returns a structured capability card with source hash, status, permissions,
+revision history, and `next_action`. A first strictly read-only revision can be
+`operational` immediately. Write, shell, network, SSH, memory mutation, secret,
+remote, or destructive authority returns `pending_approval` or
+`update_pending_approval`; Captain must say that human approval of the exact
+pending hash is still required.
+
+The tool cannot approve, reject, roll back, or delete a capability. Those are
+authenticated operator actions. Never claim `ready` when the returned status
+is pending, invalid, rejected, or disabled, and never ask another agent to
+circumvent this boundary. Control and the TUI expose direct exact-hash and
+uncertain-run decisions. When Telegram has an allowlisted user and
+`default_chat_id`, it also surfaces durable pending cards automatically; button
+clicks resolve in the kernel before any agent turn. Captain should report the
+pending state and wait for one of those human surfaces, not simulate a click or
+invent an approval command.
 
 ### `captain_docs`
 
@@ -224,7 +260,8 @@ This register is not a replacement for fixing the bug. It is the durable "do not
 - `system_time` reads the daemon's wall clock; it does not touch the filesystem or the network.
 - `location_get` reads configured/coarse location context only; it must not geolocate the user through network probes.
 - `canvas_present` writes the rendered HTML under the agent's workspace (`workspace/canvas/<timestamp>.html`). The path resolution goes through the same multi-root sandbox as `file_write`.
-- `capability_search` is read-only. It inspects live active builtin definitions, the installed SkillRegistry, connected MCP tool registries, and the `captain_docs` family index. It does not execute candidate tools.
+- `capability_search` is read-only. It inspects live active builtin definitions, workspace-aware and hot-reloaded CapSpec definitions, the installed SkillRegistry, connected MCP tool registries, and the `captain_docs` family index. It does not execute candidate tools. CapSpec results use source `capfile_tool` and status `active_native`.
+- `capability_forge` validates before writing, accepts only its four safe actions, and reserves proposals for the principal Captain agent. Project roots reject symbolic `.captain` ancestors before creating anything. Sensitive capability activation remains outside the agent tool and requires an authenticated exact-hash operator decision.
 - `captain_docs` reads **only** files under `docs/captain-tools/` — that path is in Captain's authorised root. Ordinary agents do not have access; the tool errors out with a clear message rather than spilling the doc to a worker that should not see it.
 - On real runtime update, the daemon records the current binary fingerprint in system KV and injects a one-turn "Mise a jour runtime reelle" notice. This notice proves only that the fingerprint changed. Read `captain_docs({family:"runtime-changelog", query:"update runtime"})` before explaining what changed, then treat current live schemas/docs as authoritative. Do not rely on `git log`, stale assumptions, or old sessions after an install/restart.
 

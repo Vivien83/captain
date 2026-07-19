@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.7 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.8 bash
 ```
 
 ## Global Options
@@ -81,6 +81,20 @@ The Chat footer renders `ctx used/window` from the active agent's live model
 catalog entry. `used` follows the latest provider-reported prompt rather than
 the cumulative session bill; the denominator refreshes after model switches
 and cross-surface session restores.
+
+Full-screen Chat also reserves a compact bottom subscription band. It names the
+active model first. Every provider-wide primary or secondary window, plus any
+limit family matching that model, receives its own gauge, percentage, dynamic
+duration, and reset in the operator's local time. Other model-specific families
+are summarized as outside the active model and remain exhaustive in Budget;
+critical pressure is still surfaced. Plan, credits, stale state, and exhaustion
+remain visible when supplied. The band polls Captain's local persisted
+`/api/budget` snapshot every five seconds and never calls Codex directly. It is
+shared by `captain`, full-screen `captain chat`, and the xterm Web terminal.
+Control web renders the equivalent band, which is also what the frozen desktop
+wrapper embeds. Narrow terminals pack the applicable gauges onto bounded rows
+and direct overflow details to Budget rather than resizing the input or
+overlapping the transcript.
 
 Press `Ctrl+C` to exit. A second `Ctrl+C` force-exits the process.
 
@@ -191,9 +205,13 @@ captain status [--json]
 
 **Behavior:**
 
-- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, and active agents.
+- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, and provider-reported subscription windows.
 - If no daemon is running: boots an in-process kernel and shows persisted state. Displays a warning that the daemon is not running.
 - The principal `captain` agent is expected to match the global `[default_model]`. On startup, Captain repairs stale persisted principal-agent manifests so `captain status` does not report a global provider/model that differs from the active Captain agent.
+- Provider subscription state is never inferred from local usage. `unavailable`
+  means no official observation is available; `stale` means the last one is
+  older than fifteen minutes. Window duration and reset are printed from the
+  provider response rather than from a fixed hourly or weekly assumption.
 
 **Example:**
 
@@ -1090,6 +1108,10 @@ captain chat [<AGENT>] [--plain]
   Use `/history` to list/open history, `/resume <UUID|unique-prefix|title>` to
   reopen a conversation with its owning agent, and `/new` to start fresh while
   preserving the previous transcript.
+- **Live subscription status:** full-screen mode uses the same five-second
+  local snapshot watcher and active-model quota classification as the primary
+  TUI. Plain mode stays line-oriented and uses `captain status` for the
+  exhaustive provider report.
 
 This is the simplest way to start chatting -- it works with or without a daemon.
 

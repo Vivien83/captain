@@ -3,7 +3,7 @@
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use captain_types::agent::AgentId;
 use std::sync::Arc;
@@ -105,14 +105,28 @@ pub async fn budget_status(State(state): State<Arc<AppState>>) -> impl IntoRespo
         .kernel
         .metering
         .budget_status(&state.kernel.config.budget);
-    Json(serde_json::to_value(&status).unwrap_or_default())
+    let mut payload = serde_json::to_value(&status).unwrap_or_default();
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "provider_subscriptions".to_string(),
+            crate::provider_quota_status::build_provider_subscription_status(
+                state.kernel.memory.provider_quotas(),
+            ),
+        );
+    }
+    Json(payload)
 }
 
 /// PUT /api/budget - Update global budget limits and persist config.toml.
 pub async fn update_budget(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> Response {
+    let default_hourly_tokens = body["default_max_llm_tokens_per_hour"].as_u64();
+    if default_hourly_tokens.is_some_and(|value| value > i64::MAX as u64) {
+        return bad_request("default_max_llm_tokens_per_hour exceeds TOML integer range")
+            .into_response();
+    }
     let config_ptr = &state.kernel.config as *const captain_types::config::KernelConfig
         as *mut captain_types::config::KernelConfig;
 
@@ -129,13 +143,13 @@ pub async fn update_budget(
         if let Some(value) = body["alert_threshold"].as_f64() {
             (*config_ptr).budget.alert_threshold = value.clamp(0.0, 1.0);
         }
-        if let Some(value) = body["default_max_llm_tokens_per_hour"].as_u64() {
+        if let Some(value) = default_hourly_tokens {
             (*config_ptr).budget.default_max_llm_tokens_per_hour = value;
         }
     }
 
     persist_budget_config(&state);
-    budget_status(State(state)).await
+    budget_status(State(state)).await.into_response()
 }
 
 fn persist_budget_config(state: &Arc<AppState>) {
@@ -156,27 +170,40 @@ fn persist_budget_config(state: &Arc<AppState>) {
     else {
         return;
     };
-    budget_table.insert(
-        "max_hourly_usd".into(),
-        toml::Value::Float(state.kernel.config.budget.max_hourly_usd),
-    );
-    budget_table.insert(
-        "max_daily_usd".into(),
-        toml::Value::Float(state.kernel.config.budget.max_daily_usd),
-    );
-    budget_table.insert(
-        "max_monthly_usd".into(),
-        toml::Value::Float(state.kernel.config.budget.max_monthly_usd),
-    );
-    budget_table.insert(
-        "alert_threshold".into(),
-        toml::Value::Float(state.kernel.config.budget.alert_threshold),
-    );
+    update_persisted_budget_table(budget_table, &state.kernel.config.budget);
     if let Err(err) =
         captain_types::durable_fs::atomic_write(&config_path, doc.to_string().as_bytes())
     {
         tracing::warn!("Failed to persist budget to config.toml: {err}");
     }
+}
+
+fn update_persisted_budget_table(
+    budget_table: &mut toml::map::Map<String, toml::Value>,
+    budget: &captain_types::config::BudgetConfig,
+) {
+    budget_table.insert(
+        "max_hourly_usd".into(),
+        toml::Value::Float(budget.max_hourly_usd),
+    );
+    budget_table.insert(
+        "max_daily_usd".into(),
+        toml::Value::Float(budget.max_daily_usd),
+    );
+    budget_table.insert(
+        "max_monthly_usd".into(),
+        toml::Value::Float(budget.max_monthly_usd),
+    );
+    budget_table.insert(
+        "alert_threshold".into(),
+        toml::Value::Float(budget.alert_threshold),
+    );
+    budget_table.insert(
+        "default_max_llm_tokens_per_hour".into(),
+        toml::Value::Integer(
+            i64::try_from(budget.default_max_llm_tokens_per_hour).unwrap_or(i64::MAX),
+        ),
+    );
 }
 
 /// GET /api/budget/agents/{id} - Per-agent budget/quota status.
@@ -198,8 +225,11 @@ pub async fn agent_budget_status(
     let hourly = usage_store.query_hourly(agent_id).unwrap_or(0.0);
     let daily = usage_store.query_daily(agent_id).unwrap_or(0.0);
     let monthly = usage_store.query_monthly(agent_id).unwrap_or(0.0);
-    let token_usage = state.kernel.scheduler.get_usage(agent_id);
-    let tokens_used = token_usage.map(|(tokens, _)| tokens).unwrap_or(0);
+    let token_usage = state.kernel.scheduler.get_hourly_usage(agent_id);
+    let tokens_used = token_usage
+        .as_ref()
+        .map(|usage| usage.total_tokens)
+        .unwrap_or(0);
 
     (
         StatusCode::OK,
@@ -224,6 +254,8 @@ pub async fn agent_budget_status(
             "tokens": {
                 "used": tokens_used,
                 "limit": quota.max_llm_tokens_per_hour,
+                "window_seconds": 3600,
+                "resets_at": token_usage.and_then(|usage| usage.resets_at),
                 "pct": if quota.max_llm_tokens_per_hour > 0 {
                     tokens_used as f64 / quota.max_llm_tokens_per_hour as f64
                 } else {
@@ -243,12 +275,25 @@ pub async fn agent_budget_ranking(State(state): State<Arc<AppState>>) -> impl In
         .list()
         .iter()
         .filter_map(|entry| {
+            let hourly = usage_store.query_hourly(entry.id).unwrap_or(0.0);
             let daily = usage_store.query_daily(entry.id).unwrap_or(0.0);
-            (daily > 0.0).then(|| {
+            let monthly = usage_store.query_monthly(entry.id).unwrap_or(0.0);
+            let hourly_tokens = state.kernel.scheduler.get_hourly_usage(entry.id);
+            let tokens_used = hourly_tokens
+                .as_ref()
+                .map(|usage| usage.total_tokens)
+                .unwrap_or(0);
+            (hourly > 0.0 || daily > 0.0 || monthly > 0.0 || tokens_used > 0).then(|| {
                 serde_json::json!({
                     "agent_id": entry.id.to_string(),
                     "name": entry.name,
+                    "agent_name": entry.name,
+                    "hourly_usd": hourly,
+                    "daily_usd": daily,
+                    "monthly_usd": monthly,
                     "daily_cost_usd": daily,
+                    "tokens_used": tokens_used,
+                    "tokens_reset_at": hourly_tokens.and_then(|usage| usage.resets_at),
                     "hourly_limit": entry.manifest.resources.max_cost_per_hour_usd,
                     "daily_limit": entry.manifest.resources.max_cost_per_day_usd,
                     "monthly_limit": entry.manifest.resources.max_cost_per_month_usd,
@@ -324,4 +369,31 @@ fn not_found(message: impl Into<String>) -> (StatusCode, Json<serde_json::Value>
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({"error": message.into()})),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_persisted_budget_table;
+    use captain_types::config::BudgetConfig;
+
+    #[test]
+    fn persisted_budget_keeps_default_hourly_token_guard() {
+        let budget = BudgetConfig {
+            max_hourly_usd: 1.0,
+            max_daily_usd: 5.0,
+            max_monthly_usd: 25.0,
+            alert_threshold: 0.75,
+            default_max_llm_tokens_per_hour: 345_678,
+        };
+        let mut table = toml::map::Map::new();
+
+        update_persisted_budget_table(&mut table, &budget);
+
+        assert_eq!(
+            table["default_max_llm_tokens_per_hour"].as_integer(),
+            Some(345_678)
+        );
+        assert_eq!(table["max_hourly_usd"].as_float(), Some(1.0));
+        assert_eq!(table["alert_threshold"].as_float(), Some(0.75));
+    }
 }

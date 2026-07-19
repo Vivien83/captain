@@ -26,6 +26,7 @@ counts when validating an installed runtime.
 |-------|-------------|
 | [Architecture](architecture.md) | Workspace structure, kernel boot, agent lifecycle, memory substrate |
 | [Agents](agent-templates.md) | Manifests, lifecycle, capabilities, and external in/out API |
+| [Captain Forge / CapSpec](CAPTAIN_FORGE_CAPSPEC.md) | Certified contract for readable, hot-reloaded, durable native capabilities |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
 | [Security](security.md) | Defense-in-depth security model and audit trail |
 
@@ -49,6 +50,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
+| [0.1.0-alpha.8 release notes](releases/v0.1.0-alpha.8.md) | Captain Forge native capabilities and truthful live subscription quotas |
 | [0.1.0-alpha.7 release notes](releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
 | [0.1.0-alpha.6 release notes](releases/v0.1.0-alpha.6.md) | Telegram Rich Messages, live tool boards, ephemeral progress, and reliable controls |
 | [0.1.0-alpha.5 release notes](releases/v0.1.0-alpha.5.md) | Clean daemon shutdown and explicit memory write opt-out |

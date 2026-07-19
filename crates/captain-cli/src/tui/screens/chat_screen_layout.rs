@@ -18,6 +18,7 @@ pub(super) struct ChatScreenAreas {
     pub preview: Rect,
     pub input: Rect,
     pub footer: Rect,
+    pub provider_quota: Rect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,14 +27,20 @@ pub(super) struct ReasoningAreas {
     pub messages: Rect,
 }
 
-pub(super) fn chat_screen_areas(inner: Rect, input: &str, preview_rows: u16) -> ChatScreenAreas {
+pub(super) fn chat_screen_areas(
+    inner: Rect,
+    input: &str,
+    preview_rows: u16,
+    provider_quota_rows: u16,
+) -> ChatScreenAreas {
     let input_rows = compute_input_visual_rows(input, inner.width).clamp(1, 10);
-    let [messages, separator, preview, input, footer] = Layout::vertical([
+    let [messages, separator, preview, input, footer, provider_quota] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(1),
         Constraint::Length(preview_rows),
         Constraint::Length(input_rows),
         Constraint::Length(1),
+        Constraint::Length(provider_quota_rows),
     ])
     .areas(inner);
 
@@ -43,6 +50,7 @@ pub(super) fn chat_screen_areas(inner: Rect, input: &str, preview_rows: u16) -> 
         preview,
         input,
         footer,
+        provider_quota,
     }
 }
 

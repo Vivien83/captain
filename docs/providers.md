@@ -168,9 +168,46 @@ captain agent caps <agent>
 captain doctor --full
 ```
 
-Provider prices and quotas are intentionally absent from this guide because
-they change. Use the provider's current billing page and Captain's measured
-usage instead of a copied static table.
+Captain keeps two independent contracts visible:
+
+- **Captain internal guard:** each agent's durable rolling
+  `max_llm_tokens_per_hour`, plus configured cost limits. Restarting the daemon
+  does not reset the rolling token ledger.
+- **Provider subscription (reported):** allowance windows owned and reported
+  by the configured provider. These values cannot be reconstructed reliably
+  from Captain's local usage counters.
+
+For Codex, Captain reads the authenticated account-usage endpoint associated
+with the configured official base (`/backend-api/wham/usage` for ChatGPT or
+`/api/codex/usage` for the Codex service). It refreshes that status immediately
+after daemon startup and every five minutes, and supplements it with dynamic
+`x-codex-*` response headers and `codex.rate_limits` stream events from real
+model calls. Durations, percentages, reset timestamps, plan labels, credits,
+and additional metered families are stored exactly as reported. Captain does
+not hard-code a five-hour or weekly allowance.
+
+`captain status --verbose`, the Status hub, `GET /api/status`, and
+`GET /api/budget` show these provider observations separately. `unavailable`
+means that no current official observation exists; it never means unlimited.
+Data older than fifteen minutes is marked `stale`. A provider-reported
+exhaustion is not retried or silently routed to a fallback provider.
+
+During interactive use, full-screen Ratatui Chat polls only Captain's local
+snapshot every five seconds. Its compact bottom band names the active model
+first and renders gauges only for provider-wide windows and limit families
+whose reported identifier or name matches that model. Additional model-specific
+families are summarized as outside the active model, with warning or critical
+pressure still surfaced; the exhaustive report remains in Status and Budget.
+The xterm Web terminal launches that same standalone Ratatui chat. Control web
+renders the equivalent responsive contract from `/api/budget`, and the frozen
+desktop compatibility wrapper inherits that exact Control asset when built.
+These interface polls do not increase calls to the provider: the daemon remains
+the only owner of account refresh, response observation, persistence,
+staleness, and exhaustion decisions.
+
+Provider prices and nominal plan entitlements remain absent from this guide
+because they change. Use live provider observations and the provider's current
+billing page instead of a copied static table.
 
 ## Troubleshooting
 

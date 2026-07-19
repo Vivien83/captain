@@ -6,6 +6,7 @@
 use crate::consolidation::ConsolidationEngine;
 use crate::knowledge::KnowledgeStore;
 use crate::migration::run_migrations;
+use crate::provider_quota::ProviderQuotaStore;
 use crate::semantic::SemanticStore;
 use crate::session::{Session, SessionStore};
 use crate::structured::StructuredStore;
@@ -33,6 +34,7 @@ pub struct MemorySubstrate {
     sessions: SessionStore,
     consolidation: ConsolidationEngine,
     usage: UsageStore,
+    provider_quotas: ProviderQuotaStore,
 }
 
 impl MemorySubstrate {
@@ -50,6 +52,7 @@ impl MemorySubstrate {
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
+            provider_quotas: ProviderQuotaStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(shared, decay_rate),
         })
     }
@@ -67,6 +70,7 @@ impl MemorySubstrate {
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
+            provider_quotas: ProviderQuotaStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(shared, decay_rate),
         })
     }
@@ -74,6 +78,11 @@ impl MemorySubstrate {
     /// Get a reference to the usage store.
     pub fn usage(&self) -> &UsageStore {
         &self.usage
+    }
+
+    /// Get the durable provider subscription quota store.
+    pub fn provider_quotas(&self) -> &ProviderQuotaStore {
+        &self.provider_quotas
     }
 
     /// Get the shared database connection (for constructing stores from outside).

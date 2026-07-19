@@ -19,6 +19,7 @@ pub mod milestone;
 pub mod project;
 pub mod project_checkpoint;
 pub mod project_task;
+pub mod provider_quota;
 pub mod semantic;
 pub mod session;
 pub mod skill_patterns;

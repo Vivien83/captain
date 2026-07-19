@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 captain-types = { path = "../captain-types" }
+captain-capspec = { path = "../captain-capspec" }
 captain-kernel = { path = "../captain-kernel", default-features = false }
 captain-api = { path = "../captain-api", default-features = false }
 captain-memory = { path = "../captain-memory" }

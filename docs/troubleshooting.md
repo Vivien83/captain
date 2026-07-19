@@ -46,8 +46,8 @@ export PATH="$HOME/.captain/bin:$PATH"
 GitHub's `/releases/latest` route excludes prereleases. Pin the alpha tag:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.7 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.8 bash
 ```
 
 No GitHub token is required for the official public repository. A token is
@@ -115,10 +115,17 @@ For API-key providers, keep credentials in the environment, `secrets.env`, or
 Captain's vault, and make `api_key_env` reference the variable name. Do not put
 the secret value directly in `config.toml`.
 
-HTTP `401` usually means a missing, expired, or wrong credential. HTTP `429`
-is provider throttling; wait for the retry window, reduce concurrency/budget,
-or select another configured model. Use `captain models list` rather than a
-fixed model list from documentation.
+HTTP `401` usually means a missing, expired, or wrong credential. An HTTP
+`429` from an agent message endpoint is now structured: inspect `code`,
+`quota.scope`, `quota.provider`, `quota.resets_at`, and the `Retry-After`
+header instead of treating every `429` alike. `agent_hourly_tokens` is
+Captain's durable rolling guard and can be inspected with
+`captain agent caps <agent>`. `provider_subscription` is an allowance owned by
+the provider; wait for its reported reset or make an explicit model/provider
+decision. Captain does not retry an exhausted subscription or silently select
+a fallback. If Status says `unavailable`, verify the Codex session and network;
+do not read it as unlimited. Use `captain models list` rather than a fixed model
+list from documentation.
 
 Codex catalog notifications report availability only. Captain never changes
 the active model until you explicitly keep or switch it and choose a new or
@@ -203,8 +210,8 @@ should not be the first production integration.
 The public alpha image supports Linux AMD64 and ARM64:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
-docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7 --version
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
+docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8 --version
 docker logs captain
 ```
 

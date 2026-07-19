@@ -1,0 +1,25 @@
+format = 1
+name = "cert-memory"
+description = "Save a durable certification fact and recall it after the write barrier."
+version = "1.0.0"
+tags = ["certification", "memory", "durable"]
+output = "{{steps.recall.output}}"
+
+[permissions]
+tools = ["memory_save", "memory_recall"]
+memory_read = ["*"]
+memory_write = ["*/capspec-certification/verified"]
+
+[policy]
+timeout_secs = 90
+
+[[steps]]
+id = "save"
+tool = "memory_save"
+with = { subject = "capspec-certification", predicate = "verified", object = "durable real-matrix marker", category = "info" }
+
+[[steps]]
+id = "recall"
+tool = "memory_recall"
+needs = ["save"]
+with = { key = "capspec-certification durable real-matrix marker" }

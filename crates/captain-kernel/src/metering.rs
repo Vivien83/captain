@@ -3,6 +3,7 @@
 use captain_memory::usage::{ModelUsage, UsageRecord, UsageStore, UsageSummary};
 use captain_types::agent::{AgentId, ResourceQuota};
 use captain_types::error::{CaptainError, CaptainResult};
+use captain_types::quota::{QuotaExceededInfo, QuotaScope};
 use std::sync::Arc;
 
 /// The metering engine tracks usage cost and enforces quota limits.
@@ -29,9 +30,11 @@ impl MeteringEngine {
         if quota.max_cost_per_hour_usd > 0.0 {
             let hourly_cost = self.store.query_hourly(agent_id)?;
             if hourly_cost >= quota.max_cost_per_hour_usd {
-                return Err(CaptainError::QuotaExceeded(format!(
-                    "Agent {} exceeded hourly cost quota: ${:.4} / ${:.4}",
-                    agent_id, hourly_cost, quota.max_cost_per_hour_usd
+                return Err(CaptainError::quota_exceeded(QuotaExceededInfo::cost(
+                    QuotaScope::AgentHourlyCost,
+                    Some(agent_id.to_string()),
+                    hourly_cost,
+                    quota.max_cost_per_hour_usd,
                 )));
             }
         }
@@ -40,9 +43,11 @@ impl MeteringEngine {
         if quota.max_cost_per_day_usd > 0.0 {
             let daily_cost = self.store.query_daily(agent_id)?;
             if daily_cost >= quota.max_cost_per_day_usd {
-                return Err(CaptainError::QuotaExceeded(format!(
-                    "Agent {} exceeded daily cost quota: ${:.4} / ${:.4}",
-                    agent_id, daily_cost, quota.max_cost_per_day_usd
+                return Err(CaptainError::quota_exceeded(QuotaExceededInfo::cost(
+                    QuotaScope::AgentDailyCost,
+                    Some(agent_id.to_string()),
+                    daily_cost,
+                    quota.max_cost_per_day_usd,
                 )));
             }
         }
@@ -51,9 +56,11 @@ impl MeteringEngine {
         if quota.max_cost_per_month_usd > 0.0 {
             let monthly_cost = self.store.query_monthly(agent_id)?;
             if monthly_cost >= quota.max_cost_per_month_usd {
-                return Err(CaptainError::QuotaExceeded(format!(
-                    "Agent {} exceeded monthly cost quota: ${:.4} / ${:.4}",
-                    agent_id, monthly_cost, quota.max_cost_per_month_usd
+                return Err(CaptainError::quota_exceeded(QuotaExceededInfo::cost(
+                    QuotaScope::AgentMonthlyCost,
+                    Some(agent_id.to_string()),
+                    monthly_cost,
+                    quota.max_cost_per_month_usd,
                 )));
             }
         }
@@ -69,9 +76,11 @@ impl MeteringEngine {
         if budget.max_hourly_usd > 0.0 {
             let cost = self.store.query_global_hourly()?;
             if cost >= budget.max_hourly_usd {
-                return Err(CaptainError::QuotaExceeded(format!(
-                    "Global hourly budget exceeded: ${:.4} / ${:.4}",
-                    cost, budget.max_hourly_usd
+                return Err(CaptainError::quota_exceeded(QuotaExceededInfo::cost(
+                    QuotaScope::GlobalHourlyCost,
+                    None,
+                    cost,
+                    budget.max_hourly_usd,
                 )));
             }
         }
@@ -79,9 +88,11 @@ impl MeteringEngine {
         if budget.max_daily_usd > 0.0 {
             let cost = self.store.query_today_cost()?;
             if cost >= budget.max_daily_usd {
-                return Err(CaptainError::QuotaExceeded(format!(
-                    "Global daily budget exceeded: ${:.4} / ${:.4}",
-                    cost, budget.max_daily_usd
+                return Err(CaptainError::quota_exceeded(QuotaExceededInfo::cost(
+                    QuotaScope::GlobalDailyCost,
+                    None,
+                    cost,
+                    budget.max_daily_usd,
                 )));
             }
         }
@@ -89,9 +100,11 @@ impl MeteringEngine {
         if budget.max_monthly_usd > 0.0 {
             let cost = self.store.query_global_monthly()?;
             if cost >= budget.max_monthly_usd {
-                return Err(CaptainError::QuotaExceeded(format!(
-                    "Global monthly budget exceeded: ${:.4} / ${:.4}",
-                    cost, budget.max_monthly_usd
+                return Err(CaptainError::quota_exceeded(QuotaExceededInfo::cost(
+                    QuotaScope::GlobalMonthlyCost,
+                    None,
+                    cost,
+                    budget.max_monthly_usd,
                 )));
             }
         }
@@ -597,10 +610,12 @@ mod tests {
             })
             .unwrap();
 
-        let result = engine.check_quota(agent_id, &quota);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("exceeded hourly cost quota"));
+        let error = engine.check_quota(agent_id, &quota).unwrap_err();
+        let info = error.quota_info().expect("structured quota details");
+        let agent_id_string = agent_id.to_string();
+        assert_eq!(info.code, "captain_agent_hourly_cost_quota");
+        assert_eq!(info.scope, QuotaScope::AgentHourlyCost);
+        assert_eq!(info.agent_id.as_deref(), Some(agent_id_string.as_str()));
     }
 
     #[test]

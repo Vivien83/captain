@@ -2,6 +2,7 @@ pub(super) fn in_process_runtime_health(
     llm_driver_ready: bool,
     workload: &serde_json::Value,
     disk: &serde_json::Value,
+    budget: &serde_json::Value,
 ) -> serde_json::Value {
     let channels = serde_json::json!({"locked": []});
     let agent_api = serde_json::json!({
@@ -28,6 +29,7 @@ pub(super) fn in_process_runtime_health(
         &consciousness,
         disk,
         &shutdown,
+        budget,
     )
 }
 
@@ -53,7 +55,11 @@ mod tests {
             "cleanup_threshold_gib": 15.0,
             "cleanup_recommended": true
         });
-        let health = in_process_runtime_health(true, &workload, &disk);
+        let budget = serde_json::json!({
+            "provider_subscriptions": {"state": "unavailable"},
+            "operator_actions": []
+        });
+        let health = in_process_runtime_health(true, &workload, &disk, &budget);
 
         assert_eq!(health["state"], "warn");
         assert_eq!(health["issues"][0]["kind"], "disk_space");

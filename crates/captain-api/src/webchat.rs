@@ -132,6 +132,9 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
         "store.js" => Some(include_str!("../static/js/app/store.js")),
         "control_contract.mjs" => Some(include_str!("../static/js/app/control_contract.mjs")),
         "status_model.mjs" => Some(include_str!("../static/js/app/status_model.mjs")),
+        "provider_quota_model.mjs" => {
+            Some(include_str!("../static/js/app/provider_quota_model.mjs"))
+        }
         "components/Shell.js" => Some(include_str!("../static/js/app/components/Shell.js")),
         "components/Login.js" => Some(include_str!("../static/js/app/components/Login.js")),
         "components/Markdown.js" => Some(include_str!("../static/js/app/components/Markdown.js")),
@@ -150,6 +153,9 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
         "views/Workflows.js" => Some(include_str!("../static/js/app/views/Workflows.js")),
         "views/Automation.js" => Some(include_str!("../static/js/app/views/Automation.js")),
         "views/Capabilities.js" => Some(include_str!("../static/js/app/views/Capabilities.js")),
+        "views/NativeCapabilities.js" => {
+            Some(include_str!("../static/js/app/views/NativeCapabilities.js"))
+        }
         "views/Status.js" => Some(include_str!("../static/js/app/views/Status.js")),
         "vendor/preact.module.js" => Some(include_str!("../static/vendor/preact/preact.module.js")),
         "vendor/hooks.module.js" => Some(include_str!("../static/vendor/preact/hooks.module.js")),
@@ -176,11 +182,13 @@ mod control_app_asset_tests {
             "main.js",
             "control_contract.mjs",
             "status_model.mjs",
+            "provider_quota_model.mjs",
             "components/Login.js",
             "components/Shell.js",
             "views/Automation.js",
             "views/Workflows.js",
             "views/Capabilities.js",
+            "views/NativeCapabilities.js",
             "views/Status.js",
         ] {
             let content = embedded_app_asset(path)

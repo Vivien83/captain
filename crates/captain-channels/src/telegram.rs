@@ -11,12 +11,14 @@ use crate::telegram_api_response::{
 };
 use crate::telegram_callbacks::callback_command_message;
 pub use crate::telegram_callbacks::{
-    build_approval_keyboard, build_ask_user_keyboard, build_learning_approval_keyboard,
+    build_approval_keyboard, build_ask_user_keyboard, build_capspec_approval_keyboard,
+    build_capspec_uncertain_keyboard, build_learning_approval_keyboard,
     build_model_switch_keyboard, build_model_switch_keyboard_with_recommendation,
     build_project_ask_keyboard, build_skill_proposal_keyboard, build_skill_refinement_keyboard,
-    parse_approval_callback, parse_ask_user_callback, parse_learning_callback,
-    parse_model_switch_callback, parse_project_ask_callback, parse_skill_proposal_callback,
-    parse_skill_refinement_callback,
+    parse_approval_callback, parse_ask_user_callback, parse_capspec_callback,
+    parse_learning_callback, parse_model_switch_callback, parse_project_ask_callback,
+    parse_skill_proposal_callback, parse_skill_refinement_callback, CapSpecTelegramAction,
+    CapSpecTelegramCallback,
 };
 use crate::telegram_html::{sanitize_telegram_html, telegram_html_to_plain_text};
 use crate::telegram_reply_context::apply_telegram_reply_context;
@@ -862,6 +864,12 @@ impl TelegramAdapter {
             .map(|_| ())
     }
 
+    /// Subscribe to this adapter instance's lifecycle. Kernel-side routing
+    /// tasks use it to stop when a channel hot reload replaces the adapter.
+    pub fn shutdown_signal(&self) -> watch::Receiver<bool> {
+        self.shutdown_rx.clone()
+    }
+
     /// Internal helper: send content with optional forum-topic thread_id.
     ///
     /// Both `send()` and `send_in_thread()` delegate here. When `thread_id` is
@@ -1140,6 +1148,22 @@ async fn dispatch_telegram_callback(
 
     acknowledge_telegram_callback(ctx, &callback.id).await;
 
+    if parse_capspec_callback(&callback.data).is_some() {
+        let original_message_id = callback_query["message"]["message_id"].as_i64();
+        let original_text = callback_original_preview_full(callback_query);
+        let msg = crate::telegram_callbacks::capspec_operator_callback_message(
+            &callback.data,
+            callback.chat_id,
+            callback.from_id,
+            &callback.from_name,
+            callback.thread_id.clone(),
+            original_message_id,
+            &original_text,
+        );
+        info!(callback_data = %callback.data, from = %callback.from_name, "Telegram CapSpec operator callback routed directly");
+        return ctx.tx.send(msg).await.is_ok();
+    }
+
     if let Some((short_id, idx)) = parse_ask_user_callback(&callback.data) {
         let original_message_id = callback_query["message"]["message_id"].as_i64();
         let msg = crate::telegram_callbacks::ask_user_answer_callback_message(
@@ -1326,12 +1350,17 @@ fn build_unhandled_callback_message(
 }
 
 fn callback_original_preview(callback_query: &serde_json::Value) -> String {
-    callback_query["message"]["text"]
-        .as_str()
-        .unwrap_or("")
+    callback_original_preview_full(callback_query)
         .chars()
         .take(100)
         .collect()
+}
+
+fn callback_original_preview_full(callback_query: &serde_json::Value) -> String {
+    callback_query["message"]["text"]
+        .as_str()
+        .unwrap_or("")
+        .to_string()
 }
 
 fn shortened_callback_preview(preview: &str) -> String {

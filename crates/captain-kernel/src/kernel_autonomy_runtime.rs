@@ -339,14 +339,13 @@ mod tests {
 
         // Exhaust the hourly quota.
         kernel.scheduler.set_hourly_quota(agent_id, 100);
-        kernel.scheduler.record_usage(
-            agent_id,
-            &TokenUsage {
-                input_tokens: 200,
-                output_tokens: 100,
-                ..Default::default()
-            },
-        );
+        let usage = TokenUsage {
+            input_tokens: 200,
+            output_tokens: 100,
+            ..Default::default()
+        };
+        kernel.scheduler.record_usage(agent_id, &usage);
+        kernel.record_usage_metering(agent_id, "codex", "quota-heartbeat-test", &usage, 1);
         assert!(quota_throttled(&kernel, agent_id));
 
         let status = HeartbeatStatus {
@@ -366,8 +365,12 @@ mod tests {
             AgentState::Running
         );
 
-        // Same status with quota available: normal crash-marking applies.
+        // A process-local reset must not bypass the durable quota.
         kernel.scheduler.reset_usage(agent_id);
+        assert!(quota_throttled(&kernel, agent_id));
+
+        // Same status with quota headroom: normal crash-marking applies.
+        kernel.scheduler.set_hourly_quota(agent_id, 1_000);
         assert!(!quota_throttled(&kernel, agent_id));
         process_heartbeat_status(&kernel, &heartbeat_config, &tracker, &status).await;
         assert_eq!(

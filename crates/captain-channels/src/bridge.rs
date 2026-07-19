@@ -239,6 +239,18 @@ pub trait ChannelBridgeHandle: Send + Sync {
         Err("ask_user answer routing is not supported by this runtime".to_string())
     }
 
+    /// Resolve a Captain Forge Telegram callback in the control plane.
+    ///
+    /// The callback must never become an agent turn: the implementation is
+    /// responsible for exact-state validation, authorization and auditing.
+    async fn try_resolve_capspec_callback(
+        &self,
+        _callback_data: &str,
+        _actor: &str,
+    ) -> Result<String, String> {
+        Err("Captain Forge callback routing is not supported by this runtime".to_string())
+    }
+
     /// Find an agent by name, returning its ID.
     async fn find_agent_by_name(&self, name: &str) -> Result<Option<AgentId>, String>;
 
@@ -959,6 +971,9 @@ impl ChannelDispatchTask {
             Err(_) => return,
         };
 
+        if self.try_resolve_capspec_operator_callback().await {
+            return;
+        }
         if self.try_resolve_ask_user_answer().await {
             return;
         }
@@ -980,6 +995,74 @@ impl ChannelDispatchTask {
             return;
         }
         self.start_or_queue_inbound_session(key).await;
+    }
+
+    /// Resolve Captain Forge buttons before any generic session machinery can
+    /// turn the synthetic callback envelope into model input.
+    async fn try_resolve_capspec_operator_callback(&self) -> bool {
+        let Some(callback_data) = self
+            .message
+            .metadata
+            .get("capspec_callback_data")
+            .and_then(|value| value.as_str())
+        else {
+            return false;
+        };
+        let sender_id = self
+            .message
+            .metadata
+            .get("sender_user_id")
+            .and_then(|value| value.as_i64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let actor = format!("telegram:{sender_id}");
+        let result = self
+            .handle
+            .try_resolve_capspec_callback(callback_data, &actor)
+            .await;
+        let original = self
+            .message
+            .metadata
+            .get("original_text")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim();
+        let decision_text = match result {
+            Ok(status) => format!("✅ **Décision appliquée**\n\n{status}"),
+            Err(reason) => format!("⚠️ **Décision non appliquée**\n\n{reason}"),
+        };
+        let rendered = if original.is_empty() {
+            decision_text
+        } else {
+            format!("{original}\n\n---\n\n{decision_text}")
+        };
+
+        let mut metadata = HashMap::new();
+        if let Some(chat_id) = self.message.metadata.get("chat_id") {
+            metadata.insert("chat_id".to_string(), chat_id.clone());
+        }
+        if let Some(thread_id) = &self.message.thread_id {
+            metadata.insert("thread_id".to_string(), serde_json::json!(thread_id));
+        }
+        let edited = if self.message.platform_message_id.is_empty() {
+            false
+        } else {
+            self.adapter
+                .edit_rich(&self.message.platform_message_id, &rendered, &metadata)
+                .await
+                .is_ok()
+        };
+        if !edited {
+            let _ = self
+                .adapter
+                .send_rich(
+                    &self.message.sender,
+                    ChannelContent::Text(rendered),
+                    &metadata,
+                )
+                .await;
+        }
+        true
     }
 
     /// TG2 — resolve an `ask_user` inline-keyboard click before any of the
@@ -1506,6 +1589,45 @@ mod tests {
         calls: Mutex<Vec<(String, usize)>>,
     }
 
+    struct CapSpecHandle {
+        result: Result<String, String>,
+        calls: Mutex<Vec<(String, String)>>,
+        model_calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ChannelBridgeHandle for CapSpecHandle {
+        async fn send_message(
+            &self,
+            _agent_id: AgentId,
+            _message: &str,
+            _channel_type: Option<&str>,
+        ) -> Result<String, String> {
+            *self.model_calls.lock().unwrap() += 1;
+            Err("model path must not be reached".to_string())
+        }
+        async fn try_resolve_capspec_callback(
+            &self,
+            callback_data: &str,
+            actor: &str,
+        ) -> Result<String, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((callback_data.to_string(), actor.to_string()));
+            self.result.clone()
+        }
+        async fn find_agent_by_name(&self, _name: &str) -> Result<Option<AgentId>, String> {
+            Ok(None)
+        }
+        async fn list_agents(&self) -> Result<Vec<(AgentId, String)>, String> {
+            Ok(Vec::new())
+        }
+        async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
+            Err("spawn not implemented in mock".to_string())
+        }
+    }
+
     #[async_trait]
     impl ChannelBridgeHandle for AskUserHandle {
         async fn send_message(
@@ -1536,6 +1658,7 @@ mod tests {
     struct RecordingAdapter {
         telegram: bool,
         sent: Mutex<Vec<String>>,
+        edits: Mutex<Vec<(String, String)>>,
     }
 
     #[async_trait]
@@ -1577,6 +1700,18 @@ mod tests {
             self.send(user, content).await?;
             Ok(Some("17".to_string()))
         }
+        async fn edit_rich(
+            &self,
+            message_id: &str,
+            text: &str,
+            _metadata: &HashMap<String, serde_json::Value>,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            self.edits
+                .lock()
+                .unwrap()
+                .push((message_id.to_string(), text.to_string()));
+            Ok(())
+        }
         async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
@@ -1617,6 +1752,7 @@ mod tests {
         let adapter = Arc::new(RecordingAdapter {
             telegram: false,
             sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
         });
         let task = ask_user_dispatch_task(Arc::clone(&handle), Arc::clone(&adapter), "short-1", 2);
 
@@ -1640,6 +1776,7 @@ mod tests {
         let adapter = Arc::new(RecordingAdapter {
             telegram: true,
             sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
         });
         let task = ask_user_dispatch_task(handle, Arc::clone(&adapter), "stale-id", 0);
 
@@ -1662,6 +1799,7 @@ mod tests {
         let adapter = Arc::new(RecordingAdapter {
             telegram: false,
             sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
         });
         let task = ChannelDispatchTask {
             message: test_message(ChannelContent::Text("hello".to_string())),
@@ -1676,6 +1814,62 @@ mod tests {
         };
 
         assert!(!task.try_resolve_ask_user_answer().await);
+    }
+
+    #[tokio::test]
+    async fn capspec_callback_is_resolved_and_edited_without_an_agent_turn() {
+        let callback = "capspec:approve:0123456789abcdefabcd";
+        let handle = Arc::new(CapSpecHandle {
+            result: Ok("Exact revision approved.".to_string()),
+            calls: Mutex::new(Vec::new()),
+            model_calls: Mutex::new(0),
+        });
+        let adapter = Arc::new(RecordingAdapter {
+            telegram: true,
+            sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
+        });
+        let mut message = test_message(ChannelContent::Text(
+            "[Captain Forge operator decision]".to_string(),
+        ));
+        message.metadata.insert(
+            "capspec_callback_data".to_string(),
+            serde_json::json!(callback),
+        );
+        message
+            .metadata
+            .insert("sender_user_id".to_string(), serde_json::json!(42));
+        message
+            .metadata
+            .insert("chat_id".to_string(), serde_json::json!(-1001));
+        message.metadata.insert(
+            "original_text".to_string(),
+            serde_json::json!("Captain Forge - approval required"),
+        );
+        let task = ChannelDispatchTask {
+            message,
+            recovered_key: None,
+            handle: handle.clone(),
+            router: Arc::new(AgentRouter::new()),
+            adapter: adapter.clone(),
+            rate_limiter: ChannelRateLimiter::default(),
+            pending_model_switches: test_pending_model_switches(),
+            inbound_sessions: InboundSessionQueue::default(),
+            semaphore: Arc::new(Semaphore::new(1)),
+        };
+
+        assert!(task.try_resolve_capspec_operator_callback().await);
+        assert_eq!(
+            *handle.calls.lock().unwrap(),
+            vec![(callback.to_string(), "telegram:42".to_string())]
+        );
+        assert_eq!(*handle.model_calls.lock().unwrap(), 0);
+        let edits = adapter.edits.lock().unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].0, "m1");
+        assert!(edits[0].1.contains("Décision appliquée"));
+        assert!(edits[0].1.contains("Exact revision approved."));
+        assert!(adapter.sent.lock().unwrap().is_empty());
     }
 
     #[test]

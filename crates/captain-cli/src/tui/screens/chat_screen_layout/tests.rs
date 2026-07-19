@@ -2,22 +2,24 @@ use super::*;
 
 #[test]
 fn screen_areas_reserve_preview_input_and_footer_rows() {
-    let areas = chat_screen_areas(Rect::new(2, 3, 80, 20), "hello", 2);
+    let areas = chat_screen_areas(Rect::new(2, 3, 80, 20), "hello", 2, 2);
 
-    assert_eq!(areas.messages, Rect::new(2, 3, 80, 15));
-    assert_eq!(areas.separator, Rect::new(2, 18, 80, 1));
-    assert_eq!(areas.preview, Rect::new(2, 19, 80, 2));
-    assert_eq!(areas.input, Rect::new(2, 21, 80, 1));
-    assert_eq!(areas.footer, Rect::new(2, 22, 80, 1));
+    assert_eq!(areas.messages, Rect::new(2, 3, 80, 13));
+    assert_eq!(areas.separator, Rect::new(2, 16, 80, 1));
+    assert_eq!(areas.preview, Rect::new(2, 17, 80, 2));
+    assert_eq!(areas.input, Rect::new(2, 19, 80, 1));
+    assert_eq!(areas.footer, Rect::new(2, 20, 80, 1));
+    assert_eq!(areas.provider_quota, Rect::new(2, 21, 80, 2));
 }
 
 #[test]
 fn screen_areas_clamp_wrapped_input_to_ten_rows() {
     let input = "x".repeat(200);
-    let areas = chat_screen_areas(Rect::new(0, 0, 20, 30), &input, 0);
+    let areas = chat_screen_areas(Rect::new(0, 0, 20, 30), &input, 0, 0);
 
     assert_eq!(areas.input.height, 10);
     assert_eq!(areas.footer.height, 1);
+    assert_eq!(areas.provider_quota.height, 0);
     assert_eq!(areas.messages.height, 18);
 }
 

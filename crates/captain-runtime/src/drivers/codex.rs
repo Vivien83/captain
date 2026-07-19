@@ -16,8 +16,12 @@
 //! et du Codex CLI officiel (codex_cli_rs).
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::provider_quota::{
+    parse_codex_rate_limit_event, parse_codex_rate_limit_headers, ProviderQuotaObserver,
+};
 use async_trait::async_trait;
 use captain_types::message::{ContentBlock, MessageContent, Role, StopReason, TokenUsage};
+use captain_types::quota::{ProviderQuotaSnapshot, ProviderQuotaSource, QuotaExceededInfo};
 use captain_types::tool::ToolCall;
 use futures::StreamExt;
 use serde::Serialize;
@@ -28,10 +32,10 @@ use tracing::{debug, warn};
 
 /// Stable User-Agent that Cloudflare whitelists for the chatgpt.com
 /// codex backend. **Do not change** — using the wrong UA causes 403.
-const CODEX_UA: &str = "codex_cli_rs/0.0.0 (Captain Agent)";
+pub(crate) const CODEX_UA: &str = "codex_cli_rs/0.0.0 (Captain Agent)";
 
 /// Required header — same constraint as the User-Agent.
-const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+pub(crate) const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 
 const CODEX_REASONING_METADATA_KEY: &str = "codex_reasoning";
 
@@ -43,10 +47,20 @@ pub struct CodexDriver {
     /// still attempts requests; the backend may reject them).
     account_id: Option<String>,
     client: reqwest::Client,
+    quota_observer: Option<ProviderQuotaObserver>,
 }
 
 impl CodexDriver {
     pub fn new(access_token: String, base_url: String) -> Self {
+        Self::new_with_quota_observer(access_token, base_url, None)
+    }
+
+    /// Create a Codex driver that publishes real provider quota observations.
+    pub fn new_with_quota_observer(
+        access_token: String,
+        base_url: String,
+        quota_observer: Option<ProviderQuotaObserver>,
+    ) -> Self {
         let account_id = extract_chatgpt_account_id(&access_token);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
@@ -57,6 +71,7 @@ impl CodexDriver {
             base_url,
             account_id,
             client,
+            quota_observer,
         }
     }
 
@@ -76,12 +91,32 @@ impl CodexDriver {
         }
         b
     }
+
+    fn observe_headers(
+        &self,
+        headers: &reqwest::header::HeaderMap,
+        source: ProviderQuotaSource,
+    ) -> Vec<ProviderQuotaSnapshot> {
+        let snapshots = parse_codex_rate_limit_headers(headers, source);
+        if let Some(observer) = &self.quota_observer {
+            for snapshot in &snapshots {
+                observer(snapshot.clone());
+            }
+        }
+        snapshots
+    }
+
+    fn observe_snapshot(&self, snapshot: ProviderQuotaSnapshot) {
+        if let Some(observer) = &self.quota_observer {
+            observer(snapshot);
+        }
+    }
 }
 
 /// Extract `chatgpt_account_id` from a JWT access token without verifying
 /// the signature. The Codex backend expects this id as the
 /// `ChatGPT-Account-ID` header on every `/responses` call.
-fn extract_chatgpt_account_id(token: &str) -> Option<String> {
+pub(crate) fn extract_chatgpt_account_id(token: &str) -> Option<String> {
     use base64::Engine;
 
     let parts: Vec<&str> = token.split('.').collect();
@@ -967,12 +1002,24 @@ impl LlmDriver for CodexDriver {
             .map_err(|e| LlmError::Http(e.to_string()))?;
 
         let mut status = resp.status();
+        let mut quota_snapshots = self.observe_headers(
+            resp.headers(),
+            if status.is_success() {
+                ProviderQuotaSource::ResponseHeaders
+            } else {
+                ProviderQuotaSource::ErrorResponse
+            },
+        );
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             let first_body = resp.text().await.unwrap_or_default();
             if let Some(new_token) =
                 crate::model_catalog::refresh_or_rotate_codex_credential(&self.access_token).await
             {
-                let retry_driver = CodexDriver::new(new_token, self.base_url.clone());
+                let retry_driver = CodexDriver::new_with_quota_observer(
+                    new_token,
+                    self.base_url.clone(),
+                    self.quota_observer.clone(),
+                );
                 resp = retry_driver
                     .auth_headers(retry_driver.client.post(retry_driver.endpoint()))
                     .header("Accept", "text/event-stream")
@@ -981,13 +1028,27 @@ impl LlmDriver for CodexDriver {
                     .await
                     .map_err(|e| LlmError::Http(e.to_string()))?;
                 status = resp.status();
+                quota_snapshots = retry_driver.observe_headers(
+                    resp.headers(),
+                    if status.is_success() {
+                        ProviderQuotaSource::ResponseHeaders
+                    } else {
+                        ProviderQuotaSource::ErrorResponse
+                    },
+                );
             } else {
-                return Err(map_status_error(status, first_body));
+                return Err(map_status_error(status, first_body, &quota_snapshots, None));
             }
         }
         if !status.is_success() {
+            let retry_after = parse_retry_after_header(resp.headers());
             let body = resp.text().await.unwrap_or_default();
-            return Err(map_status_error(status, body));
+            return Err(map_status_error(
+                status,
+                body,
+                &quota_snapshots,
+                retry_after,
+            ));
         }
 
         let mut state = CodexStreamState::new();
@@ -1004,14 +1065,22 @@ impl LlmDriver for CodexDriver {
                 let Some((typ, value)) = parse_sse_event(&raw_event) else {
                     continue;
                 };
+                if let Some(snapshot) = parse_codex_rate_limit_event(&value) {
+                    self.observe_snapshot(snapshot);
+                    continue;
+                }
                 for event in state.ingest_event(&typ, &value)? {
                     let _ = tx.send(event).await;
                 }
             }
         }
         if let Some((typ, value)) = parse_sse_event(&buffer) {
-            for event in state.ingest_event(&typ, &value)? {
-                let _ = tx.send(event).await;
+            if let Some(snapshot) = parse_codex_rate_limit_event(&value) {
+                self.observe_snapshot(snapshot);
+            } else {
+                for event in state.ingest_event(&typ, &value)? {
+                    let _ = tx.send(event).await;
+                }
             }
         }
 
@@ -1049,7 +1118,12 @@ impl LlmDriver for CodexDriver {
     }
 }
 
-fn map_status_error(status: reqwest::StatusCode, body: String) -> LlmError {
+fn map_status_error(
+    status: reqwest::StatusCode,
+    body: String,
+    quota_snapshots: &[ProviderQuotaSnapshot],
+    retry_after_ms: Option<u64>,
+) -> LlmError {
     let s = status.as_u16();
     match s {
         401 | 403 => LlmError::AuthenticationFailed(format!(
@@ -1061,7 +1135,16 @@ fn map_status_error(status: reqwest::StatusCode, body: String) -> LlmError {
             truncate(&body, 200)
         )),
         429 => {
-            let retry_ms = parse_retry_after(&body).unwrap_or(5000);
+            if let Some(snapshot) = quota_snapshots.iter().find(|snapshot| {
+                snapshot.alert_level() == captain_types::quota::QuotaAlertLevel::Exhausted
+            }) {
+                return LlmError::SubscriptionQuotaExceeded {
+                    info: Box::new(QuotaExceededInfo::provider_subscription(snapshot)),
+                };
+            }
+            let retry_ms = retry_after_ms
+                .or_else(|| parse_retry_after(&body))
+                .unwrap_or(5000);
             LlmError::RateLimited {
                 retry_after_ms: retry_ms,
             }
@@ -1074,6 +1157,15 @@ fn map_status_error(status: reqwest::StatusCode, body: String) -> LlmError {
             message: truncate(&body, 500),
         },
     }
+}
+
+fn parse_retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let seconds = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    seconds
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| (value * 1_000.0).ceil() as u64)
 }
 
 fn parse_retry_after(body: &str) -> Option<u64> {
@@ -1611,12 +1703,40 @@ mod tests {
     #[test]
     fn map_status_error_classifies_429_with_retry_after() {
         let body = r#"{"error":{"retry_after_ms":7500}}"#.to_string();
-        let err = map_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS, body);
+        let err = map_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS, body, &[], None);
         assert!(matches!(
             err,
             LlmError::RateLimited {
                 retry_after_ms: 7500
             }
         ));
+    }
+
+    #[test]
+    fn map_status_error_preserves_subscription_reset_without_retry_loop() {
+        let snapshot = ProviderQuotaSnapshot {
+            provider: "codex".to_string(),
+            limit_id: "codex".to_string(),
+            limit_name: Some("Codex".to_string()),
+            primary: Some(captain_types::quota::ProviderQuotaWindow {
+                used_percent: 100.0,
+                window_seconds: Some(18_000),
+                reset_after_seconds: Some(300),
+                resets_at: None,
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: Some("plus".to_string()),
+            rate_limit_reached_type: Some("primary".to_string()),
+            source: ProviderQuotaSource::ErrorResponse,
+            observed_at: chrono::Utc::now(),
+        };
+        let error = map_status_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            String::new(),
+            &[snapshot],
+            None,
+        );
+        assert!(matches!(error, LlmError::SubscriptionQuotaExceeded { .. }));
     }
 }

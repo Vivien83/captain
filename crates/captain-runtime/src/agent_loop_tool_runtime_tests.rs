@@ -64,6 +64,12 @@ fn explicit_package_timeout_disables_outer_tool_wall() {
 }
 
 #[test]
+fn capspec_uses_its_own_durable_deadline() {
+    let timeout = tool_timeout_guard_secs("cap_project_release", &serde_json::json!({}), None);
+    assert_eq!(timeout, None);
+}
+
+#[test]
 fn default_tool_timeout_keeps_outer_guard() {
     let timeout = tool_timeout_guard_secs(
         "shell_exec",

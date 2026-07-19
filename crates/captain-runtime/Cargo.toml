@@ -7,6 +7,7 @@ description = "Agent runtime and execution environment for Captain"
 
 [dependencies]
 captain-types = { path = "../captain-types" }
+captain-capspec = { path = "../captain-capspec" }
 captain-memory = { path = "../captain-memory" }
 captain-skills = { path = "../captain-skills" }
 captain-extensions = { path = "../captain-extensions" }

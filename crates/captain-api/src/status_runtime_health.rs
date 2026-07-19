@@ -29,6 +29,7 @@ pub fn build_runtime_health_status(
     consciousness: &Value,
     disk: &Value,
     shutdown: &Value,
+    budget: &Value,
 ) -> Value {
     let mut issues = Vec::new();
     let mut max_severity = Severity::Ok;
@@ -75,6 +76,7 @@ pub fn build_runtime_health_status(
     add_consciousness_issue(&mut issues, &mut max_severity, consciousness);
     add_disk_issue(&mut issues, &mut max_severity, disk);
     add_shutdown_issue(&mut issues, &mut max_severity, shutdown);
+    add_provider_quota_issue(&mut issues, &mut max_severity, budget);
 
     let actions = unique_actions(&issues);
     serde_json::json!({
@@ -83,6 +85,51 @@ pub fn build_runtime_health_status(
         "issues": issues,
         "operator_actions": actions,
     })
+}
+
+fn add_provider_quota_issue(issues: &mut Vec<Value>, max_severity: &mut Severity, budget: &Value) {
+    let provider = &budget["provider_subscriptions"];
+    let state = provider["state"].as_str().unwrap_or("unavailable");
+    let (severity, summary, fallback_action) = match state {
+        "exhausted" => (
+            Severity::Critical,
+            "The provider subscription quota is exhausted.",
+            "Wait for the provider-reported reset or change the configured model deliberately.",
+        ),
+        "critical" => (
+            Severity::Warn,
+            "The provider subscription quota is near exhaustion.",
+            "Inspect provider quota windows before starting long work.",
+        ),
+        "warning" => (
+            Severity::Watch,
+            "The provider subscription quota crossed the warning threshold.",
+            "Inspect provider quota windows before starting long work.",
+        ),
+        "stale" => (
+            Severity::Watch,
+            "The last provider subscription quota observation is stale.",
+            "Verify the Codex session and network before relying on the displayed allowance.",
+        ),
+        _ => return,
+    };
+    let action = budget["operator_actions"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|item| item.contains("Provider subscription"))
+        })
+        .unwrap_or(fallback_action);
+    push_issue(
+        issues,
+        max_severity,
+        severity,
+        "provider_subscription_quota",
+        summary,
+        action,
+    );
 }
 
 fn add_shutdown_issue(issues: &mut Vec<Value>, max_severity: &mut Severity, shutdown: &Value) {
@@ -254,7 +301,7 @@ fn unique_actions(issues: &[Value]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn clean_inputs() -> (Value, Value, Value, Value, Value, Value) {
+    fn clean_inputs() -> (Value, Value, Value, Value, Value, Value, Value) {
         (
             serde_json::json!({"locked": []}),
             serde_json::json!({
@@ -284,12 +331,16 @@ mod tests {
                 "cleanup_recommended": false
             }),
             serde_json::json!({"status": "idle", "active_run_count": 0}),
+            serde_json::json!({
+                "provider_subscriptions": {"state": "ok"},
+                "operator_actions": []
+            }),
         )
     }
 
     #[test]
     fn runtime_health_is_ok_when_core_signals_are_clean() {
-        let (channels, workload, agent_api, consciousness, disk, shutdown) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, disk, shutdown, budget) = clean_inputs();
         let status = build_runtime_health_status(
             true,
             &channels,
@@ -298,6 +349,7 @@ mod tests {
             &consciousness,
             &disk,
             &shutdown,
+            &budget,
         );
 
         assert_eq!(status["state"], "ok");
@@ -306,7 +358,7 @@ mod tests {
 
     #[test]
     fn runtime_health_promotes_llm_failure_to_critical() {
-        let (channels, workload, agent_api, consciousness, disk, shutdown) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, disk, shutdown, budget) = clean_inputs();
         let status = build_runtime_health_status(
             false,
             &channels,
@@ -315,6 +367,7 @@ mod tests {
             &consciousness,
             &disk,
             &shutdown,
+            &budget,
         );
 
         assert_eq!(status["state"], "critical");
@@ -323,7 +376,8 @@ mod tests {
 
     #[test]
     fn runtime_health_rolls_up_delivery_and_agent_api_issues() {
-        let (channels, mut workload, mut agent_api, consciousness, disk, shutdown) = clean_inputs();
+        let (channels, mut workload, mut agent_api, consciousness, disk, shutdown, budget) =
+            clean_inputs();
         workload["automation"]["delivery"]["redelivery_due"] = serde_json::json!(1);
         agent_api["egress_queue"]["pending"] = serde_json::json!(2);
         agent_api["egress_queue"]["dead_letters"] = serde_json::json!(1);
@@ -335,6 +389,7 @@ mod tests {
             &consciousness,
             &disk,
             &shutdown,
+            &budget,
         );
 
         assert_eq!(status["state"], "warn");
@@ -343,7 +398,8 @@ mod tests {
 
     #[test]
     fn runtime_health_warns_when_disk_cleanup_is_recommended() {
-        let (channels, workload, agent_api, consciousness, mut disk, shutdown) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, mut disk, shutdown, budget) =
+            clean_inputs();
         disk["available_gib"] = serde_json::json!(14.9);
         disk["cleanup_recommended"] = serde_json::json!(true);
         let status = build_runtime_health_status(
@@ -354,6 +410,7 @@ mod tests {
             &consciousness,
             &disk,
             &shutdown,
+            &budget,
         );
 
         assert_eq!(status["state"], "warn");
@@ -362,7 +419,7 @@ mod tests {
 
     #[test]
     fn runtime_health_watches_shutdown_drain() {
-        let (channels, workload, agent_api, consciousness, disk, _) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, disk, _, budget) = clean_inputs();
         let shutdown = serde_json::json!({
             "status": "draining",
             "trigger": "SIGTERM",
@@ -379,9 +436,38 @@ mod tests {
             &consciousness,
             &disk,
             &shutdown,
+            &budget,
         );
 
         assert_eq!(status["state"], "watch");
         assert_eq!(status["issues"][0]["kind"], "shutdown_draining");
+    }
+
+    #[test]
+    fn runtime_health_promotes_exhausted_provider_quota_to_critical() {
+        let (channels, workload, agent_api, consciousness, disk, shutdown, mut budget) =
+            clean_inputs();
+        budget["provider_subscriptions"]["state"] = serde_json::json!("exhausted");
+        budget["operator_actions"] = serde_json::json!([
+            "Provider subscription quota Codex is exhausted. Retry after 2026-07-18T18:00:00Z."
+        ]);
+
+        let status = build_runtime_health_status(
+            true,
+            &channels,
+            &workload,
+            &agent_api,
+            &consciousness,
+            &disk,
+            &shutdown,
+            &budget,
+        );
+
+        assert_eq!(status["state"], "critical");
+        assert_eq!(status["issues"][0]["kind"], "provider_subscription_quota");
+        assert!(status["issues"][0]["action"]
+            .as_str()
+            .unwrap()
+            .contains("2026-07-18T18:00:00Z"));
     }
 }

@@ -5,6 +5,43 @@ use std::sync::Arc;
 pub(crate) fn mount_capability_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router
         .route(
+            "/api/capabilities/native",
+            axum::routing::get(routes::list_native_capabilities),
+        )
+        .route(
+            "/api/capabilities/native/validate",
+            axum::routing::post(routes::validate_native_capability),
+        )
+        .route(
+            "/api/capabilities/native/install",
+            axum::routing::post(routes::install_native_capability),
+        )
+        .route(
+            "/api/capabilities/native/runs",
+            axum::routing::get(routes::list_native_capability_runs),
+        )
+        .route(
+            "/api/capabilities/native/runs/{run_id}",
+            axum::routing::get(routes::inspect_native_capability_run),
+        )
+        .route(
+            "/api/capabilities/native/runs/{run_id}/decision",
+            axum::routing::post(routes::resolve_uncertain_native_capability_run),
+        )
+        .route(
+            "/api/capabilities/native/{name}/decision",
+            axum::routing::post(routes::decide_native_capability),
+        )
+        .route(
+            "/api/capabilities/native/{name}/rollback",
+            axum::routing::post(routes::rollback_native_capability),
+        )
+        .route(
+            "/api/capabilities/native/{name}",
+            axum::routing::get(routes::inspect_native_capability)
+                .delete(routes::disable_native_capability),
+        )
+        .route(
             "/api/agents/{id}/update",
             axum::routing::put(routes::update_agent),
         )

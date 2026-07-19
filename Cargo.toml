@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/captain-types",
+    "crates/captain-capspec",
     "crates/captain-memory",
     "crates/captain-runtime",
     "crates/captain-wire",

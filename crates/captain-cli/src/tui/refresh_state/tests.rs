@@ -102,12 +102,12 @@ fn learning_view_refresh_routes_match_hub_views() {
 #[test]
 fn capabilities_view_refresh_routes_match_hub_views() {
     assert_eq!(
-        capabilities_refresh_route_for_view(CapabilitiesView::Skills),
-        CapabilitiesRefreshRoute::Skills
+        capabilities_refresh_route_for_view(CapabilitiesView::Native),
+        CapabilitiesRefreshRoute::Native
     );
     assert_eq!(
-        capabilities_refresh_route_for_view(CapabilitiesView::Hands),
-        CapabilitiesRefreshRoute::Hands
+        capabilities_refresh_route_for_view(CapabilitiesView::Skills),
+        CapabilitiesRefreshRoute::Skills
     );
 }
 

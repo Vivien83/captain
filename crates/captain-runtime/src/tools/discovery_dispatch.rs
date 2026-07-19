@@ -1,5 +1,6 @@
 //! Docs and capability discovery dispatch.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use captain_skills::registry::SkillRegistry;
@@ -18,11 +19,19 @@ pub(crate) async fn dispatch_discovery_tool(
     skill_registry: Option<&SkillRegistry>,
     mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     match tool_name {
         "captain_docs" => tool_captain_docs(input).await,
         "capability_search" => {
-            tool_capability_search(input, skill_registry, mcp_connections, kernel).await
+            tool_capability_search(
+                input,
+                skill_registry,
+                mcp_connections,
+                kernel,
+                workspace_root,
+            )
+            .await
         }
         "skill_search" => tool_skill_search(input, skill_registry),
         "skill_view" => tool_skill_view(input, skill_registry),

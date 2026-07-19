@@ -18,13 +18,18 @@
 //! plug in their own send path.
 
 use captain_channels::telegram::{
+    build_capspec_approval_keyboard, build_capspec_uncertain_keyboard,
     build_learning_approval_keyboard, build_project_ask_keyboard, build_skill_proposal_keyboard,
     build_skill_refinement_keyboard, TelegramAdapter,
 };
 use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelUser};
 use captain_types::event::{ChatStreamEvent, EventPayload};
+use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, warn};
+
+use crate::kernel::{CapSpecTelegramPrompt, CapSpecTelegramPromptKind, CaptainKernel};
 
 /// Render the discreet `🧠` notice that we surface back to the user.
 /// Kept short and deterministic so subscribers across channels look
@@ -639,6 +644,159 @@ pub fn spawn_telegram_project_ask_routing(
     })
 }
 
+/// Surface every currently actionable Captain Forge decision on Telegram.
+///
+/// This is a state scanner rather than a transient-event subscriber: pending
+/// approvals and crash-recovery decisions therefore reappear after a daemon
+/// restart. The deterministic identity set suppresses duplicates while an
+/// adapter instance is alive, and the adapter shutdown signal terminates the
+/// task during channel hot reload.
+pub fn spawn_telegram_capspec_routing(
+    kernel: Arc<CaptainKernel>,
+    adapter: Arc<TelegramAdapter>,
+    chat_id: i64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut sent = BTreeSet::new();
+        let mut shutdown = adapter.shutdown_signal();
+        loop {
+            if *shutdown.borrow() {
+                break;
+            }
+            match kernel.capspec_telegram_prompts() {
+                Ok(prompts) => {
+                    let current = prompts
+                        .iter()
+                        .map(capspec_prompt_identity)
+                        .collect::<BTreeSet<_>>();
+                    sent.retain(|identity| current.contains(identity));
+                    for prompt in prompts {
+                        let identity = capspec_prompt_identity(&prompt);
+                        if sent.contains(&identity) {
+                            continue;
+                        }
+                        let (text, keyboard) = format_capspec_telegram_prompt(&prompt);
+                        match adapter
+                            .send_text_with_keyboard(chat_id, &text, &keyboard)
+                            .await
+                        {
+                            Ok(()) => {
+                                sent.insert(identity);
+                                debug!(token = %prompt.token, "Telegram CapSpec operator prompt sent");
+                            }
+                            Err(error) => warn!(
+                                error = %error,
+                                token = %prompt.token,
+                                "Telegram CapSpec operator routing send failed"
+                            ),
+                        }
+                    }
+                }
+                Err(error) => warn!(error = %error, "Telegram CapSpec operator scan failed"),
+            }
+
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+}
+
+pub fn format_capspec_telegram_prompt(
+    prompt: &CapSpecTelegramPrompt,
+) -> (String, serde_json::Value) {
+    match prompt.kind {
+        CapSpecTelegramPromptKind::Approval => {
+            let authority = if prompt.authority.is_empty() {
+                "- no expanded authority".to_string()
+            } else {
+                prompt
+                    .authority
+                    .iter()
+                    .map(|line| format!("- {}", telegram_code(line)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            (
+                format!(
+                "🧩 **Captain Forge — validation requise**\n\n\
+                     **{}** v{}\n\
+                     Description : `{}`\n\n\
+                     Portée : `{}`\n\
+                     Hash source exact : `{}`\n\n\
+                     **Autorité demandée**\n{}\n\n\
+                     La décision s'applique uniquement au hash exact ci-dessus.",
+                    telegram_code(&prompt.name),
+                    telegram_code(&prompt.version),
+                    telegram_inline_text(&prompt.description),
+                    telegram_code(&prompt.scope),
+                    prompt.source_hash,
+                    authority,
+                ),
+                build_capspec_approval_keyboard(&prompt.token),
+            )
+        }
+        CapSpecTelegramPromptKind::Uncertain => (
+            format!(
+                "⚠️ **Captain Forge — décision runtime requise**\n\n\
+                 **{}** ne peut pas prouver si l'effet externe a abouti.\n\n\
+                 Run: `{}`\n\
+                 Hash source : `{}`\n\
+                 Portée : `{}`\n\
+                 Nœud : `{}`\n\
+                 Outil : `{}`\n\
+                 Tentative : {}\n\
+                 Tool use : `{}`\n\
+                 Origine : `{}`\n\n\
+                 Réessayer peut répéter l'effet. Confirmer enregistre une sortie `null` ; utilise Control ou l'API si une sortie structurée est nécessaire. Marquer en échec arrête le run.",
+                telegram_code(&prompt.name),
+                telegram_code(prompt.run_id.as_deref().unwrap_or("unknown")),
+                prompt.source_hash,
+                telegram_code(&prompt.scope),
+                telegram_code(prompt.node_id.as_deref().unwrap_or("unknown")),
+                telegram_code(prompt.tool_name.as_deref().unwrap_or("unknown")),
+                prompt.attempt.unwrap_or_default(),
+                telegram_code(prompt.tool_use_id.as_deref().unwrap_or("unknown")),
+                telegram_code(prompt.origin.as_deref().unwrap_or("unknown")),
+            ),
+            build_capspec_uncertain_keyboard(&prompt.token),
+        ),
+    }
+}
+
+fn capspec_prompt_identity(prompt: &CapSpecTelegramPrompt) -> String {
+    format!("{:?}:{}", prompt.kind, prompt.token)
+}
+
+fn telegram_code(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .map(|character| if character == '`' { '\'' } else { character })
+        .collect()
+}
+
+fn telegram_inline_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() || character == '`' {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn spawn_telegram_memory_routing(
     event_bus: crate::event_bus::EventBus,
     adapter: Arc<dyn ChannelAdapter>,
@@ -669,6 +827,59 @@ pub fn spawn_telegram_memory_routing(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capspec_approval_prompt_keeps_exact_hash_and_compact_callback() {
+        let prompt = CapSpecTelegramPrompt {
+            kind: CapSpecTelegramPromptKind::Approval,
+            token: "a".repeat(20),
+            name: "release-check".to_string(),
+            scope: "global".to_string(),
+            description: "Check **one** `release`.\nNo spoofing.".to_string(),
+            version: "1.2.3".to_string(),
+            source_hash: "f".repeat(64),
+            authority: vec!["network hosts: api.example.com".to_string()],
+            run_id: None,
+            node_id: None,
+            tool_name: None,
+            tool_use_id: None,
+            attempt: None,
+            origin: None,
+        };
+        let (text, keyboard) = format_capspec_telegram_prompt(&prompt);
+        assert!(text.contains(&"f".repeat(64)));
+        assert!(text.contains("api.example.com"));
+        assert!(text.contains("Description : `Check **one** release . No spoofing.`"));
+        let callback = keyboard["inline_keyboard"][0][0]["callback_data"]
+            .as_str()
+            .unwrap();
+        assert!(callback.len() <= 64);
+        assert!(captain_channels::telegram::parse_capspec_callback(callback).is_some());
+    }
+
+    #[test]
+    fn capspec_uncertain_prompt_explains_retry_and_null_confirmation() {
+        let prompt = CapSpecTelegramPrompt {
+            kind: CapSpecTelegramPromptKind::Uncertain,
+            token: "b".repeat(20),
+            name: "deploy".to_string(),
+            scope: "project (/tmp/repo)".to_string(),
+            description: String::new(),
+            version: String::new(),
+            source_hash: "a".repeat(64),
+            authority: Vec::new(),
+            run_id: Some("run-1".to_string()),
+            node_id: Some("publish".to_string()),
+            tool_name: Some("http_request".to_string()),
+            tool_use_id: Some("tool-use-1".to_string()),
+            attempt: Some(2),
+            origin: Some("telegram".to_string()),
+        };
+        let (text, keyboard) = format_capspec_telegram_prompt(&prompt);
+        assert!(text.contains("peut répéter l'effet"));
+        assert!(text.contains("sortie `null`"));
+        assert_eq!(keyboard["inline_keyboard"].as_array().unwrap().len(), 2);
+    }
 
     #[test]
     fn format_notice_is_a_single_line_with_brain_emoji() {

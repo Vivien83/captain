@@ -41,7 +41,8 @@ Telegram o Discord.
 <table>
 <tr><td width="220"><b>Un binario, un daemon</b></td><td>Un núcleo Rust compilado orquesta agentes, herramientas, memoria, canales, programaciones y aprobaciones. Arranca en segundos, consume poco en reposo, sobrevive a reinicios como servicio nativo (launchd/systemd), y se actualiza a sí mismo — pídeselo por chat, aprueba, listo.</td></tr>
 <tr><td><b>Trabajo duradero</b></td><td>Proyectos, objetivos, checkpoints, workflows y ejecuciones de herramientas desacopladas se persisten. El estado de control confirmado usa SQLite WAL/FULL o archivos atómicos sincronizados; tras un reinicio, el trabajo incompleto queda visible como <code>interrupted</code> en vez de desaparecer o repetirse a ciegas.</td></tr>
-<tr><td><b>Ejecución real, vigilada</b></td><td>Shell, archivos, SSH, navegador, investigación web, código, documentos y medios. Las llamadas sensibles usan aprobaciones; los patrones críticos se bloquean; los presupuestos limitan tokens, coste y frecuencia. Las lecturas independientes pueden ejecutarse en paralelo, mientras las dependencias y los efectos secundarios siguen ordenados.</td></tr>
+<tr><td><b>Ejecución real, vigilada</b></td><td>Shell, archivos, SSH, navegador, investigación web, código, documentos y medios. Las llamadas sensibles usan aprobaciones; los patrones críticos se bloquean; los presupuestos limitan tokens, coste y frecuencia. Captain separa su límite móvil y duradero de las ventanas de suscripción gestionadas por el proveedor; en Codex, los porcentajes y reinicios proceden de señales oficiales en vivo de la cuenta y las respuestas, nunca de una tabla de cuotas copiada. En las barras compactas de Chat, las ventanas generales del proveedor y las que coinciden con el modelo activo tienen su propio indicador; las demás familias específicas de otro modelo se resumen como fuera del modelo activo, mientras Status y Budget conservan el detalle completo. Ratatui, Control web y el wrapper de escritorio de compatibilidad conservado comparten este contrato. Las lecturas independientes pueden ejecutarse en paralelo, mientras las dependencias y los efectos secundarios siguen ordenados.</td></tr>
+<tr><td><b>Capacidades nativas legibles</b></td><td>Coloca un archivo <code>*.captain</code> revisado en un directorio global o de proyecto <code>.captain/</code> y Captain lo carga en caliente como herramienta tipada <code>cap_*</code>. Captain Forge mantiene dependencias, permisos, aprobaciones, DAG duradero, recuperación tras fallos, historial de revisiones, rollback y decisiones exactas del operador bajo control del kernel.</td></tr>
 <tr><td><b>Memoria que sigue la conversación</b></td><td>Recuerdo de sesiones, hechos duraderos del usuario, estado de proyectos, grafo de conocimiento y embeddings ONNX locales opcionales aportan contexto acotado sin reinyectar todo el historial en cada turno. Los hechos aceptados entran primero en un diario local duradero, siguen disponibles durante una caída de MemPalace y se resincronizan automáticamente con backoff acotado.</td></tr>
 <tr><td><b>Cualquier modelo, sin ataduras</b></td><td>Codex con tu suscripción de ChatGPT, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter y modelos locales vía Ollama. Captain descubre el catálogo y las credenciales configuradas sin depender de cifras fijas; el presupuesto de contexto sigue la ventana activa del modelo seleccionado. Para Codex, una actualización cada hora muestra los modelos nuevos en Control y, si está configurado, Telegram; Captain nunca cambia de modelo sin tu decisión explícita y tu estrategia de sesión.</td></tr>
 <tr><td><b>Seis centros operativos</b></td><td>Chat, Projects, Automation, Learning, Capabilities y Status forman la superficie principal compartida por el TUI y Control. Automation agrupa Workflows, Triggers, Crons, Aprobaciones y Webhooks.</td></tr>
@@ -54,15 +55,15 @@ Telegram o Discord.
 ## Instalación rápida
 
 Versión pública preliminar actual:
-[v0.1.0-alpha.7](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.7).
-Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7`;
+[v0.1.0-alpha.8](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8).
+Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8`;
 canal alfa móvil: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.7 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.8 bash
 ```
 
 El repositorio oficial, los assets, los checksums y la imagen son públicos. No
@@ -98,8 +99,8 @@ los instaladores Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # o cualquier clave de proveedor soportado
 export TELEGRAM_BOT_TOKEN=...      # opcional — ver más abajo
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.7 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 El perfil `vps` instala un servicio systemd, lo inicia, y valida su salud.
@@ -117,8 +118,8 @@ sin arrancar aún el daemon, para que la comprobación de disponibilidad de
 abajo no se ejecute antes de que hayas iniciado sesión:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.7/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.7 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # muestra una URL + un código — ábrela en tu teléfono, sin necesidad de navegador local
 systemctl start captain    # instalación no-root: systemctl --user start captain
@@ -134,7 +135,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.7
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
 ```
 
 El primer arranque genera la clave API del daemon y la persiste — junto
@@ -151,8 +152,8 @@ espacio PID ni el modo privilegiado. Para ejecutar la imagen inmutable:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.7 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.7 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.8 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.8 docker compose up -d
 ```
 
 Configura el proveedor elegido después del primer arranque. Cualquier acceso
@@ -241,6 +242,7 @@ ordenar mediante dependencias.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Instalaciones headless, proxy inverso, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | Servidores de herramientas externos y contrato de transporte |
 | [Troubleshooting](docs/troubleshooting.md) | Problemas comunes y sus soluciones |
+| [Notas de la versión 0.1.0-alpha.8](docs/releases/v0.1.0-alpha.8.md) | Capacidades nativas Captain Forge y cuotas de suscripción en vivo fiables |
 | [Notas de la versión 0.1.0-alpha.7](docs/releases/v0.1.0-alpha.7.md) | Estado confirmado duradero, reinicio supervisado, contexto fiel y memoria TUI directa |
 | [Notas de la versión 0.1.0-alpha.6](docs/releases/v0.1.0-alpha.6.md) | Mensajes Rich de Telegram, tableros de herramientas en vivo, progreso efímero y controles fiables |
 | [Notas de la versión 0.1.0-alpha.5](docs/releases/v0.1.0-alpha.5.md) | Apagado limpio, memoria privada, identidad real del modelo y primer arranque con un solo agente |

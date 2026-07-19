@@ -245,6 +245,7 @@ fn print_budget_summary(body: &serde_json::Value, verbose: bool) {
             budget["limited_agents"].as_u64().unwrap_or(0),
         ),
     );
+    print_provider_subscription_summary(&budget["provider_subscriptions"], verbose);
     if let Some(action) = first_string(&budget["operator_actions"]) {
         ui::hint(&action);
     }
@@ -259,6 +260,106 @@ fn print_budget_summary(body: &serde_json::Value, verbose: bool) {
                 println!("    {}", agent_budget_line(agent));
             }
         }
+    }
+}
+
+fn print_provider_subscription_summary(provider: &serde_json::Value, verbose: bool) {
+    let state = provider["state"].as_str().unwrap_or("unavailable");
+    let Some(items) = provider["items"].as_array() else {
+        ui::kv_warn(
+            "Provider subscription",
+            "not observed (official provider signals only)",
+        );
+        return;
+    };
+    if items.is_empty() {
+        ui::kv_warn(
+            "Provider subscription",
+            "not observed (official provider signals only)",
+        );
+        return;
+    }
+
+    let mut ordered = items.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|item| std::cmp::Reverse(provider_alert_rank(item)));
+    let count = if verbose { ordered.len() } else { 1 };
+    for (index, item) in ordered.into_iter().take(count).enumerate() {
+        let label = if index == 0 {
+            "Provider subscription"
+        } else {
+            "Provider limit"
+        };
+        let summary = provider_quota_item_summary(item);
+        if state == "ok" && !item["stale"].as_bool().unwrap_or(false) {
+            ui::kv_ok(label, &summary);
+        } else {
+            ui::kv_warn(label, &summary);
+        }
+    }
+}
+
+fn provider_alert_rank(item: &serde_json::Value) -> u8 {
+    match item["alert_level"].as_str().unwrap_or("normal") {
+        "exhausted" => 3,
+        "critical" => 2,
+        "warning" => 1,
+        _ if item["stale"].as_bool().unwrap_or(false) => 1,
+        _ => 0,
+    }
+}
+
+fn provider_quota_item_summary(item: &serde_json::Value) -> String {
+    let name = item["limit_name"]
+        .as_str()
+        .or_else(|| item["limit_id"].as_str())
+        .unwrap_or("provider");
+    let plan = item["plan_type"]
+        .as_str()
+        .map(|value| format!(" [{value}]"))
+        .unwrap_or_default();
+    let windows = ["primary", "secondary"]
+        .iter()
+        .filter_map(|key| provider_window_summary(&item[*key]))
+        .collect::<Vec<_>>();
+    let mut summary = format!("{name}{plan}");
+    if !windows.is_empty() {
+        summary.push_str(" -- ");
+        summary.push_str(&windows.join(" | "));
+    }
+    let alert = item["alert_level"].as_str().unwrap_or("normal");
+    if alert != "normal" {
+        summary.push_str(&format!(" [{alert}]"));
+    }
+    if item["stale"].as_bool().unwrap_or(false) {
+        summary.push_str(" [stale]");
+    }
+    summary
+}
+
+fn provider_window_summary(window: &serde_json::Value) -> Option<String> {
+    let used = window["used_percent"].as_f64()?;
+    let duration = window["window_seconds"]
+        .as_u64()
+        .map(provider_window_duration)
+        .unwrap_or_else(|| "window".to_string());
+    let reset = window["resets_at"]
+        .as_str()
+        .map(|value| format!(", reset {value}"))
+        .unwrap_or_default();
+    Some(format!("{duration} {used:.1}%{reset}"))
+}
+
+fn provider_window_duration(seconds: u64) -> String {
+    if seconds % 604_800 == 0 {
+        format!("{}w", seconds / 604_800)
+    } else if seconds % 86_400 == 0 {
+        format!("{}d", seconds / 86_400)
+    } else if seconds % 3_600 == 0 {
+        format!("{}h", seconds / 3_600)
+    } else if seconds % 60 == 0 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -419,7 +520,15 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
     let (llm_driver_ready, llm_driver_error) = kernel.default_llm_driver_status();
     let workload = kernel_status_workload(&kernel);
     let disk = captain_api::status_disk::build_disk_status(&kernel.config.home_dir);
-    let runtime_health = in_process_runtime_health(llm_driver_ready, &workload, &disk);
+    let provider_subscriptions =
+        captain_api::provider_quota_status::build_provider_subscription_status(
+            kernel.memory.provider_quotas(),
+        );
+    let budget = serde_json::json!({
+        "provider_subscriptions": provider_subscriptions,
+        "operator_actions": []
+    });
+    let runtime_health = in_process_runtime_health(llm_driver_ready, &workload, &disk, &budget);
     let status_body = serde_json::json!({
         "status": "in-process",
         "agent_count": agent_count,
@@ -434,6 +543,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
         "native_embeddings": captain_runtime::native_embeddings::status(),
         "workload": workload,
         "disk": disk,
+        "budget": budget,
         "runtime_health": runtime_health,
     });
 
@@ -454,6 +564,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
     print_llm_status(llm_driver_ready, llm_driver_error.as_deref(), false);
     print_runtime_health_summary(&status_body);
     print_disk_summary(&status_body);
+    print_provider_subscription_summary(&status_body["budget"]["provider_subscriptions"], verbose);
     print_in_process_embeddings();
     ui::kv("Data dir", &kernel.config.data_dir.display().to_string());
     ui::kv("Home", &kernel.config.home_dir.display().to_string());
@@ -628,6 +739,32 @@ mod tests {
             agent_budget_line(&agent),
             "worker (agent-1) -- tokens 90/100 (90.0%), tools 4/10/min"
         );
+    }
+
+    #[test]
+    fn provider_quota_summary_uses_server_window_durations() {
+        let item = serde_json::json!({
+            "limit_name": "Codex",
+            "plan_type": "pro",
+            "alert_level": "warning",
+            "primary": {
+                "used_percent": 72.5,
+                "window_seconds": 18000,
+                "resets_at": "2026-07-18T18:00:00Z"
+            },
+            "secondary": {
+                "used_percent": 41.0,
+                "window_seconds": 604800
+            }
+        });
+
+        let summary = provider_quota_item_summary(&item);
+
+        assert!(summary.contains("Codex [pro]"));
+        assert!(summary.contains("5h 72.5%"));
+        assert!(summary.contains("1w 41.0%"));
+        assert!(summary.contains("2026-07-18T18:00:00Z"));
+        assert!(summary.contains("[warning]"));
     }
 
     #[test]

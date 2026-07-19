@@ -48,6 +48,15 @@ pub(crate) async fn call_with_retry(
                 }
                 return Ok(response);
             }
+            Err(LlmError::SubscriptionQuotaExceeded { info }) => {
+                warn!(
+                    quota_code = %info.code,
+                    provider = info.provider.as_deref().unwrap_or("unknown"),
+                    resets_at = ?info.resets_at,
+                    "Provider subscription quota exhausted; refusing automatic retry"
+                );
+                return Err(CaptainError::quota_exceeded(*info));
+            }
             Err(LlmError::RateLimited { retry_after_ms }) => {
                 if attempt == MAX_RETRIES {
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
@@ -150,6 +159,15 @@ pub(crate) async fn stream_with_retry(
                 }
                 return Ok(response);
             }
+            Err(LlmError::SubscriptionQuotaExceeded { info }) => {
+                warn!(
+                    quota_code = %info.code,
+                    provider = info.provider.as_deref().unwrap_or("unknown"),
+                    resets_at = ?info.resets_at,
+                    "Provider subscription quota exhausted; refusing automatic stream retry"
+                );
+                return Err(CaptainError::quota_exceeded(*info));
+            }
             Err(LlmError::RateLimited { retry_after_ms }) => {
                 if attempt == MAX_RETRIES {
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
@@ -245,6 +263,51 @@ fn classify_driver_error(error: &LlmError) -> ClassifiedDriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_types::quota::{QuotaExceededInfo, QuotaScope, QuotaUnit};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct SubscriptionQuotaDriver {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmDriver for SubscriptionQuotaDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(LlmError::SubscriptionQuotaExceeded {
+                info: Box::new(QuotaExceededInfo {
+                    code: "provider_subscription_quota".to_string(),
+                    scope: QuotaScope::ProviderSubscription,
+                    provider: Some("codex".to_string()),
+                    agent_id: None,
+                    used: 100.0,
+                    limit: 100.0,
+                    unit: QuotaUnit::Percent,
+                    window_seconds: Some(18_000),
+                    resets_at: None,
+                    retry_after_seconds: Some(60),
+                    message: "Codex subscription exhausted".to_string(),
+                }),
+            })
+        }
+    }
+
+    fn request() -> CompletionRequest {
+        CompletionRequest {
+            model: "test".to_string(),
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 100,
+            temperature: 0.0,
+            system: None,
+            thinking: None,
+            tool_choice: None,
+            cache_hints: crate::llm_driver::CacheHints::default(),
+        }
+    }
 
     #[test]
     fn retry_constants_match_hermes_contract() {
@@ -271,5 +334,17 @@ mod tests {
             llm_errors::LlmErrorCategory::Format
         );
         assert!(classified.user_message.contains("raw: API error (400)"));
+    }
+
+    #[tokio::test]
+    async fn subscription_quota_is_returned_without_retry() {
+        let driver = SubscriptionQuotaDriver {
+            calls: AtomicUsize::new(0),
+        };
+
+        let result = call_with_retry(&driver, request(), Some("codex"), None).await;
+
+        assert!(matches!(result, Err(CaptainError::QuotaExceeded(_))));
+        assert_eq!(driver.calls.load(Ordering::SeqCst), 1);
     }
 }

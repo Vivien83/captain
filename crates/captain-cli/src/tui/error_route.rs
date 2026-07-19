@@ -16,6 +16,7 @@ pub(crate) enum FetchErrorTarget {
     SkillsProposed,
     Memory,
     Graph,
+    NativeCapabilities,
     Skills,
     Hands,
     Templates,
@@ -53,8 +54,8 @@ pub(crate) fn fetch_error_target(
         },
         Tab::Memory => Some(FetchErrorTarget::Memory),
         Tab::Skills => match capabilities_view {
+            CapabilitiesView::Native => Some(FetchErrorTarget::NativeCapabilities),
             CapabilitiesView::Skills => Some(FetchErrorTarget::Skills),
-            CapabilitiesView::Hands => Some(FetchErrorTarget::Hands),
         },
         Tab::Hands => Some(FetchErrorTarget::Hands),
         Tab::Extensions => Some(FetchErrorTarget::Extensions),

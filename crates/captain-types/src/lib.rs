@@ -18,6 +18,7 @@ pub mod media;
 pub mod memory;
 pub mod message;
 pub mod model_catalog;
+pub mod quota;
 pub mod scheduler;
 pub mod serde_compat;
 pub mod ssrf_guard;

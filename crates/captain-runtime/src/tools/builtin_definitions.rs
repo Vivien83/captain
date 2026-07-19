@@ -4,9 +4,9 @@ use captain_types::tool::ToolDefinition;
 
 use super::{
     a2a_tool_definitions, agent_tool_definitions, browser_tool_definitions,
-    channel_tool_definitions, config_tool_definitions, coordination_tool_definitions,
-    discovery_tool_definitions, document_tool_definitions, file_tool_definitions,
-    fleet_tool_definitions, goal_tool_definitions, hand_tool_definitions,
+    capspec_management_tool_definitions, channel_tool_definitions, config_tool_definitions,
+    coordination_tool_definitions, discovery_tool_definitions, document_tool_definitions,
+    file_tool_definitions, fleet_tool_definitions, goal_tool_definitions, hand_tool_definitions,
     improvement_tool_definitions, knowledge_tool_definitions, location_tool_definitions,
     mcp_tool_definitions, memory_tool_definitions, meta_tool_definitions,
     multimedia_tool_definitions, package_tool_definitions, peer_tool_definitions,
@@ -26,6 +26,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
     definitions.extend(schedule_tool_definitions());
     definitions.extend(knowledge_tool_definitions());
     definitions.extend(meta_tool_definitions());
+    definitions.extend(capspec_management_tool_definitions());
     definitions.extend(update_tool_definitions());
     definitions.extend(multimedia_tool_definitions());
     definitions.extend(location_tool_definitions());
