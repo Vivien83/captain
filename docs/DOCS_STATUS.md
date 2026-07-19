@@ -4,26 +4,45 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Current Release Candidate
+## Current Public Release
 
-`v0.1.0-alpha.8` is the candidate being certified for local publication. It
-combines Captain Forge's readable native capabilities with durable internal
-hourly token guards and provider-reported Codex subscription windows. The
-candidate URLs and immutable image name are already fixed so bundles and
-documentation can be audited before publication:
+`v0.1.0-alpha.8` is the current public prerelease. It combines Captain Forge's
+readable native capabilities with durable internal hourly token guards and
+provider-reported Codex subscription windows. Its immutable public surfaces
+are:
 
 - release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8>
 - image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8`
+- source commit: `d82f120153b8e83e9be82df6748f928f8d4aa6b9`
+- annotated tag object: `2e59fc0e3daed8d306b6efcd8fff24913ba83503`
+- OCI index digest:
+  `sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230`
+- `linux/amd64` manifest:
+  `sha256:f55c91a3610560fbe06558721100bd5ab8faef12f4d7e6927d62ff28c9718184`
+- `linux/arm64` manifest:
+  `sha256:598c067a4ca105a463bca253d62633b22533d19ecf6003467ffbd0a94940745d`
 - host asset contract: exactly 20 files covering five platforms, checksums,
   manifests, and four installers
 
-The public source commit, OCI index digest, anonymous download/pull evidence,
-and zero-Actions proof remain intentionally unset until those surfaces exist
-and have been verified live. They must never be copied from an older release.
+The annotated tag dereferences to the source commit above. At publication time,
+the immutable image and moving `:alpha` channel resolved to the same OCI index
+digest. Anonymous checks downloaded `manifest.json` and `install.sh`
+byte-for-byte and inspected both image architectures successfully. The GitHub
+Actions API returned zero runs because the release was built and published
+locally. A real `captain update --yes --version v0.1.0-alpha.8` then verified
+the public checksum, replaced the installed binary, restarted the daemon, and
+passed health, full doctor, SQLite integrity, and retained-state checks.
 
-## Current Public Release
+Known `alpha.8` limitation: an explicit per-turn memory write opt-out
+suppresses the post-turn graph, MemPalace, reflection, and learning paths, but
+the core agent-loop finalizer still writes its local episodic interaction
+fragment. The normal transcript and audit remain intentional; this extra
+semantic fragment does not. Treat the opt-out as incomplete until a later
+immutable release closes the core finalizer path.
 
-`v0.1.0-alpha.7` is the current public prerelease. It keeps kernel-backed tools
+## Previous Public Release
+
+`v0.1.0-alpha.7` is the previous public prerelease. It keeps kernel-backed tools
 available in direct TUI/CLI turns, supervises the macOS service after unexpected
 exits, follows the active model catalog window, and gives committed SQLite and
 file state an explicit power-loss boundary. Its immutable public surfaces are:
@@ -42,27 +61,18 @@ digest; anonymous release download and OCI pull both succeeded for
 `linux/amd64` and `linux/arm64`. The GitHub Actions API returned zero runs: the
 release was built and published locally.
 
-Known `alpha.7` limitation: an explicit per-turn memory write opt-out suppresses
-the post-turn graph, MemPalace, reflection, and learning paths, but the core
-agent-loop finalizer still writes its local episodic interaction fragment. The
-normal transcript and audit remain intentional; this extra semantic fragment
-does not. Treat the opt-out as incomplete until a later immutable release
-closes the core finalizer path.
-
-## Alpha 8 Candidate Contract
+## Alpha 8 Contract
 
 Captain Forge / CapSpec is implemented and process-level certified in the
-current source tree. The reproducible harness passed 130 checks across 14
+published runtime. The reproducible harness passed 130 checks across 14
 durable runs on implementation commit
-`38ecebaf4e34fcf955c99ee13682b54a70e1c938`. This source status does not alter
-the immutable `v0.1.0-alpha.7` release; it belongs to the alpha.8 candidate.
-The human-readable certificate is
+`38ecebaf4e34fcf955c99ee13682b54a70e1c938`. The human-readable certificate is
 `docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md`; the raw transcripts,
 temporary homes, and fixture credentials are regenerated locally and remain
 outside the public source tree.
 
-The current source tree also separates Captain's durable rolling per-agent
-token guard from provider-owned subscription allowances. Codex allowance
+The published runtime separates Captain's durable rolling per-agent token
+guard from provider-owned subscription allowances. Codex allowance
 observations come from its authenticated account usage endpoint, dynamic
 response headers, and `codex.rate_limits` stream events. Provider windows and
 resets are never hard-coded or inferred from local token totals. CLI, TUI,
@@ -71,9 +81,9 @@ missing data is `unavailable`, stale data is explicit, and an exhausted
 provider allowance produces a structured HTTP `429` without retry or silent
 fallback. Compact Chat surfaces identify the configured model and render gauges
 only for provider-wide or matching model-specific families. This contract also
-belongs to the alpha.8 candidate and is not an alpha.7 claim.
+belongs to alpha.8 and is not an alpha.7 claim.
 
-## Previous Verified Public Release
+## Earlier Verified Public Release
 
 `v0.1.0-alpha.6` remains the preceding verified public provenance. Its
 annotated source tag dereferences to commit

@@ -124,9 +124,21 @@ Agent-facing changes:
   fresh home, security denials, CLI/TUI, Control/API, Telegram, and an actual
   `SIGKILL` recovery. The checked-in certificate preserves run/source
   identities and the raw bundle digest.
-- Publication provenance is filled only after the public tag, 20 release assets,
-  and multi-platform OCI image have been verified live. Never copy a commit or
-  digest from an older release into this entry.
+- This public prerelease contains exactly 20 assets at
+  `https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8`. Its
+  annotated tag dereferences to immutable public source commit
+  `d82f120153b8e83e9be82df6748f928f8d4aa6b9`.
+- The anonymously readable multi-platform image
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8` is pinned by OCI index
+  digest
+  `sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230`.
+  Its AMD64 and ARM64 manifests were inspected anonymously, the moving
+  `:alpha` channel resolved to the same index digest, and anonymous downloads
+  of `manifest.json` and `install.sh` matched the certified local assets.
+- The GitHub Actions API returned zero runs: source, bundles, release assets,
+  and the multi-platform image were built and published locally. The official
+  updater then installed this version with checksum verification and passed
+  daemon health, full doctor, SQLite integrity, and retained-state checks.
 
 ### 0.1.0-alpha.7 — durable state, supervised restart, and truthful context
 

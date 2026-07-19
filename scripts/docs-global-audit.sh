@@ -351,13 +351,16 @@ require_contains "Telegram docs pin Rich-first transport" docs/channel-adapters.
 require_contains "channel family docs pin stateful ask_user" docs/captain-tools/channel.md '`ask_user` questions are stateful Rich cards'
 require_contains "historical alpha.4 release notes remain available" docs/releases/v0.1.0-alpha.4.md "# Captain 0.1.0-alpha.4"
 require_contains "historical alpha.3 release notes remain available" docs/releases/v0.1.0-alpha.3.md "# Captain 0.1.0-alpha.3"
-require_contains "DOC2 records the published alpha.7 provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
-require_contains "DOC2 records the published alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
-require_contains "agent changelog records the published alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
-require_contains "DOC2 identifies the alpha.7 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the current public prerelease'
-require_contains "DOC2 identifies the alpha.8 release candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the candidate being certified for local publication'
-require_contains "DOC2 discloses the alpha.7 memory opt-out limitation" docs/DOCS_STATUS.md "agent-loop finalizer still writes its local episodic interaction fragment"
-require_contains "memory docs disclose the alpha.7 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
+require_contains "DOC2 records the published alpha.8 provenance" docs/DOCS_STATUS.md "d82f120153b8e83e9be82df6748f928f8d4aa6b9"
+require_contains "DOC2 records the published alpha.8 multi-arch digest" docs/DOCS_STATUS.md "sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230"
+require_contains "agent changelog records the published alpha.8 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230"
+require_contains "DOC2 identifies the alpha.8 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the current public prerelease'
+require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
+require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
+require_contains "agent changelog retains the alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
+require_contains "DOC2 retains the alpha.7 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the previous public prerelease'
+require_contains "DOC2 discloses the alpha.8 memory opt-out limitation" docs/DOCS_STATUS.md "the core agent-loop finalizer still writes its local episodic interaction"
+require_contains "memory docs disclose the alpha.8 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
 require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"

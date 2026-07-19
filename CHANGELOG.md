@@ -47,6 +47,16 @@ human-readable native capabilities and truthful live subscription limits.
   reset metadata when available. Subscription exhaustion is not retried and
   cannot silently fall through to another provider.
 
+### Publication
+
+- The annotated `v0.1.0-alpha.8` tag dereferences to public source commit
+  `d82f120153b8e83e9be82df6748f928f8d4aa6b9`. Its 20-asset GitHub prerelease
+  and anonymous multi-platform GHCR image were published locally with zero
+  GitHub Actions runs.
+- The immutable OCI index digest is
+  `sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230`;
+  the moving `:alpha` channel resolved to that same digest at publication.
+
 ## [0.1.0-alpha.7] - 2026-07-17
 
 Early-access reliability release focused on durable committed state, abrupt

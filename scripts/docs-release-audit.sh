@@ -150,15 +150,15 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current release candidate has an agent-facing changelog" \
+  "current public release has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
   "### 0.1.0-alpha.8"
 require_contains \
-  "release readiness expects the current candidate" \
+  "release readiness expects the current public version" \
   scripts/release-readiness.sh \
   '0.1.0-alpha.8'
 require_contains \
-  "excellence smoke expects the current candidate" \
+  "excellence smoke expects the current public version" \
   scripts/excellence-smoke.sh \
   '0.1.0-alpha.8'
 require_contains \
@@ -241,6 +241,18 @@ require_not_contains \
   "alpha.8 notes do not copy the alpha.7 OCI digest" \
   docs/releases/v0.1.0-alpha.8.md \
   'sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354'
+require_contains \
+  "published alpha.8 notes pin the public source commit" \
+  docs/releases/v0.1.0-alpha.8.md \
+  'd82f120153b8e83e9be82df6748f928f8d4aa6b9'
+require_contains \
+  "published alpha.8 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.8.md \
+  'sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230'
+require_contains \
+  "published alpha.8 notes record the zero-Actions proof" \
+  docs/releases/v0.1.0-alpha.8.md \
+  'GitHub Actions API returned zero runs'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
