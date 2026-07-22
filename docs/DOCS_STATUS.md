@@ -4,26 +4,39 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Current Release Candidate
+## Current Public Release
 
-`v0.1.0-alpha.9` is the candidate being certified for local publication. It
-combines durable Workflow Learning V2 with Captain's native release monitor.
-The candidate URLs and immutable image name are fixed so bundles and
-documentation can be audited before publication:
+`v0.1.0-alpha.9` is the current public prerelease. It combines durable
+Workflow Learning V2 with Captain's native release monitor. Its immutable
+public surfaces are:
 
 - release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9>
 - image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9`
+- source commit: `1248c5928dd4968b6ff7c62ef79a607fb8d94348`
+- annotated tag object: `da41c2ffd4ccaf5561f446d3eeb8b73d1506b501`
+- OCI index digest:
+  `sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692`
+- `linux/amd64` manifest:
+  `sha256:245f7d75657e35b15d085e51ba6fcf31187aaa9849eb610e11fe60184d9e12dd`
+- `linux/arm64` manifest:
+  `sha256:b84c03fd4ad11914f7c2e92312bf07670f933e3a74ab66089db1016f9350f79c`
 - host asset contract: exactly 20 files covering five platforms, checksums,
   manifests, and four installers
 
-The public source commit, annotated tag object, OCI index digest, anonymous
-download/pull evidence, and zero-Actions proof remain intentionally unset until
-those surfaces exist and have been verified live. They must never be copied
-from an older release.
+The annotated tag dereferences to the source commit above. At publication time,
+the immutable image and moving `:alpha` channel resolved to the same OCI index
+digest. Anonymous checks downloaded `manifest.json` and `install.sh` with their
+published SHA-256 digests, then executed the image successfully on
+`linux/amd64` and `linux/arm64`. The GitHub Actions API returned zero runs
+because the release was built and published locally.
 
-## Current Public Release
+Known `alpha.9` limitation: an explicit per-turn memory write opt-out still
+allows the core agent-loop finalizer to write one local episodic interaction
+fragment. Normal transcript and audit retention remain intentional.
 
-`v0.1.0-alpha.8` is the current public prerelease. It combines Captain Forge's
+## Previous Public Release
+
+`v0.1.0-alpha.8` is the previous public prerelease. It combines Captain Forge's
 readable native capabilities with durable internal hourly token guards and
 provider-reported Codex subscription windows. Its immutable public surfaces
 are:
@@ -57,11 +70,10 @@ fragment. The normal transcript and audit remain intentional; this extra
 semantic fragment does not. Treat the opt-out as incomplete until a later
 immutable release closes the core finalizer path.
 
-## Alpha 9 Candidate Contract
+## Alpha 9 Contract
 
-The `alpha.9` candidate promotes two contracts developed after `alpha.8`. They
-remain candidate claims until the release and image have been published and
-verified live:
+The published `alpha.9` release promotes two contracts developed after
+`alpha.8`:
 
 - Skill Learning V2 replaces the active SkillSynthesizer v3.13 path with one
   durable lifecycle for evidence-bound Skills, CapSpecs, Automations, and
@@ -82,9 +94,9 @@ for comparison and display. Power loss between decision, child launch, result,
 restart, and notification is bounded by durable state, timeout recovery,
 quarantine, and delivery leases.
 
-## Previous Public Release
+## Earlier Public Release
 
-`v0.1.0-alpha.7` is the previous public prerelease. It keeps kernel-backed tools
+`v0.1.0-alpha.7` is an earlier public prerelease. It keeps kernel-backed tools
 available in direct TUI/CLI turns, supervises the macOS service after unexpected
 exits, follows the active model catalog window, and gives committed SQLite and
 file state an explicit power-loss boundary. Its immutable public surfaces are:

@@ -151,21 +151,21 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current release candidate has an agent-facing changelog" \
+  "current public release has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
   "### 0.1.0-alpha.9"
 require_contains \
-  "release readiness expects the current candidate" \
+  "release readiness expects the current public release" \
   scripts/release-readiness.sh \
   '0.1.0-alpha.9'
 require_contains \
-  "excellence smoke expects the current candidate" \
+  "excellence smoke expects the current public release" \
   scripts/excellence-smoke.sh \
   '0.1.0-alpha.9'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.9] - 2026-07-20'
+  '## [0.1.0-alpha.9] - 2026-07-22'
 require_contains \
   "reviewed alpha notes exist" \
   docs/releases/v0.1.0-alpha.9.md \
@@ -262,6 +262,18 @@ require_not_contains \
   "alpha.9 notes do not copy the alpha.8 OCI digest" \
   docs/releases/v0.1.0-alpha.9.md \
   'sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230'
+require_contains \
+  "published alpha.9 notes pin the public source commit" \
+  docs/releases/v0.1.0-alpha.9.md \
+  '1248c5928dd4968b6ff7c62ef79a607fb8d94348'
+require_contains \
+  "published alpha.9 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.9.md \
+  'sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692'
+require_contains \
+  "published alpha.9 notes record the zero-Actions proof" \
+  docs/releases/v0.1.0-alpha.9.md \
+  'GitHub Actions API returned zero runs'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \

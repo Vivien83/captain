@@ -369,7 +369,7 @@ require_contains "Telegram update callbacks precede workflow and session routing
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
 require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.9"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.9] - 2026-07-20"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.9] - 2026-07-22"
 require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
 require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
 require_contains "historical alpha.7 release notes remain available" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
@@ -382,12 +382,16 @@ require_contains "historical alpha.3 release notes remain available" docs/releas
 require_contains "DOC2 records the published alpha.8 provenance" docs/DOCS_STATUS.md "d82f120153b8e83e9be82df6748f928f8d4aa6b9"
 require_contains "DOC2 records the published alpha.8 multi-arch digest" docs/DOCS_STATUS.md "sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230"
 require_contains "agent changelog records the published alpha.8 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230"
-require_contains "DOC2 identifies the alpha.8 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the current public prerelease'
-require_contains "DOC2 identifies the alpha.9 release candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the candidate being certified for local publication'
+require_contains "DOC2 records the published alpha.9 provenance" docs/DOCS_STATUS.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
+require_contains "DOC2 records the published alpha.9 multi-arch digest" docs/DOCS_STATUS.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
+require_contains "agent changelog records the published alpha.9 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
+require_contains "DOC2 identifies the alpha.9 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the current public prerelease'
+require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the previous public prerelease'
 require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
 require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "agent changelog retains the alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
-require_contains "DOC2 retains the alpha.7 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is the previous public prerelease'
+require_contains "DOC2 retains the alpha.7 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is an earlier public prerelease'
+require_contains "DOC2 discloses the alpha.9 memory opt-out limitation" docs/DOCS_STATUS.md "core agent-loop finalizer to write one local episodic interaction"
 require_contains "DOC2 discloses the alpha.8 memory opt-out limitation" docs/DOCS_STATUS.md "the core agent-loop finalizer still writes its local episodic interaction"
 require_contains "memory docs disclose the alpha.8 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"

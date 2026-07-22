@@ -78,6 +78,12 @@ Agent-facing changes:
   a bounded timeout, malformed results are quarantined, a future state schema
   is not downgraded, and a dead delivery is reopened by the next 12-hour check.
   `captain status` and `/api/status` expose the monitor projection.
+- The public `v0.1.0-alpha.9` prerelease contains 20 host assets and points to
+  source commit `1248c5928dd4968b6ff7c62ef79a607fb8d94348`. Its immutable
+  multi-platform image and moving `:alpha` channel share OCI index digest
+  `sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692`.
+  Anonymous AMD64 and ARM64 execution succeeded, and GitHub reports zero
+  Actions runs because the release was built and published locally.
 
 ### 0.1.0-alpha.8 — Captain Forge and truthful provider quotas
 

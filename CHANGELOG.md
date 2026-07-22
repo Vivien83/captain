@@ -6,7 +6,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0-alpha.9] - 2026-07-20
+## [0.1.0-alpha.9] - 2026-07-22
 
 Early-access learning and operations release focused on durable native
 workflow acquisition and model-independent release updates.
@@ -33,6 +33,16 @@ workflow acquisition and model-independent release updates.
   malformed result files are quarantined, future state schemas are not
   overwritten, and failed Telegram delivery is reopened on a later 12-hour
   check without duplicating an already delivered card.
+
+### Publication
+
+- The annotated `v0.1.0-alpha.9` tag dereferences to public source commit
+  `1248c5928dd4968b6ff7c62ef79a607fb8d94348`. Its 20-asset GitHub prerelease
+  and anonymous multi-platform GHCR image were published locally with zero
+  GitHub Actions runs.
+- The immutable OCI index digest is
+  `sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692`;
+  the moving `:alpha` channel resolved to that same digest at publication.
 
 ## [0.1.0-alpha.8] - 2026-07-19
 
