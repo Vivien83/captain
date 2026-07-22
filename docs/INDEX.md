@@ -22,6 +22,7 @@ Use this index to find the right document quickly.
 | [Deployment](DEPLOY.md) | Deployment guidance for local machines and VPS hosts |
 | [GitHub + VPS Install](deployment/github-vps-install.md) | Pinned public prerelease install and service setup |
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS considerations |
+| [0.1.0-alpha.9 Release Notes](releases/v0.1.0-alpha.9.md) | Durable workflow learning and native release updates |
 | [0.1.0-alpha.8 Release Notes](releases/v0.1.0-alpha.8.md) | Captain Forge native capabilities and truthful live subscription quotas |
 | [0.1.0-alpha.7 Release Notes](releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
 | [0.1.0-alpha.6 Release Notes](releases/v0.1.0-alpha.6.md) | Telegram Rich Messages, live tool boards, ephemeral progress, and reliable controls |

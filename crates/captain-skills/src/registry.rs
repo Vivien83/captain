@@ -109,10 +109,19 @@ impl SkillRegistry {
         }
 
         let mut count = 0;
-        let entries = std::fs::read_dir(&self.skills_dir)?;
+        let mut paths = std::fs::read_dir(&self.skills_dir)?
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        paths.sort_by(|left, right| {
+            let left_learned = left.file_name().and_then(|name| name.to_str()) == Some("learned");
+            let right_learned = right.file_name().and_then(|name| name.to_str()) == Some("learned");
+            left_learned
+                .cmp(&right_learned)
+                .then_with(|| left.cmp(right))
+        });
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for path in paths {
             if path.is_file() {
                 if is_markdown_skill_file(&path) {
                     match self.load_markdown_skill_file(&path) {
@@ -210,10 +219,13 @@ impl SkillRegistry {
     }
 
     fn load_markdown_skills_in_dir(&mut self, dir: &Path) -> Result<usize, SkillError> {
-        let entries = std::fs::read_dir(dir)?;
+        let mut paths = std::fs::read_dir(dir)?
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        paths.sort();
         let mut count = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for path in paths {
             if !is_markdown_skill_file(&path) {
                 continue;
             }
@@ -252,6 +264,24 @@ impl SkillRegistry {
                 == Some("generated")
         {
             converted.manifest.skill.tags.push("generated".to_string());
+        }
+        if path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some("learned")
+        {
+            for tag in ["generated", "learned"] {
+                if !converted
+                    .manifest
+                    .skill
+                    .tags
+                    .iter()
+                    .any(|existing| existing == tag)
+                {
+                    converted.manifest.skill.tags.push(tag.to_string());
+                }
+            }
         }
 
         if let Some(ref ctx) = converted.manifest.prompt_context {
@@ -317,6 +347,72 @@ impl SkillRegistry {
     /// Get an installed skill by name.
     pub fn get(&self, name: &str) -> Option<&InstalledSkill> {
         self.skills.get(name)
+    }
+
+    /// Rebuild the registry and prove that one controlled learning overlay is
+    /// either the exact active owner or has been fully removed. Stable mode is
+    /// preserved, but cannot turn a successfully approved install into a
+    /// restart-only feature.
+    pub fn reconcile_learned_overlay(
+        &mut self,
+        name: &str,
+        overlay_path: &Path,
+        should_be_active: bool,
+    ) -> Result<(), SkillError> {
+        let learned_root = self.skills_dir.join("learned");
+        if overlay_path.parent() != Some(learned_root.as_path())
+            || overlay_path.file_stem().and_then(|value| value.to_str()) != Some(name)
+            || overlay_path.extension().and_then(|value| value.to_str()) != Some("md")
+        {
+            return Err(SkillError::SecurityBlocked(
+                "learned overlay is not a direct <name>.md child of skills/learned".to_string(),
+            ));
+        }
+        ensure_real_directory_if_present(&learned_root)?;
+        match std::fs::symlink_metadata(overlay_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(SkillError::SecurityBlocked(
+                    "learned overlay must be a regular file".to_string(),
+                ))
+            }
+            Ok(_) if !should_be_active => {
+                return Err(SkillError::SecurityBlocked(
+                    "rolled-back learned overlay is still present".to_string(),
+                ))
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !should_be_active => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        let was_frozen = self.frozen;
+        let mut fresh = SkillRegistry::new(self.skills_dir.clone());
+        fresh.load_bundled();
+        fresh.load_all()?;
+        if should_be_active {
+            let active = fresh.get(name).ok_or_else(|| {
+                SkillError::InvalidManifest(format!(
+                    "learned overlay {name} was not loaded by the registry"
+                ))
+            })?;
+            if active.path != overlay_path {
+                return Err(SkillError::SecurityBlocked(format!(
+                    "learned overlay {name} did not become the active owner"
+                )));
+            }
+        } else if fresh
+            .get(name)
+            .is_some_and(|active| active.path == overlay_path)
+        {
+            return Err(SkillError::SecurityBlocked(format!(
+                "rolled-back learned overlay {name} remains active"
+            )));
+        }
+        if was_frozen {
+            fresh.freeze();
+        }
+        *self = fresh;
+        Ok(())
     }
 
     /// List all installed skills.
@@ -476,6 +572,17 @@ impl SkillRegistry {
             );
         }
         Ok(count)
+    }
+}
+
+fn ensure_real_directory_if_present(path: &Path) -> Result<(), SkillError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Err(
+            SkillError::SecurityBlocked(format!("{} is not a real directory", path.display())),
+        ),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -686,5 +793,32 @@ Run the project's smoke-check workflow.
             .skill
             .tags
             .contains(&"family:software-development".to_string()));
+    }
+
+    #[test]
+    fn learned_markdown_overlay_deterministically_wins_by_name() {
+        let dir = TempDir::new().unwrap();
+        create_test_skill(dir.path(), "shared-workflow");
+        let learned = dir.path().join("learned");
+        std::fs::create_dir_all(&learned).unwrap();
+        let overlay = learned.join("shared-workflow.md");
+        std::fs::write(
+            &overlay,
+            r#"---
+name: shared-workflow
+description: Learned replacement
+---
+# Learned replacement
+
+Use the verified learned procedure.
+"#,
+        )
+        .unwrap();
+
+        let mut registry = SkillRegistry::new(dir.path().to_path_buf());
+        assert_eq!(registry.load_all().unwrap(), 2);
+        let active = registry.get("shared-workflow").unwrap();
+        assert_eq!(active.path, overlay);
+        assert_eq!(active.manifest.skill.description, "Learned replacement");
     }
 }

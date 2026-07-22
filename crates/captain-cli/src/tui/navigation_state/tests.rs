@@ -482,7 +482,7 @@ fn automation_views_keep_order_and_labels() {
 fn learning_views_keep_order_and_labels() {
     let labels: Vec<_> = LEARNING_VIEWS.iter().map(|view| view.label()).collect();
 
-    assert_eq!(labels, vec!["Review", "Skill proposals", "Memory", "Graph"]);
+    assert_eq!(labels, vec!["Review", "Workflows", "Memory", "Graph"]);
     assert_eq!(LearningView::Graph.index(), 3);
 }
 

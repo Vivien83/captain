@@ -193,6 +193,51 @@ fn d7_skill_family_audit() {
     assert_family_doc("skill", captain_docs::SKILL_FAMILY_TOOLS);
 }
 
+#[test]
+fn active_learning_docs_reject_retired_synthesizer_contracts() {
+    let tool_docs_root = docs_root();
+    let workspace_root = tool_docs_root
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root resolvable");
+    let active_files = [
+        tool_docs_root.join("skill.md"),
+        tool_docs_root.join("config-secret.md"),
+        workspace_root.join("docs/SKILL_LEARNING_V2.md"),
+        workspace_root.join("captain.toml.example"),
+    ];
+    let retired_contracts = [
+        "skill_proposal_list",
+        "skill_proposal_decide",
+        "/skill_approve",
+        "/skill_reject",
+        "/skill_proposals",
+        "skills.pattern_threshold",
+        "skills.proposer_model",
+        "skills.fallback_models",
+        "skills.min_confidence",
+        "skills.reflection_provider",
+        "skills.reflection_api_key_env",
+    ];
+
+    for path in active_files {
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        for retired in retired_contracts {
+            assert!(
+                !body.contains(retired),
+                "{} still advertises retired contract {retired}",
+                path.display()
+            );
+        }
+    }
+
+    let contract = std::fs::read_to_string(workspace_root.join("docs/SKILL_LEARNING_V2.md"))
+        .expect("Skill Learning V2 contract should be readable");
+    assert!(contract.contains("exact active configured model"));
+    assert!(contract.contains("canonical observed graph"));
+}
+
 /// D.8 — channel family audit (send + per-adapter hot-reload).
 #[test]
 fn d8_channel_family_audit() {

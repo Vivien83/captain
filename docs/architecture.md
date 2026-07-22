@@ -167,7 +167,29 @@ When the daemon wraps the kernel in `Arc`, additional steps occur:
     - Publishes HealthCheckFailed events on anomalies
 
 18. Start background agent loops (continuous, periodic, proactive)
+
+19. Start the durable Captain release monitor
+    - Reconcile any detached installer result before release discovery
+    - Check the compatible official channel after startup and every 12 hours
+    - Persist the candidate, exact decision version, deferral/refusal history,
+      install attempt, and Telegram outbox in structured memory
+    - Deliver Rich cards through leased retries; reopen a dead delivery on the
+      next release check without duplicating a card already delivered
+    - Route button callbacks before session restoration or model dispatch and
+      require the exact configured Telegram chat plus an explicit numeric user
+
+20. Publish release-monitor state through `/api/status`; `captain status`, TUI,
+    Control Web, and the retained Desktop wrapper consume this local projection
+    and never query GitHub themselves
 ```
+
+Host installation is a detached, checksum-required operation. The child writes
+one durable result before the service restart; the next runtime only announces
+success after its embedded version matches the requested release tag. A
+missing result becomes recoverable after a bounded timeout, malformed results
+are quarantined, and a future state schema is never overwritten by an older
+runtime. Container and unsupported-platform modes expose instructions only;
+they never grant Captain access to the host Docker socket or package manager.
 
 ---
 

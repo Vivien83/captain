@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 24;
+const SCHEMA_VERSION: u32 = 32;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -107,6 +107,38 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         migrate_v24(conn)?;
     }
 
+    if current_version < 25 {
+        migrate_v25(conn)?;
+    }
+
+    if current_version < 26 {
+        migrate_v26(conn)?;
+    }
+
+    if current_version < 27 {
+        migrate_v27(conn)?;
+    }
+
+    if current_version < 28 {
+        migrate_v28(conn)?;
+    }
+
+    if current_version < 29 {
+        migrate_v29(conn)?;
+    }
+
+    if current_version < 30 {
+        migrate_v30(conn)?;
+    }
+
+    if current_version < 31 {
+        migrate_v31(conn)?;
+    }
+
+    if current_version < 32 {
+        migrate_v32(conn)?;
+    }
+
     set_schema_version(conn, SCHEMA_VERSION)?;
     Ok(())
 }
@@ -128,6 +160,14 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
     };
     let names: Vec<String> = rows.filter_map(|r| r.ok()).collect();
     names.iter().any(|n| n == column)
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )
 }
 
 /// Set the schema version in the database.
@@ -882,9 +922,627 @@ fn migrate_v24(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 25: Persist workflow episodes and their tool attempts.
+fn migrate_v25(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS workflow_episodes (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            origin_channel TEXT,
+            project_id TEXT,
+            workspace_scope TEXT,
+            intent_redacted TEXT NOT NULL,
+            intent_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            explicit_reuse_request INTEGER NOT NULL DEFAULT 0,
+            tool_attempt_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            has_secret_input INTEGER NOT NULL DEFAULT 0,
+            has_unverified_mutation INTEGER NOT NULL DEFAULT 0,
+            failure_reason TEXT,
+            started_at INTEGER NOT NULL,
+            completed_at INTEGER,
+            analysis_status TEXT NOT NULL DEFAULT 'pending',
+            analysis_reason TEXT,
+            analyzed_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(agent_id, session_id, turn_id),
+            CHECK(status IN ('running', 'succeeded', 'failed', 'stopped', 'uncertain')),
+            CHECK(analysis_status IN ('pending', 'claimed', 'processed', 'rejected'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_episodes_analysis
+            ON workflow_episodes(analysis_status, status, completed_at);
+        CREATE INDEX IF NOT EXISTS idx_workflow_episodes_session
+            ON workflow_episodes(session_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_workflow_episodes_intent
+            ON workflow_episodes(intent_fingerprint, completed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS workflow_episode_steps (
+            episode_id TEXT NOT NULL,
+            tool_use_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            tool_name TEXT NOT NULL,
+            dependency_ids_json TEXT NOT NULL DEFAULT '[]',
+            input_shape_json TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            effect_class TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            output_class TEXT,
+            verification_marker TEXT,
+            secret_detected INTEGER NOT NULL DEFAULT 0,
+            started_at INTEGER NOT NULL,
+            completed_at INTEGER,
+            duration_ms INTEGER,
+            PRIMARY KEY (episode_id, tool_use_id),
+            FOREIGN KEY (episode_id) REFERENCES workflow_episodes(id) ON DELETE CASCADE,
+            CHECK(effect_class IN ('read', 'write', 'external', 'destructive', 'unknown')),
+            CHECK(status IN ('running', 'succeeded', 'failed', 'interrupted', 'uncertain'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_episode_steps_order
+            ON workflow_episode_steps(episode_id, ordinal, started_at);
+        CREATE INDEX IF NOT EXISTS idx_workflow_episode_steps_tool
+            ON workflow_episode_steps(tool_name, status, completed_at);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (25, datetime('now'), 'Add durable workflow episodes and tool attempts');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 26: Add the crash-safe Skill Learning V2 control plane.
+fn migrate_v26(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS workflow_learning_proposals (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            workflow_signature TEXT NOT NULL,
+            state TEXT NOT NULL,
+            state_version INTEGER NOT NULL DEFAULT 0,
+            revision_sha256 TEXT,
+            operator_token TEXT,
+            artifact_sha256 TEXT,
+            staging_job_id TEXT,
+            kind TEXT,
+            name TEXT,
+            source_agent_id TEXT NOT NULL,
+            origin_channel TEXT,
+            evidence_json TEXT NOT NULL,
+            validation_json TEXT,
+            snoozed_until INTEGER,
+            last_error_code TEXT,
+            last_error_message TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            CHECK(state IN (
+                'observed', 'eligible', 'drafting', 'validating', 'proposed',
+                'dismissed', 'snoozed', 'superseded',
+                'approved_pending_install', 'active_canary', 'active',
+                'rejected', 'install_failed', 'rolled_back'
+            )),
+            CHECK(kind IS NULL OR kind IN ('skill', 'capspec', 'automation', 'refinement')),
+            CHECK(revision_sha256 IS NULL OR length(revision_sha256) = 64),
+            CHECK(operator_token IS NULL OR (
+                length(operator_token) = 20
+                AND operator_token NOT GLOB '*[^0-9a-f]*'
+            )),
+            CHECK(artifact_sha256 IS NULL OR length(artifact_sha256) = 64)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_proposals_state
+            ON workflow_learning_proposals(state, updated_at, id);
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_proposals_signature
+            ON workflow_learning_proposals(workflow_signature, created_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_learning_proposals_revision
+            ON workflow_learning_proposals(revision_sha256)
+            WHERE revision_sha256 IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_learning_proposals_operator_token
+            ON workflow_learning_proposals(operator_token)
+            WHERE operator_token IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS workflow_learning_proposal_events (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            proposal_id TEXT NOT NULL,
+            from_state TEXT,
+            to_state TEXT NOT NULL,
+            resulting_version INTEGER NOT NULL,
+            revision_sha256 TEXT,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_events_proposal
+            ON workflow_learning_proposal_events(proposal_id, sequence);
+
+        CREATE TABLE IF NOT EXISTS workflow_learning_jobs (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            proposal_id TEXT NOT NULL,
+            revision_sha256 TEXT,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            payload_json TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            run_after INTEGER NOT NULL,
+            lease_owner TEXT,
+            lease_expires_at INTEGER,
+            effect_state TEXT NOT NULL DEFAULT 'none',
+            result_json TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT,
+            CHECK(kind IN ('analyze', 'draft', 'validate', 'install', 'canary', 'rollback')),
+            CHECK(status IN ('pending', 'running', 'retry_wait', 'succeeded', 'uncertain', 'dead')),
+            CHECK(effect_state IN ('none', 'started', 'completed')),
+            CHECK(attempt_count >= 0),
+            CHECK(max_attempts BETWEEN 1 AND 20)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_jobs_due
+            ON workflow_learning_jobs(status, run_after, created_at);
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_jobs_proposal
+            ON workflow_learning_jobs(proposal_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS workflow_learning_outbox (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            proposal_id TEXT NOT NULL,
+            revision_sha256 TEXT,
+            topic TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 8,
+            run_after INTEGER NOT NULL,
+            lease_owner TEXT,
+            lease_expires_at INTEGER,
+            delivery_result_json TEXT,
+            last_error TEXT,
+            delivered_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT,
+            CHECK(status IN ('pending', 'delivering', 'retry_wait', 'delivered', 'dead')),
+            CHECK(attempt_count >= 0),
+            CHECK(max_attempts BETWEEN 1 AND 20)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_outbox_due
+            ON workflow_learning_outbox(status, run_after, created_at);
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_outbox_proposal
+            ON workflow_learning_outbox(proposal_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS workflow_learning_installations (
+            proposal_id TEXT NOT NULL,
+            revision_sha256 TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            target_locator TEXT NOT NULL,
+            backup_locator TEXT,
+            backup_sha256 TEXT,
+            installed_sha256 TEXT NOT NULL,
+            last_error TEXT,
+            prepared_at INTEGER NOT NULL,
+            promoted_at INTEGER,
+            verified_at INTEGER,
+            rolled_back_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (proposal_id, revision_sha256),
+            FOREIGN KEY (proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT,
+            CHECK(kind IN ('skill', 'capspec', 'automation', 'refinement')),
+            CHECK(phase IN (
+                'prepared', 'promoted', 'verified', 'active',
+                'rollback_pending', 'rolled_back', 'quarantined', 'failed'
+            )),
+            CHECK(length(revision_sha256) = 64),
+            CHECK(length(installed_sha256) = 64)
+        );
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (26, datetime('now'), 'Add durable workflow-learning proposals, jobs, outbox, and installations');
+        ",
+    )?;
+    Ok(())
+}
+
+fn migrate_v27(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "workflow_learning_installations", "phase_version") {
+        conn.execute(
+            "ALTER TABLE workflow_learning_installations
+             ADD COLUMN phase_version INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS workflow_learning_installation_events (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            proposal_id TEXT NOT NULL,
+            revision_sha256 TEXT NOT NULL,
+            from_phase TEXT,
+            to_phase TEXT NOT NULL,
+            resulting_version INTEGER NOT NULL,
+            last_error TEXT,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (proposal_id, revision_sha256)
+                REFERENCES workflow_learning_installations(proposal_id, revision_sha256)
+                ON DELETE RESTRICT,
+            CHECK(from_phase IS NULL OR from_phase IN (
+                'prepared', 'promoted', 'verified', 'active',
+                'rollback_pending', 'rolled_back', 'quarantined', 'failed'
+            )),
+            CHECK(to_phase IN (
+                'prepared', 'promoted', 'verified', 'active',
+                'rollback_pending', 'rolled_back', 'quarantined', 'failed'
+            )),
+            CHECK(length(revision_sha256) = 64),
+            CHECK(resulting_version >= 0)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_learning_installation_events_revision
+            ON workflow_learning_installation_events(
+                proposal_id, revision_sha256, sequence
+            );
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (27, datetime('now'), 'Add CAS audit events to workflow-learning installations');
+        ",
+    )?;
+    if !column_exists(conn, "workflow_learning_installation_events", "last_error") {
+        conn.execute(
+            "ALTER TABLE workflow_learning_installation_events ADD COLUMN last_error TEXT",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_v28(conn: &Connection) -> Result<(), rusqlite::Error> {
+    for (column, definition) in [
+        ("analysis_result_json", "TEXT"),
+        ("analysis_proposal_id", "TEXT"),
+        ("analysis_updated_at", "INTEGER"),
+    ] {
+        if !column_exists(conn, "workflow_episodes", column) {
+            conn.execute(
+                &format!("ALTER TABLE workflow_episodes ADD COLUMN {column} {definition}"),
+                [],
+            )?;
+        }
+    }
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (28, datetime('now'), 'Audit workflow episode analysis outcomes');",
+    )?;
+    Ok(())
+}
+
+/// Version 29: Persist the compact operator lookup token for exact callbacks.
+fn migrate_v29(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+    if !column_exists(&tx, "workflow_learning_proposals", "operator_token") {
+        tx.execute(
+            "ALTER TABLE workflow_learning_proposals
+             ADD COLUMN operator_token TEXT
+             CHECK(operator_token IS NULL OR (
+                 length(operator_token) = 20
+                 AND operator_token NOT GLOB '*[^0-9a-f]*'
+             ))",
+            [],
+        )?;
+    }
+    tx.execute(
+        "UPDATE workflow_learning_proposals
+         SET operator_token = lower(substr(revision_sha256, 1, 20))
+         WHERE revision_sha256 IS NOT NULL AND operator_token IS NULL",
+        [],
+    )?;
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_learning_proposals_operator_token
+             ON workflow_learning_proposals(operator_token)
+             WHERE operator_token IS NOT NULL;
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (29, datetime('now'), 'Persist unique workflow proposal operator tokens');",
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Version 30: Persist exact, expiring operator refinement bindings.
+fn migrate_v30(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_learning_refinements (
+             id TEXT PRIMARY KEY,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             proposal_id TEXT NOT NULL,
+             revision_sha256 TEXT NOT NULL,
+             expected_proposal_version INTEGER NOT NULL,
+             actor TEXT NOT NULL,
+             surface TEXT NOT NULL,
+             conversation_key TEXT NOT NULL,
+             source_message_id TEXT,
+             language TEXT NOT NULL,
+             state TEXT NOT NULL DEFAULT 'awaiting_input',
+             state_version INTEGER NOT NULL DEFAULT 0,
+             instruction TEXT,
+             captured_message_id TEXT,
+             child_proposal_id TEXT,
+             draft_job_id TEXT,
+             last_error TEXT,
+             expires_at INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY (proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT,
+             FOREIGN KEY (child_proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT,
+             CHECK(state IN (
+                 'awaiting_input', 'queued', 'completed', 'failed', 'cancelled', 'expired'
+             )),
+             CHECK(length(revision_sha256) = 64),
+             CHECK(expected_proposal_version >= 0),
+             CHECK(state_version >= 0)
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_refinements_active_binding
+             ON workflow_learning_refinements(surface, conversation_key, actor)
+             WHERE state = 'awaiting_input';
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_refinements_active_revision
+             ON workflow_learning_refinements(proposal_id, revision_sha256)
+             WHERE state IN ('awaiting_input', 'queued');
+         CREATE INDEX IF NOT EXISTS idx_workflow_refinements_due
+             ON workflow_learning_refinements(state, expires_at, id);
+
+         CREATE TABLE IF NOT EXISTS workflow_learning_refinement_events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             request_id TEXT NOT NULL,
+             from_state TEXT,
+             to_state TEXT NOT NULL,
+             resulting_version INTEGER NOT NULL,
+             actor TEXT NOT NULL,
+             reason TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             FOREIGN KEY (request_id) REFERENCES workflow_learning_refinements(id) ON DELETE RESTRICT
+         );
+         CREATE INDEX IF NOT EXISTS idx_workflow_refinement_events_request
+             ON workflow_learning_refinement_events(request_id, sequence);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (30, datetime('now'), 'Persist workflow proposal refinement bindings');",
+    )?;
+    Ok(())
+}
+
+/// Version 31: Persist isolated tests independently from active installations.
+fn migrate_v31(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_learning_tests (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             id TEXT NOT NULL UNIQUE,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             proposal_id TEXT NOT NULL,
+             revision_sha256 TEXT NOT NULL,
+             job_id TEXT NOT NULL UNIQUE,
+             status TEXT NOT NULL DEFAULT 'queued',
+             requested_by TEXT NOT NULL,
+             result_json TEXT,
+             requested_at INTEGER NOT NULL,
+             completed_at INTEGER,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY (proposal_id) REFERENCES workflow_learning_proposals(id) ON DELETE RESTRICT,
+             FOREIGN KEY (job_id) REFERENCES workflow_learning_jobs(id) ON DELETE RESTRICT,
+             CHECK(status IN ('queued', 'passed', 'failed')),
+             CHECK(length(revision_sha256) = 64),
+             CHECK(
+                 (status = 'queued' AND result_json IS NULL AND completed_at IS NULL)
+                 OR
+                 (status IN ('passed', 'failed') AND result_json IS NOT NULL AND completed_at IS NOT NULL)
+             )
+         );
+         CREATE INDEX IF NOT EXISTS idx_workflow_learning_tests_revision
+             ON workflow_learning_tests(
+                 proposal_id, revision_sha256, requested_at DESC, sequence DESC
+             );
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (31, datetime('now'), 'Persist isolated workflow-learning test evidence');",
+    )?;
+    Ok(())
+}
+
+/// Version 32: Archive and retire the v3.13 SkillSynthesizer substrate.
+///
+/// Legacy rows do not contain immutable staging, validation evidence, or a
+/// recoverable activation contract, so they must never be promoted into
+/// Skill Learning V2 proposals. This migration preserves an exact audit copy,
+/// retires pending work, and makes the source tables read-only. Dropping and
+/// recreating the guards inside the transaction keeps the migration replayable
+/// if the process stops after commit but before `user_version` is advanced.
+fn migrate_v32(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let has_skill_patterns = table_exists(conn, "skill_patterns")?;
+    let has_skill_proposals = table_exists(conn, "skill_proposals")?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS guard_legacy_skill_patterns_insert;
+         DROP TRIGGER IF EXISTS guard_legacy_skill_patterns_update;
+         DROP TRIGGER IF EXISTS guard_legacy_skill_patterns_delete;
+         DROP TRIGGER IF EXISTS guard_legacy_skill_proposals_insert;
+         DROP TRIGGER IF EXISTS guard_legacy_skill_proposals_update;
+         DROP TRIGGER IF EXISTS guard_legacy_skill_proposals_delete;
+
+         CREATE TABLE IF NOT EXISTS legacy_skill_patterns_archive (
+             hash TEXT PRIMARY KEY,
+             agent_id TEXT NOT NULL,
+             tool_sequence_json TEXT NOT NULL,
+             first_seen INTEGER NOT NULL,
+             last_seen INTEGER NOT NULL,
+             count INTEGER NOT NULL,
+             proposed_at INTEGER,
+             archived_at INTEGER NOT NULL,
+             archive_reason TEXT NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS legacy_skill_proposals_archive (
+             id TEXT PRIMARY KEY,
+             pattern_hash TEXT NOT NULL,
+             name TEXT NOT NULL,
+             description TEXT NOT NULL,
+             trigger_hint TEXT NOT NULL,
+             tool_sequence_json TEXT NOT NULL,
+             arg_schema_hint TEXT NOT NULL,
+             confidence REAL NOT NULL,
+             family TEXT NOT NULL,
+             source_agent_id TEXT NOT NULL,
+             origin_channel TEXT,
+             status TEXT,
+             created_at INTEGER NOT NULL,
+             decided_at INTEGER,
+             decided_by TEXT,
+             written_path TEXT,
+             original_state TEXT NOT NULL,
+             archived_at INTEGER NOT NULL,
+             archive_reason TEXT NOT NULL
+         );
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (32, datetime('now'), 'Archive and retire the v3.13 SkillSynthesizer');",
+    )?;
+
+    if has_skill_patterns {
+        tx.execute_batch(
+            "INSERT OR IGNORE INTO legacy_skill_patterns_archive (
+                 hash, agent_id, tool_sequence_json, first_seen, last_seen, count,
+                 proposed_at, archived_at, archive_reason
+             )
+             SELECT hash, agent_id, tool_sequence_json, first_seen, last_seen, count,
+                    proposed_at, CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+                    'v3.13 SkillSynthesizer retired in favor of durable workflow learning'
+             FROM skill_patterns;
+
+             UPDATE skill_patterns
+             SET proposed_at = COALESCE(
+                 proposed_at,
+                 CAST(strftime('%s', 'now') AS INTEGER) * 1000
+             );
+
+             CREATE TRIGGER guard_legacy_skill_patterns_insert
+             BEFORE INSERT ON skill_patterns BEGIN
+                 SELECT RAISE(ABORT, 'legacy SkillSynthesizer is retired; use workflow learning');
+             END;
+             CREATE TRIGGER guard_legacy_skill_patterns_update
+             BEFORE UPDATE ON skill_patterns BEGIN
+                 SELECT RAISE(ABORT, 'legacy SkillSynthesizer is retired; use workflow learning');
+             END;
+             CREATE TRIGGER guard_legacy_skill_patterns_delete
+             BEFORE DELETE ON skill_patterns BEGIN
+                 SELECT RAISE(ABORT, 'legacy SkillSynthesizer is retired; use workflow learning');
+             END;",
+        )?;
+    }
+
+    if has_skill_proposals {
+        tx.execute_batch(
+            "INSERT OR IGNORE INTO legacy_skill_proposals_archive (
+                 id, pattern_hash, name, description, trigger_hint,
+                 tool_sequence_json, arg_schema_hint, confidence, family,
+                 source_agent_id, origin_channel, status, created_at, decided_at,
+                 decided_by, written_path, original_state, archived_at,
+                 archive_reason
+             )
+             SELECT id, pattern_hash, name, description, trigger_hint,
+                    tool_sequence_json, arg_schema_hint, confidence, family,
+                    source_agent_id, origin_channel, status, created_at, decided_at,
+                    decided_by, written_path,
+                    CASE WHEN status IS NULL THEN 'pending' ELSE status END,
+                    CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+                    'v3.13 SkillSynthesizer retired in favor of durable workflow learning'
+             FROM skill_proposals;
+
+             UPDATE skill_proposals
+             SET status = 'denied',
+                 decided_at = COALESCE(
+                     decided_at,
+                     CAST(strftime('%s', 'now') AS INTEGER) * 1000
+                 ),
+                 decided_by = COALESCE(decided_by, 'system:skill2-v32-retirement')
+             WHERE status IS NULL;
+
+             CREATE TRIGGER guard_legacy_skill_proposals_insert
+             BEFORE INSERT ON skill_proposals BEGIN
+                 SELECT RAISE(ABORT, 'legacy SkillSynthesizer is retired; use workflow learning');
+             END;
+             CREATE TRIGGER guard_legacy_skill_proposals_update
+             BEFORE UPDATE ON skill_proposals BEGIN
+                 SELECT RAISE(ABORT, 'legacy SkillSynthesizer is retired; use workflow learning');
+             END;
+             CREATE TRIGGER guard_legacy_skill_proposals_delete
+             BEFORE DELETE ON skill_proposals BEGIN
+                 SELECT RAISE(ABORT, 'legacy SkillSynthesizer is retired; use workflow learning');
+             END;",
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reset_to_v31_fixture(conn: &Connection) {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS guard_legacy_skill_patterns_insert;
+             DROP TRIGGER IF EXISTS guard_legacy_skill_patterns_update;
+             DROP TRIGGER IF EXISTS guard_legacy_skill_patterns_delete;
+             DROP TRIGGER IF EXISTS guard_legacy_skill_proposals_insert;
+             DROP TRIGGER IF EXISTS guard_legacy_skill_proposals_update;
+             DROP TRIGGER IF EXISTS guard_legacy_skill_proposals_delete;
+             DROP TABLE IF EXISTS legacy_skill_patterns_archive;
+             DROP TABLE IF EXISTS legacy_skill_proposals_archive;
+             DELETE FROM migrations WHERE version = 32;
+             PRAGMA user_version = 31;",
+        )
+        .unwrap();
+    }
+
+    fn seed_legacy_skill_synthesizer(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO skill_patterns (
+                 hash, agent_id, tool_sequence_json, first_seen, last_seen,
+                 count, proposed_at
+             ) VALUES ('legacy-pattern', 'captain', '[\"shell_exec\",\"file_write\"]',
+                       10, 20, 4, NULL);
+
+             INSERT INTO skill_proposals (
+                 id, pattern_hash, name, description, trigger_hint,
+                 tool_sequence_json, arg_schema_hint, confidence, family,
+                 source_agent_id, origin_channel, status, created_at,
+                 decided_at, decided_by, written_path
+             ) VALUES
+                 ('legacy-pending', 'legacy-pattern', 'pending-skill', 'pending',
+                  'when pending', '[\"shell_exec\"]', '{}', 0.8,
+                  'general-automation', 'captain', 'telegram', NULL, 30,
+                  NULL, NULL, NULL),
+                 ('legacy-approved', 'legacy-pattern', 'approved-skill', 'approved',
+                  'when approved', '[\"shell_exec\"]', '{}', 0.9,
+                  'general-automation', 'captain', 'cli', 'approved', 31,
+                  41, 'operator', '/legacy/skill.md'),
+                 ('legacy-denied', 'legacy-pattern', 'denied-skill', 'denied',
+                  'when denied', '[\"shell_exec\"]', '{}', 0.7,
+                  'general-automation', 'captain', 'web', 'denied', 32,
+                  42, 'operator', NULL);",
+        )
+        .unwrap();
+    }
 
     #[test]
     fn test_migration_creates_tables() {
@@ -915,10 +1573,54 @@ mod tests {
         assert!(tables.contains(&"learning_review_queue".to_string()));
         assert!(tables.contains(&"skill_patterns".to_string()));
         assert!(tables.contains(&"skill_proposals".to_string()));
+        assert!(tables.contains(&"legacy_skill_patterns_archive".to_string()));
+        assert!(tables.contains(&"legacy_skill_proposals_archive".to_string()));
         assert!(tables.contains(&"todos".to_string()));
         assert!(tables.contains(&"detached_tool_runs".to_string()));
         assert!(tables.contains(&"provider_quota_snapshots".to_string()));
         assert!(tables.contains(&"provider_quota_events".to_string()));
+        assert!(tables.contains(&"workflow_episodes".to_string()));
+        assert!(tables.contains(&"workflow_episode_steps".to_string()));
+        assert!(tables.contains(&"workflow_learning_proposals".to_string()));
+        assert!(tables.contains(&"workflow_learning_proposal_events".to_string()));
+        assert!(tables.contains(&"workflow_learning_jobs".to_string()));
+        assert!(tables.contains(&"workflow_learning_outbox".to_string()));
+        assert!(tables.contains(&"workflow_learning_installations".to_string()));
+        assert!(tables.contains(&"workflow_learning_installation_events".to_string()));
+        assert!(tables.contains(&"workflow_learning_refinements".to_string()));
+        assert!(tables.contains(&"workflow_learning_refinement_events".to_string()));
+        assert!(tables.contains(&"workflow_learning_tests".to_string()));
+        assert!(column_exists(
+            &conn,
+            "workflow_learning_installations",
+            "phase_version"
+        ));
+        assert!(column_exists(
+            &conn,
+            "workflow_learning_installation_events",
+            "last_error"
+        ));
+        assert!(column_exists(
+            &conn,
+            "workflow_episodes",
+            "analysis_result_json"
+        ));
+        assert!(column_exists(
+            &conn,
+            "workflow_episodes",
+            "analysis_proposal_id"
+        ));
+        assert!(column_exists(
+            &conn,
+            "workflow_episodes",
+            "analysis_updated_at"
+        ));
+        assert!(column_exists(
+            &conn,
+            "workflow_learning_proposals",
+            "operator_token"
+        ));
+        assert_eq!(get_schema_version(&conn), 32);
     }
 
     #[test]
@@ -971,6 +1673,212 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(operation, "add");
-        assert_eq!(get_schema_version(&conn), 24);
+        assert_eq!(get_schema_version(&conn), 32);
+    }
+
+    #[test]
+    fn v29_backfills_operator_tokens_for_published_proposals() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                description TEXT
+            );
+            CREATE TABLE workflow_learning_proposals (
+                id TEXT PRIMARY KEY,
+                revision_sha256 TEXT
+            );
+            INSERT INTO workflow_learning_proposals (id, revision_sha256)
+            VALUES (
+                'published',
+                'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+            );
+            PRAGMA user_version = 28;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let token: String = conn
+            .query_row(
+                "SELECT operator_token FROM workflow_learning_proposals WHERE id = 'published'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(token, "aaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(get_schema_version(&conn), 32);
+    }
+
+    #[test]
+    fn v30_adds_refinement_bindings_without_changing_existing_proposals() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO workflow_learning_proposals (
+                 id, idempotency_key, workflow_signature, state, state_version,
+                 source_agent_id, evidence_json, created_at, updated_at
+             ) VALUES ('existing', 'existing:key', ?1, 'observed', 0,
+                       'captain', '{}', 1, 1)",
+            ["a".repeat(64)],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 29).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 30", [])
+            .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_learning_proposals WHERE id = 'existing'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(column_exists(
+            &conn,
+            "workflow_learning_refinements",
+            "conversation_key"
+        ));
+        assert_eq!(get_schema_version(&conn), 32);
+    }
+
+    #[test]
+    fn v31_adds_isolated_test_history_without_changing_existing_proposals() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO workflow_learning_proposals (
+                 id, idempotency_key, workflow_signature, state, state_version,
+                 source_agent_id, evidence_json, created_at, updated_at
+             ) VALUES ('existing-v31', 'existing-v31:key', ?1, 'observed', 0,
+                       'captain', '{}', 1, 1)",
+            ["b".repeat(64)],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 30).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 31", [])
+            .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_learning_proposals WHERE id = 'existing-v31'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(column_exists(
+            &conn,
+            "workflow_learning_tests",
+            "revision_sha256"
+        ));
+        assert_eq!(get_schema_version(&conn), 32);
+    }
+
+    #[test]
+    fn v32_archives_every_legacy_state_without_fabricating_v2_work() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        reset_to_v31_fixture(&conn);
+        seed_legacy_skill_synthesizer(&conn);
+
+        run_migrations(&conn).unwrap();
+
+        let pattern_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM legacy_skill_patterns_archive",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pattern_count, 1);
+
+        let archived_states: Vec<String> = conn
+            .prepare(
+                "SELECT original_state FROM legacy_skill_proposals_archive
+                 ORDER BY original_state",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(archived_states, vec!["approved", "denied", "pending"]);
+
+        let (status, decided_by): (String, String) = conn
+            .query_row(
+                "SELECT status, decided_by FROM skill_proposals
+                 WHERE id = 'legacy-pending'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "denied");
+        assert_eq!(decided_by, "system:skill2-v32-retirement");
+
+        let v2_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_learning_proposals",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(v2_count, 0);
+
+        let error = conn
+            .execute(
+                "INSERT INTO skill_patterns (
+                     hash, agent_id, tool_sequence_json, first_seen, last_seen, count
+                 ) VALUES ('new-legacy', 'captain', '[]', 1, 1, 1)",
+                [],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("SkillSynthesizer is retired"));
+        assert_eq!(get_schema_version(&conn), 32);
+    }
+
+    #[test]
+    fn v32_replays_after_reopen_without_duplicate_archive_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("memory.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            run_migrations(&conn).unwrap();
+            reset_to_v31_fixture(&conn);
+            seed_legacy_skill_synthesizer(&conn);
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            run_migrations(&conn).unwrap();
+            conn.pragma_update(None, "user_version", 31).unwrap();
+            conn.execute("DELETE FROM migrations WHERE version = 32", [])
+                .unwrap();
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            run_migrations(&conn).unwrap();
+            let proposals: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM legacy_skill_proposals_archive",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let patterns: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM legacy_skill_patterns_archive",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!((proposals, patterns), (3, 1));
+            assert_eq!(get_schema_version(&conn), 32);
+        }
     }
 }

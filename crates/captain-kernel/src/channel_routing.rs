@@ -19,8 +19,8 @@
 
 use captain_channels::telegram::{
     build_capspec_approval_keyboard, build_capspec_uncertain_keyboard,
-    build_learning_approval_keyboard, build_project_ask_keyboard, build_skill_proposal_keyboard,
-    build_skill_refinement_keyboard, TelegramAdapter,
+    build_learning_approval_keyboard, build_project_ask_keyboard, build_skill_refinement_keyboard,
+    TelegramAdapter,
 };
 use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelUser};
 use captain_types::event::{ChatStreamEvent, EventPayload};
@@ -149,16 +149,24 @@ pub fn format_skill_proposal_prompt(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let description = captain_runtime::skill_proposer::localize_skill_description(
-        description,
-        name,
-        tool_sequence,
-        language,
-    );
-    let trigger_hint =
-        captain_runtime::skill_proposer::localize_trigger_hint(trigger_hint, language);
-    let why =
-        captain_runtime::skill_proposer::proposal_why_text(tool_sequence, confidence, language);
+    let description = description.to_string();
+    let trigger_hint = trigger_hint.to_string();
+    let why = if french && tool_sequence.is_empty() {
+        "Archive v3.13 : aucune étape outillée observée, sans preuve de validation SKILL2."
+            .to_string()
+    } else if french {
+        format!(
+            "Archive v3.13 : {} étape(s) observée(s), sans preuve de validation SKILL2.",
+            tool_sequence.len()
+        )
+    } else if tool_sequence.is_empty() {
+        "v3.13 archive: no tool step observed, without SKILL2 validation evidence.".to_string()
+    } else {
+        format!(
+            "v3.13 archive: {} observed step(s), without SKILL2 validation evidence.",
+            tool_sequence.len()
+        )
+    };
     let family = family
         .and_then(captain_skills::families::known_family)
         .map(|f| {
@@ -223,25 +231,25 @@ struct SkillProposalLabels {
 fn skill_proposal_labels(french: bool) -> SkillProposalLabels {
     if french {
         SkillProposalLabels {
-            title: "Proposition de skill",
+            title: "Proposition de skill archivée",
             purpose: "À quoi il servira",
             trigger: "Quand Captain l'utilisera",
             why_label: "Ce que Captain a observé",
             family: "Famille",
             tools: "Étapes / outils observés",
             confidence: "Confiance",
-            decision_help: "Refuse ici si c'est trop spécifique ou incomplet. Pour approuver, réponds /skill_approve <id> schema diff tests human seulement après avoir vérifié le schéma, le diff, les tests et la décision humaine.",
+            decision_help: "Cette proposition historique est en lecture seule. Consulte Learning pour les workflows SKILL2 vérifiés.",
         }
     } else {
         SkillProposalLabels {
-            title: "Skill proposal",
+            title: "Archived skill proposal",
             purpose: "What it will do",
             trigger: "When Captain will use it",
             why_label: "What Captain observed",
             family: "Family",
             tools: "Observed steps / tools",
             confidence: "Confidence",
-            decision_help: "Reject here if it is too specific or incomplete. To approve, reply /skill_approve <id> schema diff tests human only after checking schema, diff, tests and human approval.",
+            decision_help: "This historical proposal is read-only. Open Learning for verified SKILL2 workflows.",
         }
     }
 }
@@ -535,36 +543,6 @@ pub fn spawn_telegram_memory_approval_routing(
                         );
                     } else {
                         debug!(review_id = %review_id, "telegram memory approval prompt sent");
-                    }
-                }
-            }
-        }
-    })
-}
-
-pub fn spawn_telegram_skill_proposal_routing(
-    event_bus: crate::event_bus::EventBus,
-    adapter: Arc<TelegramAdapter>,
-    chat_id: i64,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut rx = event_bus.subscribe_all();
-        while let Ok(event) = rx.recv().await {
-            if let EventPayload::ChatStream(stream_ev) = &event.payload {
-                if let Some((proposal_id, text)) = should_route_preferred_skill_proposal(stream_ev)
-                {
-                    let keyboard = build_skill_proposal_keyboard(&proposal_id);
-                    if let Err(e) = adapter
-                        .send_text_with_keyboard(chat_id, &text, &keyboard)
-                        .await
-                    {
-                        warn!(
-                            error = %e,
-                            proposal_id = %proposal_id,
-                            "telegram skill proposal routing send failed"
-                        );
-                    } else {
-                        debug!(proposal_id = %proposal_id, "telegram skill proposal prompt sent");
                     }
                 }
             }
@@ -981,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn format_skill_proposal_prompt_localizes_legacy_trigger_hint() {
+    fn format_skill_proposal_prompt_marks_legacy_trigger_as_archived_read_only() {
         let body = format_skill_proposal_prompt(
             "prop-fr",
             "smoke-check",
@@ -992,17 +970,19 @@ mod tests {
             Some("general-automation"),
             "fr",
         );
-        assert!(body.contains("une future tâche correspond"));
+        assert!(body.contains("Proposition de skill archivée"));
+        assert!(body.contains("When a future task matches"));
         assert!(body.contains("Aucune trace d'outil automatique"));
         assert!(body.contains("Ce que Captain a observé"));
+        assert!(body.contains("Archive v3.13"));
+        assert!(body.contains("lecture seule"));
         assert!(!body.contains("0 étape"));
         assert!(body.contains("Automatisation générale"));
-        assert!(!body.contains("When a future task"));
         assert!(!body.contains("tools:"));
     }
 
     #[test]
-    fn format_skill_proposal_prompt_localizes_english_description() {
+    fn format_skill_proposal_prompt_preserves_archived_payload_without_rewriting() {
         let body = format_skill_proposal_prompt(
             "prop-health",
             "status-checker",
@@ -1013,15 +993,15 @@ mod tests {
             Some("software-development"),
             "fr",
         );
-        assert!(body.contains("Vérifie l'état de santé d'un service."));
-        assert!(body.contains("l'utilisateur demande un contrôle de santé."));
+        assert!(body.contains("Proposition de skill archivée"));
+        assert!(body.contains("Checks service health"));
+        assert!(body.contains("user asks for a health check"));
         assert!(body.contains("Développement logiciel"));
-        assert!(!body.contains("Checks service health"));
-        assert!(!body.contains("user asks for a health check"));
+        assert!(body.contains("sans preuve de validation SKILL2"));
     }
 
     #[test]
-    fn format_skill_proposal_prompt_can_render_in_english() {
+    fn format_skill_proposal_prompt_can_render_archived_notice_in_english() {
         let body = format_skill_proposal_prompt(
             "prop-en",
             "status-checker",
@@ -1032,11 +1012,13 @@ mod tests {
             Some("software-development"),
             "en",
         );
-        assert!(body.contains("Skill proposal"));
+        assert!(body.contains("Archived skill proposal"));
         assert!(body.contains("What it will do"));
         assert!(body.contains("Observed steps / tools"));
         assert!(body.contains("Software development"));
         assert!(body.contains("Checks service health"));
+        assert!(body.contains("v3.13 archive"));
+        assert!(body.contains("historical proposal is read-only"));
         assert!(!body.contains("À quoi il servira"));
     }
 

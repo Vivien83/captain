@@ -169,7 +169,6 @@ pub mod native_embeddings;
 pub mod native_mempalace;
 pub mod native_voice;
 pub mod outcome_detector;
-pub mod pattern_detector;
 pub mod peer_discovery;
 pub mod pii_filter;
 pub mod process_manager;
@@ -178,7 +177,6 @@ pub mod project_memory;
 pub mod project_rules;
 pub mod prompt_builder;
 pub mod prompt_sanitizer;
-pub mod proposal_policy;
 pub mod provider_health;
 pub mod provider_quota;
 pub mod pty_session;
@@ -196,10 +194,7 @@ pub(crate) mod session_summarizer_recall;
 #[cfg(test)]
 mod session_summarizer_tests;
 pub mod shell_bleed;
-pub mod skill_diff;
 pub mod skill_execute;
-pub mod skill_proposer;
-pub mod skill_writer;
 pub mod ssh_exec;
 pub mod ssh_known_hosts;
 pub mod ssh_sftp;
@@ -226,5 +221,51 @@ pub mod web_cache;
 pub mod web_content;
 pub mod web_fetch;
 pub mod web_search;
+pub mod workflow_learning_analysis;
+#[cfg(test)]
+mod workflow_learning_analysis_tests;
+pub mod workflow_learning_automation;
+pub(crate) mod workflow_learning_canonical;
+pub mod workflow_learning_card;
+#[cfg(test)]
+mod workflow_learning_card_tests;
+pub mod workflow_learning_delivery;
+#[cfg(test)]
+mod workflow_learning_delivery_tests;
+pub mod workflow_learning_engine;
+mod workflow_learning_engine_refinement;
+mod workflow_learning_engine_scan;
+mod workflow_learning_engine_support;
+#[cfg(test)]
+mod workflow_learning_engine_tests;
+pub mod workflow_learning_isolated_test;
+#[cfg(test)]
+mod workflow_learning_isolated_test_tests;
+pub mod workflow_learning_operator;
+#[cfg(test)]
+mod workflow_learning_operator_tests;
+pub mod workflow_learning_projection;
+#[cfg(test)]
+mod workflow_learning_projection_tests;
+pub mod workflow_learning_promotion;
+pub(crate) mod workflow_learning_promotion_fs;
+#[cfg(test)]
+mod workflow_learning_promotion_tests;
+pub mod workflow_learning_promotion_types;
+pub(crate) mod workflow_learning_promotion_validation;
+pub mod workflow_learning_proposer;
+#[cfg(test)]
+mod workflow_learning_proposer_tests;
+pub mod workflow_learning_refinement;
+#[cfg(test)]
+mod workflow_learning_refinement_tests;
+pub mod workflow_learning_registry;
+pub(crate) mod workflow_learning_runtime;
+pub mod workflow_learning_snooze;
+#[cfg(test)]
+mod workflow_learning_snooze_tests;
+pub mod workflow_learning_staging;
+#[cfg(test)]
+mod workflow_learning_staging_tests;
 pub mod workspace_context;
 pub mod workspace_sandbox;

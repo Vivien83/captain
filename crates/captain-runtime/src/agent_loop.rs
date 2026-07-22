@@ -29,6 +29,7 @@ use crate::llm_driver::{CompletionResponse, LlmDriver, StreamEvent};
 use crate::loop_guard::LoopGuard;
 use crate::mcp::McpConnection;
 use crate::web_search::WebToolsContext;
+use crate::workflow_learning_runtime::{begin_episode_best_effort, run_in_workflow_episode};
 use captain_memory::session::Session;
 use captain_memory::MemorySubstrate;
 use captain_skills::registry::SkillRegistry;
@@ -212,46 +213,60 @@ pub async fn run_agent_loop(
     user_content_blocks: Option<Vec<ContentBlock>>,
     origin_channel: Option<String>,
 ) -> CaptainResult<AgentLoopResult> {
-    info!(agent = %manifest.name, "Starting agent loop");
-
-    let mut turn = prepare_active_turn(
-        manifest,
-        user_message,
-        session,
+    let workflow_episode = begin_episode_best_effort(
         memory,
-        kernel.as_ref(),
-        embedding_driver,
-        hooks,
-        user_content_blocks,
-        available_tools,
-        context_window_tokens,
-        false,
-    )
-    .await;
-
-    let ctx = NonStreamingAgentLoopContext {
-        manifest,
+        &session.agent_id.to_string(),
+        &session.id.to_string(),
         user_message,
-        session,
-        memory,
-        driver,
-        available_tools,
-        kernel,
-        skill_registry,
-        mcp_connections,
-        web_ctx,
-        browser_ctx,
-        embedding_driver,
+        origin_channel.as_deref(),
         workspace_root,
-        on_phase,
-        media_engine,
-        tts_engine,
-        docker_config,
-        hooks,
-        process_manager,
-        origin_channel,
-    };
-    run_non_streaming_agent_loop_iterations(ctx, &mut turn).await
+    );
+    run_in_workflow_episode(
+        workflow_episode,
+        Box::pin(async {
+            info!(agent = %manifest.name, "Starting agent loop");
+
+            let mut turn = prepare_active_turn(
+                manifest,
+                user_message,
+                session,
+                memory,
+                kernel.as_ref(),
+                embedding_driver,
+                hooks,
+                user_content_blocks,
+                available_tools,
+                context_window_tokens,
+                false,
+            )
+            .await;
+
+            let ctx = NonStreamingAgentLoopContext {
+                manifest,
+                user_message,
+                session,
+                memory,
+                driver,
+                available_tools,
+                kernel,
+                skill_registry,
+                mcp_connections,
+                web_ctx,
+                browser_ctx,
+                embedding_driver,
+                workspace_root,
+                on_phase,
+                media_engine,
+                tts_engine,
+                docker_config,
+                hooks,
+                process_manager,
+                origin_channel,
+            };
+            run_non_streaming_agent_loop_iterations(ctx, &mut turn).await
+        }),
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -281,48 +296,62 @@ pub async fn run_agent_loop_streaming(
     user_input_rx: Option<Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>>,
     origin_channel: Option<String>,
 ) -> CaptainResult<AgentLoopResult> {
-    info!(agent = %manifest.name, "Starting streaming agent loop");
-
-    let mut turn = prepare_active_turn(
-        manifest,
-        user_message,
-        session,
+    let workflow_episode = begin_episode_best_effort(
         memory,
-        kernel.as_ref(),
-        embedding_driver,
-        hooks,
-        user_content_blocks,
-        available_tools,
-        context_window_tokens,
-        true,
-    )
-    .await;
-
-    let ctx = StreamingAgentLoopContext {
-        manifest,
+        &session.agent_id.to_string(),
+        &session.id.to_string(),
         user_message,
-        session,
-        memory,
-        driver,
-        available_tools,
-        kernel,
-        stream_tx,
-        skill_registry,
-        mcp_connections,
-        web_ctx,
-        browser_ctx,
-        embedding_driver,
+        origin_channel.as_deref(),
         workspace_root,
-        on_phase,
-        media_engine,
-        tts_engine,
-        docker_config,
-        hooks,
-        process_manager,
-        user_input_rx,
-        origin_channel,
-    };
-    run_streaming_agent_loop_iterations(ctx, &mut turn).await
+    );
+    run_in_workflow_episode(
+        workflow_episode,
+        Box::pin(async {
+            info!(agent = %manifest.name, "Starting streaming agent loop");
+
+            let mut turn = prepare_active_turn(
+                manifest,
+                user_message,
+                session,
+                memory,
+                kernel.as_ref(),
+                embedding_driver,
+                hooks,
+                user_content_blocks,
+                available_tools,
+                context_window_tokens,
+                true,
+            )
+            .await;
+
+            let ctx = StreamingAgentLoopContext {
+                manifest,
+                user_message,
+                session,
+                memory,
+                driver,
+                available_tools,
+                kernel,
+                stream_tx,
+                skill_registry,
+                mcp_connections,
+                web_ctx,
+                browser_ctx,
+                embedding_driver,
+                workspace_root,
+                on_phase,
+                media_engine,
+                tts_engine,
+                docker_config,
+                hooks,
+                process_manager,
+                user_input_rx,
+                origin_channel,
+            };
+            run_streaming_agent_loop_iterations(ctx, &mut turn).await
+        }),
+    )
+    .await
 }
 
 async fn run_non_streaming_agent_loop_iterations(

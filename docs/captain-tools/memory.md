@@ -57,7 +57,7 @@ erase the session. It is per-turn and does not retract an older fact. Use
 `memory_forget` when the user asks to remove or correct knowledge already
 stored.
 
-`0.1.0-alpha.6`, `0.1.0-alpha.7`, and `0.1.0-alpha.8` share one known
+`0.1.0-alpha.6`, `0.1.0-alpha.7`, `0.1.0-alpha.8`, and `0.1.0-alpha.9` share one known
 limitation: the post-turn paths above
 honor this opt-out, but the core agent-loop finalizer still stores one local episodic interaction
 fragment. This is distinct from the expected transcript

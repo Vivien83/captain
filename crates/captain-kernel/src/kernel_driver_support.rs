@@ -210,7 +210,7 @@ impl CaptainKernel {
         }
     }
 
-    fn quota_observer_for(
+    pub(crate) fn quota_observer_for(
         &self,
         provider: &str,
     ) -> Option<captain_runtime::provider_quota::ProviderQuotaObserver> {

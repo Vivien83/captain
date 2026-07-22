@@ -44,31 +44,24 @@ impl Default for CheckpointConfig {
     }
 }
 
-/// SkillSynthesizer configuration (v3.13).
+/// Durable workflow-capability learning configuration.
 ///
-/// Controls the pattern -> LLM judge -> review queue -> file writer pipeline.
-/// Default mode is `approval` because approved proposals eventually land on
-/// disk as executable skills; auto is opt-in.
+/// Skill Learning V2 uses the active Captain model and deterministic episode
+/// gates. Unknown v3.13 keys remain harmless because Serde ignores them during
+/// deserialization, but fresh configuration no longer advertises that retired
+/// pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillsConfig {
     pub enabled: bool,
     pub mode: LearningMode,
-    /// Occurrences of a tool sequence before the LLM judge is called.
-    pub pattern_threshold: u32,
-    pub pattern_window_days: u32,
-    pub proposer_model: String,
-    pub fallback_models: Vec<String>,
+    /// Timeout for the active-model structured draft call.
     pub reflection_timeout_secs: u64,
-    /// Max accepted proposals per UTC day.
+    /// Maximum observed proposals created per rolling 24-hour window.
     pub rate_limit_per_day: u32,
-    pub min_confidence: f32,
     /// Directory (relative to home_dir when not absolute) for
     /// generated skill files.
     pub generated_dir: String,
-    /// Reflection provider override; default: use default_model.
-    pub reflection_provider: Option<String>,
-    pub reflection_api_key_env: Option<String>,
 }
 
 impl Default for SkillsConfig {
@@ -76,16 +69,9 @@ impl Default for SkillsConfig {
         Self {
             enabled: true,
             mode: LearningMode::Approval,
-            pattern_threshold: 5,
-            pattern_window_days: 7,
-            proposer_model: "gpt-5.5".to_string(),
-            fallback_models: Vec::new(),
             reflection_timeout_secs: 30,
             rate_limit_per_day: 3,
-            min_confidence: 0.7,
             generated_dir: "skills/generated".to_string(),
-            reflection_provider: None,
-            reflection_api_key_env: None,
         }
     }
 }
@@ -224,7 +210,6 @@ mod tests {
 
         assert!(cfg.enabled);
         assert_eq!(cfg.mode, LearningMode::Approval);
-        assert_eq!(cfg.pattern_threshold, 5);
         assert_eq!(cfg.rate_limit_per_day, 3);
         assert_eq!(cfg.generated_dir, "skills/generated");
     }

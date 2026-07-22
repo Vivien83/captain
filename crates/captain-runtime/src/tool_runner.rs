@@ -25,10 +25,10 @@ use crate::tools::{
     tool_capability_search, tool_edit_file, tool_execute_code, tool_file_inspect_batch,
     tool_file_write, tool_glob, tool_grep, tool_learning_review_decide, tool_learning_review_list,
     tool_multi_edit, tool_pkg_wrapper, tool_search, tool_self_improvement_review, tool_shell_exec,
-    tool_skill_proposal_decide, tool_skill_proposal_list, tool_skill_refinement_decide,
-    tool_skill_refinement_list, tool_skill_refinement_propose, tool_skill_refinement_restore,
-    tool_skill_refinement_update, tool_skill_search, tool_ssh_download, tool_ssh_exec,
-    tool_ssh_upload, tool_system_bug_list, tool_system_bug_report, tool_system_bug_update,
+    tool_skill_refinement_decide, tool_skill_refinement_list, tool_skill_refinement_propose,
+    tool_skill_refinement_restore, tool_skill_refinement_update, tool_skill_search,
+    tool_ssh_download, tool_ssh_exec, tool_ssh_upload, tool_system_bug_list,
+    tool_system_bug_report, tool_system_bug_update, tool_workflow_learning_list,
     write_web_credentials_config, CARGO_SUBCOMMANDS, DEFAULT_MEMORY_CONTEXT_MIN_SIMILARITY,
     NPM_SUBCOMMANDS, PIP_SUBCOMMANDS, SKILL_REFINEMENTS_KEY, SYSTEM_BUGS_KEY,
 };
@@ -44,6 +44,7 @@ use crate::tools::{find_python_interpreter, validate_pip_allowlist};
 #[cfg(test)]
 use crate::tools::{AGENT_CALL_DEPTH, MAX_AGENT_CALL_DEPTH};
 use crate::web_search::WebToolsContext;
+use crate::workflow_learning_runtime::{record_tool_finished, record_tool_started};
 use captain_skills::registry::SkillRegistry;
 use captain_types::tool::{ToolDefinition, ToolResult};
 use captain_types::tool_compat::normalize_tool_name;
@@ -90,6 +91,7 @@ pub async fn execute_tool(
 
     // v3.12b — wall-clock for the LearningSignal emission at the end.
     let dispatch_start = std::time::Instant::now();
+    record_tool_started(tool_use_id, tool_name, input);
 
     // Grouped tool dispatch removed — tools are now flat with proper schemas.
     // tool_groups::resolve_grouped_tool is no longer called here.
@@ -105,12 +107,20 @@ pub async fn execute_tool(
     )
     .await
     {
+        record_tool_finished(
+            tool_use_id,
+            tool_name,
+            blocked.is_error,
+            0,
+            "pre_dispatch_blocked",
+        );
         return blocked;
     }
 
     // v3.10f — cache lookup before dispatch.
     let tool_cache = crate::tool_cache::global_cache();
     if let Some(cached) = cached_tool_result(tool_use_id, tool_name, input, &tool_cache).await {
+        record_tool_finished(tool_use_id, tool_name, cached.is_error, 0, "cache_hit");
         return cached;
     }
 
@@ -136,7 +146,16 @@ pub async fn execute_tool(
     })
     .await;
     let (result, transient_content) = match dispatch {
-        ToolDispatchOutcome::Blocked(result) => return result,
+        ToolDispatchOutcome::Blocked(result) => {
+            record_tool_finished(
+                tool_use_id,
+                tool_name,
+                result.is_error,
+                0,
+                "dispatch_blocked",
+            );
+            return result;
+        }
         ToolDispatchOutcome::Dispatched(result) => (result, Vec::new()),
         ToolDispatchOutcome::Browser(result) => match result {
             Ok(output) => (Ok(output.content), output.transient_content),

@@ -14,17 +14,22 @@ pub use crate::telegram_callbacks::{
     build_approval_keyboard, build_ask_user_keyboard, build_capspec_approval_keyboard,
     build_capspec_uncertain_keyboard, build_learning_approval_keyboard,
     build_model_switch_keyboard, build_model_switch_keyboard_with_recommendation,
-    build_project_ask_keyboard, build_skill_proposal_keyboard, build_skill_refinement_keyboard,
-    parse_approval_callback, parse_ask_user_callback, parse_capspec_callback,
-    parse_learning_callback, parse_model_switch_callback, parse_project_ask_callback,
-    parse_skill_proposal_callback, parse_skill_refinement_callback, CapSpecTelegramAction,
-    CapSpecTelegramCallback,
+    build_project_ask_keyboard, build_skill_refinement_keyboard, parse_approval_callback,
+    parse_ask_user_callback, parse_capspec_callback, parse_learning_callback,
+    parse_model_switch_callback, parse_project_ask_callback, parse_runtime_update_callback,
+    parse_skill_proposal_callback, parse_skill_refinement_callback,
+    parse_workflow_learning_callback, CapSpecTelegramAction, CapSpecTelegramCallback,
+    RuntimeUpdateTelegramCallback, WorkflowLearningTelegramCallback,
 };
 use crate::telegram_html::{sanitize_telegram_html, telegram_html_to_plain_text};
 use crate::telegram_reply_context::apply_telegram_reply_context;
 use crate::telegram_rich::{
     split_telegram_rich_markdown, telegram_edit_rich_message_body, telegram_rich_fallback_reason,
     telegram_send_rich_message_body, telegram_send_rich_message_draft_body, RichFallbackReason,
+};
+pub use crate::telegram_runtime_update::{
+    build_runtime_update_keyboard, format_runtime_update_card, format_runtime_update_error,
+    format_runtime_update_resolution,
 };
 use crate::telegram_streaming::is_telegram_html_parse_failure;
 pub use crate::telegram_streaming::{
@@ -36,6 +41,12 @@ use crate::telegram_update_content::parse_telegram_update_content;
 use crate::telegram_update_context::check_mention_entities;
 use crate::telegram_update_context::{
     parse_telegram_update_context, telegram_update_message, telegram_update_metadata,
+};
+pub use crate::telegram_workflow_learning::{
+    build_workflow_learning_keyboard, format_workflow_isolated_test_result,
+    format_workflow_learning_card, format_workflow_learning_error,
+    format_workflow_learning_resolution, format_workflow_lifecycle_card,
+    format_workflow_refinement_capture, format_workflow_refinement_capture_error,
 };
 use crate::types::{
     split_message, ChannelAdapter, ChannelContent, ChannelMessage, ChannelType, ChannelUser,
@@ -1147,6 +1158,46 @@ async fn dispatch_telegram_callback(
     };
 
     acknowledge_telegram_callback(ctx, &callback.id).await;
+
+    if callback.data.starts_with("runtime_update:") {
+        let original_message_id = callback_query["message"]["message_id"].as_i64();
+        let original_text = callback_original_preview_full(callback_query);
+        let language = callback_query["from"]["language_code"]
+            .as_str()
+            .unwrap_or("en");
+        let msg = crate::telegram_callbacks::runtime_update_operator_callback_message(
+            &callback.data,
+            callback.chat_id,
+            callback.from_id,
+            &callback.from_name,
+            callback.thread_id.clone(),
+            original_message_id,
+            &original_text,
+            language,
+        );
+        info!(callback_data = %callback.data, from = %callback.from_name, "Telegram runtime-update operator callback routed directly");
+        return ctx.tx.send(msg).await.is_ok();
+    }
+
+    if parse_workflow_learning_callback(&callback.data).is_some() {
+        let original_message_id = callback_query["message"]["message_id"].as_i64();
+        let original_text = callback_original_preview_full(callback_query);
+        let language = callback_query["from"]["language_code"]
+            .as_str()
+            .unwrap_or("en");
+        let msg = crate::telegram_callbacks::workflow_learning_operator_callback_message(
+            &callback.data,
+            callback.chat_id,
+            callback.from_id,
+            &callback.from_name,
+            callback.thread_id.clone(),
+            original_message_id,
+            &original_text,
+            language,
+        );
+        info!(callback_data = %callback.data, from = %callback.from_name, "Telegram workflow-learning operator callback routed directly");
+        return ctx.tx.send(msg).await.is_ok();
+    }
 
     if parse_capspec_callback(&callback.data).is_some() {
         let original_message_id = callback_query["message"]["message_id"].as_i64();

@@ -4,6 +4,23 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Current Release Candidate
+
+`v0.1.0-alpha.9` is the candidate being certified for local publication. It
+combines durable Workflow Learning V2 with Captain's native release monitor.
+The candidate URLs and immutable image name are fixed so bundles and
+documentation can be audited before publication:
+
+- release: <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9`
+- host asset contract: exactly 20 files covering five platforms, checksums,
+  manifests, and four installers
+
+The public source commit, annotated tag object, OCI index digest, anonymous
+download/pull evidence, and zero-Actions proof remain intentionally unset until
+those surfaces exist and have been verified live. They must never be copied
+from an older release.
+
 ## Current Public Release
 
 `v0.1.0-alpha.8` is the current public prerelease. It combines Captain Forge's
@@ -39,6 +56,31 @@ the core agent-loop finalizer still writes its local episodic interaction
 fragment. The normal transcript and audit remain intentional; this extra
 semantic fragment does not. Treat the opt-out as incomplete until a later
 immutable release closes the core finalizer path.
+
+## Alpha 9 Candidate Contract
+
+The `alpha.9` candidate promotes two contracts developed after `alpha.8`. They
+remain candidate claims until the release and image have been published and
+verified live:
+
+- Skill Learning V2 replaces the active SkillSynthesizer v3.13 path with one
+  durable lifecycle for evidence-bound Skills, CapSpecs, Automations, and
+  refinements. Telegram, API, TUI, Control Web, and Desktop consume the same
+  exact operator projection.
+- The native Captain release monitor checks after startup and every 12 hours.
+  It follows the installed stable/prerelease channel, requires complete host
+  bundle/checksum assets, and persists candidate, exact decisions, detached
+  install result, and leased Telegram Rich delivery. **Update**, **Defer 24 h**,
+  and **Refuse this version** bypass the model and require the exact configured
+  Telegram chat plus an explicit numeric user. Docker/manual procedures never
+  gain host authority and stay observable until a later runtime check.
+
+`captain status --json` and `GET /api/status` expose this monitor under
+`runtime_update`. The implementation deliberately preserves the exact release
+tag for GitHub asset download while using its canonical semantic version only
+for comparison and display. Power loss between decision, child launch, result,
+restart, and notification is bounded by durable state, timeout recovery,
+quarantine, and delivery leases.
 
 ## Previous Public Release
 
@@ -109,6 +151,7 @@ These files are maintained as current operator or runtime-facing references:
   `docs/troubleshooting.md`, `docs/DEPLOY.md`
 - `docs/cli-reference.md`, `docs/api-reference.md`, `docs/configuration.md`
 - `docs/channel-adapters.md`, `docs/providers.md`, `docs/skill-development.md`
+- `docs/SKILL_LEARNING_V2.md`
 - `docs/CAPTAIN_FORGE_CAPSPEC.md`
 - `docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md`
 - `docs/architecture.md`, `docs/security.md`, `docs/workflows.md`,

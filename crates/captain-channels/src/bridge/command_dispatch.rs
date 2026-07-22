@@ -3,15 +3,16 @@
 use super::command_agent::{parse_thinking_enabled, run_selected_agent_command};
 use super::command_agent_select::run_agent_selection_command;
 use super::command_automation::{run_schedule_command, run_trigger_command, run_workflow_command};
-use super::command_format::{format_agents_message, format_help_message, format_start_message};
+use super::command_format::{
+    format_agents_message, format_help_message, format_start_message,
+    legacy_skill_synthesizer_retired,
+};
 use super::command_home::{
     format_get_home_response, format_set_home_error, format_set_home_success, resolve_home_chat_id,
 };
 use super::command_model::{handle_model_command, handle_model_switch_callback};
 use super::command_response::CommandResponse;
-use super::command_review::{
-    run_id_prefix_command, run_project_answer_command, run_skill_approval_command,
-};
+use super::command_review::{run_id_prefix_command, run_project_answer_command};
 use super::model_switch_pending::PendingModelSwitchStore;
 use super::ChannelBridgeHandle;
 use crate::router::AgentRouter;
@@ -253,7 +254,7 @@ async fn dispatch_review_list_command(name: &str, ctx: &CommandContext<'_>) -> O
     match name {
         "approvals" => Some(ctx.handle.list_approvals_text().await),
         "learnings" => Some(ctx.handle.list_learning_review_text().await),
-        "skill_proposals" => Some(ctx.handle.list_skill_proposals_text().await),
+        "skill_proposals" => Some(legacy_skill_synthesizer_retired()),
         "skill_refinements" => Some(ctx.handle.list_skill_refinements_text().await),
         _ => None,
     }
@@ -344,18 +345,7 @@ async fn dispatch_skill_review_command(
 ) -> Option<String> {
     let handle = ctx.handle;
     match name {
-        "skill_approve" => Some(
-            run_skill_approval_command(args, |id| async move {
-                handle.resolve_skill_proposal_text(&id, true, true).await
-            })
-            .await,
-        ),
-        "skill_reject" => Some(
-            run_id_prefix_command(args, "skill_reject", |id| async move {
-                handle.resolve_skill_proposal_text(&id, false, false).await
-            })
-            .await,
-        ),
+        "skill_approve" | "skill_reject" => Some(legacy_skill_synthesizer_retired()),
         "skill_refine_approve" => Some(
             run_id_prefix_command(args, "skill_refine_approve", |id| async move {
                 handle.resolve_skill_refinement_text(&id, true).await

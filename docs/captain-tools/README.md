@@ -39,7 +39,7 @@ with the matching family documentation. Any new family means: append a
 | [`browser`](browser.md)                           | D.4  | `browser_batch`, `browser_navigate`, `browser_click`, `browser_type`, `browser_keys`, `browser_select`, `browser_hover`, `browser_screenshot`, `browser_read_page`, `browser_close`, `browser_scroll`, `browser_wait`, `browser_run_js`, `browser_back`, `browser_status`, `browser_network_log`, `browser_observe`, `browser_diagnostics`, `screenshot` |
 | [`ssh`](ssh.md)                                   | D.5  | `ssh_health_check`, `ssh_exec`, `ssh_upload`, `ssh_download` |
 | [`memory`](memory.md)                             | D.6  | `memory_context_batch`, `memory_save`, `memory_recall`, `memory_store`, `memory_forget` |
-| [`skill`](skill.md)                               | D.7  | `skill_search`, `skill_execute`, `scaffold_skill`, `skill_proposal_list`, `skill_proposal_decide`, skill refinement tools |
+| [`skill`](skill.md)                               | D.7  | `skill_search`, `skill_view`, `skill_check`, `skill_execute`, `scaffold_skill`, `workflow_learning_list`, skill refinement tools |
 | [`channel`](channel.md)                           | D.8  | `channel_delivery_batch`, `channel_send`, `channel_reconfigure`, Telegram topic tools |
 | [`agent-coordination`](agent-coordination.md)     | D.9  | `agent_spawn`, `agent_send`, `agent_list`, `agent_kill`, `agent_status`, `agent_watch`, `agent_delegate`, `agent_correct`, `agent_find`, fleet tools, task tools, Hands, A2A, `ask_user` |
 | [`scheduling`](scheduling.md)                     | D.10 | `cron_create`, `cron_list`, `cron_update`, `cron_cancel`, `reminder_set`, schedule tools, goal lifecycle and suggestions |

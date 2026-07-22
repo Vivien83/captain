@@ -69,6 +69,7 @@ clap_complete = "4"
 
 # HTTP client (for LLM drivers)
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "gzip", "deflate", "brotli"] }
+semver = "1"
 flate2 = "1"
 tar = "0.4"
 fs2 = "0.4"

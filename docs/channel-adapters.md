@@ -73,6 +73,17 @@ server explicitly lacks the Rich endpoints, Captain caches that result and
 uses the existing HTML/plain fallback. Ambiguous network or server failures do
 not trigger a second send that could duplicate a message.
 
+Captain release notices use the same model-independent control plane. The
+daemon checks the compatible official release channel after startup and every
+12 hours, then durably queues one Rich card for `default_chat_id`. Its buttons
+carry a compact candidate token and exact decision version. Before applying an
+update, deferral, or refusal, the kernel verifies the current candidate, exact
+chat, and an explicitly listed numeric Telegram user; `allowed_users = ["*"]`
+is not sufficient for this privileged action. Stale or malformed callbacks are
+answered directly and never enter a session or model turn. Host updates verify
+the archive checksum in a detached process. Docker/manual procedures retain a
+24-hour reminder until the new runtime is actually observed.
+
 ## Access Policy
 
 Restrict inbound users before exposing a channel. For active inbound adapters,

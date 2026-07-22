@@ -1,9 +1,4 @@
-//! REST surface for the v3.13 SkillSynthesizer API.
-//!
-//! - GET /api/skills/proposals - list pending drafts awaiting review
-//! - GET /api/skills/patterns - recent detected patterns (debug view)
-//! - POST /api/skills/proposals/{id}/decide - approve or deny
-//! - GET /api/skills/metrics - counts for the sidebar
+//! Installed-skill API and compatibility tombstone for SkillSynthesizer v3.13.
 
 use crate::state::AppState;
 use crate::types::{SkillInstallRequest, SkillUninstallRequest};
@@ -11,217 +6,50 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use captain_memory::{skill_patterns, skill_proposals};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-fn server_error(msg: String) -> (StatusCode, Json<serde_json::Value>) {
+/// Compatibility tombstone for the retired v3.13 SkillSynthesizer.
+///
+/// Historical rows remain available as a read-only SQLite audit archive. They
+/// cannot be promoted because they lack immutable staging and validation
+/// evidence required by Skill Learning V2.
+pub async fn retired_skill_synthesizer() -> impl IntoResponse {
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": msg })),
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "error": "The v3.13 SkillSynthesizer is retired",
+            "replacement": "/api/learning/workflows",
+            "archived": true,
+            "migration": "v32"
+        })),
     )
-}
-
-fn bad_request(msg: String) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": msg })),
-    )
-}
-
-fn parse_limit(params: &HashMap<String, String>, default: usize, cap: usize) -> usize {
-    params
-        .get("limit")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(default)
-        .min(cap)
 }
 
 pub async fn list_proposals(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
+    State(_state): State<Arc<AppState>>,
+    Query(_params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let limit = parse_limit(&params, 50, 500);
-    let conn = state.kernel.memory.usage_conn();
-    let rows = {
-        let guard = match conn.lock() {
-            Ok(g) => g,
-            Err(e) => return server_error(format!("sqlite poisoned: {e}")),
-        };
-        match skill_proposals::list_pending(&guard, limit) {
-            Ok(r) => r,
-            Err(e) => return server_error(e.to_string()),
-        }
-    };
-    let pending = rows
-        .into_iter()
-        .map(|row| {
-            let mut value = serde_json::to_value(row).unwrap_or_default();
-            captain_runtime::skill_proposer::localize_skill_proposal_value(
-                &mut value,
-                &state.kernel.config.language,
-            );
-            value
-        })
-        .collect::<Vec<_>>();
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "pending": pending })),
-    )
+    retired_skill_synthesizer().await
 }
 
 pub async fn list_patterns(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
+    State(_state): State<Arc<AppState>>,
+    Query(_params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let limit = parse_limit(&params, 50, 500);
-    let threshold = params
-        .get("threshold")
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(1);
-    let window_days = params
-        .get("window_days")
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(30);
-    let conn = state.kernel.memory.usage_conn();
-    let rows = {
-        let guard = match conn.lock() {
-            Ok(g) => g,
-            Err(e) => return server_error(format!("sqlite poisoned: {e}")),
-        };
-        match skill_patterns::list_ready(&guard, threshold, window_days, limit) {
-            Ok(r) => r,
-            Err(e) => return server_error(e.to_string()),
-        }
-    };
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "patterns": rows })),
-    )
-}
-
-#[derive(Deserialize)]
-pub struct DecideBody {
-    pub approve: bool,
-    #[serde(default)]
-    pub decided_by: Option<String>,
-    #[serde(default)]
-    pub verification: Option<SkillProposalApprovalVerification>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct SkillProposalApprovalVerification {
-    #[serde(default)]
-    pub schema_reviewed: bool,
-    #[serde(default)]
-    pub diff_reviewed: bool,
-    #[serde(default)]
-    pub tests_reviewed: bool,
-    #[serde(default)]
-    pub human_approved: bool,
-}
-
-impl SkillProposalApprovalVerification {
-    fn complete(&self) -> bool {
-        self.schema_reviewed && self.diff_reviewed && self.tests_reviewed && self.human_approved
-    }
-}
-
-fn skill_proposal_decided_by_for_api(body: &DecideBody) -> Result<String, String> {
-    let decided_by = body
-        .decided_by
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("api");
-    if !body.approve {
-        return Ok(decided_by.to_string());
-    }
-    if !body.verification.as_ref().is_some_and(|v| v.complete()) {
-        return Err(
-            "approve=true requires verification.schema_reviewed, diff_reviewed, tests_reviewed and human_approved".to_string(),
-        );
-    }
-    Ok(captain_runtime::kernel_handle::skill_proposal_approval_decider(decided_by))
+    retired_skill_synthesizer().await
 }
 
 pub async fn decide_proposal(
-    State(state): State<Arc<AppState>>,
-    Path(proposal_id): Path<String>,
-    Json(body): Json<DecideBody>,
+    State(_state): State<Arc<AppState>>,
+    Path(_proposal_id): Path<String>,
+    Json(_body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    use captain_runtime::kernel_handle::KernelHandle;
-    let kh: Arc<dyn KernelHandle> = Arc::clone(&state.kernel) as Arc<dyn KernelHandle>;
-    let decided_by = match skill_proposal_decided_by_for_api(&body) {
-        Ok(value) => value,
-        Err(e) => return bad_request(e),
-    };
-    match kh
-        .skill_proposal_decide(&proposal_id, body.approve, Some(decided_by.as_str()))
-        .await
-    {
-        Ok(v) => (StatusCode::OK, Json(v)),
-        Err(e) => {
-            let lower = e.to_lowercase();
-            if lower.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({ "error": e })),
-                )
-            } else if lower.contains("already decided") {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({ "error": e })),
-                )
-            } else {
-                bad_request(e)
-            }
-        }
-    }
+    retired_skill_synthesizer().await
 }
 
-pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let conn = state.kernel.memory.usage_conn();
-    let guard = match conn.lock() {
-        Ok(g) => g,
-        Err(e) => return server_error(format!("sqlite poisoned: {e}")),
-    };
-    let pending = skill_proposals::list_pending(&guard, 10_000)
-        .map(|v| v.len() as i64)
-        .unwrap_or(0);
-    let patterns_hot = skill_patterns::list_ready(&guard, 3, 7, 10_000)
-        .map(|v| v.len() as i64)
-        .unwrap_or(0);
-    let total_patterns: i64 = guard
-        .query_row("SELECT COUNT(*) FROM skill_patterns", [], |r| r.get(0))
-        .unwrap_or(0);
-    let total_approved: i64 = guard
-        .query_row(
-            "SELECT COUNT(*) FROM skill_proposals WHERE status = 'approved'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    let total_denied: i64 = guard
-        .query_row(
-            "SELECT COUNT(*) FROM skill_proposals WHERE status = 'denied'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "pending": pending,
-            "patterns_hot": patterns_hot,
-            "total_patterns": total_patterns,
-            "approved": total_approved,
-            "denied": total_denied,
-            "skills_mode": format!("{:?}", state.kernel.config.skills.mode).to_lowercase(),
-            "skills_enabled": state.kernel.config.skills.enabled,
-        })),
-    )
+pub async fn metrics(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
+    retired_skill_synthesizer().await
 }
 
 /// GET /api/skills - List available skills.
@@ -497,40 +325,18 @@ pub async fn create_skill(
 
 #[cfg(test)]
 mod tests {
-    use super::{skill_proposal_decided_by_for_api, DecideBody, SkillProposalApprovalVerification};
+    use super::*;
 
-    #[test]
-    fn skill_proposal_api_approval_requires_complete_external_verification() {
-        let body = DecideBody {
-            approve: true,
-            decided_by: Some("web".to_string()),
-            verification: Some(SkillProposalApprovalVerification {
-                schema_reviewed: true,
-                diff_reviewed: true,
-                tests_reviewed: false,
-                human_approved: true,
-            }),
-        };
-
-        let err = skill_proposal_decided_by_for_api(&body).unwrap_err();
-        assert!(err.contains("schema_reviewed"));
-        assert!(err.contains("human_approved"));
-    }
-
-    #[test]
-    fn skill_proposal_api_approval_marks_decider_with_verification() {
-        let body = DecideBody {
-            approve: true,
-            decided_by: Some("web".to_string()),
-            verification: Some(SkillProposalApprovalVerification {
-                schema_reviewed: true,
-                diff_reviewed: true,
-                tests_reviewed: true,
-                human_approved: true,
-            }),
-        };
-
-        let decided_by = skill_proposal_decided_by_for_api(&body).unwrap();
-        assert_eq!(decided_by, "web:schema_diff_tests_human");
+    #[tokio::test]
+    async fn legacy_synthesizer_returns_actionable_gone_response() {
+        let response = retired_skill_synthesizer().await.into_response();
+        assert_eq!(response.status(), StatusCode::GONE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["replacement"], "/api/learning/workflows");
+        assert_eq!(value["archived"], true);
+        assert_eq!(value["migration"], "v32");
     }
 }

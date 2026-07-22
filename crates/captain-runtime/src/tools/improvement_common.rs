@@ -99,26 +99,6 @@ pub(crate) fn review_id_field(
     }
 }
 
-pub(crate) fn resolve_json_id_prefix(
-    items: &serde_json::Value,
-    id_prefix: &str,
-    label: &str,
-) -> Result<String, String> {
-    let items = items
-        .as_array()
-        .ok_or_else(|| format!("{label} registry is corrupted: expected JSON array"))?;
-    let matches: Vec<&str> = items
-        .iter()
-        .filter_map(|item| item["id"].as_str())
-        .filter(|id| id.starts_with(id_prefix))
-        .collect();
-    match matches.as_slice() {
-        [] => Err(format!("{label} id not found")),
-        [id] => Ok((*id).to_string()),
-        _ => Err(format!("{label} id prefix is ambiguous; use the full id")),
-    }
-}
-
 pub(crate) fn public_safe_json_value(
     mut value: serde_json::Value,
     tool_name: &str,

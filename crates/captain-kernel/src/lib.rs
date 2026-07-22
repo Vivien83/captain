@@ -39,6 +39,7 @@ pub mod operational_awareness;
 pub mod pairing;
 mod provider_quota_monitor;
 pub mod registry;
+pub mod release_updates;
 pub mod scheduler;
 pub mod supervisor;
 pub mod tool_rag;

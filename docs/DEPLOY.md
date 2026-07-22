@@ -2,7 +2,7 @@
 
 Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
 container image. The current public release is the prerelease
-`v0.1.0-alpha.8`; pin it explicitly because GitHub's `/releases/latest`
+`v0.1.0-alpha.9`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 
 ## Host Install
@@ -10,8 +10,8 @@ endpoint excludes prereleases.
 macOS, Linux, or a Linux VPS:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=desktop bash
 ```
 
 Use `CAPTAIN_PROFILE=vps` for a service-oriented server install. The installer
@@ -62,14 +62,14 @@ approving first launch.
 The immutable image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
 
 docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
 ```
 
 The moving prerelease channel is `ghcr.io/vivien83/captain-agent-os:alpha`.
@@ -96,8 +96,8 @@ docker compose up -d --build
 To consume the published image without rebuilding:
 
 ```bash
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.8 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.8 docker compose up -d --no-build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.9 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.9 docker compose up -d --no-build
 ```
 
 The optional `personal`, `trusted`, and `yolo` overlays progressively grant
@@ -133,14 +133,31 @@ TLS termination.
 ## Update
 
 Host installs can rerun the pinned installer or use `captain update` after
-reviewing the target version. Container installs should pull the desired
+reviewing the target version. The daemon also checks the configured official
+release channel after startup and every 12 hours. If Telegram has an exact
+`default_chat_id` and an explicitly allowed numeric operator ID, Captain sends
+a Rich decision card. `Update` starts a detached checksum-verified host update;
+`Defer` schedules an exact 24-hour reminder; `Refuse` suppresses only that
+version. Callback decisions bypass the model and stale cards cannot mutate a
+newer candidate.
+
+Container installs remain orchestrator-owned. Captain never mounts the Docker
+socket or claims that showing the procedure completed the update; it keeps the
+candidate observable and checks again after the reminder. Pull the desired
 immutable tag and recreate the container:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
 docker rm -f captain
 # Re-run the same docker run command; captain-data preserves state.
 ```
+
+The update monitor, pending version, retry state, and next check are available
+through `captain status --json` and `GET /api/status` under `runtime_update`.
+Host update attempts write a per-attempt log under
+`$CAPTAIN_HOME/logs/runtime-update-<attempt-id>.log`. A missing result is
+recovered after a bounded timeout; malformed result files are quarantined
+rather than replayed.
 
 ## Backup and Reset
 

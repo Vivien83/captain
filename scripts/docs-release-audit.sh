@@ -35,6 +35,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
   docs/releases/v0.1.0-alpha.7.md
   docs/releases/v0.1.0-alpha.6.md
@@ -150,25 +151,25 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current public release has an agent-facing changelog" \
+  "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.8"
+  "### 0.1.0-alpha.9"
 require_contains \
-  "release readiness expects the current public version" \
+  "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.8'
+  '0.1.0-alpha.9'
 require_contains \
-  "excellence smoke expects the current public version" \
+  "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.8'
+  '0.1.0-alpha.9'
 require_contains \
   "public changelog exposes the alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.8] - 2026-07-19'
+  '## [0.1.0-alpha.9] - 2026-07-20'
 require_contains \
   "reviewed alpha notes exist" \
-  docs/releases/v0.1.0-alpha.8.md \
-  '# Captain 0.1.0-alpha.8'
+  docs/releases/v0.1.0-alpha.9.md \
+  '# Captain 0.1.0-alpha.9'
 require_contains \
   "last published alpha.3 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.3.md \
@@ -253,6 +254,14 @@ require_contains \
   "published alpha.8 notes record the zero-Actions proof" \
   docs/releases/v0.1.0-alpha.8.md \
   'GitHub Actions API returned zero runs'
+require_not_contains \
+  "alpha.9 notes do not copy the alpha.8 source commit" \
+  docs/releases/v0.1.0-alpha.9.md \
+  'd82f120153b8e83e9be82df6748f928f8d4aa6b9'
+require_not_contains \
+  "alpha.9 notes do not copy the alpha.8 OCI digest" \
+  docs/releases/v0.1.0-alpha.9.md \
+  'sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
@@ -290,6 +299,18 @@ require_contains \
   docs/releases/v0.1.0-alpha.8.md \
   '## Subscription and internal quotas'
 require_contains \
+  "alpha.9 notes disclose the retained memory opt-out limitation" \
+  docs/releases/v0.1.0-alpha.9.md \
+  'core agent-loop finalizer'
+require_contains \
+  "alpha.9 notes expose durable workflow learning" \
+  docs/releases/v0.1.0-alpha.9.md \
+  '## Durable workflow learning'
+require_contains \
+  "alpha.9 notes expose the native release monitor" \
+  docs/releases/v0.1.0-alpha.9.md \
+  '## Native release monitor'
+require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
   'scripts/release-workflow-audit.sh'
@@ -309,11 +330,11 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the public prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.8/install.sh'
+    'releases/download/v0.1.0-alpha.9/install.sh'
   require_contains \
     "$readme pins the immutable alpha image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \

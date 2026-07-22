@@ -76,6 +76,11 @@ export const api = {
   learningCommitted: () => request('/api/learning/committed'),
   learningMetrics: () => request('/api/learning/metrics'),
   learningDecide: (id, approve) => request(`/api/learning/review/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ approve }) }),
+  workflowLearning: () => request('/api/learning/workflows?limit=100'),
+  workflowLearningDecide: (token, decisionVersion, action) => request(`/api/learning/workflows/${encodeURIComponent(token)}/decide`, {
+    method: 'POST',
+    body: JSON.stringify({ decision_version: decisionVersion, action, surface: 'web' }),
+  }),
 
   workflows: () => request('/api/workflows'),
   createWorkflow: (body) => request('/api/workflows', { method: 'POST', body: JSON.stringify(body) }),

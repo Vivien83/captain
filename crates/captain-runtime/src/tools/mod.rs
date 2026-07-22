@@ -238,7 +238,7 @@ pub use improvement_definitions::improvement_tool_definitions;
 pub(crate) use improvement_dispatch::dispatch_improvement_tool;
 pub(crate) use improvement_ops::{
     tool_learning_review_decide, tool_learning_review_list, tool_self_improvement_review,
-    tool_skill_proposal_decide, tool_skill_proposal_list,
+    tool_workflow_learning_list,
 };
 pub(crate) use input::{collect_string_list, hex_nibble};
 pub(crate) use kernel_access::require_kernel;

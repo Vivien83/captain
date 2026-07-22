@@ -28,6 +28,7 @@ pub enum AuditAction {
     AuthAttempt,
     WireConnect,
     ConfigChange,
+    LearningDecision,
 }
 
 impl std::fmt::Display for AuditAction {
@@ -131,6 +132,7 @@ impl AuditLog {
                         "AuthAttempt" => AuditAction::AuthAttempt,
                         "WireConnect" => AuditAction::WireConnect,
                         "ConfigChange" => AuditAction::ConfigChange,
+                        "LearningDecision" => AuditAction::LearningDecision,
                         _ => AuditAction::ToolInvoke, // fallback
                     };
                     Ok(AuditEntry {

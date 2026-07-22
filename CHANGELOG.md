@@ -6,6 +6,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.9] - 2026-07-20
+
+Early-access learning and operations release focused on durable native
+workflow acquisition and model-independent release updates.
+
+### Added
+
+- Durable Workflow Learning V2 replaces the retired SkillSynthesizer path with
+  evidence-bound proposals for Skills, readable native CapSpecs, Automations,
+  and refinements. Exact operator decisions, isolated tests, installation,
+  canary, rollback, Telegram, TUI, Web, and Desktop now project the same
+  crash-recoverable lifecycle.
+- Captain checks its compatible official release channel after startup and
+  every 12 hours. An explicitly authorized Telegram operator receives a Rich
+  card to update, defer for 24 hours, or refuse only that version. The callback
+  bypasses the model, stale cards fail closed, host bundles require SHA-256,
+  and Docker/manual updates remain operator-owned.
+- `captain status` and `GET /api/status` expose release-check cadence, pending
+  version, detached installation state, and durable notification retries.
+
+### Reliability
+
+- Release discovery, decisions, installer results, and Telegram delivery are
+  persisted across restart. Orphaned attempts recover after a bounded timeout,
+  malformed result files are quarantined, future state schemas are not
+  overwritten, and failed Telegram delivery is reopened on a later 12-hour
+  check without duplicating an already delivered card.
+
 ## [0.1.0-alpha.8] - 2026-07-19
 
 Early-access extensibility and observability release focused on governed,
@@ -302,7 +330,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.8...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.9...HEAD
+[0.1.0-alpha.9]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.8...v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.7...v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.6...v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.5...v0.1.0-alpha.6

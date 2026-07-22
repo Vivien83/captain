@@ -291,7 +291,7 @@ pub struct KernelConfig {
     /// Session checkpoint summarizer configuration.
     #[serde(default)]
     pub checkpoints: CheckpointConfig,
-    /// v3.13 SkillSynthesizer configuration.
+    /// Durable Skill Learning V2 configuration.
     #[serde(default)]
     pub skills: SkillsConfig,
 }

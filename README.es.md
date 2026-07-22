@@ -55,15 +55,15 @@ Telegram o Discord.
 ## Instalación rápida
 
 Versión pública preliminar actual:
-[v0.1.0-alpha.8](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8).
-Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8`;
+[v0.1.0-alpha.9](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9).
+Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9`;
 canal alfa móvil: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 bash
 ```
 
 El repositorio oficial, los assets, los checksums y la imagen son públicos. No
@@ -99,8 +99,8 @@ los instaladores Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # o cualquier clave de proveedor soportado
 export TELEGRAM_BOT_TOKEN=...      # opcional — ver más abajo
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 El perfil `vps` instala un servicio systemd, lo inicia, y valida su salud.
@@ -118,8 +118,8 @@ sin arrancar aún el daemon, para que la comprobación de disponibilidad de
 abajo no se ejecute antes de que hayas iniciado sesión:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # muestra una URL + un código — ábrela en tu teléfono, sin necesidad de navegador local
 systemctl start captain    # instalación no-root: systemctl --user start captain
@@ -135,7 +135,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
 ```
 
 El primer arranque genera la clave API del daemon y la persiste — junto
@@ -152,8 +152,8 @@ espacio PID ni el modo privilegiado. Para ejecutar la imagen inmutable:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.8 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.8 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.9 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.9 docker compose up -d
 ```
 
 Configura el proveedor elegido después del primer arranque. Cualquier acceso
@@ -205,6 +205,15 @@ explícita de usuarios antes de responder a nadie.
 | Voz | `captain voice` (Whisper STT local + Kokoro TTS) | enviar una nota de voz |
 | Actualizar Captain | `captain update` | "actualízate" → aprobación → hecho |
 
+Captain consulta su canal oficial de releases después del arranque y luego
+cada 12 horas. Con un chat operador de Telegram exacto y una lista blanca
+explícita, una tarjeta Rich ofrece **Actualizar**, **Recordar en 24 h** o
+**Rechazar esta versión**. El plano de control procesa la decisión sin un turno
+del modelo; nada se instala sin un clic. En el host se verifica el SHA-256 de
+la release; Docker y las plataformas no compatibles siguen bajo control del
+operador y se vuelven a comprobar. El estado duradero aparece en
+`captain status` y `GET /api/status`.
+
 ---
 
 ## Qué puedes pedirle
@@ -242,7 +251,7 @@ ordenar mediante dependencias.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Instalaciones headless, proxy inverso, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | Servidores de herramientas externos y contrato de transporte |
 | [Troubleshooting](docs/troubleshooting.md) | Problemas comunes y sus soluciones |
-| [Notas de la versión 0.1.0-alpha.8](docs/releases/v0.1.0-alpha.8.md) | Capacidades nativas Captain Forge y cuotas de suscripción en vivo fiables |
+| [Notas de la versión 0.1.0-alpha.9](docs/releases/v0.1.0-alpha.9.md) | Aprendizaje durable de workflows y actualizaciones nativas |
 | [Notas de la versión 0.1.0-alpha.7](docs/releases/v0.1.0-alpha.7.md) | Estado confirmado duradero, reinicio supervisado, contexto fiel y memoria TUI directa |
 | [Notas de la versión 0.1.0-alpha.6](docs/releases/v0.1.0-alpha.6.md) | Mensajes Rich de Telegram, tableros de herramientas en vivo, progreso efímero y controles fiables |
 | [Notas de la versión 0.1.0-alpha.5](docs/releases/v0.1.0-alpha.5.md) | Apagado limpio, memoria privada, identidad real del modelo y primer arranque con un solo agente |

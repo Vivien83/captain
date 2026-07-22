@@ -69,7 +69,7 @@ When the user asks about runtime behavior, do not hesitate or invent a new knob.
 | ElevenLabs TTS | `tts.provider`, `tts.elevenlabs.api_key_env`, `tts.elevenlabs.voice_id`, `tts.elevenlabs.model_id` | Store the real key through `secret_write` or `config_setup`, never in config. |
 | Web terminal exposure | `web_terminal.enabled`, `web_terminal.allow_raw_shell`, `deployment.public_url`, `api_listen` | On VPS, direct IP access requires `api_listen = "0.0.0.0:50051"` or a reverse proxy. |
 | Learning autonomy | `learning.mode`, `learning.autonomy_aggressiveness`, `learning.reflection_model` | Aggressiveness is clamped to `0.25..3.0`; approval/auto/off still controls final writes. Default model follows the Codex subscription path. |
-| Skill synthesis | `skills.mode`, `skills.pattern_threshold`, `skills.proposer_model`, `skills.generated_dir` | Use approval mode unless the user explicitly wants fully automatic skill writes. Default proposer follows the Codex subscription path. |
+| Skill Learning V2 | `skills.enabled`, `skills.mode`, `skills.reflection_timeout_secs`, `skills.rate_limit_per_day`, `skills.generated_dir` | `off` disables the durable worker; `approval` and `auto` both observe and draft, but activation still requires an authenticated operator card. Drafting always uses Captain's exact active model. |
 
 After any config surface changes in code, update `docs/configuration.md`, `captain.toml.example`, and this section so the runtime docs stay aligned with what Captain can actually write.
 

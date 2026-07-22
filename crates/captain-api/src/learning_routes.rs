@@ -12,6 +12,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use captain_memory::{learning_review, memory_writer};
+use captain_types::workflow_learning::ProposalCardAction;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -156,6 +157,91 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     )
 }
 
+/// GET /api/learning/workflows — shared durable Skill/CapSpec/Automation view.
+pub async fn list_workflows(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let limit = parse_limit(&params, 100, 500);
+    match state.kernel.workflow_learning_list(limit) {
+        Ok(list) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(list).unwrap_or_else(|error| {
+                serde_json::json!({ "error": format!("workflow projection encoding failed: {error}") })
+            })),
+        ),
+        Err(error) => server_error(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowDecisionBody {
+    pub decision_version: u64,
+    pub action: ProposalCardAction,
+    #[serde(default)]
+    pub surface: Option<String>,
+}
+
+/// POST /api/learning/workflows/{token}/decide — exact CAS operator action.
+pub async fn decide_workflow(
+    State(state): State<Arc<AppState>>,
+    Path(operator_token): Path<String>,
+    Json(body): Json<WorkflowDecisionBody>,
+) -> impl IntoResponse {
+    let actor = match workflow_surface_actor(body.surface.as_deref()) {
+        Ok(actor) => actor,
+        Err(error) => return bad_request(error),
+    };
+    match state.kernel.workflow_learning_resolve_surface_action(
+        &operator_token,
+        body.decision_version,
+        body.action,
+        actor,
+    ) {
+        Ok(resolution) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(resolution).unwrap_or_else(|error| {
+                serde_json::json!({ "error": format!("workflow decision encoding failed: {error}") })
+            })),
+        ),
+        Err(error) => {
+            let normalized = error.to_ascii_lowercase();
+            if normalized.contains("unknown or expired") || normalized.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": error })),
+                )
+            } else if normalized.contains("stale")
+                || normalized.contains("unavailable while")
+                || normalized.contains("conflict")
+            {
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": error })),
+                )
+            } else {
+                bad_request(error)
+            }
+        }
+    }
+}
+
+fn workflow_surface_actor(surface: Option<&str>) -> Result<&'static str, String> {
+    match surface
+        .unwrap_or("api")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "api" => Ok("api:authenticated"),
+        "web" => Ok("web:authenticated"),
+        "desktop" => Ok("desktop:authenticated"),
+        "tui" => Ok("tui:authenticated"),
+        _ => Err("surface must be api, web, desktop, or tui".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +274,27 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(payload["recovery"], "in_sync");
+    }
+
+    #[test]
+    fn workflow_decisions_only_accept_known_authenticated_surfaces() {
+        assert_eq!(
+            workflow_surface_actor(Some("web")).unwrap(),
+            "web:authenticated"
+        );
+        assert_eq!(
+            workflow_surface_actor(Some("tui")).unwrap(),
+            "tui:authenticated"
+        );
+        assert!(workflow_surface_actor(Some("telegram")).is_err());
+    }
+
+    #[test]
+    fn web_learning_consumes_the_durable_workflow_contract() {
+        let api_source = include_str!("../static/js/app/api.js");
+        let learning_source = include_str!("../static/js/app/views/Learning.js");
+        assert!(api_source.contains("/api/learning/workflows"));
+        assert!(learning_source.contains("workflowLearning"));
+        assert!(!learning_source.contains("/api/skills/proposals"));
     }
 }

@@ -108,6 +108,9 @@ pub(crate) fn telegram_update_metadata(
 ) -> HashMap<String, serde_json::Value> {
     let mut metadata = HashMap::new();
     metadata.insert("sender_user_id".to_string(), serde_json::json!(user_id));
+    if let Some(language) = message["from"]["language_code"].as_str() {
+        metadata.insert("language".to_string(), serde_json::json!(language));
+    }
 
     if let Some(tid) = thread_id {
         metadata.insert("telegram_thread_id".to_string(), serde_json::json!(tid));
@@ -240,6 +243,7 @@ mod tests {
     fn telegram_update_metadata_preserves_thread_reply_topic_and_mentions() {
         let message = serde_json::json!({
             "text": "Salut @mybot",
+            "from": { "language_code": "fr" },
             "message_thread_id": 7,
             "forum_topic_created": { "name": "Ops" },
             "reply_to_message": { "message_id": 55 },
@@ -249,6 +253,7 @@ mod tests {
         let metadata = telegram_update_metadata(&message, 123, Some("7"), true, Some("mybot"));
 
         assert_eq!(metadata["sender_user_id"], serde_json::json!(123));
+        assert_eq!(metadata["language"], serde_json::json!("fr"));
         assert_eq!(metadata["telegram_thread_id"], serde_json::json!("7"));
         assert_eq!(metadata["telegram_topic_name"], serde_json::json!("Ops"));
         assert_eq!(metadata["reply_to_message_id"], serde_json::json!(55));

@@ -22,8 +22,8 @@ fn test_memory_save_description_has_concrete_example() {
 
 /// scaffold_skill is the agent's lever for self-extensibility, but it is
 /// a durable behaviour change. The description must keep the model on the
-/// controlled-improvement rail: visible proposal first, explicit approval
-/// before writing a global reusable capability.
+/// controlled-improvement rail: manual scaffolding only on explicit request;
+/// observed workflows must stay in the durable V2 lifecycle.
 #[test]
 fn test_scaffold_skill_description_has_controlled_guidance() {
     let tools = builtin_tool_definitions();
@@ -33,29 +33,36 @@ fn test_scaffold_skill_description_has_controlled_guidance() {
         .expect("scaffold_skill must exist");
     let desc = &scaffold.description;
     assert!(
-        desc.contains("approbation") && desc.contains("self_improvement_review"),
-        "scaffold_skill must require visible controlled improvement guidance; got: {desc}"
+        desc.contains("workflow_learning_list") && desc.contains("carte authentifiée"),
+        "scaffold_skill must route observed workflows through Skill Learning V2; got: {desc}"
     );
     assert!(
-        desc.contains("EXEMPLE") || desc.contains("Exemple"),
-        "scaffold_skill must show a concrete example"
+        desc.contains("uniquement") && desc.contains("explicitement"),
+        "scaffold_skill must require an explicit manual request"
     );
 }
 
 #[test]
-fn test_skill_approval_tools_block_agent_self_approval_in_descriptions() {
+fn test_skill_refinement_blocks_agent_self_approval_and_v2_has_no_decide_tool() {
     let tools = builtin_tool_definitions();
-    for name in ["skill_proposal_decide", "skill_refinement_decide"] {
-        let def = tools
-            .iter()
-            .find(|t| t.name == name)
-            .unwrap_or_else(|| panic!("{name} must exist"));
-        let desc = &def.description;
-        assert!(
-            desc.contains("outil") && desc.contains("API/canal") && desc.contains("approve=false"),
-            "{name} must steer tool calls away from positive self-approval; got: {desc}"
-        );
-    }
+    let refinement = tools
+        .iter()
+        .find(|tool| tool.name == "skill_refinement_decide")
+        .expect("skill_refinement_decide must exist");
+    assert!(
+        refinement.description.contains("outil")
+            && refinement.description.contains("API/canal")
+            && refinement.description.contains("approve=false")
+    );
+    assert!(tools
+        .iter()
+        .any(|tool| tool.name == "workflow_learning_list"));
+    assert!(!tools
+        .iter()
+        .any(|tool| tool.name == "workflow_learning_decide"));
+    assert!(!tools
+        .iter()
+        .any(|tool| tool.name == "skill_proposal_decide"));
 }
 
 /// Proactive guidance: critical remote/credential tools must

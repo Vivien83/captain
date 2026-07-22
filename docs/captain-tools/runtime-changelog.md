@@ -26,6 +26,59 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.9 — Durable workflow learning and native release updates
+
+Agent-facing changes:
+
+- `workflow_learning_list` is the single read-only tool projection for learned
+  Skills, CapSpecs, Automations, and refinements. It reports generation,
+  validation, operator review, isolated test, installation, canary, activation,
+  failure, and rollback from the same durable state as Telegram, TUI, Web, and
+  Desktop.
+- Captain exposes no agent-side workflow decision tool. Activation, test,
+  editing, deferral, and dismissal require the exact authenticated operator
+  card and current decision version.
+- The v3.13 SkillSynthesizer detector, proposer, policy, diff, and writer are
+  removed from the active Runtime. Schema v32 archives every historical row,
+  retires pending proposals, and makes the legacy tables read-only.
+- Old REST proposal/pattern/metrics routes now return HTTP `410 Gone` with
+  `/api/learning/workflows` as the replacement. Already-delivered Telegram
+  callbacks show an archive notice and cannot mutate state.
+- Fresh `[skills]` configuration no longer advertises legacy model, threshold,
+  or fallback fields. Skill Learning V2 always uses Captain's configured active
+  model.
+- Initial drafts are rejected before staging if their required capabilities are
+  not an exact subset of tools in the canonical observed workflow. This is a
+  Runtime check, not a prompt convention.
+- Real-domain engine proofs now cover sourced research as a Skill, household
+  document extraction as a CapSpec, recurring VPS reporting as an Automation,
+  memory-only work as no proposal, and file-backed recovery after a staged
+  draft without a second model call.
+- The active Skill Learning V2, skill-family, configuration, example TOML, and
+  DOC2 inventories are cross-checked against retired v3.13 tools, commands, and
+  settings. Historical changelog prose remains searchable but cannot become a
+  live tool schema.
+- Captain now checks its compatible official release channel after startup and
+  every 12 hours. Stable installations stay on stable releases; an existing
+  prerelease may advance through newer prereleases and then to stable. A
+  release is offered to a self-updating host only when both its platform archive
+  and `.sha256` asset exist.
+- A configured Telegram operator chat receives one durable Rich card with
+  **Update**, **Defer 24 h**, and **Refuse this version**. The callback is
+  resolved before session restoration or model dispatch and requires the exact
+  candidate, decision version, configured chat, and explicitly allowlisted
+  numeric user. A wildcard allowlist cannot authorize this privileged action.
+- Deferral and refusal are version-specific. Docker and unsupported platforms
+  show an honest operator-owned procedure and remain observable until Captain
+  sees the new runtime; Captain never mounts the host Docker socket. Host
+  updates preserve the exact GitHub tag, verify SHA-256, atomically replace the
+  binary, and restart through the existing service manager.
+- Candidate, decisions, detached attempt, result, and Telegram outbox are
+  durable. Expired leases replay after restart, orphaned attempts recover after
+  a bounded timeout, malformed results are quarantined, a future state schema
+  is not downgraded, and a dead delivery is reopened by the next 12-hour check.
+  `captain status` and `/api/status` expose the monitor projection.
+
 ### 0.1.0-alpha.8 — Captain Forge and truthful provider quotas
 
 Agent-facing changes:

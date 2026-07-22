@@ -115,6 +115,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Err(err) => unavailable_agent_api_status(err),
     };
     let disk_status = build_disk_status(&config.home_dir);
+    let runtime_update_status = match state.kernel.runtime_update_snapshot() {
+        Ok(snapshot) => serde_json::to_value(snapshot).unwrap_or_else(
+            |error| serde_json::json!({"status": "unavailable", "error": error.to_string()}),
+        ),
+        Err(error) => {
+            serde_json::json!({"status": "unavailable", "error": error.to_string()})
+        }
+    };
     let runtime_health_status = build_runtime_health_status(
         llm_driver_ready,
         &channel_status,
@@ -174,6 +182,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     status_payload["budget"] = budget_status;
     status_payload["streaming"] = crate::stream_metrics::status_json();
     status_payload["tool_runs"] = captain_runtime::tool_runs::global_registry().status_summary();
+    status_payload["runtime_update"] = runtime_update_status;
     status_payload["runtime_health"] = runtime_health_status;
     Json(status_payload)
 }

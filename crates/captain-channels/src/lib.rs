@@ -33,11 +33,13 @@ mod telegram_callbacks;
 mod telegram_html;
 mod telegram_reply_context;
 mod telegram_rich;
+mod telegram_runtime_update;
 mod telegram_streaming;
 pub use telegram_streaming::TelegramProgressDraft;
 mod telegram_ui;
 mod telegram_update_content;
 mod telegram_update_context;
+mod telegram_workflow_learning;
 pub use telegram_ui::{
     render_telegram_ask_user_answer, render_telegram_ask_user_expired,
     render_telegram_ask_user_prompt, render_telegram_channel_error,

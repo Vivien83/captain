@@ -72,6 +72,7 @@ mod tests {
     use async_trait::async_trait;
     use captain_types::agent::AgentId;
     use futures::stream;
+    use std::collections::HashMap;
     use std::pin::Pin;
     use std::sync::Mutex;
 
@@ -148,6 +149,22 @@ mod tests {
                     .push((text, Some(thread_id.to_string())));
             }
             Ok(())
+        }
+
+        async fn send_rich(
+            &self,
+            _user: &ChannelUser,
+            content: ChannelContent,
+            metadata: &HashMap<String, serde_json::Value>,
+        ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+            if let ChannelContent::Text(text) = content {
+                let thread_id = metadata
+                    .get("thread_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string);
+                self.sent.lock().unwrap().push((text, thread_id));
+            }
+            Ok(None)
         }
 
         async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {

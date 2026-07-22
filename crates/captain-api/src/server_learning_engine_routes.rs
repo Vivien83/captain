@@ -21,19 +21,27 @@ pub(crate) fn mount_learning_engine_routes(router: Router<Arc<AppState>>) -> Rou
             axum::routing::get(crate::learning_routes::metrics),
         )
         .route(
+            "/api/learning/workflows",
+            axum::routing::get(crate::learning_routes::list_workflows),
+        )
+        .route(
+            "/api/learning/workflows/{token}/decide",
+            axum::routing::post(crate::learning_routes::decide_workflow),
+        )
+        .route(
             "/api/skills/proposals",
-            axum::routing::get(crate::skill_routes::list_proposals),
+            axum::routing::get(crate::skill_routes::retired_skill_synthesizer),
         )
         .route(
             "/api/skills/patterns",
-            axum::routing::get(crate::skill_routes::list_patterns),
+            axum::routing::get(crate::skill_routes::retired_skill_synthesizer),
         )
         .route(
             "/api/skills/proposals/{id}/decide",
-            axum::routing::post(crate::skill_routes::decide_proposal),
+            axum::routing::post(crate::skill_routes::retired_skill_synthesizer),
         )
         .route(
             "/api/skills/metrics",
-            axum::routing::get(crate::skill_routes::metrics),
+            axum::routing::get(crate::skill_routes::retired_skill_synthesizer),
         )
 }

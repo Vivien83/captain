@@ -15,6 +15,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use tracing::{debug, info, warn};
 
 use crate::cron_delivery_queue::{
@@ -107,6 +108,27 @@ pub struct CronJobPatch {
     pub one_shot: Option<bool>,
 }
 
+/// Result of an exact, durable scheduler installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableCronInstallOutcome {
+    Installed,
+    AlreadyExact,
+}
+
+/// Result of an exact, durable scheduler rollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableCronRemoveOutcome {
+    Removed,
+    AlreadyAbsent,
+}
+
+/// Result of an exact, durable scheduler enable/disable transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableCronSetEnabledOutcome {
+    Updated,
+    AlreadyExact,
+}
+
 // ---------------------------------------------------------------------------
 // CronScheduler
 // ---------------------------------------------------------------------------
@@ -126,6 +148,9 @@ pub struct CronScheduler {
     max_total_jobs: AtomicUsize,
     /// Default IANA timezone from config (e.g., "Europe/Paris").
     default_tz: String,
+    /// Serializes every mutation with persistence snapshots. DashMap protects
+    /// memory safety; this lock protects the durable scheduler transaction.
+    mutation_lock: Mutex<()>,
 }
 
 impl CronScheduler {
@@ -140,6 +165,7 @@ impl CronScheduler {
             persist_path: home_dir.join("cron_jobs.json"),
             max_total_jobs: AtomicUsize::new(max_total_jobs),
             default_tz: "UTC".to_string(),
+            mutation_lock: Mutex::new(()),
         }
     }
 
@@ -160,6 +186,7 @@ impl CronScheduler {
     /// Returns the number of jobs loaded. If the persistence file does not
     /// exist, returns `Ok(0)` without error.
     pub fn load(&self) -> CaptainResult<usize> {
+        let _guard = self.mutation_guard();
         if !self.persist_path.exists() {
             return Ok(0);
         }
@@ -179,7 +206,13 @@ impl CronScheduler {
 
     /// Persist all jobs atomically and synchronize the committed file to disk.
     pub fn persist(&self) -> CaptainResult<()> {
-        let metas: Vec<JobMeta> = self.jobs.iter().map(|r| r.value().clone()).collect();
+        let _guard = self.mutation_guard();
+        self.persist_unlocked()
+    }
+
+    fn persist_unlocked(&self) -> CaptainResult<()> {
+        let mut metas: Vec<JobMeta> = self.jobs.iter().map(|r| r.value().clone()).collect();
+        metas.sort_by_key(|meta| meta.job.id.to_string());
         let data = serde_json::to_string_pretty(&metas)
             .map_err(|e| CaptainError::Internal(format!("Failed to serialize cron jobs: {e}")))?;
         captain_types::durable_fs::atomic_write(&self.persist_path, data.as_bytes())
@@ -196,6 +229,11 @@ impl CronScheduler {
     /// `one_shot` controls whether the job is removed after a single
     /// successful execution.
     pub fn add_job(&self, mut job: CronJob, one_shot: bool) -> CaptainResult<CronJobId> {
+        let _guard = self.mutation_guard();
+        self.add_job_unlocked(&mut job, one_shot)
+    }
+
+    fn add_job_unlocked(&self, job: &mut CronJob, one_shot: bool) -> CaptainResult<CronJobId> {
         // Global limit
         let max_jobs = self.max_total_jobs.load(Ordering::Relaxed);
         if self.jobs.len() >= max_jobs {
@@ -224,21 +262,135 @@ impl CronScheduler {
         ));
 
         let id = job.id;
-        self.jobs.insert(id, JobMeta::new(job, one_shot));
+        self.jobs.insert(id, JobMeta::new(job.clone(), one_shot));
         Ok(id)
+    }
+
+    /// Install one exact job and persist it before returning success.
+    ///
+    /// Replays are accepted only when the immutable owner/configuration and
+    /// one-shot policy match. Runtime fields such as `enabled`, `last_run`,
+    /// and `next_run` are deliberately excluded because execution may update
+    /// them after installation.
+    pub fn install_job_durable_exact(
+        &self,
+        mut job: CronJob,
+        one_shot: bool,
+    ) -> CaptainResult<DurableCronInstallOutcome> {
+        let _guard = self.mutation_guard();
+        if let Some(existing) = self.jobs.get(&job.id).map(|entry| entry.value().clone()) {
+            if existing.one_shot != one_shot || !same_owned_job_configuration(&existing.job, &job)?
+            {
+                return Err(CaptainError::InvalidInput(format!(
+                    "cron job {} is already owned by a different configuration",
+                    job.id
+                )));
+            }
+            self.persist_unlocked()?;
+            return Ok(DurableCronInstallOutcome::AlreadyExact);
+        }
+
+        let id = self.add_job_unlocked(&mut job, one_shot)?;
+        if let Err(error) = self.persist_unlocked() {
+            self.jobs.remove(&id);
+            return Err(error);
+        }
+        Ok(DurableCronInstallOutcome::Installed)
     }
 
     /// Remove a job by ID. Returns the removed `CronJob`.
     pub fn remove_job(&self, id: CronJobId) -> CaptainResult<CronJob> {
+        let _guard = self.mutation_guard();
         self.jobs
             .remove(&id)
             .map(|(_, meta)| meta.job)
             .ok_or_else(|| CaptainError::Internal(format!("Cron job {id} not found")))
     }
 
+    /// Remove an exact Captain-owned job and persist the absence before
+    /// returning. A configuration changed outside this transaction is never
+    /// deleted by rollback.
+    pub fn remove_job_durable_exact(
+        &self,
+        expected: &CronJob,
+        one_shot: bool,
+    ) -> CaptainResult<DurableCronRemoveOutcome> {
+        let _guard = self.mutation_guard();
+        let Some(existing) = self
+            .jobs
+            .get(&expected.id)
+            .map(|entry| entry.value().clone())
+        else {
+            self.persist_unlocked()?;
+            return Ok(DurableCronRemoveOutcome::AlreadyAbsent);
+        };
+        if existing.one_shot != one_shot || !same_owned_job_configuration(&existing.job, expected)?
+        {
+            return Err(CaptainError::InvalidInput(format!(
+                "cron job {} changed outside the installation transaction",
+                expected.id
+            )));
+        }
+
+        self.jobs.remove(&expected.id);
+        if let Err(error) = self.persist_unlocked() {
+            self.jobs.insert(expected.id, existing);
+            return Err(error);
+        }
+        Ok(DurableCronRemoveOutcome::Removed)
+    }
+
+    /// Enable or disable an exact Captain-owned job and persist the new state
+    /// before returning. Immutable drift is rejected so a canary cannot take
+    /// ownership of an operator-edited job that happens to share its UUID.
+    pub fn set_job_enabled_durable_exact(
+        &self,
+        expected: &CronJob,
+        one_shot: bool,
+        enabled: bool,
+    ) -> CaptainResult<DurableCronSetEnabledOutcome> {
+        let _guard = self.mutation_guard();
+        let existing = self
+            .jobs
+            .get(&expected.id)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| CaptainError::Internal(format!("Cron job {} not found", expected.id)))?;
+        if existing.one_shot != one_shot || !same_owned_job_configuration(&existing.job, expected)?
+        {
+            return Err(CaptainError::InvalidInput(format!(
+                "cron job {} changed outside the installation transaction",
+                expected.id
+            )));
+        }
+        if existing.job.enabled == enabled {
+            self.persist_unlocked()?;
+            return Ok(DurableCronSetEnabledOutcome::AlreadyExact);
+        }
+
+        let mut updated = existing.clone();
+        updated.job.enabled = enabled;
+        if enabled {
+            updated.consecutive_errors = 0;
+            updated.job.next_run = Some(compute_next_run_after_with_tz(
+                &updated.job.schedule,
+                Utc::now(),
+                Some(&self.default_tz),
+            ));
+        } else {
+            updated.job.next_run = None;
+        }
+        self.jobs.insert(expected.id, updated);
+        if let Err(error) = self.persist_unlocked() {
+            self.jobs.insert(expected.id, existing);
+            return Err(error);
+        }
+        Ok(DurableCronSetEnabledOutcome::Updated)
+    }
+
     /// Enable or disable a job. Re-enabling resets errors and recomputes
     /// `next_run`.
     pub fn set_enabled(&self, id: CronJobId, enabled: bool) -> CaptainResult<()> {
+        let _guard = self.mutation_guard();
         match self.jobs.get_mut(&id) {
             Some(mut meta) => {
                 meta.job.enabled = enabled;
@@ -260,6 +412,7 @@ impl CronScheduler {
     /// last_status and run_history. The modified job is validated before it
     /// becomes visible; invalid patches are rolled back atomically.
     pub fn update_job(&self, id: CronJobId, patch: CronJobPatch) -> CaptainResult<CronJob> {
+        let _guard = self.mutation_guard();
         let current = self
             .get_job(id)
             .ok_or_else(|| CaptainError::Internal(format!("Cron job {id} not found")))?;
@@ -358,6 +511,7 @@ impl CronScheduler {
     ///
     /// Returns the number of jobs reassigned.
     pub fn reassign_agent_jobs(&self, old_agent_id: AgentId, new_agent_id: AgentId) -> usize {
+        let _guard = self.mutation_guard();
         let mut count = 0;
         for mut entry in self.jobs.iter_mut() {
             if entry.value().job.agent_id == old_agent_id {
@@ -401,6 +555,7 @@ impl CronScheduler {
     /// Used when an agent is deleted so its cron entries don't linger as
     /// orphans pointing at a dead UUID. Returns the number of jobs removed.
     pub fn remove_agent_jobs(&self, agent_id: AgentId) -> usize {
+        let _guard = self.mutation_guard();
         let ids: Vec<CronJobId> = self
             .jobs
             .iter()
@@ -428,6 +583,7 @@ impl CronScheduler {
     /// next scheduled time. This prevents the same job from being returned as
     /// "due" on subsequent tick iterations while it's still executing.
     pub fn due_jobs(&self) -> Vec<CronJob> {
+        let _guard = self.mutation_guard();
         let now = Utc::now();
         let mut due = Vec::new();
         for mut entry in self.jobs.iter_mut() {
@@ -454,6 +610,7 @@ impl CronScheduler {
     /// Updates `last_run`, resets errors, and either removes the job (if
     /// one-shot) or advances `next_run`.
     pub fn record_success(&self, id: CronJobId) {
+        let _guard = self.mutation_guard();
         let should_remove = {
             if let Some(mut meta) = self.jobs.get_mut(&id) {
                 let now = Utc::now();
@@ -485,6 +642,7 @@ impl CronScheduler {
     /// Increments the consecutive error counter. If it reaches
     /// [`MAX_CONSECUTIVE_ERRORS`], the job is automatically disabled.
     pub fn record_failure(&self, id: CronJobId, error_msg: &str) {
+        let _guard = self.mutation_guard();
         if let Some(mut meta) = self.jobs.get_mut(&id) {
             let now = Utc::now();
             meta.job.last_run = Some(now);
@@ -523,6 +681,7 @@ impl CronScheduler {
     /// failures. They must remain visible without burning the job's
     /// consecutive-error budget or disabling recurring schedules.
     pub fn record_delivery_failure(&self, id: CronJobId, failure: &DeliveryFailure, payload: &str) {
+        let _guard = self.mutation_guard();
         if let Some(mut meta) = self.jobs.get_mut(&id) {
             let now = Utc::now();
             meta.job.last_run = Some(now);
@@ -582,6 +741,7 @@ impl CronScheduler {
 
     /// Mark a queued redelivery as delivered and clean up its payload file.
     pub fn record_redelivery_success(&self, job_id: CronJobId, redelivery_id: &str) {
+        let _guard = self.mutation_guard();
         if let Some(mut meta) = self.jobs.get_mut(&job_id) {
             if let Some(index) = meta
                 .redelivery_queue
@@ -613,6 +773,7 @@ impl CronScheduler {
         failure: &DeliveryFailure,
         payload: &str,
     ) {
+        let _guard = self.mutation_guard();
         if let Some(mut meta) = self.jobs.get_mut(&job_id) {
             let Some(index) = meta
                 .redelivery_queue
@@ -654,6 +815,33 @@ impl CronScheduler {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."))
     }
+
+    fn mutation_guard(&self) -> MutexGuard<'_, ()> {
+        match self.mutation_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("Cron scheduler mutation lock was poisoned; recovering protected state");
+                poisoned.into_inner()
+            }
+        }
+    }
+}
+
+fn same_owned_job_configuration(actual: &CronJob, expected: &CronJob) -> CaptainResult<bool> {
+    if actual.id != expected.id
+        || actual.agent_id != expected.agent_id
+        || actual.name != expected.name
+        || actual.created_at != expected.created_at
+    {
+        return Ok(false);
+    }
+    let actual_contract = serde_json::to_vec(&(&actual.schedule, &actual.action, &actual.delivery))
+        .map_err(|error| CaptainError::Internal(format!("Failed to compare cron job: {error}")))?;
+    let expected_contract =
+        serde_json::to_vec(&(&expected.schedule, &expected.action, &expected.delivery)).map_err(
+            |error| CaptainError::Internal(format!("Failed to compare cron job: {error}")),
+        )?;
+    Ok(actual_contract == expected_contract)
 }
 
 fn normalize_loaded_job_schedule(
@@ -1331,6 +1519,203 @@ mod tests {
             let meta = sched.get_meta(b_id).unwrap();
             assert!(meta.one_shot);
         }
+    }
+
+    #[test]
+    fn durable_exact_install_replays_and_survives_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent = AgentId::new();
+        let job = make_job(agent);
+        let id = job.id;
+
+        let scheduler = CronScheduler::new(tmp.path(), 100);
+        assert_eq!(
+            scheduler
+                .install_job_durable_exact(job.clone(), false)
+                .unwrap(),
+            DurableCronInstallOutcome::Installed
+        );
+        assert_eq!(
+            scheduler
+                .install_job_durable_exact(job.clone(), false)
+                .unwrap(),
+            DurableCronInstallOutcome::AlreadyExact
+        );
+        assert_eq!(scheduler.total_jobs(), 1);
+
+        let reopened = CronScheduler::new(tmp.path(), 100);
+        assert_eq!(reopened.load().unwrap(), 1);
+        assert_eq!(reopened.get_job(id).unwrap().name, job.name);
+    }
+
+    #[test]
+    fn durable_exact_install_rejects_an_existing_foreign_configuration() {
+        let (scheduler, _tmp) = make_scheduler(100);
+        let agent = AgentId::new();
+        let job = make_job(agent);
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+
+        let mut conflicting = job.clone();
+        conflicting.schedule = CronSchedule::Every { every_secs: 7200 };
+        let error = scheduler
+            .install_job_durable_exact(conflicting, false)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("different configuration"));
+        let actual = scheduler.get_job(job.id).unwrap();
+        assert!(matches!(
+            actual.schedule,
+            CronSchedule::Every { every_secs: 3600 }
+        ));
+    }
+
+    #[test]
+    fn durable_exact_remove_persists_absence_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let job = make_job(AgentId::new());
+        let scheduler = CronScheduler::new(tmp.path(), 100);
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+        scheduler.set_enabled(job.id, false).unwrap();
+
+        assert_eq!(
+            scheduler.remove_job_durable_exact(&job, false).unwrap(),
+            DurableCronRemoveOutcome::Removed
+        );
+        assert_eq!(
+            scheduler.remove_job_durable_exact(&job, false).unwrap(),
+            DurableCronRemoveOutcome::AlreadyAbsent
+        );
+
+        let reopened = CronScheduler::new(tmp.path(), 100);
+        assert_eq!(reopened.load().unwrap(), 0);
+        assert!(reopened.get_job(job.id).is_none());
+    }
+
+    #[test]
+    fn durable_exact_enable_is_idempotent_and_survives_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut job = make_job(AgentId::new());
+        job.enabled = false;
+        let scheduler = CronScheduler::new(tmp.path(), 100);
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+
+        assert_eq!(
+            scheduler
+                .set_job_enabled_durable_exact(&job, false, true)
+                .unwrap(),
+            DurableCronSetEnabledOutcome::Updated
+        );
+        assert_eq!(
+            scheduler
+                .set_job_enabled_durable_exact(&job, false, true)
+                .unwrap(),
+            DurableCronSetEnabledOutcome::AlreadyExact
+        );
+        assert!(scheduler.get_job(job.id).unwrap().enabled);
+
+        let reopened = CronScheduler::new(tmp.path(), 100);
+        assert_eq!(reopened.load().unwrap(), 1);
+        assert!(reopened.get_job(job.id).unwrap().enabled);
+    }
+
+    #[test]
+    fn durable_exact_enable_rejects_foreign_configuration() {
+        let (scheduler, _tmp) = make_scheduler(100);
+        let mut job = make_job(AgentId::new());
+        job.enabled = false;
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+        let mut foreign = job.clone();
+        foreign.name = "operator-edit".to_string();
+
+        let error = scheduler
+            .set_job_enabled_durable_exact(&foreign, false, true)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("changed outside the installation transaction"));
+        assert!(!scheduler.get_job(job.id).unwrap().enabled);
+    }
+
+    #[test]
+    fn durable_exact_enable_restores_memory_when_persistence_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut job = make_job(AgentId::new());
+        job.enabled = false;
+        let scheduler = CronScheduler::new(tmp.path(), 100);
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+        std::fs::remove_file(tmp.path().join("cron_jobs.json")).unwrap();
+        std::fs::create_dir(tmp.path().join("cron_jobs.json")).unwrap();
+
+        assert!(scheduler
+            .set_job_enabled_durable_exact(&job, false, true)
+            .is_err());
+        assert!(!scheduler.get_job(job.id).unwrap().enabled);
+    }
+
+    #[test]
+    fn durable_exact_remove_refuses_a_job_changed_outside_the_transaction() {
+        let (scheduler, _tmp) = make_scheduler(100);
+        let job = make_job(AgentId::new());
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+        scheduler
+            .update_job(
+                job.id,
+                CronJobPatch {
+                    action: Some(CronAction::SystemEvent {
+                        text: "externally changed".into(),
+                    }),
+                    ..CronJobPatch::default()
+                },
+            )
+            .unwrap();
+
+        let error = scheduler.remove_job_durable_exact(&job, false).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("changed outside the installation transaction"));
+        assert!(scheduler.get_job(job.id).is_some());
+    }
+
+    #[test]
+    fn durable_exact_install_rolls_memory_back_when_persistence_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("cron_jobs.json")).unwrap();
+        let scheduler = CronScheduler::new(tmp.path(), 100);
+        let job = make_job(AgentId::new());
+
+        assert!(scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .is_err());
+        assert!(scheduler.get_job(job.id).is_none());
+        assert_eq!(scheduler.total_jobs(), 0);
+    }
+
+    #[test]
+    fn durable_exact_remove_restores_memory_when_persistence_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scheduler = CronScheduler::new(tmp.path(), 100);
+        let job = make_job(AgentId::new());
+        scheduler
+            .install_job_durable_exact(job.clone(), false)
+            .unwrap();
+        std::fs::remove_file(tmp.path().join("cron_jobs.json")).unwrap();
+        std::fs::create_dir(tmp.path().join("cron_jobs.json")).unwrap();
+
+        assert!(scheduler.remove_job_durable_exact(&job, false).is_err());
+        assert!(scheduler.get_job(job.id).is_some());
+        assert_eq!(scheduler.total_jobs(), 1);
     }
 
     #[test]

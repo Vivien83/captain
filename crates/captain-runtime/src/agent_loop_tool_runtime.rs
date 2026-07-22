@@ -1,5 +1,6 @@
 use crate::llm_driver::StreamEvent;
 use crate::tool_runner;
+use crate::workflow_learning_runtime::record_tool_finished;
 use captain_types::tool::{ToolCall, ToolResult};
 use std::future::Future;
 use std::time::Duration;
@@ -142,7 +143,10 @@ where
     if let Some(timeout_secs) = timeout_guard_secs {
         match tokio::time::timeout(Duration::from_secs(timeout_secs), exec_fut).await {
             Ok(result) => result,
-            Err(_) => tool_timeout_result(tool_call, timeout_secs, streaming),
+            Err(_) => {
+                record_tool_finished(&tool_call.id, &tool_call.name, true, 0, "timeout");
+                tool_timeout_result(tool_call, timeout_secs, streaming)
+            }
         }
     } else {
         exec_fut.await

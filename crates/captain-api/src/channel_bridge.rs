@@ -60,7 +60,7 @@ use captain_kernel::error::KernelResult;
 use captain_kernel::model_switch::ModelSwitchSessionStrategy;
 use captain_kernel::CaptainKernel;
 use captain_runtime::agent_loop::AgentLoopResult;
-use captain_runtime::kernel_handle::{skill_proposal_approval_decider, KernelHandle};
+use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_types::agent::AgentId;
 use captain_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
@@ -127,8 +127,6 @@ type ChannelAdapterStartup = (Arc<dyn ChannelAdapter>, Option<String>);
 
 const TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS: u64 = 20;
 const TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS: u64 = 20;
-const SKILL_PROPOSAL_APPROVAL_USAGE: &str =
-    "Usage: /skill_approve <id-prefix> schema diff tests human";
 
 fn telegram_stream_progress_text(elapsed: Duration) -> String {
     let minutes = elapsed.as_secs().div_ceil(60).max(1);
@@ -478,20 +476,6 @@ async fn finalize_telegram_stream_response(
     .await;
 
     Ok(result.response)
-}
-
-fn skill_proposal_channel_decided_by(
-    approve: bool,
-    external_validation: bool,
-) -> Result<String, &'static str> {
-    if approve && !external_validation {
-        return Err(SKILL_PROPOSAL_APPROVAL_USAGE);
-    }
-    if approve {
-        Ok(skill_proposal_approval_decider("channel"))
-    } else {
-        Ok("channel".to_string())
-    }
 }
 
 fn cron_action_message(action: &CronAction) -> String {
@@ -1185,6 +1169,35 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         self.kernel
             .capspec_resolve_telegram_callback(callback_data, actor)
             .await
+    }
+
+    async fn try_resolve_runtime_update_callback(
+        &self,
+        callback_data: &str,
+        actor: &str,
+        context: &captain_types::release_update::RuntimeUpdateOperatorContext,
+    ) -> Result<captain_types::release_update::RuntimeUpdateOperatorResolution, String> {
+        self.kernel
+            .runtime_update_resolve_telegram_callback(callback_data, actor, context)
+            .await
+    }
+
+    async fn try_resolve_workflow_learning_callback(
+        &self,
+        callback_data: &str,
+        actor: &str,
+        context: &captain_types::workflow_learning::ProposalOperatorContext,
+    ) -> Result<captain_types::workflow_learning::ProposalOperatorResolution, String> {
+        self.kernel
+            .workflow_learning_resolve_telegram_callback(callback_data, actor, context)
+    }
+
+    async fn try_capture_workflow_learning_refinement(
+        &self,
+        message: &captain_types::workflow_learning::ProposalRefinementMessage,
+    ) -> Result<Option<captain_types::workflow_learning::ProposalRefinementCaptureResolution>, String>
+    {
+        self.kernel.workflow_learning_capture_refinement(message)
     }
 
     async fn send_message_with_blocks(
@@ -1922,81 +1935,6 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                 }
             }
             n => format!("{n} apprentissages correspondent à « {id_prefix} ». Sois plus précis."),
-        }
-    }
-
-    async fn list_skill_proposals_text(&self) -> String {
-        let items = match self.kernel.skill_proposal_list(20) {
-            Ok(v) => v,
-            Err(e) => return format!("Impossible de lire les skills proposés : {e}"),
-        };
-        let Some(rows) = items.as_array() else {
-            return "Aucun skill proposé en attente.".to_string();
-        };
-        if rows.is_empty() {
-            return "Aucun skill proposé en attente.".to_string();
-        }
-        let mut msg = format!("🛠️ Skills proposés en attente ({}) :\n\n", rows.len());
-        for item in rows {
-            let id = item["id"].as_str().unwrap_or("");
-            let name = item["name"].as_str().unwrap_or("");
-            let description = item["description"].as_str().unwrap_or("");
-            let family = item["family"].as_str().unwrap_or("general-automation");
-            let confidence = item["confidence"].as_f64().unwrap_or(0.0);
-            msg.push_str(&format!(
-                "[{}] {} — {} · famille: {} ({:.0}%)\n",
-                safe_truncate_str(id, 8),
-                name,
-                safe_truncate_str(description, 90),
-                family,
-                confidence * 100.0,
-            ));
-        }
-        msg.push_str("\n/skill_approve <id> schema diff tests human · /skill_reject <id>");
-        msg
-    }
-
-    async fn resolve_skill_proposal_text(
-        &self,
-        id_prefix: &str,
-        approve: bool,
-        external_validation: bool,
-    ) -> String {
-        let decided_by = match skill_proposal_channel_decided_by(approve, external_validation) {
-            Ok(value) => value,
-            Err(usage) => return usage.to_string(),
-        };
-        let items = match self.kernel.skill_proposal_list(10_000) {
-            Ok(v) => v,
-            Err(e) => return format!("Impossible de lire les skills proposés : {e}"),
-        };
-        let rows = items.as_array().cloned().unwrap_or_default();
-        let matched: Vec<_> = rows
-            .iter()
-            .filter(|item| {
-                item["id"]
-                    .as_str()
-                    .is_some_and(|id| id.starts_with(id_prefix))
-            })
-            .collect();
-        match matched.len() {
-            0 => format!("Aucun skill proposé correspondant à « {id_prefix} »."),
-            1 => {
-                let id = matched[0]["id"].as_str().unwrap_or(id_prefix);
-                match self
-                    .kernel
-                    .skill_proposal_decide(id, approve, Some(decided_by.as_str()))
-                    .await
-                {
-                    Ok(_) if approve => format!(
-                        "✅ Skill approuvé et mis en quarantaine — [{}]",
-                        safe_truncate_str(id, 8)
-                    ),
-                    Ok(_) => format!("❌ Skill proposé rejeté — [{}]", safe_truncate_str(id, 8)),
-                    Err(e) => format!("Échec de la décision skill : {e}"),
-                }
-            }
-            n => format!("{n} skills proposés correspondent à « {id_prefix} ». Sois plus précis."),
         }
     }
 
@@ -2765,11 +2703,6 @@ fn push_telegram_adapter(
         );
         if let Ok(chat_id_int) = chat_id_str.parse::<i64>() {
             captain_kernel::channel_routing::spawn_telegram_memory_approval_routing(
-                kernel.event_bus.clone(),
-                adapter.clone(),
-                chat_id_int,
-            );
-            captain_kernel::channel_routing::spawn_telegram_skill_proposal_routing(
                 kernel.event_bus.clone(),
                 adapter.clone(),
                 chat_id_int,
@@ -4407,22 +4340,6 @@ mod tests {
         )
         .is_none());
         assert!(super::clone_active_stream_for_session(&streams, None, agent_id).is_none());
-    }
-
-    #[test]
-    fn skill_proposal_channel_decider_requires_external_validation_for_approval() {
-        assert_eq!(
-            super::skill_proposal_channel_decided_by(true, false).unwrap_err(),
-            super::SKILL_PROPOSAL_APPROVAL_USAGE
-        );
-        assert_eq!(
-            super::skill_proposal_channel_decided_by(true, true).unwrap(),
-            "channel:schema_diff_tests_human"
-        );
-        assert_eq!(
-            super::skill_proposal_channel_decided_by(false, false).unwrap(),
-            "channel"
-        );
     }
 
     #[test]

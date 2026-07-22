@@ -549,13 +549,14 @@ impl App {
             AppEvent::LearningDecided { id, approved } => {
                 self.handle_learning_decided(id, approved);
             }
-            AppEvent::SkillsProposedLoaded {
-                proposals,
-                patterns,
-                metrics,
-            } => self.handle_skills_proposed_loaded(proposals, patterns, metrics),
-            AppEvent::SkillProposalDecided { id, approved } => {
-                self.handle_skill_proposal_decided(id, approved);
+            AppEvent::SkillsProposedLoaded { workflows, metrics } => {
+                self.handle_skills_proposed_loaded(workflows, metrics)
+            }
+            AppEvent::WorkflowProposalDecided {
+                proposal_id,
+                action,
+            } => {
+                self.handle_workflow_proposal_decided(proposal_id, action);
             }
             AppEvent::CronJobsLoaded(jobs) => self.handle_cron_jobs_loaded(jobs),
             AppEvent::CronJobMutated { id, what } => self.handle_cron_job_mutated(id, what),
@@ -1045,23 +1046,26 @@ impl App {
 
     fn handle_skills_proposed_loaded(
         &mut self,
-        proposals: Vec<skills_proposed::Proposal>,
-        patterns: Vec<skills_proposed::Pattern>,
+        workflows: Vec<captain_types::workflow_learning::WorkflowLearningView>,
         metrics: Option<skills_proposed::SkillsMetrics>,
     ) {
-        self.skills_proposed.proposals = proposals;
-        self.skills_proposed.patterns = patterns;
+        self.skills_proposed.workflows = workflows;
         self.skills_proposed.metrics = metrics;
         self.skills_proposed.loading = false;
-        select_first_if_unselected(
-            &mut self.skills_proposed.list_state,
-            &self.skills_proposed.proposals,
-        );
+        if self.skills_proposed.list_state.selected().is_none()
+            && !self.skills_proposed.workflows.is_empty()
+        {
+            self.skills_proposed.list_state.select(Some(0));
+        }
     }
 
-    fn handle_skill_proposal_decided(&mut self, id: String, approved: bool) {
-        self.skills_proposed.proposals.retain(|p| p.id != id);
-        self.skills_proposed.status_msg = decision_status::decision_message(&id, approved);
+    fn handle_workflow_proposal_decided(
+        &mut self,
+        proposal_id: String,
+        action: captain_types::workflow_learning::ProposalCardAction,
+    ) {
+        self.skills_proposed.status_msg =
+            format!("action {} acceptée pour {}", action.as_str(), proposal_id);
         self.refresh_skills_proposed();
     }
 
@@ -2548,14 +2552,21 @@ impl App {
         match action {
             skills_proposed::SkillsProposedAction::Continue => {}
             skills_proposed::SkillsProposedAction::Refresh => self.refresh_skills_proposed(),
-            skills_proposed::SkillsProposedAction::Approve(id) => {
+            skills_proposed::SkillsProposedAction::Decide {
+                proposal_id,
+                operator_token,
+                decision_version,
+                action,
+            } => {
                 if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_decide_skill_proposal(backend, id, true, self.event_tx.clone());
-                }
-            }
-            skills_proposed::SkillsProposedAction::Deny(id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_decide_skill_proposal(backend, id, false, self.event_tx.clone());
+                    event::spawn_decide_workflow_proposal(
+                        backend,
+                        proposal_id,
+                        operator_token,
+                        decision_version,
+                        action,
+                        self.event_tx.clone(),
+                    );
                 }
             }
         }

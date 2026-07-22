@@ -54,9 +54,6 @@ pub(crate) fn format_help_message() -> String {
      /learnings - list pending learning candidates\n\
      /learn_approve <id> - approve a learning candidate\n\
      /learn_reject <id> - reject a learning candidate\n\
-     /skill_proposals - list generated skill proposals\n\
-     /skill_approve <id> schema diff tests human - approve a generated skill after external validation\n\
-     /skill_reject <id> - reject a generated skill\n\
      /skill_refinements - list existing-skill refinements\n\
      /skill_refine_approve <id> - approve a skill refinement\n\
      /skill_refine_reject <id> - reject a skill refinement\n\
@@ -101,8 +98,9 @@ pub(crate) fn format_id_prefix_usage(command: &str) -> String {
     format!("Usage: /{command} <id-prefix>")
 }
 
-pub(crate) fn format_skill_approval_usage() -> String {
-    "Usage: /skill_approve <id-prefix> schema diff tests human".to_string()
+pub(crate) fn legacy_skill_synthesizer_retired() -> String {
+    "L'ancien SkillSynthesizer est archivé en lecture seule. Utilise Learning dans Telegram, le TUI, le Web ou le Desktop pour consulter et décider les workflows durables Skill Learning V2."
+        .to_string()
 }
 
 pub(crate) fn format_project_answer_usage() -> String {
@@ -177,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn review_usage_messages_use_command_names() {
+    fn active_review_usage_messages_use_command_names() {
         assert_eq!(
             format_id_prefix_usage("approve_session"),
             "Usage: /approve_session <id-prefix>"
@@ -185,10 +183,6 @@ mod tests {
         assert_eq!(
             format_project_answer_usage(),
             "Usage: /project_answer <id-prefix> <réponse>"
-        );
-        assert_eq!(
-            format_skill_approval_usage(),
-            "Usage: /skill_approve <id-prefix> schema diff tests human"
         );
     }
 }

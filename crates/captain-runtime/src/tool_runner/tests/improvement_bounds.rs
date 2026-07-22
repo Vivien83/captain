@@ -36,20 +36,8 @@ impl KernelHandle for OvereagerReviewKernel {
         Ok(review_items("learn", 55))
     }
 
-    fn skill_proposal_list(&self, _limit: usize) -> Result<serde_json::Value, String> {
-        Ok(review_items("proposal", 55))
-    }
-
-    async fn skill_proposal_decide(
-        &self,
-        proposal_id: &str,
-        approve: bool,
-        _decided_by: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        Ok(serde_json::json!({
-            "id": proposal_id,
-            "status": if approve { "approved" } else { "denied" }
-        }))
+    fn workflow_learning_list(&self, _limit: usize) -> Result<serde_json::Value, String> {
+        Ok(workflow_items(55))
     }
 
     fn find_agents(&self, _q: &str) -> Vec<crate::kernel_handle::AgentInfo> {
@@ -88,6 +76,26 @@ fn review_items(prefix: &str, count: usize) -> serde_json::Value {
     )
 }
 
+fn workflow_items(count: usize) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "returned": count,
+        "workflows": (0..count)
+            .map(|idx| serde_json::json!({
+                "proposal_id": format!("workflow-{idx}"),
+                "decision_version": idx,
+                "state": "proposed",
+                "name": format!("Workflow {idx}"),
+                "kind": "skill",
+                "projection_status": "verified",
+                "updated_at_unix_ms": idx,
+                "card": null,
+                "installation": null
+            }))
+            .collect::<Vec<_>>()
+    })
+}
+
 #[test]
 fn direct_review_lists_truncate_overeager_kernel_output() {
     let kh: Arc<dyn KernelHandle> = Arc::new(OvereagerReviewKernel);
@@ -98,15 +106,15 @@ fn direct_review_lists_truncate_overeager_kernel_output() {
     assert_eq!(learning_json.as_array().unwrap().len(), 2);
     assert_eq!(learning_json[1]["id"], "learn-1");
 
-    let proposals = tool_skill_proposal_list(&serde_json::json!({"limit": 3}), Some(&kh))
-        .expect("skill proposals should serialize");
-    let proposals_json: serde_json::Value = serde_json::from_str(&proposals).unwrap();
-    assert_eq!(proposals_json.as_array().unwrap().len(), 3);
-    assert_eq!(proposals_json[2]["id"], "proposal-2");
+    let workflows = tool_workflow_learning_list(&serde_json::json!({"limit": 3}), Some(&kh))
+        .expect("workflow learning should serialize");
+    let workflows_json: serde_json::Value = serde_json::from_str(&workflows).unwrap();
+    assert_eq!(workflows_json["items"].as_array().unwrap().len(), 3);
+    assert_eq!(workflows_json["items"][2]["proposal_id"], "workflow-2");
 }
 
-#[tokio::test]
-async fn self_review_and_proposal_prefix_resolution_use_bounded_output_window() {
+#[test]
+fn self_review_uses_bounded_workflow_projection() {
     let kh: Arc<dyn KernelHandle> = Arc::new(OvereagerReviewKernel);
 
     let review = tool_self_improvement_review(&serde_json::json!({"limit": 2}), Some(&kh))
@@ -119,14 +127,9 @@ async fn self_review_and_proposal_prefix_resolution_use_bounded_output_window() 
             .len(),
         2
     );
-    assert_eq!(review_json["pending"]["skill_proposals"]["count"], 2);
-
-    let err = tool_skill_proposal_decide(
-        &serde_json::json!({"id": "proposal-54", "approve": true}),
-        Some(&kh),
-        Some("captain"),
-    )
-    .await
-    .expect_err("prefix outside the bounded review window should not resolve");
-    assert_eq!(err, "Skill proposal id not found");
+    assert_eq!(review_json["pending"]["workflow_learning"]["count"], 2);
+    assert_eq!(
+        review_json["pending"]["workflow_learning"]["action_required"],
+        2
+    );
 }

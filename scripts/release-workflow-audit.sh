@@ -150,6 +150,8 @@ require_file_literal "local packager emulates Linux ARM64" "$RELEASE_ALL" 'qemu-
 require_file_literal "local packager forwards custom output roots" "$RELEASE_ALL" 'CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"'
 require_file_literal "local packager honors the shared Cargo target root" "$RELEASE_ALL" 'TARGET_ROOT="${CARGO_TARGET_DIR:-target}"'
 require_file_literal "local packager resolves the host binary from the shared target root" "$RELEASE_ALL" 'echo "$TARGET_ROOT/release/captain"'
+require_file_literal "local packager opens current Docker Desktop app" "$RELEASE_ALL" 'open -a "Docker Desktop"'
+require_file_literal "local packager retains legacy Docker app fallback" "$RELEASE_ALL" 'open -a Docker'
 require_file_literal "macOS bundle signing fails closed" "$PACKAGE_RELEASE" 'failed to verify $PLATFORM release signature'
 require_file_literal "Windows preflight requires LLVM" "$RELEASE_ALL" 'command -v llvm-ar'
 require_file_literal "Windows preflight requires NASM" "$RELEASE_ALL" 'command -v nasm'

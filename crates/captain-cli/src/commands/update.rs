@@ -12,13 +12,26 @@ use std::path::{Path, PathBuf};
 
 use super::service_runtime::installed_captain_binary;
 use crate::{prompt_input, ui, ServiceManagerArg};
+use captain_types::release_update::{
+    current_release_platform, select_newest_compatible_release, ReleaseDescriptor,
+    RuntimeUpdateAttemptResult, RuntimeUpdateAttemptStatus, RUNTIME_UPDATE_RESULT_FILENAME,
+    RUNTIME_UPDATE_RESULT_SCHEMA_VERSION,
+};
 
 const DEFAULT_GITHUB_REPO: &str = "Vivien83/captain";
+const UPDATE_ATTEMPT_ID_ENV: &str = "CAPTAIN_UPDATE_ATTEMPT_ID";
+const UPDATE_RESULT_PATH_ENV: &str = "CAPTAIN_UPDATE_RESULT_PATH";
 
 pub(crate) fn cmd_update(check: bool, yes: bool, version: Option<String>) {
     ui::section("Captain Update");
 
     if running_in_container() {
+        record_update_attempt(
+            RuntimeUpdateAttemptStatus::Failed,
+            version.as_deref().unwrap_or("latest"),
+            None,
+            "Captain runs inside a container; the orchestrator must replace the image.",
+        );
         ui::hint("Captain runs inside a container: update by rebuilding/pulling the image");
         ui::suggest_cmd(
             "From the repo checkout",
@@ -30,14 +43,30 @@ pub(crate) fn cmd_update(check: bool, yes: bool, version: Option<String>) {
     let platform = match detect_platform() {
         Ok(p) => p,
         Err(e) => {
+            record_update_attempt(
+                RuntimeUpdateAttemptStatus::Failed,
+                version.as_deref().unwrap_or("latest"),
+                None,
+                &e,
+            );
             ui::error(&e);
             std::process::exit(1);
         }
     };
     let current = captain_types::version::captain_version();
-    let remote = match version.map(Ok).unwrap_or_else(resolve_latest_version) {
+    let remote = match version
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| resolve_latest_version(&platform, &current))
+    {
         Ok(v) => v,
         Err(e) => {
+            record_update_attempt(
+                RuntimeUpdateAttemptStatus::Failed,
+                version.as_deref().unwrap_or("latest"),
+                None,
+                &e,
+            );
             ui::error_with_fix(
                 &format!("Could not determine the latest version: {e}"),
                 "Set CAPTAIN_DIST_BASE_URL to a release mirror, or CAPTAIN_GITHUB_TOKEN for the private GitHub repo.",
@@ -49,6 +78,12 @@ pub(crate) fn cmd_update(check: bool, yes: bool, version: Option<String>) {
     ui::kv("Installed", &current);
     ui::kv("Available", &remote);
     if versions_match(&remote, &current) {
+        record_update_attempt(
+            RuntimeUpdateAttemptStatus::Succeeded,
+            &remote,
+            Some(&current),
+            "Captain was already on the requested version.",
+        );
         ui::success("Captain is already up to date.");
         return;
     }
@@ -60,18 +95,31 @@ pub(crate) fn cmd_update(check: bool, yes: bool, version: Option<String>) {
     if !yes {
         let answer = prompt_input(&format!("  Update {current} -> {remote} now? [Y/n] "));
         if !(answer.is_empty() || answer.starts_with(['y', 'Y'])) {
+            record_update_attempt(
+                RuntimeUpdateAttemptStatus::Failed,
+                &remote,
+                None,
+                "Update cancelled before installation.",
+            );
             ui::hint("Update cancelled.");
             return;
         }
     }
 
     if let Err(e) = perform_update(&remote, &platform) {
+        record_update_attempt(RuntimeUpdateAttemptStatus::Failed, &remote, None, &e);
         ui::error_with_fix(
             &format!("Update failed: {e}"),
             "The current binary is untouched. Retry, or reinstall with scripts/install.sh.",
         );
         std::process::exit(1);
     }
+    record_update_attempt(
+        RuntimeUpdateAttemptStatus::Succeeded,
+        &remote,
+        Some(captain_types::version::canonical_version(&remote)),
+        "The checksum-verified binary was installed atomically.",
+    );
 
     if crate::find_daemon().is_some() {
         ui::step("Restarting the daemon on the new binary...");
@@ -87,23 +135,18 @@ fn perform_update(version: &str, platform: &str) -> Result<(), String> {
 
     ui::step(&format!("Downloading {archive_name} ({version})..."));
     let archive_bytes = download_release_asset(version, &archive_name)?;
-    let checksum_line = download_release_asset(version, &format!("{archive_name}.sha256"))
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok());
-
-    match checksum_line {
-        Some(line) => {
-            let expected = line.split_whitespace().next().unwrap_or("").to_lowercase();
-            let actual = format!("{:x}", sha2::Sha256::digest(&archive_bytes));
-            if expected.is_empty() || expected != actual {
-                return Err(format!(
-                    "checksum mismatch for {archive_name} (expected {expected}, got {actual})"
-                ));
-            }
-            ui::success("Checksum verified.");
-        }
-        None => ui::check_warn("No .sha256 published for this bundle — skipping verification."),
+    let checksum_asset = format!("{archive_name}.sha256");
+    let checksum_bytes = download_release_asset(version, &checksum_asset)?;
+    let checksum_line = String::from_utf8(checksum_bytes)
+        .map_err(|error| format!("{checksum_asset} is not UTF-8: {error}"))?;
+    let expected = parse_sha256(&checksum_line, &checksum_asset)?;
+    let actual = format!("{:x}", sha2::Sha256::digest(&archive_bytes));
+    if expected != actual {
+        return Err(format!(
+            "checksum mismatch for {archive_name} (expected {expected}, got {actual})"
+        ));
     }
+    ui::success("Checksum verified.");
 
     let staging = tempfile::tempdir().map_err(|e| format!("temp dir: {e}"))?;
     let archive_path = staging.path().join(&archive_name);
@@ -184,12 +227,13 @@ fn find_binary(dir: &Path) -> Option<PathBuf> {
 
 fn write_version_marker(version: &str) {
     let home = crate::cli_captain_home();
-    if std::fs::create_dir_all(&home).is_ok() {
-        let _ = std::fs::write(home.join("VERSION"), format!("{version}\n"));
-    }
+    let _ = captain_types::durable_fs::atomic_write(
+        &home.join("VERSION"),
+        format!("{}\n", captain_types::version::canonical_version(version)).as_bytes(),
+    );
 }
 
-fn resolve_latest_version() -> Result<String, String> {
+fn resolve_latest_version(platform: &str, current: &str) -> Result<String, String> {
     if let Some(base) = dist_base_url() {
         let url = format!("{base}/latest.txt");
         let text = http_client()?
@@ -208,22 +252,73 @@ fn resolve_latest_version() -> Result<String, String> {
     }
 
     let repo = github_repo();
-    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
     let mut request = http_client()?.get(&url).header("User-Agent", "captain-cli");
     if let Some(token) = github_token() {
         request = request.bearer_auth(token);
     }
-    let body: serde_json::Value = request
+    let releases: Vec<ReleaseDescriptor> = request
         .send()
         .map_err(|e| format!("{url}: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("{url}: {e} (no release published yet?)"))?
+        .map_err(|e| format!("{url}: {e}"))?
         .json()
         .map_err(|e| format!("{url}: {e}"))?;
-    body["tag_name"]
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| format!("{url}: response has no tag_name"))
+    let archive = format!("captain-{platform}.tar.gz");
+    let checksum = format!("{archive}.sha256");
+    Ok(
+        select_newest_compatible_release(current, &releases, &[&archive, &checksum])?
+            .map(|release| release.tag_name)
+            .unwrap_or_else(|| current.to_string()),
+    )
+}
+
+fn parse_sha256(line: &str, asset: &str) -> Result<String, String> {
+    let expected = line
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("{asset} does not contain a valid SHA-256 digest"));
+    }
+    Ok(expected)
+}
+
+fn record_update_attempt(
+    status: RuntimeUpdateAttemptStatus,
+    requested_version: &str,
+    installed_version: Option<&str>,
+    message: &str,
+) {
+    let Some(attempt_id) = std::env::var(UPDATE_ATTEMPT_ID_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let path = std::env::var_os(UPDATE_RESULT_PATH_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::cli_captain_home().join(RUNTIME_UPDATE_RESULT_FILENAME));
+    let result = RuntimeUpdateAttemptResult {
+        schema_version: RUNTIME_UPDATE_RESULT_SCHEMA_VERSION,
+        attempt_id,
+        requested_version: requested_version.to_string(),
+        status,
+        installed_version: installed_version.map(str::to_string),
+        message: captain_types::truncate_str(message, 2_048).to_string(),
+        completed_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let write = serde_json::to_vec_pretty(&result)
+        .map_err(std::io::Error::other)
+        .and_then(|payload| captain_types::durable_fs::atomic_write(&path, &payload));
+    if let Err(error) = write {
+        ui::check_warn(&format!(
+            "Could not persist detached update result to {}: {error}",
+            path.display()
+        ));
+    }
 }
 
 fn download_release_asset(version: &str, asset: &str) -> Result<Vec<u8>, String> {
@@ -335,18 +430,7 @@ fn container_marker(dockerenv: &Path, cgroup: &Path) -> bool {
 }
 
 fn detect_platform() -> Result<String, String> {
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => return Err(format!("unsupported architecture: {other}")),
-    };
-    match std::env::consts::OS {
-        "macos" => Ok(format!("{arch}-apple-darwin")),
-        "linux" => Ok(format!("{arch}-unknown-linux-gnu")),
-        other => Err(format!(
-            "self-update is not supported on {other}; re-run the installer instead"
-        )),
-    }
+    current_release_platform()
 }
 
 #[cfg(test)]
@@ -395,5 +479,16 @@ mod tests {
         std::fs::write(nested.join("captain"), b"fake").unwrap();
         let found = find_binary(tmp.path()).unwrap();
         assert!(found.ends_with("bundle/bin/captain"));
+    }
+
+    #[test]
+    fn checksum_parser_requires_an_exact_sha256() {
+        let digest = "a".repeat(64);
+        assert_eq!(
+            parse_sha256(&format!("{digest}  captain.tar.gz\n"), "sum").unwrap(),
+            digest
+        );
+        assert!(parse_sha256("abc captain.tar.gz", "sum").is_err());
+        assert!(parse_sha256(&"z".repeat(64), "sum").is_err());
     }
 }

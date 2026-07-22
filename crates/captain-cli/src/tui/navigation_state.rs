@@ -83,7 +83,7 @@ impl Tab {
             Tab::Learning => "Learning",
             Tab::Channels => "Connections",
             Tab::Skills => "Capabilities",
-            Tab::SkillsProposed => "Skill proposals",
+            Tab::SkillsProposed => "Learned workflows",
             Tab::Hands => "Hands",
             Tab::Extensions => "Extensions",
             Tab::Templates => "Templates",
@@ -423,7 +423,7 @@ impl LearningView {
     pub(crate) fn label(self) -> &'static str {
         match self {
             LearningView::Review => "Review",
-            LearningView::SkillProposals => "Skill proposals",
+            LearningView::SkillProposals => "Workflows",
             LearningView::Memory => "Memory",
             LearningView::Graph => "Graph",
         }

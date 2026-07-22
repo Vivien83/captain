@@ -876,7 +876,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.8"
+  "version": "0.1.0-alpha.9"
 }
 ```
 
@@ -891,7 +891,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -922,6 +922,7 @@ provider, uptime, path, deployment, and access fields:
 | `consciousness` | Operational awareness state, signals, and actions |
 | `streaming` | Active/completed stream timing telemetry |
 | `disk`, `shutdown` | Free-space policy and graceful-drain state |
+| `runtime_update` | Last successful release check, next 12-hour check, pending version, detached-install state, and notification retry/dead-letter counts |
 | `native_voice`, `native_embeddings`, `media`, `tts` | Native capability readiness |
 
 `consciousness.supervisor.failure_count` counts recoverable turn failures since
@@ -953,6 +954,17 @@ historical failures alone do not keep operational awareness in warning state.
     "cancelled": 0,
     "interrupted": 0,
     "recent": []
+  },
+  "runtime_update": {
+    "last_checked_at": "2026-07-20T08:00:00Z",
+    "last_success_at": "2026-07-20T08:00:00Z",
+    "next_check_at": "2026-07-20T20:00:00Z",
+    "last_error": null,
+    "consecutive_failures": 0,
+    "pending_version": "0.1.0-alpha.9",
+    "update_in_progress": false,
+    "undelivered_notifications": 1,
+    "dead_notifications": 0
   },
   "budget": {
     "total_tokens_used": 12000,

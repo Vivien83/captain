@@ -59,13 +59,11 @@ pub(crate) fn skill_proposal_line(
     let hint = if trigger_hint.is_empty() {
         String::new()
     } else {
-        let trigger_hint =
-            captain_runtime::skill_proposer::localize_trigger_hint(trigger_hint, "fr");
         format!(" · quand : {trigger_hint}")
     };
     let short_id = proposal_id.chars().take(8).collect::<String>();
     format!(
-        "🛠️ skill proposé · {name} — {description}{hint} · famille: {family_label}   ({:.0}%, {short_id}) · /skills-proposed",
+        "skill archivé v3.13 · {name} — {description}{hint} · famille: {family_label}   ({:.0}%, {short_id}) · consulte Learning",
         confidence * 100.0
     )
 }

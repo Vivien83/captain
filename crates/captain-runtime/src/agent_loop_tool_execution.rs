@@ -20,6 +20,9 @@ use crate::tool_parallelism::{
 };
 use crate::tool_runner;
 use crate::web_search::WebToolsContext;
+use crate::workflow_learning_runtime::{
+    advance_dependency_frontier, current_dependency_frontier, register_parallel_tool_dependencies,
+};
 use captain_memory::session::Session;
 use captain_memory::MemorySubstrate;
 use captain_skills::registry::SkillRegistry;
@@ -115,6 +118,11 @@ async fn apply_loop_guard_verdict(
 ) -> CaptainResult<ToolGuardAction> {
     match verdict {
         LoopGuardVerdict::CircuitBreak(msg) => {
+            crate::workflow_learning_runtime::record_terminal_tool_attempt(
+                tool_call,
+                true,
+                "loop_guard_circuit_break",
+            );
             let suffix = if streaming { " (streaming)" } else { "" };
             warn!(tool = %tool_call.name, "Circuit breaker triggered{}", suffix);
             fail_loop_guard_circuit_break(manifest, session, memory, hooks, agent_id_str, msg)
@@ -122,6 +130,11 @@ async fn apply_loop_guard_verdict(
                 .map(ToolGuardAction::Finish)
         }
         LoopGuardVerdict::Block(msg) => {
+            crate::workflow_learning_runtime::record_terminal_tool_attempt(
+                tool_call,
+                true,
+                "loop_guard_blocked",
+            );
             let suffix = if streaming { " (streaming)" } else { "" };
             warn!(tool = %tool_call.name, "Tool call blocked by loop guard{}", suffix);
             push_loop_guard_block_result(tool_result_blocks, tool_call, msg);
@@ -680,8 +693,12 @@ async fn execute_parallel_group(
     // this later call, so this path still owes them EXEC+POST below before
     // the error is allowed to propagate.
     let mut pre_error: Option<captain_types::error::CaptainError> = None;
+    let group_dependencies = current_dependency_frontier();
+    let mut resolved_tool_ids = Vec::new();
 
     for (index, tool_call) in calls.iter().enumerate() {
+        register_parallel_tool_dependencies(&tool_call.id, group_dependencies.clone());
+        resolved_tool_ids.push(tool_call.id.clone());
         let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
         let guard_action = apply_loop_guard_verdict(
             manifest,
@@ -779,6 +796,9 @@ async fn execute_parallel_group(
 
     for blocks in per_call_blocks {
         tool_result_blocks.extend(blocks);
+    }
+    if !resolved_tool_ids.is_empty() {
+        advance_dependency_frontier(resolved_tool_ids);
     }
 
     if let Some(e) = pre_error {
@@ -968,8 +988,12 @@ async fn execute_streaming_parallel_group(
     let mut pending: Vec<PendingExec<'_>> = Vec::new();
     let mut finish_result: Option<AgentLoopResult> = None;
     let mut pre_error: Option<captain_types::error::CaptainError> = None;
+    let group_dependencies = current_dependency_frontier();
+    let mut resolved_tool_ids = Vec::new();
 
     for (index, tool_call) in calls.iter().enumerate() {
+        register_parallel_tool_dependencies(&tool_call.id, group_dependencies.clone());
+        resolved_tool_ids.push(tool_call.id.clone());
         let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
         let guard_action = apply_loop_guard_verdict(
             manifest,
@@ -1081,6 +1105,9 @@ async fn execute_streaming_parallel_group(
 
     for blocks in per_call_blocks {
         tool_result_blocks.extend(blocks);
+    }
+    if !resolved_tool_ids.is_empty() {
+        advance_dependency_frontier(resolved_tool_ids);
     }
 
     if let Some(e) = pre_error {

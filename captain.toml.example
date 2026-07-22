@@ -345,13 +345,6 @@ emit_learning_review = true               # OBSERVE -> THINK -> PLAN -> BUILD ->
 [skills]
 enabled = true
 mode = "approval"                          # off | approval | auto
-pattern_threshold = 5
-pattern_window_days = 7
-proposer_model = "gpt-5.5"                # normalized against live/cache Codex model list when provider=codex
-fallback_models = []
 reflection_timeout_secs = 30
 rate_limit_per_day = 3
-min_confidence = 0.7
 generated_dir = "skills/generated"
-# reflection_provider = "openrouter"
-# reflection_api_key_env = "OPENROUTER_API_KEY"

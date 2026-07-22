@@ -83,7 +83,7 @@ const budget = {
 const jsonRoutes = new Map([
   ['/api/auth/check', { mode: 'session', authenticated: true }],
   ['/api/agents', [{ id: 'captain', name: 'captain', model_provider: 'codex', model_name: 'gpt-5.6-sol' }]],
-  ['/api/status', { version: '0.1.0-alpha.8' }],
+  ['/api/status', { version: '0.1.0-alpha.9' }],
   ['/api/models/updates', { pending: [], agents: [] }],
   ['/api/approvals', { approvals: [] }],
   ['/api/agents/captain/sessions', { sessions: [] }],

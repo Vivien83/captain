@@ -24,6 +24,11 @@ pub(crate) fn before_tool_call_allows_execution(
     };
 
     if let Err(reason) = hook_reg.fire(&ctx) {
+        crate::workflow_learning_runtime::record_terminal_tool_attempt(
+            tool_call,
+            true,
+            "hook_blocked",
+        );
         push_hook_block_result(tool_result_blocks, tool_call, &reason);
         return false;
     }

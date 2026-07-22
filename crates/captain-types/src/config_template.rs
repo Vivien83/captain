@@ -188,16 +188,18 @@ mod tests {
     }
 
     #[test]
-    fn render_exposes_v312_and_v313_fields() {
+    fn render_exposes_learning_v2_and_hides_retired_synthesizer_fields() {
         let s = render_default_toml().expect("render");
         // v3.12 LearningEngine surface
         assert!(s.contains("reflection_model"));
         assert!(s.contains("fallback_models"));
         assert!(s.contains("min_confidence"));
-        // v3.13 SkillSynthesizer surface
-        assert!(s.contains("proposer_model"));
-        assert!(s.contains("pattern_threshold"));
+        // Skill Learning V2 surface
+        assert!(s.contains("reflection_timeout_secs"));
+        assert!(s.contains("rate_limit_per_day"));
         assert!(s.contains("generated_dir"));
+        assert!(!s.contains("proposer_model"));
+        assert!(!s.contains("pattern_threshold"));
     }
 
     #[test]
@@ -224,9 +226,7 @@ mod tests {
         assert!(parsed.skills.enabled);
         assert_eq!(parsed.learning.reflection_model, "gpt-5.5");
         assert!(parsed.learning.fallback_models.is_empty());
-        assert_eq!(parsed.skills.proposer_model, "gpt-5.5");
-        assert!(parsed.skills.fallback_models.is_empty());
-        assert_eq!(parsed.skills.pattern_threshold, 5);
+        assert_eq!(parsed.skills.rate_limit_per_day, 3);
         assert_eq!(parsed.tts.local_native.preferred_engine, "kokoro");
         assert_eq!(parsed.tts.local_native.fallback_engine, "piper");
         assert!(parsed.media.audio_model.is_none());
@@ -247,8 +247,7 @@ mod tests {
         assert_eq!(parsed.default_model.api_key_env, "");
         assert_eq!(parsed.learning.reflection_model, "gpt-5.5");
         assert!(parsed.learning.fallback_models.is_empty());
-        assert_eq!(parsed.skills.proposer_model, "gpt-5.5");
-        assert!(parsed.skills.fallback_models.is_empty());
+        assert_eq!(parsed.skills.rate_limit_per_day, 3);
         assert!(parsed.checkpoints.enabled);
         assert_eq!(parsed.checkpoints.model, "gpt-5.5");
     }

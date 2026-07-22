@@ -19,6 +19,7 @@ pub mod memory;
 pub mod message;
 pub mod model_catalog;
 pub mod quota;
+pub mod release_update;
 pub mod scheduler;
 pub mod serde_compat;
 pub mod ssrf_guard;
@@ -27,6 +28,7 @@ pub mod tool;
 pub mod tool_compat;
 pub mod version;
 pub mod webhook;
+pub mod workflow_learning;
 
 /// Safely truncate a string to at most `max_bytes`, never splitting a UTF-8 char.
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {

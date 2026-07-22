@@ -68,6 +68,13 @@ use async_trait::async_trait;
 use captain_types::agent::AgentId;
 use captain_types::config::ChannelOverrides;
 use captain_types::message::ContentBlock;
+use captain_types::release_update::{
+    RuntimeUpdateOperatorContext, RuntimeUpdateOperatorResolution,
+};
+use captain_types::workflow_learning::{
+    ProposalOperatorContext, ProposalOperatorResolution, ProposalRefinementCaptureResolution,
+    ProposalRefinementMessage,
+};
 use channel_mapping::channel_type_str;
 use channel_policy::channel_policy_ignore_reason;
 #[cfg(test)]
@@ -249,6 +256,42 @@ pub trait ChannelBridgeHandle: Send + Sync {
         _actor: &str,
     ) -> Result<String, String> {
         Err("Captain Forge callback routing is not supported by this runtime".to_string())
+    }
+
+    /// Resolve a Telegram runtime-update callback in the control plane.
+    ///
+    /// This is a privileged, model-independent operation. Implementations
+    /// must validate the exact candidate, decision version, actor and chat.
+    async fn try_resolve_runtime_update_callback(
+        &self,
+        _callback_data: &str,
+        _actor: &str,
+        _context: &RuntimeUpdateOperatorContext,
+    ) -> Result<RuntimeUpdateOperatorResolution, String> {
+        Err("Runtime update callback routing is not supported by this runtime".to_string())
+    }
+
+    /// Resolve a Skill Learning V2 Telegram callback in the control plane.
+    ///
+    /// The implementation must validate the persisted proposal revision and
+    /// actor, apply the decision atomically and audit it without starting an
+    /// agent turn.
+    async fn try_resolve_workflow_learning_callback(
+        &self,
+        _callback_data: &str,
+        _actor: &str,
+        _context: &ProposalOperatorContext,
+    ) -> Result<ProposalOperatorResolution, String> {
+        Err("Workflow learning callback routing is not supported by this runtime".to_string())
+    }
+
+    /// Capture one message bound to a previously requested proposal edit.
+    /// `Ok(None)` means this ordinary message has no matching durable binding.
+    async fn try_capture_workflow_learning_refinement(
+        &self,
+        _message: &ProposalRefinementMessage,
+    ) -> Result<Option<ProposalRefinementCaptureResolution>, String> {
+        Ok(None)
     }
 
     /// Find an agent by name, returning its ID.
@@ -518,21 +561,6 @@ pub trait ChannelBridgeHandle: Send + Sync {
     /// Approve or reject a pending learning candidate by id prefix.
     async fn resolve_learning_review_text(&self, _id_prefix: &str, _approve: bool) -> String {
         "Learning review not available.".to_string()
-    }
-
-    /// List pending generated-skill proposals.
-    async fn list_skill_proposals_text(&self) -> String {
-        "Skill proposals not available.".to_string()
-    }
-
-    /// Approve or reject a pending generated-skill proposal by id prefix.
-    async fn resolve_skill_proposal_text(
-        &self,
-        _id_prefix: &str,
-        _approve: bool,
-        _external_validation: bool,
-    ) -> String {
-        "Skill proposals not available.".to_string()
     }
 
     /// List pending existing-skill refinement proposals.
@@ -958,6 +986,37 @@ struct ChannelDispatchTask {
     semaphore: Arc<Semaphore>,
 }
 
+fn workflow_learning_actor(message: &ChannelMessage) -> Option<String> {
+    if !matches!(message.channel, crate::types::ChannelType::Telegram) {
+        return None;
+    }
+    let user_id = message.metadata.get("sender_user_id").and_then(|value| {
+        value
+            .as_i64()
+            .map(|value| value.to_string())
+            .or_else(|| value.as_str().map(str::to_string))
+    })?;
+    if user_id.is_empty() || !user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("telegram:{user_id}"))
+}
+
+fn workflow_learning_conversation_key(message: &ChannelMessage) -> String {
+    let chat_id = message
+        .metadata
+        .get("chat_id")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .map(|value| value.to_string())
+                .or_else(|| value.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| message.sender.platform_id.clone());
+    let thread_id = message.thread_id.as_deref().unwrap_or("root");
+    format!("telegram:chat:{chat_id}:thread:{thread_id}")
+}
+
 impl ChannelDispatchTask {
     fn spawn(self) {
         tokio::spawn(async move {
@@ -971,10 +1030,19 @@ impl ChannelDispatchTask {
             Err(_) => return,
         };
 
+        if self.try_resolve_runtime_update_operator_callback().await {
+            return;
+        }
+        if self.try_resolve_workflow_learning_operator_callback().await {
+            return;
+        }
         if self.try_resolve_capspec_operator_callback().await {
             return;
         }
         if self.try_resolve_ask_user_answer().await {
+            return;
+        }
+        if self.try_capture_workflow_learning_refinement().await {
             return;
         }
 
@@ -995,6 +1063,247 @@ impl ChannelDispatchTask {
             return;
         }
         self.start_or_queue_inbound_session(key).await;
+    }
+
+    /// Apply runtime update buttons before any session or model routing.
+    async fn try_resolve_runtime_update_operator_callback(&self) -> bool {
+        let Some(callback_data) = self
+            .message
+            .metadata
+            .get("runtime_update_callback_data")
+            .and_then(|value| value.as_str())
+        else {
+            return false;
+        };
+        let sender_id = self
+            .message
+            .metadata
+            .get("sender_user_id")
+            .and_then(|value| value.as_i64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let actor = format!("telegram:{sender_id}");
+        let language = self
+            .message
+            .metadata
+            .get("language")
+            .and_then(|value| value.as_str())
+            .unwrap_or("en");
+        let chat_id = self
+            .message
+            .metadata
+            .get("chat_id")
+            .and_then(|value| {
+                value
+                    .as_i64()
+                    .map(|id| id.to_string())
+                    .or_else(|| value.as_str().map(str::to_string))
+            })
+            .unwrap_or_default();
+        let context = RuntimeUpdateOperatorContext {
+            chat_id,
+            source_message_id: (!self.message.platform_message_id.is_empty())
+                .then(|| self.message.platform_message_id.clone()),
+        };
+        let result = self
+            .handle
+            .try_resolve_runtime_update_callback(callback_data, &actor, &context)
+            .await;
+        let (decision_text, retire_keyboard) = match result {
+            Ok(resolution) => (
+                crate::telegram::format_runtime_update_resolution(&resolution, language),
+                resolution.retire_keyboard,
+            ),
+            Err(reason) => (
+                crate::telegram::format_runtime_update_error(&reason, language),
+                false,
+            ),
+        };
+        let original = self
+            .message
+            .metadata
+            .get("original_text")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim();
+        let rendered = if retire_keyboard && !original.is_empty() {
+            format!("{original}\n\n---\n\n{decision_text}")
+        } else {
+            decision_text
+        };
+        let mut metadata = HashMap::new();
+        if let Some(chat_id) = self.message.metadata.get("chat_id") {
+            metadata.insert("chat_id".to_string(), chat_id.clone());
+        }
+        if let Some(thread_id) = &self.message.thread_id {
+            metadata.insert("thread_id".to_string(), serde_json::json!(thread_id));
+        }
+        let edited = retire_keyboard
+            && !self.message.platform_message_id.is_empty()
+            && self
+                .adapter
+                .edit_rich(&self.message.platform_message_id, &rendered, &metadata)
+                .await
+                .is_ok();
+        if !edited {
+            let _ = self
+                .adapter
+                .send_rich(
+                    &self.message.sender,
+                    ChannelContent::Text(rendered),
+                    &metadata,
+                )
+                .await;
+        }
+        true
+    }
+
+    /// Resolve workflow-learning buttons before session routing. Non-terminal
+    /// responses are posted separately so the original keyboard remains
+    /// usable; a committed terminal decision edits the card and retires it.
+    async fn try_resolve_workflow_learning_operator_callback(&self) -> bool {
+        let Some(callback_data) = self
+            .message
+            .metadata
+            .get("workflow_learning_callback_data")
+            .and_then(|value| value.as_str())
+        else {
+            return false;
+        };
+        let sender_id = self
+            .message
+            .metadata
+            .get("sender_user_id")
+            .and_then(|value| value.as_i64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let actor = format!("telegram:{sender_id}");
+        let language = self
+            .message
+            .metadata
+            .get("language")
+            .and_then(|value| value.as_str())
+            .unwrap_or("en");
+        let context = ProposalOperatorContext {
+            surface: "telegram".to_string(),
+            conversation_key: workflow_learning_conversation_key(&self.message),
+            source_message_id: (!self.message.platform_message_id.is_empty())
+                .then(|| self.message.platform_message_id.clone()),
+            language: language.to_string(),
+        };
+        let result = self
+            .handle
+            .try_resolve_workflow_learning_callback(callback_data, &actor, &context)
+            .await;
+
+        let (decision_text, retire_keyboard) = match result {
+            Ok(resolution) => (
+                crate::telegram::format_workflow_learning_resolution(&resolution, language),
+                resolution.retire_keyboard,
+            ),
+            Err(reason) => (
+                crate::telegram::format_workflow_learning_error(&reason, language),
+                false,
+            ),
+        };
+        let original = self
+            .message
+            .metadata
+            .get("original_text")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim();
+        let rendered = if retire_keyboard && !original.is_empty() {
+            format!("{original}\n\n---\n\n{decision_text}")
+        } else {
+            decision_text
+        };
+
+        let mut metadata = HashMap::new();
+        if let Some(chat_id) = self.message.metadata.get("chat_id") {
+            metadata.insert("chat_id".to_string(), chat_id.clone());
+        }
+        if let Some(thread_id) = &self.message.thread_id {
+            metadata.insert("thread_id".to_string(), serde_json::json!(thread_id));
+        }
+        let edited = retire_keyboard
+            && !self.message.platform_message_id.is_empty()
+            && self
+                .adapter
+                .edit_rich(&self.message.platform_message_id, &rendered, &metadata)
+                .await
+                .is_ok();
+        if !edited {
+            let _ = self
+                .adapter
+                .send_rich(
+                    &self.message.sender,
+                    ChannelContent::Text(rendered),
+                    &metadata,
+                )
+                .await;
+        }
+        true
+    }
+
+    /// Intercept the exact next Telegram text for an active edit binding
+    /// before recovered sessions, interjections, queues or model routing.
+    async fn try_capture_workflow_learning_refinement(&self) -> bool {
+        let ChannelContent::Text(instruction) = &self.message.content else {
+            return false;
+        };
+        if self
+            .message
+            .metadata
+            .contains_key("workflow_learning_callback_data")
+        {
+            return false;
+        }
+        let Some(actor) = workflow_learning_actor(&self.message) else {
+            return false;
+        };
+        let language = self
+            .message
+            .metadata
+            .get("language")
+            .and_then(|value| value.as_str())
+            .unwrap_or("en");
+        let message = ProposalRefinementMessage {
+            actor,
+            surface: "telegram".to_string(),
+            conversation_key: workflow_learning_conversation_key(&self.message),
+            message_id: self.message.platform_message_id.clone(),
+            instruction: instruction.clone(),
+        };
+        let result = self
+            .handle
+            .try_capture_workflow_learning_refinement(&message)
+            .await;
+        let rendered = match result {
+            Ok(None) => return false,
+            Ok(Some(resolution)) => {
+                crate::telegram::format_workflow_refinement_capture(&resolution)
+            }
+            Err(reason) => {
+                crate::telegram::format_workflow_refinement_capture_error(&reason, language)
+            }
+        };
+        let mut metadata = HashMap::new();
+        if let Some(chat_id) = self.message.metadata.get("chat_id") {
+            metadata.insert("chat_id".to_string(), chat_id.clone());
+        }
+        if let Some(thread_id) = &self.message.thread_id {
+            metadata.insert("thread_id".to_string(), serde_json::json!(thread_id));
+        }
+        let _ = self
+            .adapter
+            .send_rich(
+                &self.message.sender,
+                ChannelContent::Text(rendered),
+                &metadata,
+            )
+            .await;
+        true
     }
 
     /// Resolve Captain Forge buttons before any generic session machinery can
@@ -1530,6 +1839,17 @@ mod tests {
     use super::*;
     use crate::types::{ChannelType, ChannelUser};
     use captain_types::config::OutputFormat;
+    use captain_types::release_update::{
+        RuntimeUpdateOperatorContext, RuntimeUpdateOperatorResolution,
+        RuntimeUpdateResolutionStatus,
+    };
+    use captain_types::workflow_learning::{
+        ProposalCard, ProposalCardAction, ProposalCardEvidence, ProposalCardKind,
+        ProposalCardModel, ProposalCardRisk, ProposalCardState, ProposalInstallMode,
+        ProposalOperatorContext, ProposalOperatorOutcome, ProposalOperatorResolution,
+        ProposalRefinementCaptureResolution, ProposalRefinementMessage,
+        PROPOSAL_CARD_SCHEMA_VERSION,
+    };
     use std::sync::Mutex;
 
     /// Mock kernel handle for testing.
@@ -1595,6 +1915,20 @@ mod tests {
         model_calls: Mutex<usize>,
     }
 
+    struct RuntimeUpdateHandle {
+        result: Result<RuntimeUpdateOperatorResolution, String>,
+        calls: Mutex<Vec<(String, String, RuntimeUpdateOperatorContext)>>,
+        model_calls: Mutex<usize>,
+    }
+
+    struct WorkflowLearningHandle {
+        result: Result<ProposalOperatorResolution, String>,
+        calls: Mutex<Vec<(String, String)>>,
+        capture_result: Result<Option<ProposalRefinementCaptureResolution>, String>,
+        capture_calls: Mutex<Vec<ProposalRefinementMessage>>,
+        model_calls: Mutex<usize>,
+    }
+
     #[async_trait]
     impl ChannelBridgeHandle for CapSpecHandle {
         async fn send_message(
@@ -1625,6 +1959,124 @@ mod tests {
         }
         async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
             Err("spawn not implemented in mock".to_string())
+        }
+    }
+
+    #[async_trait]
+    impl ChannelBridgeHandle for RuntimeUpdateHandle {
+        async fn send_message(
+            &self,
+            _agent_id: AgentId,
+            _message: &str,
+            _channel_type: Option<&str>,
+        ) -> Result<String, String> {
+            *self.model_calls.lock().unwrap() += 1;
+            Err("model path must not be reached".to_string())
+        }
+        async fn try_resolve_runtime_update_callback(
+            &self,
+            callback_data: &str,
+            actor: &str,
+            context: &RuntimeUpdateOperatorContext,
+        ) -> Result<RuntimeUpdateOperatorResolution, String> {
+            self.calls.lock().unwrap().push((
+                callback_data.to_string(),
+                actor.to_string(),
+                context.clone(),
+            ));
+            self.result.clone()
+        }
+        async fn find_agent_by_name(&self, _name: &str) -> Result<Option<AgentId>, String> {
+            Ok(None)
+        }
+        async fn list_agents(&self) -> Result<Vec<(AgentId, String)>, String> {
+            Ok(Vec::new())
+        }
+        async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
+            Err("spawn not implemented in mock".to_string())
+        }
+    }
+
+    #[async_trait]
+    impl ChannelBridgeHandle for WorkflowLearningHandle {
+        async fn send_message(
+            &self,
+            _agent_id: AgentId,
+            _message: &str,
+            _channel_type: Option<&str>,
+        ) -> Result<String, String> {
+            *self.model_calls.lock().unwrap() += 1;
+            Err("model path must not be reached".to_string())
+        }
+        async fn try_resolve_workflow_learning_callback(
+            &self,
+            callback_data: &str,
+            actor: &str,
+            _context: &ProposalOperatorContext,
+        ) -> Result<ProposalOperatorResolution, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((callback_data.to_string(), actor.to_string()));
+            self.result.clone()
+        }
+        async fn try_capture_workflow_learning_refinement(
+            &self,
+            message: &ProposalRefinementMessage,
+        ) -> Result<Option<ProposalRefinementCaptureResolution>, String> {
+            self.capture_calls.lock().unwrap().push(message.clone());
+            self.capture_result.clone()
+        }
+        async fn find_agent_by_name(&self, _name: &str) -> Result<Option<AgentId>, String> {
+            Ok(None)
+        }
+        async fn list_agents(&self) -> Result<Vec<(AgentId, String)>, String> {
+            Ok(Vec::new())
+        }
+        async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
+            Err("spawn not implemented in mock".to_string())
+        }
+    }
+
+    fn workflow_resolution(
+        outcome: ProposalOperatorOutcome,
+        retire_keyboard: bool,
+    ) -> ProposalOperatorResolution {
+        ProposalOperatorResolution {
+            card: ProposalCard {
+                schema_version: PROPOSAL_CARD_SCHEMA_VERSION,
+                proposal_id: "proposal-1".to_string(),
+                lookup_token: "00000000000000000000".to_string(),
+                decision_version: 4,
+                revision_sha256: "a".repeat(64),
+                state: ProposalCardState::Proposed,
+                kind: ProposalCardKind::Skill,
+                name: "sourced-research".to_string(),
+                purpose: "Research current sources safely.".to_string(),
+                trigger: "A current claim needs sources.".to_string(),
+                evidence: ProposalCardEvidence {
+                    occurrences: 3,
+                    distinct_turns: 3,
+                    distinct_sessions: 2,
+                    explicit_reuse_request: false,
+                },
+                steps: Vec::new(),
+                validation: Vec::new(),
+                validation_limitations: Vec::new(),
+                isolated_test: None,
+                validated_by: ProposalCardModel {
+                    provider: "codex".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
+                },
+                required_authority: vec!["web_search".to_string()],
+                expected_benefit: "Repeatable sourced answers.".to_string(),
+                risk: ProposalCardRisk::ReadOnly,
+                recommended_action: ProposalCardAction::Activate,
+                available_actions: vec![ProposalCardAction::Activate, ProposalCardAction::Details],
+            },
+            outcome,
+            replayed: false,
+            retire_keyboard,
         }
     }
 
@@ -1818,7 +2270,7 @@ mod tests {
 
     #[tokio::test]
     async fn capspec_callback_is_resolved_and_edited_without_an_agent_turn() {
-        let callback = "capspec:approve:0123456789abcdefabcd";
+        let callback = "capspec:approve:00000000000000000000";
         let handle = Arc::new(CapSpecHandle {
             result: Ok("Exact revision approved.".to_string()),
             calls: Mutex::new(Vec::new()),
@@ -1870,6 +2322,258 @@ mod tests {
         assert!(edits[0].1.contains("Décision appliquée"));
         assert!(edits[0].1.contains("Exact revision approved."));
         assert!(adapter.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_update_callback_is_applied_and_retires_card_without_model() {
+        let callback = "runtime_update:defer:00000000000000000000:4";
+        let handle = Arc::new(RuntimeUpdateHandle {
+            result: Ok(RuntimeUpdateOperatorResolution {
+                status: RuntimeUpdateResolutionStatus::Deferred,
+                current_version: "0.1.0-alpha.8".to_string(),
+                available_version: "0.1.0-alpha.9".to_string(),
+                retire_keyboard: true,
+                next_prompt_at: Some("2026-07-21T08:00:00Z".to_string()),
+                log_path: None,
+            }),
+            calls: Mutex::new(Vec::new()),
+            model_calls: Mutex::new(0),
+        });
+        let adapter = Arc::new(RecordingAdapter {
+            telegram: true,
+            sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
+        });
+        let mut message = test_message(ChannelContent::Text(
+            "[Captain runtime update decision]".to_string(),
+        ));
+        message.metadata.insert(
+            "runtime_update_callback_data".to_string(),
+            serde_json::json!(callback),
+        );
+        message
+            .metadata
+            .insert("sender_user_id".to_string(), serde_json::json!(42));
+        message
+            .metadata
+            .insert("chat_id".to_string(), serde_json::json!(-1001));
+        message
+            .metadata
+            .insert("language".to_string(), serde_json::json!("fr"));
+        message.metadata.insert(
+            "original_text".to_string(),
+            serde_json::json!("Mise à jour Captain disponible"),
+        );
+        let task = ChannelDispatchTask {
+            message,
+            recovered_key: None,
+            handle: handle.clone(),
+            router: Arc::new(AgentRouter::new()),
+            adapter: adapter.clone(),
+            rate_limiter: ChannelRateLimiter::default(),
+            pending_model_switches: test_pending_model_switches(),
+            inbound_sessions: InboundSessionQueue::default(),
+            semaphore: Arc::new(Semaphore::new(1)),
+        };
+
+        assert!(task.try_resolve_runtime_update_operator_callback().await);
+        assert_eq!(*handle.model_calls.lock().unwrap(), 0);
+        let calls = handle.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, callback);
+        assert_eq!(calls[0].1, "telegram:42");
+        assert_eq!(calls[0].2.chat_id, "-1001");
+        assert_eq!(calls[0].2.source_message_id.as_deref(), Some("m1"));
+        let edits = adapter.edits.lock().unwrap();
+        assert_eq!(edits.len(), 1);
+        assert!(edits[0].1.contains("Mise à jour reportée"));
+        assert!(adapter.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_callback_commits_and_retires_card_without_an_agent_turn() {
+        let callback = "workflow:test:00000000000000000000:4";
+        let handle = Arc::new(WorkflowLearningHandle {
+            result: Ok(workflow_resolution(
+                ProposalOperatorOutcome::InstallQueued {
+                    mode: ProposalInstallMode::Test,
+                },
+                true,
+            )),
+            calls: Mutex::new(Vec::new()),
+            capture_result: Ok(None),
+            capture_calls: Mutex::new(Vec::new()),
+            model_calls: Mutex::new(0),
+        });
+        let adapter = Arc::new(RecordingAdapter {
+            telegram: true,
+            sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
+        });
+        let mut message = test_message(ChannelContent::Text(
+            "[Workflow learning operator decision]".to_string(),
+        ));
+        message.metadata.insert(
+            "workflow_learning_callback_data".to_string(),
+            serde_json::json!(callback),
+        );
+        message
+            .metadata
+            .insert("sender_user_id".to_string(), serde_json::json!(42));
+        message
+            .metadata
+            .insert("chat_id".to_string(), serde_json::json!(-1001));
+        message
+            .metadata
+            .insert("language".to_string(), serde_json::json!("fr"));
+        message.metadata.insert(
+            "original_text".to_string(),
+            serde_json::json!("Nouvelle capacite proposee"),
+        );
+        let task = ChannelDispatchTask {
+            message,
+            recovered_key: None,
+            handle: handle.clone(),
+            router: Arc::new(AgentRouter::new()),
+            adapter: adapter.clone(),
+            rate_limiter: ChannelRateLimiter::default(),
+            pending_model_switches: test_pending_model_switches(),
+            inbound_sessions: InboundSessionQueue::default(),
+            semaphore: Arc::new(Semaphore::new(1)),
+        };
+
+        task.run().await;
+        assert_eq!(
+            *handle.calls.lock().unwrap(),
+            vec![(callback.to_string(), "telegram:42".to_string())]
+        );
+        assert_eq!(*handle.model_calls.lock().unwrap(), 0);
+        let edits = adapter.edits.lock().unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].0, "m1");
+        assert!(edits[0].1.contains("Nouvelle capacite proposee"));
+        assert!(edits[0].1.contains("Decision enregistree"));
+        assert!(adapter.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_details_are_sent_separately_and_keep_the_keyboard() {
+        let callback = "workflow:details:00000000000000000000:4";
+        let handle = Arc::new(WorkflowLearningHandle {
+            result: Ok(workflow_resolution(ProposalOperatorOutcome::Details, false)),
+            calls: Mutex::new(Vec::new()),
+            capture_result: Ok(None),
+            capture_calls: Mutex::new(Vec::new()),
+            model_calls: Mutex::new(0),
+        });
+        let adapter = Arc::new(RecordingAdapter {
+            telegram: true,
+            sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
+        });
+        let mut message = test_message(ChannelContent::Text(
+            "[Workflow learning operator decision]".to_string(),
+        ));
+        message.metadata.insert(
+            "workflow_learning_callback_data".to_string(),
+            serde_json::json!(callback),
+        );
+        message
+            .metadata
+            .insert("sender_user_id".to_string(), serde_json::json!(42));
+        message
+            .metadata
+            .insert("chat_id".to_string(), serde_json::json!(-1001));
+        message
+            .metadata
+            .insert("language".to_string(), serde_json::json!("en"));
+        message.metadata.insert(
+            "original_text".to_string(),
+            serde_json::json!("Original proposal card"),
+        );
+        let task = ChannelDispatchTask {
+            message,
+            recovered_key: None,
+            handle: handle.clone(),
+            router: Arc::new(AgentRouter::new()),
+            adapter: adapter.clone(),
+            rate_limiter: ChannelRateLimiter::default(),
+            pending_model_switches: test_pending_model_switches(),
+            inbound_sessions: InboundSessionQueue::default(),
+            semaphore: Arc::new(Semaphore::new(1)),
+        };
+
+        assert!(task.try_resolve_workflow_learning_operator_callback().await);
+        assert_eq!(*handle.model_calls.lock().unwrap(), 0);
+        assert!(adapter.edits.lock().unwrap().is_empty());
+        let sent = adapter.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].contains("New capability proposal"));
+        assert!(!sent[0].contains("Original proposal card"));
+    }
+
+    #[tokio::test]
+    async fn workflow_edit_message_is_captured_before_session_or_model_routing() {
+        let handle = Arc::new(WorkflowLearningHandle {
+            result: Err("callback path must not be reached".to_string()),
+            calls: Mutex::new(Vec::new()),
+            capture_result: Ok(Some(ProposalRefinementCaptureResolution {
+                request_id: "wr-1".to_string(),
+                parent_proposal_id: "proposal-1".to_string(),
+                child_proposal_id: "proposal-child-1".to_string(),
+                language: "fr".to_string(),
+                replayed: false,
+            })),
+            capture_calls: Mutex::new(Vec::new()),
+            model_calls: Mutex::new(0),
+        });
+        let adapter = Arc::new(RecordingAdapter {
+            telegram: true,
+            sent: Mutex::new(Vec::new()),
+            edits: Mutex::new(Vec::new()),
+        });
+        let mut message = test_message(ChannelContent::Text(
+            "Ajoute une verification finale des sources.".to_string(),
+        ));
+        message.sender.platform_id = "-1001".to_string();
+        message.platform_message_id = "101".to_string();
+        message
+            .metadata
+            .insert("sender_user_id".to_string(), serde_json::json!(42));
+        message
+            .metadata
+            .insert("chat_id".to_string(), serde_json::json!(-1001));
+        message
+            .metadata
+            .insert("language".to_string(), serde_json::json!("fr"));
+        let task = ChannelDispatchTask {
+            message,
+            recovered_key: Some("a recovered agent session".to_string()),
+            handle: handle.clone(),
+            router: Arc::new(AgentRouter::new()),
+            adapter: adapter.clone(),
+            rate_limiter: ChannelRateLimiter::default(),
+            pending_model_switches: test_pending_model_switches(),
+            inbound_sessions: InboundSessionQueue::default(),
+            semaphore: Arc::new(Semaphore::new(1)),
+        };
+
+        task.run().await;
+
+        assert_eq!(*handle.model_calls.lock().unwrap(), 0);
+        assert!(handle.calls.lock().unwrap().is_empty());
+        let captures = handle.capture_calls.lock().unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].actor, "telegram:42");
+        assert_eq!(
+            captures[0].conversation_key,
+            "telegram:chat:-1001:thread:topic-1"
+        );
+        assert_eq!(captures[0].message_id, "101");
+        let sent = adapter.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].contains("Modification prise en compte"));
+        assert!(sent[0].contains("proposal-child-1"));
     }
 
     #[test]

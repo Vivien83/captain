@@ -1,40 +1,11 @@
 use super::CaptainKernel;
 use captain_runtime::reflection_job::{LlmDriverCompleter, NoopCompleter, ReflectionCompleter};
-use captain_runtime::skill_diff::SkillDiffConfig;
+use captain_runtime::workflow_learning_proposer::{ActiveModelIdentity, WorkflowDraftProposer};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 
 impl CaptainKernel {
-    /// Resolved skills generated directory. `generated_dir` is
-    /// relative to `home_dir` unless absolute.
-    pub(crate) fn skills_generated_root(&self) -> std::path::PathBuf {
-        let gd = std::path::Path::new(&self.config.skills.generated_dir);
-        if gd.is_absolute() {
-            gd.to_path_buf()
-        } else {
-            self.config.home_dir.join(gd)
-        }
-    }
-
-    pub(crate) fn skill_diff_config(&self) -> SkillDiffConfig {
-        let mut roots = Vec::new();
-        let user_skills = self.config.home_dir.join("skills");
-        roots.push(user_skills);
-        let generated = self.skills_generated_root();
-        if !roots.contains(&generated) {
-            roots.push(generated);
-        }
-        SkillDiffConfig::new(roots)
-    }
-
-    fn skills_reflection_provider(&self) -> String {
-        self.config
-            .skills
-            .reflection_provider
-            .clone()
-            .unwrap_or_else(|| self.config.default_model.provider.clone())
-    }
-
     fn learning_reflection_provider(&self) -> String {
         self.config
             .learning
@@ -83,66 +54,66 @@ impl CaptainKernel {
         )
     }
 
-    pub(crate) fn resolve_skills_proposer_model(&self) -> String {
-        let provider = self.skills_reflection_provider();
-        let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
-        super::normalize_background_model_for_provider(
-            &catalog,
-            &provider,
-            &self.config.skills.proposer_model,
-        )
+    /// The V2 workflow proposer follows the effective user-selected model.
+    /// It deliberately ignores the legacy `[skills]` proposer override and
+    /// fallback list so a draft can never be attributed to another model.
+    pub fn workflow_learning_active_model(&self) -> ActiveModelIdentity {
+        let configured = self.effective_default_model();
+        ActiveModelIdentity {
+            provider: configured.provider.clone(),
+            model: captain_runtime::agent_loop::strip_provider_prefix(
+                &configured.model,
+                &configured.provider,
+            ),
+        }
     }
 
-    pub(crate) fn resolve_skills_proposer_fallbacks(&self) -> Vec<String> {
-        let provider = self.skills_reflection_provider();
-        let primary = self.resolve_skills_proposer_model();
-        let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
-        super::normalize_background_fallbacks_for_provider(
-            &catalog,
-            &provider,
-            &primary,
-            &self.config.skills.fallback_models,
-        )
-    }
-
-    /// Build the proposer completer for v3.13b. Same shape as the
-    /// reflection completer: fall back to NoopCompleter on init
-    /// failure so the detector + policy stages stay observable.
-    pub(crate) fn build_proposer_completer(&self) -> Arc<dyn ReflectionCompleter> {
-        let provider = self.skills_reflection_provider();
-        let env_var = self
-            .config
-            .skills
-            .reflection_api_key_env
-            .clone()
-            .unwrap_or_else(|| self.config.resolve_api_key_env(&provider));
-        let api_key = std::env::var(&env_var).ok();
-        let resolved_model = self.resolve_skills_proposer_model();
+    /// Build a strict workflow-learning proposer bound to that exact model.
+    /// Driver initialization errors are returned; no no-op or fallback model
+    /// is substituted.
+    pub fn build_workflow_learning_proposer(&self) -> Result<WorkflowDraftProposer, String> {
+        let configured = self.effective_default_model();
+        let identity = self.workflow_learning_active_model();
+        let api_key = if configured.api_key_env.is_empty() {
+            self.resolve_credential(&self.config.resolve_api_key_env(&configured.provider))
+        } else {
+            self.resolve_credential(&configured.api_key_env)
+        };
         let driver_config = captain_runtime::llm_driver::DriverConfig {
-            provider: provider.clone(),
+            provider: configured.provider.clone(),
             api_key,
-            base_url: self.lookup_provider_url(&provider),
+            base_url: configured
+                .base_url
+                .clone()
+                .or_else(|| self.lookup_provider_url(&configured.provider)),
             skip_permissions: true,
         };
-        match captain_runtime::drivers::create_driver(&driver_config) {
-            Ok(driver) => {
-                info!(
-                    provider = %provider,
-                    configured_model = %self.config.skills.proposer_model,
-                    model = %resolved_model,
-                    "v3.13b skill proposer: LlmDriverCompleter active"
-                );
-                Arc::new(LlmDriverCompleter::new(driver))
-            }
-            Err(e) => {
-                warn!(
-                    provider = %provider,
-                    error = %e,
-                    "v3.13b skill proposer: driver init failed — falling back to Noop"
-                );
-                Arc::new(NoopCompleter)
-            }
-        }
+        let driver = captain_runtime::drivers::create_driver_with_quota_observer(
+            &driver_config,
+            self.quota_observer_for(&configured.provider),
+        )
+        .map_err(|error| {
+            format!(
+                "active workflow proposer driver {}:{} unavailable: {error}",
+                identity.provider, identity.model
+            )
+        })?;
+        let completer: Arc<dyn ReflectionCompleter> = Arc::new(LlmDriverCompleter {
+            driver,
+            max_tokens: 32_768,
+            temperature: 0.1,
+        });
+        info!(
+            provider = %identity.provider,
+            model = %identity.model,
+            "workflow learning V2 proposer bound to effective active model without fallback"
+        );
+        Ok(WorkflowDraftProposer::new(
+            completer,
+            identity,
+            Duration::from_secs(self.config.skills.reflection_timeout_secs.max(1)),
+            self.config.language.clone(),
+        ))
     }
 
     /// Build the reflection completer for v3.12d. Uses
@@ -235,27 +206,6 @@ mod tests {
     use captain_types::config::KernelConfig;
 
     #[test]
-    fn skill_diff_config_deduplicates_generated_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home_dir = tmp.path().join("captain-skill-diff-root-test");
-        let config = KernelConfig {
-            home_dir: home_dir.clone(),
-            data_dir: home_dir.join("data"),
-            skills: captain_types::config::SkillsConfig {
-                generated_dir: "skills".to_string(),
-                ..Default::default()
-            },
-            ..KernelConfig::default()
-        };
-        let kernel = CaptainKernel::boot_with_config(config).expect("kernel boot");
-
-        let diff_config = kernel.skill_diff_config();
-
-        assert_eq!(diff_config.roots, vec![home_dir.join("skills")]);
-        kernel.shutdown();
-    }
-
-    #[test]
     fn learning_reflection_provider_override_remaps_legacy_codex_background_models() {
         let tmp = tempfile::tempdir().unwrap();
         let home_dir = tmp.path().join("captain-reflection-model-test");
@@ -275,6 +225,37 @@ mod tests {
 
         assert_eq!(kernel.resolve_learning_reflection_model(), "gpt-5.5");
         assert!(kernel.resolve_learning_reflection_fallbacks().is_empty());
+        kernel.shutdown();
+    }
+
+    #[test]
+    fn workflow_learning_uses_effective_default_not_legacy_proposer_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("captain-workflow-proposer-model-test");
+        let mut config = KernelConfig {
+            home_dir: home_dir.clone(),
+            data_dir: home_dir.join("data"),
+            ..KernelConfig::default()
+        };
+        config.default_model.provider = "codex".to_string();
+        config.default_model.model = "codex/gpt-5.6-sol".to_string();
+        config.skills = toml::from_str(
+            r#"
+            reflection_provider = "anthropic"
+            proposer_model = "claude-haiku-4.5"
+            fallback_models = ["claude-sonnet-4.6"]
+            "#,
+        )
+        .expect("legacy skills keys remain harmless during deserialization");
+        let kernel = CaptainKernel::boot_with_config(config).expect("kernel boot");
+
+        assert_eq!(
+            kernel.workflow_learning_active_model(),
+            ActiveModelIdentity {
+                provider: "codex".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+            }
+        );
         kernel.shutdown();
     }
 }

@@ -198,11 +198,7 @@ fn test_captain_prompt_teaches_phase_b_security_constraints() {
 }
 
 #[test]
-fn test_captain_prompt_invites_scaffold_skill_proactively() {
-    // Mirror of the memory_save alignment: the prompt must explicitly
-    // invite Sonnet to capture repeatable workflows via scaffold_skill,
-    // otherwise the agent will solve the same problem from scratch
-    // session after session.
+fn test_captain_prompt_routes_repeatable_workflows_through_learning_v2() {
     let prompt = CAPTAIN_SYSTEM_PROMPT;
     assert!(
         prompt.contains("EXTENSIBILITÉ"),
@@ -213,16 +209,16 @@ fn test_captain_prompt_invites_scaffold_skill_proactively() {
         "CAPTAIN_SYSTEM_PROMPT must name scaffold_skill"
     );
     assert!(
-        prompt.contains("WORKFLOW RÉPÉTABLE") || prompt.contains("workflow répétable"),
-        "section must spell out the repeatable-workflow trigger"
+        prompt.contains("Learning V2") && prompt.contains("workflow_learning_list"),
+        "repeatable workflows must route through the native Learning V2 control plane"
     );
     assert!(
-        prompt.contains("skill_search") && prompt.contains("skill_refinement_propose"),
-        "Captain must search existing skills before creating duplicates and refine instead when appropriate"
+        prompt.contains("ne contourne jamais") && prompt.contains("demande manuelle explicite"),
+        "scaffold_skill must not bypass staging, tests, canary, rollback, or operator approval"
     );
     assert!(
-        prompt.contains("N'attends pas forcément 5 répétitions"),
-        "non-trivial reusable discoveries must be capturable without waiting for repeated pattern mining"
+        prompt.contains("skill_refinement_propose"),
+        "existing skills must retain the separate refinement approval path"
     );
     assert!(
         prompt.contains("Auto-amélioration contrôlée"),
@@ -233,8 +229,8 @@ fn test_captain_prompt_invites_scaffold_skill_proactively() {
         "must name the self-improvement review tool"
     );
     assert!(
-        prompt.contains("attends approbation explicite"),
-        "critical self-improvements must require explicit approval"
+        prompt.contains("attends l'action humaine exacte"),
+        "critical self-improvements must require an exact human action"
     );
 }
 

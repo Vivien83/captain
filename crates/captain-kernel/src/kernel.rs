@@ -85,6 +85,8 @@ mod kernel_boot_registries;
 mod kernel_boot_restore_agents;
 #[path = "kernel_boot_restore_tool_runs.rs"]
 mod kernel_boot_restore_tool_runs;
+#[path = "kernel_boot_workflow_learning.rs"]
+mod kernel_boot_workflow_learning;
 #[path = "kernel_capspec_management.rs"]
 mod kernel_capspec_management;
 #[path = "kernel_capspec_projection.rs"]
@@ -212,6 +214,23 @@ mod kernel_trigger_runtime;
 mod kernel_usage_runtime;
 #[path = "kernel_user_facts.rs"]
 mod kernel_user_facts;
+#[path = "kernel_workflow_learning_activation.rs"]
+mod kernel_workflow_learning_activation;
+#[cfg(test)]
+#[path = "kernel_workflow_learning_activation_tests.rs"]
+mod kernel_workflow_learning_activation_tests;
+#[path = "kernel_workflow_learning_activation_worker.rs"]
+mod kernel_workflow_learning_activation_worker;
+#[path = "kernel_workflow_learning_operator.rs"]
+mod kernel_workflow_learning_operator;
+#[path = "kernel_workflow_learning_outbox.rs"]
+mod kernel_workflow_learning_outbox;
+#[path = "kernel_workflow_learning_snooze.rs"]
+mod kernel_workflow_learning_snooze;
+#[path = "kernel_workflow_learning_test_worker.rs"]
+mod kernel_workflow_learning_test_worker;
+#[path = "kernel_workflow_learning_worker.rs"]
+mod kernel_workflow_learning_worker;
 #[path = "kernel_workflow_runtime.rs"]
 mod kernel_workflow_runtime;
 #[path = "kernel_workspace_security.rs"]
@@ -230,6 +249,7 @@ use kernel_boot_llm::build_boot_llm_driver;
 use kernel_boot_registries::build_boot_registries;
 use kernel_boot_restore_agents::restore_persisted_agents;
 use kernel_boot_restore_tool_runs::restore_persisted_tool_runs;
+use kernel_boot_workflow_learning::reconcile_workflow_learning;
 pub use kernel_capspec_telegram::{CapSpecTelegramPrompt, CapSpecTelegramPromptKind};
 pub use kernel_delivery_tracker::DeliveryTracker;
 #[cfg(test)]
@@ -284,6 +304,8 @@ pub struct CaptainKernel {
     pub model_catalog: std::sync::RwLock<captain_runtime::model_catalog::ModelCatalog>,
     /// Serializes durable Codex model update state mutations.
     pub(crate) codex_model_update_lock: std::sync::Mutex<()>,
+    /// Serializes durable Captain runtime update state mutations.
+    pub(crate) runtime_update_lock: std::sync::Mutex<()>,
     /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
     pub skill_registry: std::sync::RwLock<captain_skills::registry::SkillRegistry>,
     /// Versioned readable capability registry.
@@ -455,31 +477,28 @@ ORCHESTRATION:\n\
 - agent_delegate(id, task, max_tokens) = assigner une tâche avec budget.\n\
 - agent_correct(id, message) = corriger un agent en live.\n\n\
 EXTENSIBILITÉ — tu peux te rendre plus capable:\n\
-- Quand tu résous un WORKFLOW RÉPÉTABLE (suite d'API, check récurrent,\n\
-  procédure manuelle, debug, convention projet, commande CLI), capitalise-le\n\
-  au lieu de juste répondre. Commence par skill_search/capability_search pour\n\
-  éviter un doublon. Si un skill existe déjà, propose un skill_refinement_propose\n\
-  avec snapshot; sinon propose ou scaffold un skill. Le skill doit contenir\n\
-  conditions de déclenchement, étapes numérotées, commandes/API exactes si\n\
-  connues, pièges et vérification.\n\
-- N'attends pas forcément 5 répétitions : une découverte non triviale et\n\
-  réutilisable (nouvel endpoint documenté, route d'outil fiable, recovery\n\
-  validé) mérite au minimum mémoire déclarative + proposition de skill ou de\n\
-  refinement selon le cas.\n\
-- Quand une INTÉGRATION TIERCE manque (Slack, Notion, monitoring,\n\
-  paiement), propose un scaffold_skill plutôt que d'abandonner.\n\
-- Si une CAPABILITY peut servir à d'autres agents, capture-la — tu fais\n\
-  grandir Captain à chaque skill créé.\n\
+- Les workflows réellement exécutés sont observés automatiquement par Skill\n\
+  Learning V2. Ne crée pas de skill, CapSpec ou automation depuis une simple\n\
+  intuition conversationnelle et ne contourne jamais son staging, ses tests,\n\
+  sa carte opérateur, son canary ou son rollback avec scaffold_skill.\n\
+- Utilise workflow_learning_list pour expliquer les workflows détectés. Les\n\
+  décisions restent exclusivement dans les cartes authentifiées Telegram,\n\
+  TUI, Web ou Desktop.\n\
+- scaffold_skill reste réservé à une demande manuelle explicite. Pour un skill\n\
+  existant réellement utilisé, skill_refinement_propose garde son snapshot et\n\
+  son approbation séparée.\n\
 - Auto-amélioration contrôlée : après une tâche longue/tool-heavy, un\n\
   échec répété ou un `Security blocked`, appelle self_improvement_review\n\
-  pour inspecter les learnings, bugs système et proposals. Si tu détectes\n\
+  pour inspecter les learnings, bugs système, raffinements et workflows\n\
+  durables. Si tu détectes\n\
   un défaut reproductible de Captain, enregistre-le via system_bug_report\n\
   avec une description générique sans secrets ni noms privés. Apprentissage non critique :\n\
   memory_save est autorisé et doit produire un feedback chat 🧠.\n\
   Changement critique (skill, config, goal, routing, prompt, comportement\n\
-  global) : rends la proposition visible, puis attends approbation explicite\n\
-  via learning_review_decide, skill_proposal_decide ou ask_user avant de\n\
-  muter durablement. Quand un apprentissage change ton comportement futur,\n\
+  global) : rends la proposition visible puis attends l'action humaine exacte.\n\
+  Les workflows appris se décident uniquement via leur carte authentifiée;\n\
+  ask_user ne remplace pas cette preuve. Quand un apprentissage change ton\n\
+  comportement futur,\n\
   dis explicitement à l'utilisateur ce qui change et comment tu agiras la\n\
   prochaine fois. Si la préférence est ambiguë, pose une question courte avant\n\
   de mémoriser ou d'appliquer la règle.\n\n\
@@ -719,6 +738,7 @@ impl CaptainKernel {
             auth: boot_core.auth,
             model_catalog: std::sync::RwLock::new(boot_core.model_catalog),
             codex_model_update_lock: std::sync::Mutex::new(()),
+            runtime_update_lock: std::sync::Mutex::new(()),
             skill_registry: std::sync::RwLock::new(skill_registry),
             capspec_registry: boot_capspec.registry,
             capspec_executor: boot_capspec.executor,
@@ -766,6 +786,7 @@ impl CaptainKernel {
 
         restore_persisted_agents(&kernel);
         restore_persisted_tool_runs(&kernel);
+        reconcile_workflow_learning(&kernel);
         ensure_default_captain(&kernel);
         import_legacy_tui_sessions(&kernel);
 
@@ -1486,18 +1507,9 @@ impl KernelHandle for CaptainKernel {
             .await
     }
 
-    fn skill_proposal_list(&self, limit: usize) -> Result<serde_json::Value, String> {
-        self.handle_skill_proposal_list(limit)
-    }
-
-    async fn skill_proposal_decide(
-        &self,
-        proposal_id: &str,
-        approve: bool,
-        decided_by: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        self.handle_skill_proposal_decide(proposal_id, approve, decided_by)
-            .await
+    fn workflow_learning_list(&self, limit: usize) -> Result<serde_json::Value, String> {
+        let projection = CaptainKernel::workflow_learning_list(self, limit)?;
+        serde_json::to_value(projection).map_err(|error| error.to_string())
     }
 
     fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String> {

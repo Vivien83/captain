@@ -1,9 +1,6 @@
-use crate::event_bus::EventBus;
-use captain_memory::skill_proposals::Proposal;
 use captain_runtime::outcome_detector::ClassifiedSignal;
 use captain_runtime::reflection_job::ReflectionBatch;
 use captain_types::agent::{AgentEntry, AgentId, ScheduleMode};
-use captain_types::event::{ChatStreamEvent, Event, EventPayload, EventTarget};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -22,7 +19,19 @@ impl CaptainKernel {
         let learning_aggressiveness = self.config.learning.effective_autonomy_aggressiveness();
         self.start_learning_pipeline(learning_aggressiveness);
         self.start_checkpoint_summarizer_if_configured();
-        self.start_skill_synthesizer_pipeline(learning_aggressiveness);
+        super::kernel_workflow_learning_worker::spawn_workflow_learning_worker(Arc::clone(self));
+        super::kernel_workflow_learning_test_worker::spawn_workflow_learning_test_worker(
+            Arc::clone(self),
+        );
+        super::kernel_workflow_learning_activation_worker::spawn_workflow_learning_activation_worker(
+            Arc::clone(self),
+        );
+        super::kernel_workflow_learning_outbox::spawn_workflow_learning_outbox_worker(Arc::clone(
+            self,
+        ));
+        super::kernel_workflow_learning_snooze::spawn_workflow_learning_snooze_worker(Arc::clone(
+            self,
+        ));
         self.restore_persisted_hands();
         self.start_registry_background_agent_loops();
         self.spawn_runtime_service_loops();
@@ -42,6 +51,7 @@ impl CaptainKernel {
         captain_runtime::active_project::install(&self.config.home_dir);
         crate::builtin_crons::ensure_all(self);
         crate::codex_model_updates::spawn_codex_model_catalog_monitor(Arc::clone(self));
+        crate::release_updates::spawn_runtime_update_monitor(Arc::clone(self));
         crate::provider_quota_monitor::spawn_codex_provider_quota_monitor(Arc::clone(self));
         crate::milestone_alerts::spawn_deadline_alert_task(Arc::clone(self));
         crate::ephemeral_agents::spawn_ephemeral_agent_reaper(Arc::clone(self));
@@ -62,13 +72,7 @@ impl CaptainKernel {
                     captain_runtime::outcome_detector::OutcomeDetector::spawn(signal_rx, 256);
                 let (reflection_model, reflection_rx) =
                     self.spawn_learning_reflection_consumer(classified_rx);
-                let (declarative_rx, procedural_skill_rx) =
-                    self.spawn_cognitive_learning_router(reflection_rx, learning_aggressiveness);
-                spawn_skill_proposal_event_publisher(
-                    self.event_bus.clone(),
-                    self.config.language.clone(),
-                    procedural_skill_rx,
-                );
+                let declarative_rx = self.spawn_cognitive_learning_router(reflection_rx);
                 let filtered_rx = self.spawn_learning_memory_policy(declarative_rx);
                 self.spawn_learning_memory_committer(filtered_rx, reflection_model.clone());
                 info!(
@@ -105,22 +109,10 @@ impl CaptainKernel {
     fn spawn_cognitive_learning_router(
         &self,
         reflection_rx: mpsc::Receiver<ReflectionBatch>,
-        learning_aggressiveness: f32,
-    ) -> (mpsc::Receiver<ReflectionBatch>, mpsc::Receiver<Proposal>) {
-        let cognitive_skill_policy = if self.config.skills.enabled {
-            Some(self.skill_proposal_policy(learning_aggressiveness))
-        } else {
-            None
-        };
-        let (_cog_handle, declarative_rx, procedural_skill_rx) =
-            captain_runtime::cognitive_router::spawn_router(
-                reflection_rx,
-                cognitive_skill_policy,
-                self.memory.usage_conn(),
-                self.config.language.clone(),
-                64,
-            );
-        (declarative_rx, procedural_skill_rx)
+    ) -> mpsc::Receiver<ReflectionBatch> {
+        let (_cog_handle, declarative_rx) =
+            captain_runtime::cognitive_router::spawn_router(reflection_rx, 64);
+        declarative_rx
     }
 
     fn spawn_learning_memory_policy(
@@ -179,70 +171,6 @@ impl CaptainKernel {
         }
     }
 
-    fn start_skill_synthesizer_pipeline(self: &Arc<Self>, learning_aggressiveness: f32) {
-        if self.config.skills.enabled {
-            let mut det_cfg: captain_runtime::pattern_detector::DetectorConfig =
-                (&self.config.skills).into();
-            det_cfg.apply_autonomy_aggressiveness(learning_aggressiveness);
-            let effective_pattern_threshold = det_cfg.threshold;
-            if let Some(candidate_rx) =
-                captain_runtime::pattern_detector::install(self.memory.usage_conn(), det_cfg, 64)
-            {
-                let mut proposer_cfg: captain_runtime::skill_proposer::ProposerConfig =
-                    (&self.config.skills).into();
-                proposer_cfg.apply_autonomy_aggressiveness(learning_aggressiveness);
-                proposer_cfg.primary_model = self.resolve_skills_proposer_model();
-                proposer_cfg.fallback_models = self.resolve_skills_proposer_fallbacks();
-                proposer_cfg.language = self.config.language.clone();
-                let completer = self.build_proposer_completer();
-                let (_prop_handle, proposal_rx) = captain_runtime::skill_proposer::spawn_consumer(
-                    candidate_rx,
-                    completer,
-                    proposer_cfg,
-                    self.memory.usage_conn(),
-                    32,
-                );
-                let policy = self.skill_proposal_policy(learning_aggressiveness);
-                let (_pol_handle, enqueued_rx) = captain_runtime::proposal_policy::spawn_middleware(
-                    proposal_rx,
-                    policy,
-                    self.memory.usage_conn(),
-                    "captain".to_string(),
-                    32,
-                );
-                spawn_skill_proposal_event_publisher(
-                    self.event_bus.clone(),
-                    self.config.language.clone(),
-                    enqueued_rx,
-                );
-                info!(
-                    mode = ?self.config.skills.mode,
-                    threshold = effective_pattern_threshold,
-                    autonomy_aggressiveness = learning_aggressiveness,
-                    model = %self.resolve_skills_proposer_model(),
-                    "v3.13a-e skill synthesizer pipeline live"
-                );
-            }
-        } else {
-            info!("v3.13 skill synthesizer disabled via [skills] enabled=false");
-        }
-    }
-
-    fn skill_proposal_policy(
-        &self,
-        learning_aggressiveness: f32,
-    ) -> Arc<captain_runtime::proposal_policy::ProposalPolicy> {
-        let mut policy_cfg: captain_runtime::proposal_policy::PolicyConfig =
-            (&self.config.skills).into();
-        policy_cfg.apply_autonomy_aggressiveness(learning_aggressiveness);
-        Arc::new(
-            captain_runtime::proposal_policy::ProposalPolicy::with_skill_diff(
-                policy_cfg,
-                self.skill_diff_config(),
-            ),
-        )
-    }
-
     fn start_registry_background_agent_loops(self: &Arc<Self>) {
         let bg_agents = background_agent_specs(&self.registry.list());
         if !bg_agents.is_empty() {
@@ -287,31 +215,6 @@ impl CaptainKernel {
         self.spawn_a2a_discovery_if_configured();
         self.spawn_whatsapp_gateway_if_configured();
     }
-}
-
-fn spawn_skill_proposal_event_publisher(
-    event_bus: EventBus,
-    language: String,
-    mut rx: mpsc::Receiver<Proposal>,
-) {
-    tokio::spawn(async move {
-        while let Some(proposal) = rx.recv().await {
-            let payload = EventPayload::ChatStream(ChatStreamEvent::SkillProposalQueued {
-                proposal_id: proposal.id,
-                name: proposal.name,
-                description: proposal.description,
-                trigger_hint: proposal.trigger_hint,
-                tool_sequence: proposal.tool_sequence,
-                confidence: proposal.confidence,
-                family: Some(proposal.family),
-                language: Some(language.clone()),
-                source_agent_id: proposal.source_agent_id,
-                channel: proposal.origin_channel,
-            });
-            let event = Event::new(AgentId::default(), EventTarget::Broadcast, payload);
-            event_bus.publish(event).await;
-        }
-    });
 }
 
 fn background_agent_specs(entries: &[AgentEntry]) -> Vec<(AgentId, String, ScheduleMode)> {

@@ -17,7 +17,7 @@ fn memory_queued_line_truncates_long_object() {
 }
 
 #[test]
-fn skill_proposal_line_truncates_description_and_shortens_id() {
+fn skill_proposal_line_marks_archive_and_points_to_learning() {
     let description = "b".repeat(101);
     let line = skill_proposal_line(
         "proposal-abcdef",
@@ -30,7 +30,9 @@ fn skill_proposal_line_truncates_description_and_shortens_id() {
 
     assert!(line.contains(&format!("— {}…", "b".repeat(98))));
     assert!(line.contains(" · famille: devops   (87%, proposal)"));
-    assert!(line.ends_with(" · /skills-proposed"));
+    assert!(line.starts_with("skill archivé v3.13"));
+    assert!(line.ends_with(" · consulte Learning"));
+    assert!(!line.contains("/skills-proposed"));
 }
 
 #[test]

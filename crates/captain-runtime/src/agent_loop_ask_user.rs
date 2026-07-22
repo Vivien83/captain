@@ -19,6 +19,12 @@ pub(crate) async fn try_handle_ask_user_tool_call(
         return false;
     }
 
+    crate::workflow_learning_runtime::record_tool_started(
+        &tool_call.id,
+        &tool_call.name,
+        &tool_call.input,
+    );
+
     let question = tool_call
         .input
         .get("question")
@@ -60,12 +66,25 @@ pub(crate) async fn try_handle_ask_user_tool_call(
         input_summary: question,
         output_summary: answer.clone(),
     });
+    let response_unavailable =
+        answer.starts_with("[No response") || answer.starts_with("[ask_user not");
     tool_result_blocks.push(ContentBlock::ToolResult {
         tool_use_id: tool_call.id.clone(),
         tool_name: "ask_user".to_string(),
         content: answer,
         is_error: false,
     });
+    crate::workflow_learning_runtime::record_tool_finished(
+        &tool_call.id,
+        &tool_call.name,
+        response_unavailable,
+        0,
+        if response_unavailable {
+            "user_response_unavailable"
+        } else {
+            "user_response_received"
+        },
+    );
 
     true
 }

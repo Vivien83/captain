@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 bash
 ```
 
 ## Global Options
@@ -205,7 +205,7 @@ captain status [--json]
 
 **Behavior:**
 
-- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, and provider-reported subscription windows.
+- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, provider-reported subscription windows, and the durable Captain release monitor.
 - If no daemon is running: boots an in-process kernel and shows persisted state. Displays a warning that the daemon is not running.
 - The principal `captain` agent is expected to match the global `[default_model]`. On startup, Captain repairs stale persisted principal-agent manifests so `captain status` does not report a global provider/model that differs from the active Captain agent.
 - Provider subscription state is never inferred from local usage. `unavailable`
@@ -219,6 +219,39 @@ captain status [--json]
 captain status
 
 captain status --json | jq '.agent_count'
+```
+
+---
+
+### captain update
+
+Download, verify, atomically install, and restart on an official Captain host
+bundle.
+
+```bash
+captain update [--check] [--yes] [--version <release-tag>]
+```
+
+| Option | Description |
+|---|---|
+| `--check` | Resolve the compatible release channel without installing. |
+| `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.9`. |
+
+Stable installations do not opt into prereleases. An existing prerelease may
+advance to a newer prerelease or the corresponding stable version. The archive
+and its `.sha256` asset are both mandatory. Captain stages the binary beside
+the installed target, performs an atomic swap, and then restarts through the
+platform service manager. Inside a container the command refuses to mutate the
+image and returns an orchestrator-owned procedure.
+
+The daemon independently checks after startup and every 12 hours. An exact
+Telegram operator can update, defer for 24 hours, or refuse only the offered
+version from a Rich card. These callbacks never enter a model turn. Inspect the
+same durable state with:
+
+```bash
+captain status --json | jq '.runtime_update'
 ```
 
 ---

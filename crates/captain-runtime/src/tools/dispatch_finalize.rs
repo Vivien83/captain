@@ -9,16 +9,16 @@ use tracing::{info, warn};
 use crate::kernel_handle::KernelHandle;
 use crate::mcp;
 use crate::tool_cache::{CachedToolResult, ToolKind, ToolResultCache};
+use crate::workflow_learning_runtime::record_tool_finished;
 
 use super::{
-    current_origin_channel, is_retryable_tool, is_write_tool_that_must_not_be_masked,
-    render_error_with_suggestion, tool_config_read, tool_cron_cancel, tool_cron_create,
-    tool_cron_list, tool_cron_update, tool_file_trigger_list, tool_file_trigger_register,
-    tool_file_trigger_remove, tool_file_trigger_set_enabled, tool_knowledge_add_entity,
-    tool_knowledge_add_relation, tool_knowledge_query, tool_memory_recall,
-    tool_memory_recall_mempalace, tool_memory_save, tool_memory_store, tool_memory_store_mempalace,
-    tool_secret_read, tool_todo_complete, tool_todo_create, tool_todo_delete, tool_todo_list,
-    tool_todo_reopen,
+    is_retryable_tool, is_write_tool_that_must_not_be_masked, render_error_with_suggestion,
+    tool_config_read, tool_cron_cancel, tool_cron_create, tool_cron_list, tool_cron_update,
+    tool_file_trigger_list, tool_file_trigger_register, tool_file_trigger_remove,
+    tool_file_trigger_set_enabled, tool_knowledge_add_entity, tool_knowledge_add_relation,
+    tool_knowledge_query, tool_memory_recall, tool_memory_recall_mempalace, tool_memory_save,
+    tool_memory_store, tool_memory_store_mempalace, tool_secret_read, tool_todo_complete,
+    tool_todo_create, tool_todo_delete, tool_todo_list, tool_todo_reopen,
 };
 
 pub(crate) struct DispatchFinalizeContext<'a> {
@@ -36,19 +36,46 @@ pub(crate) async fn finalize_dispatch_result(
     ctx: DispatchFinalizeContext<'_>,
     result: Result<String, String>,
 ) -> ToolResult {
-    let (result, recovered_after_retry) = retry_if_transient(&ctx, result).await;
+    let (result, retry_count) = retry_if_transient(&ctx, result).await;
+    let recovered_after_retry = retry_count > 0 && result.is_ok();
+    let dispatch_failed = result.is_err();
     let tool_result = result_to_tool_result(&ctx, result, recovered_after_retry);
     update_cache(&ctx, &tool_result).await;
-    emit_learning_signal(&ctx, &tool_result, recovered_after_retry);
+    emit_learning_signal(&ctx, &tool_result, recovered_after_retry, dispatch_failed);
+    let (learning_is_error, output_class) =
+        learning_outcome(dispatch_failed, tool_result.is_error, recovered_after_retry);
+    record_tool_finished(
+        ctx.tool_use_id,
+        ctx.tool_name,
+        learning_is_error,
+        retry_count,
+        output_class,
+    );
     tool_result
+}
+
+fn learning_outcome(
+    dispatch_failed: bool,
+    visible_tool_error: bool,
+    recovered_after_retry: bool,
+) -> (bool, &'static str) {
+    if recovered_after_retry {
+        (false, "retry_success")
+    } else if dispatch_failed && !visible_tool_error {
+        (true, "transient_unavailable")
+    } else if visible_tool_error {
+        (true, "tool_error")
+    } else {
+        (false, "tool_success")
+    }
 }
 
 async fn retry_if_transient(
     ctx: &DispatchFinalizeContext<'_>,
     result: Result<String, String>,
-) -> (Result<String, String>, bool) {
+) -> (Result<String, String>, u32) {
     if result.is_ok() || !is_retryable_tool(ctx.tool_name) {
-        return (result, false);
+        return (result, 0);
     }
     warn!(
         tool_name = ctx.tool_name,
@@ -98,9 +125,9 @@ async fn retry_if_transient(
     };
     if retry.is_ok() {
         info!(tool_name = ctx.tool_name, "Retry succeeded");
-        (retry, true)
+        (retry, 1)
     } else {
-        (retry, false)
+        (retry, 1)
     }
 }
 
@@ -191,10 +218,11 @@ fn emit_learning_signal(
     ctx: &DispatchFinalizeContext<'_>,
     tool_result: &ToolResult,
     recovered_after_retry: bool,
+    dispatch_failed: bool,
 ) {
     let duration_ms = ctx.dispatch_start.elapsed().as_millis() as u64;
     let agent_id = ctx.caller_agent_id.unwrap_or("unknown").to_string();
-    let signal = if tool_result.is_error {
+    let signal = if dispatch_failed || tool_result.is_error {
         crate::learning_bus::LearningSignal::ToolFailure {
             agent_id: agent_id.clone(),
             tool: ctx.tool_name.to_string(),
@@ -217,14 +245,6 @@ fn emit_learning_signal(
         }
     };
     let _ = crate::learning_bus::emit(signal);
-
-    if !tool_result.is_error {
-        crate::pattern_detector::record_with_channel(
-            &agent_id,
-            ctx.tool_name,
-            current_origin_channel(),
-        );
-    }
 }
 
 fn host_os_label() -> &'static str {
@@ -236,5 +256,27 @@ fn host_os_label() -> &'static str {
         "windows"
     } else {
         "unknown"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::learning_outcome;
+
+    #[test]
+    fn learning_outcome_never_counts_a_masked_dispatch_failure_as_success() {
+        assert_eq!(
+            learning_outcome(true, false, false),
+            (true, "transient_unavailable")
+        );
+        assert_eq!(learning_outcome(true, true, false), (true, "tool_error"));
+        assert_eq!(
+            learning_outcome(false, false, true),
+            (false, "retry_success")
+        );
+        assert_eq!(
+            learning_outcome(false, false, false),
+            (false, "tool_success")
+        );
     }
 }

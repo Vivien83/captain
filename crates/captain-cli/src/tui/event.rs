@@ -5,6 +5,9 @@ use captain_kernel::CaptainKernel;
 use captain_runtime::agent_loop::AgentLoopResult;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_types::agent::AgentId;
+use captain_types::workflow_learning::{
+    ProposalCardAction, ProposalOperatorResolution, WorkflowLearningList, WorkflowLearningView,
+};
 use ratatui::crossterm::event::{
     self, Event as CtEvent, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
 };
@@ -33,7 +36,7 @@ use super::screens::{
     sessions::SessionInfo,
     settings::{ModelInfo, ProviderInfo, TestResult, ToolInfo},
     skills::{ClawHubResult, McpServerInfo, SkillInfo},
-    skills_proposed::{Pattern, Proposal, SkillsMetrics},
+    skills_proposed::SkillsMetrics,
     templates::ProviderAuth,
     triggers::TriggerInfo,
     usage::{AgentUsage, ModelUsage, UsageSummary},
@@ -353,14 +356,16 @@ pub enum AppEvent {
     },
     /// Phase-h.1: a learning review item was approved or denied.
     LearningDecided { id: String, approved: bool },
-    /// Phase-h.2: Skills Proposed data loaded (proposals + patterns + metrics).
+    /// Durable learned workflows loaded from the shared runtime projection.
     SkillsProposedLoaded {
-        proposals: Vec<crate::tui::screens::skills_proposed::Proposal>,
-        patterns: Vec<crate::tui::screens::skills_proposed::Pattern>,
+        workflows: Vec<WorkflowLearningView>,
         metrics: Option<crate::tui::screens::skills_proposed::SkillsMetrics>,
     },
-    /// Phase-h.2: a skill proposal was approved or denied.
-    SkillProposalDecided { id: String, approved: bool },
+    /// An exact workflow-learning action was accepted by the daemon.
+    WorkflowProposalDecided {
+        proposal_id: String,
+        action: ProposalCardAction,
+    },
     /// Phase-h.3: cron jobs list loaded.
     CronJobsLoaded(Vec<crate::tui::screens::cron::CronJob>),
     /// Phase-h.3: a cron job mutation completed (toggle/run/delete).
@@ -2837,109 +2842,34 @@ pub fn spawn_decide_learning(
     });
 }
 
-/// Phase-h.2: fetch Skills Proposed data (proposals + patterns + metrics).
-fn string_array_field(value: &serde_json::Value, key: &str) -> Vec<String> {
-    value[key]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn skill_proposal_from_json(value: &serde_json::Value) -> Proposal {
-    Proposal {
-        id: value["id"].as_str().unwrap_or_default().to_string(),
-        name: value["name"].as_str().unwrap_or_default().to_string(),
-        description: value["description"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        trigger_hint: value["trigger_hint"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        tool_sequence: string_array_field(value, "tool_sequence"),
-        confidence: value["confidence"].as_f64().unwrap_or(0.0),
-        created_at: value["created_at"].as_i64().unwrap_or(0),
-    }
-}
-
-fn skill_proposals_from_payload(body: &serde_json::Value) -> Vec<Proposal> {
-    array_payload(body, "pending")
-        .map(|items| items.iter().map(skill_proposal_from_json).collect())
-        .unwrap_or_default()
-}
-
-fn skill_pattern_from_json(value: &serde_json::Value) -> Pattern {
-    Pattern {
-        hash: value["hash"].as_str().unwrap_or_default().to_string(),
-        agent_id: value["agent_id"].as_str().unwrap_or_default().to_string(),
-        tool_sequence: string_array_field(value, "tool_sequence"),
-        count: value["count"].as_u64().unwrap_or(0),
-        last_seen: value["last_seen"].as_i64().unwrap_or(0),
-    }
-}
-
-fn skill_patterns_from_payload(body: &serde_json::Value) -> Vec<Pattern> {
-    array_payload(body, "patterns")
-        .map(|items| items.iter().map(skill_pattern_from_json).collect())
-        .unwrap_or_default()
-}
-
-fn skills_metrics_from_json(value: &serde_json::Value) -> SkillsMetrics {
-    SkillsMetrics {
-        pending: value["pending"].as_u64().unwrap_or(0),
-        patterns_hot: value["patterns_hot"].as_u64().unwrap_or(0),
-        total_patterns: value["total_patterns"].as_u64().unwrap_or(0),
-        approved: value["approved"].as_u64().unwrap_or(0),
-        denied: value["denied"].as_u64().unwrap_or(0),
-        mode: value["skills_mode"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        enabled: value["skills_enabled"].as_bool().unwrap_or(false),
-    }
-}
-
+/// Fetch the channel-neutral workflow projection used by every operator UI.
 pub fn spawn_fetch_skills_proposed(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = daemon_client();
-            let proposals: Vec<Proposal> = client
-                .get(format!("{base_url}/api/skills/proposals?limit=100"))
+            let result = client
+                .get(format!("{base_url}/api/learning/workflows?limit=100"))
                 .send()
-                .ok()
-                .and_then(|r| r.json::<serde_json::Value>().ok())
-                .map(|body| skill_proposals_from_payload(&body))
-                .unwrap_or_default();
-            let patterns: Vec<Pattern> = client
-                .get(format!(
-                    "{base_url}/api/skills/patterns?threshold=1&window_days=30&limit=50"
-                ))
-                .send()
-                .ok()
-                .and_then(|r| r.json::<serde_json::Value>().ok())
-                .map(|body| skill_patterns_from_payload(&body))
-                .unwrap_or_default();
-            let metrics = client
-                .get(format!("{base_url}/api/skills/metrics"))
-                .send()
-                .ok()
-                .and_then(|r| r.json::<serde_json::Value>().ok())
-                .map(|body| skills_metrics_from_json(&body));
-            let _ = tx.send(AppEvent::SkillsProposedLoaded {
-                proposals,
-                patterns,
-                metrics,
-            });
+                .and_then(reqwest::blocking::Response::error_for_status)
+                .and_then(|response| response.json::<WorkflowLearningList>());
+            match result {
+                Ok(list) => {
+                    let metrics = Some(SkillsMetrics::from_workflows(&list.workflows));
+                    let _ = tx.send(AppEvent::SkillsProposedLoaded {
+                        workflows: list.workflows,
+                        metrics,
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(AppEvent::FetchError(format!(
+                        "Workflow learning fetch failed: {error}"
+                    )));
+                }
+            }
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError(
-                "Skills proposals are only available in daemon mode".to_string(),
+                "Learned workflows are only available in daemon mode".to_string(),
             ));
         }
     });
@@ -2948,114 +2878,99 @@ pub fn spawn_fetch_skills_proposed(backend: BackendRef, tx: mpsc::Sender<AppEven
 #[cfg(test)]
 mod skills_proposed_fetch_tests {
     use super::*;
+    use captain_types::workflow_learning::{
+        ProposalCardState, WorkflowProjectionStatus, WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
+    };
 
     #[test]
-    fn skills_proposed_mapping_accepts_wrapped_payloads() {
-        let proposals = skill_proposals_from_payload(&serde_json::json!({
-            "pending": [
-                {
-                    "id": "proposal-1",
-                    "name": "Summarize release notes",
-                    "description": "Create a reusable release workflow",
-                    "trigger_hint": "When changelog changes",
-                    "tool_sequence": ["rg", "git"],
-                    "confidence": 0.875,
-                    "created_at": 42
-                }
-            ]
-        }));
-        let patterns = skill_patterns_from_payload(&serde_json::json!({
-            "patterns": [
-                {
-                    "hash": "abc123",
-                    "agent_id": "agent-core",
-                    "tool_sequence": ["rg", "cargo"],
-                    "count": 3,
-                    "last_seen": 99
-                }
-            ]
-        }));
-        let metrics = skills_metrics_from_json(&serde_json::json!({
-            "pending": 2,
-            "patterns_hot": 4,
-            "total_patterns": 8,
-            "approved": 5,
-            "denied": 1,
-            "skills_mode": "review",
-            "skills_enabled": true
-        }));
-
-        assert_eq!(proposals.len(), 1);
-        assert_eq!(proposals[0].id, "proposal-1");
-        assert_eq!(proposals[0].tool_sequence, vec!["rg", "git"]);
-        assert!((proposals[0].confidence - 0.875).abs() < f64::EPSILON);
-        assert_eq!(patterns.len(), 1);
-        assert_eq!(patterns[0].hash, "abc123");
-        assert_eq!(patterns[0].tool_sequence, vec!["rg", "cargo"]);
-        assert_eq!(patterns[0].count, 3);
-        assert_eq!(metrics.pending, 2);
-        assert_eq!(metrics.mode, "review");
-        assert!(metrics.enabled);
-    }
-
-    #[test]
-    fn skills_proposed_mapping_accepts_legacy_arrays_and_missing_fields() {
-        let proposals = skill_proposals_from_payload(&serde_json::json!([
-            {
-                "id": "proposal-1",
-                "tool_sequence": ["shell", 42, "git"],
-                "confidence": 0.5
-            },
-            {}
-        ]));
-        let patterns = skill_patterns_from_payload(&serde_json::json!([{}]));
-        let metrics = skills_metrics_from_json(&serde_json::json!({}));
-
-        assert_eq!(proposals.len(), 2);
-        assert_eq!(proposals[0].tool_sequence, vec!["shell", "git"]);
-        assert_eq!(proposals[0].created_at, 0);
-        assert_eq!(proposals[1].id, "");
-        assert_eq!(patterns.len(), 1);
-        assert_eq!(patterns[0].count, 0);
-        assert_eq!(metrics.total_patterns, 0);
-        assert_eq!(metrics.mode, "");
-        assert!(!metrics.enabled);
+    fn shared_projection_deserializes_without_legacy_shape_fallbacks() {
+        let payload = serde_json::json!({
+            "schema_version": WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
+            "returned": 1,
+            "workflows": [{
+                "schema_version": WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
+                "proposal_id": "proposal-1",
+                "decision_version": 4,
+                "state": "proposed",
+                "revision_sha256": null,
+                "kind": null,
+                "name": null,
+                "source_agent_id": "captain",
+                "origin_channel": "telegram",
+                "created_at_unix_ms": 1,
+                "updated_at_unix_ms": 2,
+                "last_error_code": null,
+                "last_error_message": null,
+                "projection_status": "invalid",
+                "projection_error": "missing exact card",
+                "card": null,
+                "installation": null,
+                "timeline": []
+            }]
+        });
+        let list: WorkflowLearningList = serde_json::from_value(payload).unwrap();
+        assert_eq!(list.returned, 1);
+        assert_eq!(list.workflows[0].state, ProposalCardState::Proposed);
+        assert_eq!(
+            list.workflows[0].projection_status,
+            WorkflowProjectionStatus::Invalid
+        );
     }
 }
 
-/// Phase-h.2: POST approve/deny decision for a skill proposal.
-pub fn spawn_decide_skill_proposal(
+/// Submit one exact workflow-learning CAS decision.
+pub fn spawn_decide_workflow_proposal(
     backend: BackendRef,
-    id: String,
-    approve: bool,
+    proposal_id: String,
+    operator_token: String,
+    decision_version: u64,
+    action: ProposalCardAction,
     tx: mpsc::Sender<AppEvent>,
 ) {
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = daemon_client();
-            let url = format!("{base_url}/api/skills/proposals/{id}/decide");
-            let body = serde_json::json!({ "approve": approve });
+            let url = format!("{base_url}/api/learning/workflows/{operator_token}/decide");
+            let body = serde_json::json!({
+                "decision_version": decision_version,
+                "action": action,
+                "surface": "tui"
+            });
             match client.post(&url).json(&body).send() {
-                Ok(r) if r.status().is_success() => {
-                    let _ = tx.send(AppEvent::SkillProposalDecided {
-                        id,
-                        approved: approve,
-                    });
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<ProposalOperatorResolution>() {
+                        Ok(resolution) if resolution.card.proposal_id == proposal_id => {
+                            let _ = tx.send(AppEvent::WorkflowProposalDecided {
+                                proposal_id,
+                                action,
+                            });
+                        }
+                        Ok(_) => {
+                            let _ = tx.send(AppEvent::FetchError(
+                                "Workflow decision returned another proposal".to_string(),
+                            ));
+                        }
+                        Err(error) => {
+                            let _ = tx.send(AppEvent::FetchError(format!(
+                                "Workflow decision response: {error}"
+                            )));
+                        }
+                    }
                 }
-                Ok(r) => {
+                Ok(response) => {
                     let _ = tx.send(AppEvent::FetchError(format!(
-                        "Skill decide failed ({})",
-                        r.status()
+                        "Workflow decision failed ({})",
+                        response.status()
                     )));
                 }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Skill decide: {e}")));
+                Err(error) => {
+                    let _ = tx.send(AppEvent::FetchError(format!("Workflow decision: {error}")));
                 }
             }
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError(
-                "Skill decisions require daemon mode".to_string(),
+                "Workflow decisions require daemon mode".to_string(),
             ));
         }
     });

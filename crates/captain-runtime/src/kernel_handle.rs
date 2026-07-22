@@ -10,69 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::memory_retractions::{load_retractions, MemoryRetraction, MEMORY_RETRACTIONS_KEY};
 
-pub const SKILL_PROPOSAL_APPROVAL_VERIFICATION: &str = "schema_diff_tests_human";
-
-pub fn skill_proposal_approval_decider(decided_by: &str) -> String {
-    format!(
-        "{}:{}",
-        decided_by.trim(),
-        SKILL_PROPOSAL_APPROVAL_VERIFICATION
-    )
-}
-
-pub fn skill_proposal_decider_has_external_validation(decided_by: Option<&str>) -> bool {
-    let Some(raw) = decided_by.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    let Some((label, verification)) = raw.split_once(':') else {
-        return false;
-    };
-    !label.trim().is_empty() && verification.trim() == SKILL_PROPOSAL_APPROVAL_VERIFICATION
-}
-
-pub fn skill_proposal_decider_public_label(decided_by: Option<&str>) -> Option<String> {
-    decided_by
-        .map(str::trim)
-        .and_then(|value| {
-            value
-                .split_once(':')
-                .map(|(label, _)| label)
-                .or(Some(value))
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-#[cfg(test)]
-mod skill_proposal_approval_tests {
-    use super::{
-        skill_proposal_approval_decider, skill_proposal_decider_has_external_validation,
-        skill_proposal_decider_public_label,
-    };
-
-    #[test]
-    fn approval_decider_marks_external_validation() {
-        let decided_by = skill_proposal_approval_decider("web");
-
-        assert_eq!(decided_by, "web:schema_diff_tests_human");
-        assert!(skill_proposal_decider_has_external_validation(Some(
-            &decided_by
-        )));
-    }
-
-    #[test]
-    fn public_label_strips_external_validation_marker() {
-        assert_eq!(
-            skill_proposal_decider_public_label(Some("channel:schema_diff_tests_human")),
-            Some("channel".to_string())
-        );
-        assert!(!skill_proposal_decider_has_external_validation(Some(
-            "channel"
-        )));
-    }
-}
-
 /// Agent info returned by list and discovery operations.
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
@@ -410,24 +347,10 @@ pub trait KernelHandle: Send + Sync {
         Err("learning_review_decide not implemented on this kernel".into())
     }
 
-    /// List pending skill proposals (v3.13c).
-    fn skill_proposal_list(&self, limit: usize) -> Result<serde_json::Value, String> {
+    /// Return the durable, channel-neutral Skill Learning V2 projection.
+    fn workflow_learning_list(&self, limit: usize) -> Result<serde_json::Value, String> {
         let _ = limit;
-        Err("skill_proposal_list not implemented on this kernel".into())
-    }
-
-    /// Approve or deny a pending skill proposal (v3.13d). On approve
-    /// the SkillWriter drops a generated `.md` under the configured
-    /// `[skills] generated_dir`; the resulting path is returned and
-    /// recorded via `mark_written`.
-    async fn skill_proposal_decide(
-        &self,
-        proposal_id: &str,
-        approve: bool,
-        decided_by: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        let _ = (proposal_id, approve, decided_by);
-        Err("skill_proposal_decide not implemented on this kernel".into())
+        Err("workflow_learning_list not implemented on this kernel".into())
     }
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).

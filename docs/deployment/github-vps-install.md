@@ -7,8 +7,8 @@ VPS does not need Rust, Cargo, or a source build.
 
 ```bash
 curl -fsSL \
-  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 The public alpha is a GitHub prerelease, so this command pins its immutable tag
@@ -21,8 +21,8 @@ To pin an immutable release:
 
 ```bash
 curl -fsSL \
-  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 ## Codex Login Before First Start
@@ -32,8 +32,8 @@ it, complete device login, then start it:
 
 ```bash
 curl -fsSL \
-  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 \
+  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_START=0 \
@@ -47,8 +47,8 @@ systemctl start captain        # use systemctl --user for a non-root install
 
 ```bash
 curl -fsSL \
-  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.8/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.8 \
+  https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.9 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=captain.example.com \
     CAPTAIN_YES=1 \

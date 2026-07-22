@@ -81,6 +81,7 @@ fn print_daemon_runtime(body: &serde_json::Value) {
     print_runtime_health_summary(body);
     print_shutdown_drain_summary(body);
     print_disk_summary(body);
+    print_runtime_update_summary(body);
     let channels = &body["channels"];
     let configured = channels["configured_count"]
         .as_u64()
@@ -127,6 +128,43 @@ fn print_daemon_runtime(body: &serde_json::Value) {
 fn print_streaming_summary(body: &serde_json::Value) {
     if let Some(summary) = streaming_status_summary(&body["streaming"]) {
         ui::kv("Streaming", &summary);
+    }
+}
+
+fn print_runtime_update_summary(body: &serde_json::Value) {
+    let update = &body["runtime_update"];
+    if update.is_null() {
+        return;
+    }
+    if let Some(error) = update["error"].as_str() {
+        ui::kv_warn("Captain update", "state unavailable");
+        ui::hint(error);
+        return;
+    }
+    let next = update["next_check_at"].as_str().unwrap_or("unknown");
+    if update["update_in_progress"].as_bool().unwrap_or(false) {
+        ui::kv_warn("Captain update", "installation in progress");
+    } else if let Some(version) = update["pending_version"].as_str() {
+        ui::kv_warn(
+            "Captain update",
+            &format!("{version} available, next check {next}"),
+        );
+    } else if update["last_success_at"].is_string() {
+        ui::kv_ok("Captain update", &format!("current, next check {next}"));
+    } else {
+        ui::kv("Captain update", &format!("first check scheduled {next}"));
+    }
+    if let Some(error) = update["last_error"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+    {
+        ui::hint(error);
+    }
+    let dead = update["dead_notifications"].as_u64().unwrap_or(0);
+    if dead > 0 {
+        ui::hint(&format!(
+            "{dead} update notification(s) exhausted delivery retries; Captain will reopen delivery on the next 12-hour release check."
+        ));
     }
 }
 
@@ -528,6 +566,14 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
         "provider_subscriptions": provider_subscriptions,
         "operator_actions": []
     });
+    let runtime_update = match kernel.runtime_update_snapshot() {
+        Ok(snapshot) => serde_json::to_value(snapshot).unwrap_or_else(
+            |error| serde_json::json!({"status": "unavailable", "error": error.to_string()}),
+        ),
+        Err(error) => {
+            serde_json::json!({"status": "unavailable", "error": error.to_string()})
+        }
+    };
     let runtime_health = in_process_runtime_health(llm_driver_ready, &workload, &disk, &budget);
     let status_body = serde_json::json!({
         "status": "in-process",
@@ -544,6 +590,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
         "workload": workload,
         "disk": disk,
         "budget": budget,
+        "runtime_update": runtime_update,
         "runtime_health": runtime_health,
     });
 
@@ -564,6 +611,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
     print_llm_status(llm_driver_ready, llm_driver_error.as_deref(), false);
     print_runtime_health_summary(&status_body);
     print_disk_summary(&status_body);
+    print_runtime_update_summary(&status_body);
     print_provider_subscription_summary(&status_body["budget"]["provider_subscriptions"], verbose);
     print_in_process_embeddings();
     ui::kv("Data dir", &kernel.config.data_dir.display().to_string());

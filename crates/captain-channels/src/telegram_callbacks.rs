@@ -1,9 +1,14 @@
 //! Telegram callback payload parsing and inline keyboards.
 
 use crate::types::{ChannelContent, ChannelMessage, ChannelType, ChannelUser};
+use captain_types::release_update::{
+    RuntimeUpdateTelegramAction, RUNTIME_UPDATE_CALLBACK_TOKEN_LEN,
+};
+use captain_types::workflow_learning::ProposalCardAction;
 use std::collections::HashMap;
 
 const CAPSPEC_CALLBACK_TOKEN_LEN: usize = 20;
+const WORKFLOW_LEARNING_CALLBACK_TOKEN_LEN: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapSpecTelegramAction {
@@ -18,6 +23,84 @@ pub enum CapSpecTelegramAction {
 pub struct CapSpecTelegramCallback {
     pub action: CapSpecTelegramAction,
     pub token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowLearningTelegramCallback {
+    pub action: ProposalCardAction,
+    pub token: String,
+    pub decision_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeUpdateTelegramCallback {
+    pub action: RuntimeUpdateTelegramAction,
+    pub token: String,
+    pub decision_version: u64,
+}
+
+/// Parse a model-independent runtime update decision.
+///
+/// The compact token only performs lookup. The kernel still compares the
+/// exact candidate version, decision version, recipient chat and operator.
+pub fn parse_runtime_update_callback(data: &str) -> Option<RuntimeUpdateTelegramCallback> {
+    let rest = data.strip_prefix("runtime_update:")?;
+    let mut parts = rest.split(':');
+    let action = match parts.next()? {
+        "install" => RuntimeUpdateTelegramAction::Install,
+        "defer" => RuntimeUpdateTelegramAction::Defer,
+        "refuse" => RuntimeUpdateTelegramAction::Refuse,
+        _ => return None,
+    };
+    let token = parts.next()?.trim();
+    let decision_version = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() || decision_version == 0 {
+        return None;
+    }
+    if token.len() != RUNTIME_UPDATE_CALLBACK_TOKEN_LEN
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(RuntimeUpdateTelegramCallback {
+        action,
+        token: token.to_ascii_lowercase(),
+        decision_version,
+    })
+}
+
+/// Parse a compact Skill Learning V2 operator callback.
+///
+/// The callback carries an 80-bit lookup token and the exact proposal state
+/// version rendered in the card. The control plane must still resolve the
+/// token and compare the complete revision before applying any decision.
+pub fn parse_workflow_learning_callback(data: &str) -> Option<WorkflowLearningTelegramCallback> {
+    let rest = data.strip_prefix("workflow:")?;
+    let mut parts = rest.split(':');
+    let action = match parts.next()? {
+        "activate" => ProposalCardAction::Activate,
+        "test" => ProposalCardAction::Test,
+        "details" => ProposalCardAction::Details,
+        "edit" => ProposalCardAction::Edit,
+        "later" => ProposalCardAction::Later,
+        "ignore" => ProposalCardAction::Ignore,
+        _ => return None,
+    };
+    let token = parts.next()?.trim();
+    let decision_version = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() || decision_version == 0 {
+        return None;
+    }
+    if token.len() != WORKFLOW_LEARNING_CALLBACK_TOKEN_LEN
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(WorkflowLearningTelegramCallback {
+        action,
+        token: token.to_ascii_lowercase(),
+        decision_version,
+    })
 }
 
 /// Parse a compact Captain Forge operator callback.
@@ -98,8 +181,8 @@ pub fn parse_learning_callback(data: &str) -> Option<(String, Vec<String>)> {
     Some((cmd.to_string(), vec![id.to_string()]))
 }
 
-/// Skill proposal approvals resolve the SkillSynthesizer review queue, not
-/// generic tool approvals and not memory learning approvals.
+/// Parse callbacks from already-delivered v3.13 cards. The command dispatcher
+/// renders an archive notice; no legacy decision is executed.
 pub fn parse_skill_proposal_callback(data: &str) -> Option<(String, Vec<String>)> {
     let rest = data.strip_prefix("skill_proposal:")?;
     let mut parts = rest.splitn(2, ':');
@@ -237,15 +320,6 @@ pub fn build_learning_approval_keyboard(review_id: &str) -> serde_json::Value {
         "inline_keyboard": [[
             {"text": "✅ Approuver", "callback_data": format!("learning:approve:{review_id}")},
             {"text": "❌ Rejeter",   "callback_data": format!("learning:reject:{review_id}")},
-        ]]
-    })
-}
-
-/// Build a Telegram inline keyboard for generated skill proposals.
-pub fn build_skill_proposal_keyboard(proposal_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "inline_keyboard": [[
-            {"text": "❌ Ignorer", "callback_data": format!("skill_proposal:reject:{proposal_id}")},
         ]]
     })
 }
@@ -488,6 +562,92 @@ pub(crate) fn capspec_operator_callback_message(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn workflow_learning_operator_callback_message(
+    callback_data: &str,
+    chat_id: i64,
+    from_id: i64,
+    from_name: &str,
+    thread_id: Option<String>,
+    original_message_id: Option<i64>,
+    original_text: &str,
+    language: &str,
+) -> ChannelMessage {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "workflow_learning_callback_data".to_string(),
+        serde_json::json!(callback_data),
+    );
+    metadata.insert("sender_user_id".to_string(), serde_json::json!(from_id));
+    metadata.insert("chat_id".to_string(), serde_json::json!(chat_id));
+    metadata.insert(
+        "original_text".to_string(),
+        serde_json::json!(original_text),
+    );
+    metadata.insert("language".to_string(), serde_json::json!(language));
+
+    ChannelMessage {
+        channel: ChannelType::Telegram,
+        platform_message_id: original_message_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        sender: ChannelUser {
+            platform_id: chat_id.to_string(),
+            display_name: from_name.to_string(),
+            captain_user: None,
+        },
+        content: ChannelContent::Text("[Workflow learning operator decision]".to_string()),
+        target_agent: None,
+        timestamp: chrono::Utc::now(),
+        is_group: false,
+        thread_id,
+        metadata,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn runtime_update_operator_callback_message(
+    callback_data: &str,
+    chat_id: i64,
+    from_id: i64,
+    from_name: &str,
+    thread_id: Option<String>,
+    original_message_id: Option<i64>,
+    original_text: &str,
+    language: &str,
+) -> ChannelMessage {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "runtime_update_callback_data".to_string(),
+        serde_json::json!(callback_data),
+    );
+    metadata.insert("sender_user_id".to_string(), serde_json::json!(from_id));
+    metadata.insert("chat_id".to_string(), serde_json::json!(chat_id));
+    metadata.insert(
+        "original_text".to_string(),
+        serde_json::json!(original_text),
+    );
+    metadata.insert("language".to_string(), serde_json::json!(language));
+
+    ChannelMessage {
+        channel: ChannelType::Telegram,
+        platform_message_id: original_message_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        sender: ChannelUser {
+            platform_id: chat_id.to_string(),
+            display_name: from_name.to_string(),
+            captain_user: None,
+        },
+        content: ChannelContent::Text("[Captain runtime update decision]".to_string()),
+        target_agent: None,
+        timestamp: chrono::Utc::now(),
+        is_group: false,
+        thread_id,
+        metadata,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +675,44 @@ mod tests {
     }
 
     #[test]
+    fn runtime_update_callbacks_are_compact_versioned_and_strict() {
+        let token = "a".repeat(RUNTIME_UPDATE_CALLBACK_TOKEN_LEN);
+        let callback =
+            parse_runtime_update_callback(&format!("runtime_update:install:{token}:7")).unwrap();
+        assert_eq!(callback.action, RuntimeUpdateTelegramAction::Install);
+        assert_eq!(callback.token, token);
+        assert_eq!(callback.decision_version, 7);
+        assert!(parse_runtime_update_callback("runtime_update:install:short:7").is_none());
+        assert!(
+            parse_runtime_update_callback(&format!("runtime_update:install:{token}:0")).is_none()
+        );
+        assert!(
+            parse_runtime_update_callback(&format!("runtime_update:unknown:{token}:7")).is_none()
+        );
+    }
+
+    #[test]
+    fn runtime_update_callback_envelope_preserves_operator_and_card() {
+        let callback = "runtime_update:defer:0123456789abcdefabcd:4";
+        let message = runtime_update_operator_callback_message(
+            callback,
+            -1001,
+            42,
+            "Vivien",
+            Some("7".to_string()),
+            Some(99),
+            "Update card",
+            "fr",
+        );
+        assert_eq!(message.platform_message_id, "99");
+        assert_eq!(message.metadata["runtime_update_callback_data"], callback);
+        assert_eq!(message.metadata["sender_user_id"], 42);
+        assert_eq!(message.metadata["original_text"], "Update card");
+        assert_eq!(message.metadata["language"], "fr");
+        assert!(matches!(message.content, ChannelContent::Text(_)));
+    }
+
+    #[test]
     fn capspec_callback_envelope_preserves_human_and_original_message() {
         let callback = "capspec:approve:0123456789abcdefabcd";
         let message = capspec_operator_callback_message(
@@ -530,6 +728,30 @@ mod tests {
         assert_eq!(message.metadata["capspec_callback_data"], callback);
         assert_eq!(message.metadata["sender_user_id"], 42);
         assert_eq!(message.metadata["original_text"], "Captain Forge prompt");
+        assert!(matches!(message.content, ChannelContent::Text(_)));
+    }
+
+    #[test]
+    fn workflow_callback_envelope_preserves_operator_message_and_language() {
+        let callback = "workflow:activate:0123456789abcdefabcd:4";
+        let message = workflow_learning_operator_callback_message(
+            callback,
+            -1001,
+            42,
+            "Vivien",
+            Some("7".to_string()),
+            Some(99),
+            "Workflow proposal",
+            "fr",
+        );
+        assert_eq!(message.platform_message_id, "99");
+        assert_eq!(
+            message.metadata["workflow_learning_callback_data"],
+            callback
+        );
+        assert_eq!(message.metadata["sender_user_id"], 42);
+        assert_eq!(message.metadata["original_text"], "Workflow proposal");
+        assert_eq!(message.metadata["language"], "fr");
         assert!(matches!(message.content, ChannelContent::Text(_)));
     }
 

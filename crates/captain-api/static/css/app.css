@@ -839,6 +839,18 @@ input:focus, textarea:focus {
   flex-direction: column;
   gap: 16px;
 }
+.learned-workflow-list { margin-bottom: 28px; }
+.learned-workflow-entry:first-child { border-top: 1px solid var(--border); }
+.learned-workflow-detail { gap: 12px; }
+.learned-workflow-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+}
+.learned-workflow-facts span { color: var(--text-1); font-size: 12.5px; line-height: 1.45; }
+.learned-workflow-facts strong { display: block; margin-bottom: 3px; color: var(--text-2); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.learning-integrity-error { color: var(--err); font-size: 12.5px; line-height: 1.45; }
+.learning-memory-metrics { margin-top: 30px; }
 .workflow-run-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .workflow-run-form textarea { width: 100%; resize: vertical; }
 .workflow-create-form {
@@ -1133,4 +1145,7 @@ input:focus, textarea:focus {
   .native-revision, .native-run { align-items: flex-start; flex-direction: column; }
   .native-run-actions { width: 100%; align-items: center; justify-content: space-between; }
   .native-run-decision-fields { grid-template-columns: 1fr; }
+  .learned-workflow-facts { grid-template-columns: 1fr; }
+  .learned-workflow-entry .item-row-actions { width: 100%; }
+  .learned-workflow-entry .item-row-actions button { flex: 1 1 auto; }
 }

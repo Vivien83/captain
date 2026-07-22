@@ -53,7 +53,10 @@ if [ "$needs_docker" = "1" ]; then
     if ! docker info >/dev/null 2>&1; then
         if [ "$(uname -s)" = "Darwin" ] && [ -d "/Applications/Docker.app" ]; then
             echo "  Starting Docker Desktop for cross builds..."
-            open -a Docker
+            if ! open -a "Docker Desktop" >/dev/null 2>&1; then
+                open -a Docker >/dev/null 2>&1 \
+                    || fail "Docker Desktop is installed but its application cannot be opened"
+            fi
             for _ in $(seq 1 60); do
                 docker info >/dev/null 2>&1 && break
                 sleep 3

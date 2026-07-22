@@ -50,6 +50,16 @@ interrupted before calling it. Inside a Docker container the tool refuses and
 explains that the image must be rebuilt/pulled instead. The updater's output
 is appended to `~/.captain/update.log`.
 
+This agent-facing tool is distinct from the native release monitor. The daemon
+checks the compatible official release channel after startup and every 12
+hours, then sends a durable Telegram Rich card when an exact operator chat is
+configured. Its **Update / Defer / Refuse** buttons are resolved by the control
+plane before session dispatch and do not consume a model turn. Nothing is
+installed automatically. Host installs use the same checksum and atomic-swap
+contract as `captain update`; Docker and unsupported platforms receive an
+operator procedure and a later verification reminder. Monitor state is exposed
+under `runtime_update` in `captain status --json` and `GET /api/status`.
+
 ### `location_get`
 
 Return Captain's configured coarse location context when available.
@@ -235,9 +245,20 @@ Use these when Captain notices a repeated failure pattern or when the user asks 
 
 `self_improvement_review` is the safe first step for controlled auto-improvement. It does not mutate anything. It shows pending memory review items, open system bugs, pending skill refinements, pending skill proposals, the visual feedback contract, and the next approved action surface. Critical changes (skills, config, goals, routing, prompts, global behaviour) must remain visible proposals until the user approves them.
 
-Feedback is mandatory. In approval mode, a queued learning emits `MemoryQueued` and the current chat renders `💭 apprentissage à valider` with the review id. Telegram approval buttons use the dedicated learning commands (`/learn_approve`, `/learn_reject`) so the review item is resolved through `learning_review_decide`. In auto mode, the commit emits `MemoryStored` and renders `🧠 mémorisé`. Repeatable-workflow proposals emit `SkillProposalQueued`; the current chat renders `🛠️ skill proposé`, and Telegram buttons resolve through `/skill_approve` / `/skill_reject` into `skill_proposal_decide`. Existing-skill improvements emit `SkillRefinementQueued`; Telegram buttons resolve through `/skill_refine_approve` / `/skill_refine_reject`, and file-backed skills include an automatic pre-improvement snapshot for `skill_refinement_restore`. If the learning changes future behaviour, Captain must also tell the user what changed and how it will act differently next time; if the preference is ambiguous, ask one short clarification before saving. If the user asks "qu'as-tu appris ?", answer from those visible events, `learning_review_list`, `skill_proposal_list`, or `skill_refinement_list`, not from guesses.
+Feedback is mandatory. In approval mode, a queued memory learning emits
+`MemoryQueued` and Telegram resolves it through `learning_review_decide`.
+In auto mode, `MemoryStored` renders visible memorisation feedback. Repeatable
+workflows use the durable Skill Learning V2 cards shared by Telegram, TUI, Web,
+Desktop, and API. `workflow_learning_list` can explain their state but cannot
+decide it; exact operator tokens and decision versions remain bound to
+authenticated surfaces. Existing-skill improvements continue through
+`skill_refinement_*` with snapshots and explicit approval. If the user asks
+what Captain learned, answer from those durable projections rather than a
+guess.
 
-Generated-skill approvals keep the audit path internal. `skill_proposal_decide(approve:true)` returns a logical `written` state instead of the generated file path, and all learning/proposal review surfaces apply the same public-safe output projection before display or `self_improvement_review`.
+All learning output passes through the public-safe projection before display or
+`self_improvement_review`; secrets, host paths, staging locators, and internal
+audit fields remain private.
 
 ### System bug register
 

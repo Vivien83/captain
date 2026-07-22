@@ -7,7 +7,7 @@ pub fn improvement_tool_definitions() -> Vec<ToolDefinition> {
     let mut definitions = improvement_review_tool_definitions();
     definitions.extend(system_bug_tool_definitions());
     definitions.extend(learning_review_tool_definitions());
-    definitions.extend(skill_proposal_tool_definitions());
+    definitions.extend(workflow_learning_tool_definitions());
     definitions.extend(skill_refinement_tool_definitions());
     definitions
 }
@@ -31,11 +31,8 @@ fn learning_review_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
-fn skill_proposal_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        skill_proposal_list_tool_definition(),
-        skill_proposal_decide_tool_definition(),
-    ]
+fn workflow_learning_tool_definitions() -> Vec<ToolDefinition> {
+    vec![workflow_learning_list_tool_definition()]
 }
 
 fn skill_refinement_tool_definitions() -> Vec<ToolDefinition> {
@@ -59,7 +56,7 @@ fn tool_definition(name: &str, description: &str, input_schema: Value) -> ToolDe
 fn self_improvement_review_tool_definition() -> ToolDefinition {
     tool_definition(
         "self_improvement_review",
-        "[AUTO-AMÉLIORATION CONTRÔLÉE] Inspecte en une seule lecture les files d'amélioration de Captain: learnings en attente d'approbation, bugs système ouverts, raffinements de skills, et skills proposés par le synthesizer. Read-only: ne modifie rien. À appeler spontanément après une tâche longue/tool-heavy, un échec répété, un `Security blocked`, ou quand l'utilisateur demande ce que Captain a appris. Règle: apprentissage non critique = feedback visible puis mémoire; changement critique (skill/config/goal/comportement global) = proposition visible + approbation explicite via les tools de decide.",
+        "[AUTO-AMÉLIORATION CONTRÔLÉE] Inspecte en une seule lecture les files durables de Captain: learnings en attente d'approbation, bugs système ouverts, raffinements de skills et workflows Skill Learning V2. Read-only: ne modifie rien. À appeler spontanément après une tâche longue/tool-heavy, un échec répété, un `Security blocked`, ou quand l'utilisateur demande ce que Captain a appris. Les capacités critiques se décident uniquement depuis leur carte opérateur authentifiée Telegram/TUI/Web/Desktop.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -152,30 +149,15 @@ fn learning_review_decide_tool_definition() -> ToolDefinition {
     )
 }
 
-fn skill_proposal_list_tool_definition() -> ToolDefinition {
+fn workflow_learning_list_tool_definition() -> ToolDefinition {
     tool_definition(
-        "skill_proposal_list",
-        "Liste les skills proposes par le SkillSynthesizer en attente de validation. Chaque item est projeté sur id/name/description/trigger_hint/tool_sequence/arg_schema_hint/confidence/family avec sortie operator-safe: secrets masqués, chemins locaux redigés, et champs d'audit internes masqués. Les appels outil peuvent refuser avec skill_proposal_decide(approve=false); une approbation positive doit passer par une décision humaine/API/canal explicite après validation externe.",
+        "workflow_learning_list",
+        "Liste la projection durable Skill Learning V2: génération, validation, proposition, test isolé, installation, canary, activation, échec et rollback. Read-only et operator-safe. Utiliser pour expliquer ce que Captain apprend ou diagnostiquer son état; ne jamais simuler une décision. Les actions exactes restent réservées aux cartes authentifiées Telegram, TUI, Web et Desktop.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "limit": { "type": "number", "description": "Max items returned (1-50, default 50)" }
             }
-        }),
-    )
-}
-
-fn skill_proposal_decide_tool_definition() -> ToolDefinition {
-    tool_definition(
-        "skill_proposal_decide",
-        "Refuse un skill en attente depuis un appel outil, ou applique une décision positive seulement depuis une surface humaine/API/canal explicite avec preuve externe schema/diff/tests/humain. Sur approve=true depuis un outil, l'appel est bloqué pour éviter l'auto-approbation et le proxy reward; sur approve=false, marque denied sans effet fichier. Les approbations humaines écrivent le .md dans le generated-skills root, le gardent en quarantaine et gardent le chemin local interne.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "id": { "type": "string", "description": "Proposal id or non-ambiguous prefix from skill_proposal_list" },
-                "approve": { "type": "boolean", "description": "true = write file, false = mark denied" }
-            },
-            "required": ["id", "approve"]
         }),
     )
 }
@@ -285,8 +267,7 @@ mod tests {
                 "system_bug_update",
                 "learning_review_list",
                 "learning_review_decide",
-                "skill_proposal_list",
-                "skill_proposal_decide",
+                "workflow_learning_list",
                 "skill_refinement_propose",
                 "skill_refinement_list",
                 "skill_refinement_decide",
@@ -341,13 +322,13 @@ mod tests {
     fn improvement_tool_definitions_keep_approval_guardrails() {
         let definitions = improvement_tool_definitions();
         let learning_decide = tool(&definitions, "learning_review_decide");
-        let proposal_decide = tool(&definitions, "skill_proposal_decide");
+        let workflow_learning = tool(&definitions, "workflow_learning_list");
         let refinement_propose = tool(&definitions, "skill_refinement_propose");
         let refinement_list = tool(&definitions, "skill_refinement_list");
         let refinement_restore = tool(&definitions, "skill_refinement_restore");
 
         assert_eq!(required_fields(learning_decide), vec!["id", "approve"]);
-        assert_eq!(required_fields(proposal_decide), vec!["id", "approve"]);
+        assert!(required_fields(workflow_learning).is_empty());
         assert_eq!(
             required_fields(refinement_propose),
             vec!["skill", "finding", "suggested_change"]
@@ -361,7 +342,8 @@ mod tests {
             enum_values(property(refinement_list, "status")),
             vec!["pending", "approved", "denied", "applied", "restored"]
         );
-        assert_contains(&proposal_decide.description, "auto-approbation");
+        assert_contains(&workflow_learning.description, "Read-only");
+        assert_contains(&workflow_learning.description, "cartes authentifiées");
         assert_contains(&refinement_propose.description, "snapshot restaurable");
         assert_contains(&refinement_restore.description, "backup pre-restore");
     }

@@ -41,6 +41,7 @@ CONTRACT_DOCS=(
   docs/channel-adapters.md
   docs/providers.md
   docs/skill-development.md
+  docs/SKILL_LEARNING_V2.md
   docs/CAPTAIN_FORGE_CAPSPEC.md
   docs/architecture.md
   docs/security.md
@@ -49,6 +50,7 @@ CONTRACT_DOCS=(
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
   docs/releases/v0.1.0-alpha.4.md
   docs/releases/v0.1.0-alpha.5.md
@@ -80,7 +82,6 @@ HISTORICAL_DOCS=(
   docs/v3.10-cache-efficiency.md
   docs/v3.11-projects-memory.md
   docs/v3.12-learning-engine.md
-  docs/v3.13-skill-synthesizer.md
 )
 
 pass() {
@@ -303,14 +304,23 @@ require_not_contains "configuration guide omits frozen Slack setup" docs/configu
 require_not_contains "provider guide has no copied model catalog" docs/providers.md '**Available Models:**'
 require_not_contains "provider guide has no volatile price table" docs/providers.md '$/1M'
 require_not_contains "skill guide omits the frozen marketplace path" docs/skill-development.md 'Frozen Marketplace'
+require_contains "DOC2 classifies the Skill Learning V2 contract" docs/DOCS_STATUS.md 'docs/SKILL_LEARNING_V2.md'
+require_contains "Skill Learning V2 pins the exact active model" docs/SKILL_LEARNING_V2.md 'exact active configured model'
+require_contains "Skill Learning V2 confines draft authority to observed tools" docs/SKILL_LEARNING_V2.md 'canonical observed graph'
+require_contains "Skill Learning V2 documents the v32 retirement boundary" docs/SKILL_LEARNING_V2.md 'Schema v32 retires the legacy sliding-window detector transactionally'
+require_not_contains "Skill Learning V2 omits the retired list tool" docs/SKILL_LEARNING_V2.md 'skill_proposal_list'
+require_not_contains "Skill Learning V2 omits the retired decision tool" docs/SKILL_LEARNING_V2.md 'skill_proposal_decide'
+require_not_contains "config docs omit the retired skills threshold" docs/captain-tools/config-secret.md 'skills.pattern_threshold'
+require_not_contains "config docs omit the retired proposer override" docs/captain-tools/config-secret.md 'skills.proposer_model'
+require_contains "config docs pin authenticated workflow activation" docs/captain-tools/config-secret.md 'activation still requires an authenticated operator card'
 require_contains "README points to DOC2" docs/README.md "Docs Status (DOC2)"
 require_not_contains "docs navigation does not advertise frozen migration" docs/README.md 'MIGRATION.md'
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.8"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.8"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.8/install.sh"
+  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9"
+  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.9/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -341,9 +351,27 @@ require_contains "English README exposes readable native capabilities" README.md
 require_contains "French README exposes readable native capabilities" README.fr.md "Capacités natives lisibles"
 require_contains "Spanish README exposes readable native capabilities" README.es.md "Capacidades nativas legibles"
 require_contains "Chinese README exposes readable native capabilities" README.zh.md "人类可读的原生能力"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.8"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.8] - 2026-07-19"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
+require_contains "English README documents the native 12-hour release monitor" README.md "after startup and then every 12"
+require_contains "French README documents the native 12-hour release monitor" README.fr.md "les 12 heures"
+require_contains "Spanish README documents the native 12-hour release monitor" README.es.md "cada 12 horas"
+require_contains "Chinese README documents the native 12-hour release monitor" README.zh.md "之后每 12 小时检查一次"
+require_contains "deployment pins model-independent versioned update decisions" docs/DEPLOY.md "Callback decisions bypass the model"
+require_contains "CLI documents the durable release monitor projection" docs/cli-reference.md "jq '.runtime_update'"
+require_contains "API status documents runtime update state" docs/api-reference.md '`runtime_update` | Last successful release check'
+require_contains "Telegram docs pin explicit update operator identity" docs/channel-adapters.md 'explicitly listed numeric Telegram user; `allowed_users = ["*"]`'
+require_contains "meta docs distinguish the native release monitor" docs/captain-tools/meta.md "distinct from the native release monitor"
+require_contains "runtime changelog pins twelve-hour release checks" docs/captain-tools/runtime-changelog.md "every 12 hours"
+require_contains "public changelog records the native release monitor" CHANGELOG.md "compatible official release channel after startup"
+require_contains "DOC2 classifies the unreleased release monitor" docs/DOCS_STATUS.md "The native Captain release monitor checks after startup and every 12 hours"
+require_contains "kernel boots the native release monitor" crates/captain-kernel/src/kernel_background_startup.rs "spawn_runtime_update_monitor"
+require_contains "kernel uses an exact twelve-hour update interval" crates/captain-kernel/src/release_updates.rs '12 * 60 * 60 * 1_000'
+require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
+require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
+require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.9"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.9] - 2026-07-20"
+require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
+require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
 require_contains "historical alpha.7 release notes remain available" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
 require_contains "historical alpha.6 release notes remain available" docs/releases/v0.1.0-alpha.6.md "# Captain 0.1.0-alpha.6"
 require_contains "historical alpha.5 release notes remain available" docs/releases/v0.1.0-alpha.5.md "# Captain 0.1.0-alpha.5"
@@ -355,6 +383,7 @@ require_contains "DOC2 records the published alpha.8 provenance" docs/DOCS_STATU
 require_contains "DOC2 records the published alpha.8 multi-arch digest" docs/DOCS_STATUS.md "sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230"
 require_contains "agent changelog records the published alpha.8 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:af32a605de0a019482ff3aadcee07179171630ccfb45c9b88fbcf135d2680230"
 require_contains "DOC2 identifies the alpha.8 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the current public prerelease'
+require_contains "DOC2 identifies the alpha.9 release candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the candidate being certified for local publication'
 require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
 require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "agent changelog retains the alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"

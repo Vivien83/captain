@@ -5,8 +5,7 @@ struct ImprovementOutputSafetyKernel {
     raw_secret: String,
     memory: std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
     learning_limits: std::sync::Mutex<Vec<usize>>,
-    proposal_limits: std::sync::Mutex<Vec<usize>>,
-    proposal_decisions: std::sync::Mutex<Vec<(String, bool)>>,
+    workflow_limits: std::sync::Mutex<Vec<usize>>,
     learning_decisions: std::sync::Mutex<Vec<(String, bool)>>,
 }
 
@@ -74,46 +73,28 @@ impl KernelHandle for ImprovementOutputSafetyKernel {
         }))
     }
 
-    fn skill_proposal_list(&self, limit: usize) -> Result<serde_json::Value, String> {
-        self.proposal_limits.lock().unwrap().push(limit);
-        Ok(serde_json::json!([{
-            "id": "proposal-1",
-            "pattern_hash": self.raw_secret,
-            "limit_seen": limit,
-            "name": "path-safe-proposal",
-            "description": format!("Generate a skill from {}", self.local_path),
-            "trigger_hint": self.raw_secret,
-            "tool_sequence": ["file_read", "file_write"],
-            "source_agent_id": self.local_path,
-            "origin_channel": self.raw_secret,
-            "written_path": self.local_path
-        }]))
-    }
-
-    async fn skill_proposal_decide(
-        &self,
-        proposal_id: &str,
-        approve: bool,
-        _decided_by: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        self.proposal_decisions
-            .lock()
-            .unwrap()
-            .push((proposal_id.to_string(), approve));
-        if !approve {
-            return Ok(serde_json::json!({ "status": "denied", "id": proposal_id }));
-        }
+    fn workflow_learning_list(&self, limit: usize) -> Result<serde_json::Value, String> {
+        self.workflow_limits.lock().unwrap().push(limit);
         Ok(serde_json::json!({
-            "status": self.raw_secret,
-            "id": self.local_path,
-            "written_path": self.local_path,
-            "generated_path": self.local_path,
-            "metadata": {
-                "path": self.local_path,
-                "file_path": self.local_path
-            },
-            "description": format!("generated from {}", self.local_path),
-            "debug": self.raw_secret
+            "schema_version": 1,
+            "returned": 1,
+            "workflows": [{
+                "proposal_id": "workflow-1",
+                "decision_version": 4,
+                "state": "proposed",
+                "name": "path-safe-workflow",
+                "kind": "skill",
+                "projection_status": "verified",
+                "updated_at_unix_ms": 44,
+                "projection_error": null,
+                "card": {
+                    "purpose": format!("Generate from {}", self.local_path),
+                    "trigger": self.raw_secret,
+                    "available_actions": ["activate", "test", "later", "ignore"]
+                },
+                "installation": null,
+                "source_agent_id": self.local_path
+            }]
         }))
     }
 
@@ -163,8 +144,7 @@ fn output_safety_kernel_state(
         raw_secret: raw_secret.clone(),
         memory: std::sync::Mutex::new(memory),
         learning_limits: std::sync::Mutex::new(Vec::new()),
-        proposal_limits: std::sync::Mutex::new(Vec::new()),
-        proposal_decisions: std::sync::Mutex::new(Vec::new()),
+        workflow_limits: std::sync::Mutex::new(Vec::new()),
         learning_decisions: std::sync::Mutex::new(Vec::new()),
     });
     let kh: Arc<dyn KernelHandle> = state.clone();
@@ -184,7 +164,7 @@ fn assert_public_safe(output: &str, local_path: &str, raw_secret: &str) {
 }
 
 #[test]
-fn learning_and_proposal_lists_are_public_safe() {
+fn learning_and_workflow_lists_are_public_safe() {
     let (kh, local_path, raw_secret) = output_safety_kernel();
 
     let learning = tool_learning_review_list(&serde_json::json!({"limit": 5}), Some(&kh))
@@ -194,12 +174,12 @@ fn learning_and_proposal_lists_are_public_safe() {
     assert!(learning.contains("<secret>"));
     assert!(!learning.contains("agent_id") && !learning.contains("written_write_id"));
 
-    let proposals = tool_skill_proposal_list(&serde_json::json!({"limit": 5}), Some(&kh))
-        .expect("proposal list should serialize");
-    assert_public_safe(&proposals, &local_path, &raw_secret);
-    assert!(proposals.contains("<local-path>"));
-    assert!(proposals.contains("<secret>"));
-    assert!(!proposals.contains("pattern_hash") && !proposals.contains("source_agent_id"));
+    let workflows = tool_workflow_learning_list(&serde_json::json!({"limit": 5}), Some(&kh))
+        .expect("workflow list should serialize");
+    assert_public_safe(&workflows, &local_path, &raw_secret);
+    assert!(workflows.contains("<local-path>"));
+    assert!(workflows.contains("<secret>"));
+    assert!(!workflows.contains("source_agent_id"));
 
     let review = tool_self_improvement_review(&serde_json::json!({"limit": 5}), Some(&kh))
         .expect("self improvement review should serialize");
@@ -209,23 +189,23 @@ fn learning_and_proposal_lists_are_public_safe() {
 }
 
 #[test]
-fn learning_and_proposal_list_limits_are_bounded() {
+fn learning_and_workflow_list_limits_are_bounded() {
     let (state, kh, _local_path, _raw_secret) = output_safety_kernel_state(Vec::new());
 
     tool_learning_review_list(&serde_json::json!({"limit": 5000}), Some(&kh))
         .expect("learning list should serialize");
     assert_eq!(*state.learning_limits.lock().unwrap(), vec![50]);
 
-    tool_skill_proposal_list(&serde_json::json!({"limit": 0}), Some(&kh))
-        .expect("proposal list should serialize");
+    tool_workflow_learning_list(&serde_json::json!({"limit": 0}), Some(&kh))
+        .expect("workflow list should serialize");
 
-    tool_skill_proposal_list(&serde_json::json!({}), Some(&kh))
-        .expect("default proposal list should serialize");
-    assert_eq!(*state.proposal_limits.lock().unwrap(), vec![1, 50]);
+    tool_workflow_learning_list(&serde_json::json!({}), Some(&kh))
+        .expect("default workflow list should serialize");
+    assert_eq!(*state.workflow_limits.lock().unwrap(), vec![1, 50]);
 }
 
 #[tokio::test]
-async fn decisions_are_public_safe_and_agent_skill_approval_is_blocked() {
+async fn learning_decisions_are_public_safe_and_agent_approval_is_blocked() {
     let (state, kh, local_path, raw_secret) = output_safety_kernel_state(Vec::new());
 
     let learning_err = tool_learning_review_decide(
@@ -258,51 +238,6 @@ async fn decisions_are_public_safe_and_agent_skill_approval_is_blocked() {
         *state.learning_decisions.lock().unwrap(),
         vec![("learn-1".to_string(), false)]
     );
-
-    let proposal_err = tool_skill_proposal_decide(
-        &serde_json::json!({"id": "proposal", "approve": true}),
-        Some(&kh),
-        Some("captain"),
-    )
-    .await
-    .expect_err("tool calls must not approve generated skills");
-    assert_public_safe(&proposal_err, &local_path, &raw_secret);
-    assert!(proposal_err.contains("human/API/channel approval"));
-    assert!(state.proposal_decisions.lock().unwrap().is_empty());
-
-    let proposal = tool_skill_proposal_decide(
-        &serde_json::json!({"id": "proposal", "approve": false}),
-        Some(&kh),
-        Some("captain"),
-    )
-    .await
-    .expect("skill proposal rejection should serialize");
-    assert_public_safe(&proposal, &local_path, &raw_secret);
-    assert!(!proposal.contains("written_path"));
-    assert!(!proposal.contains("generated_path") && !proposal.contains("\"metadata\""));
-    assert!(!proposal.contains("<local-path>") && !proposal.contains("<secret>"));
-    let json: serde_json::Value = serde_json::from_str(&proposal).unwrap();
-    assert_eq!(json["status"], "denied");
-    assert_eq!(json["id"], "proposal-1");
-    assert_eq!(
-        *state.proposal_decisions.lock().unwrap(),
-        vec![("proposal-1".to_string(), false)]
-    );
-}
-
-#[tokio::test]
-async fn skill_proposal_decide_prefix_scan_is_bounded() {
-    let (state, kh, _local_path, _raw_secret) = output_safety_kernel_state(Vec::new());
-
-    tool_skill_proposal_decide(
-        &serde_json::json!({"id": "proposal", "approve": false}),
-        Some(&kh),
-        Some("captain"),
-    )
-    .await
-    .expect("skill proposal decision should serialize");
-
-    assert_eq!(*state.proposal_limits.lock().unwrap(), vec![50]);
 }
 
 #[tokio::test]
@@ -319,18 +254,6 @@ async fn review_decision_ids_are_validated_without_echoing_raw_input() {
     assert!(
         !learning_err.contains(&local_path),
         "local path echoed in error: {learning_err}"
-    );
-
-    let proposal_err = tool_skill_proposal_decide(
-        &serde_json::json!({"id": raw_secret, "approve": true}),
-        Some(&kh),
-        Some("captain"),
-    )
-    .await
-    .expect_err("secret-looking id should be rejected before kernel access");
-    assert!(
-        !proposal_err.contains(&raw_secret),
-        "secret echoed in error: {proposal_err}"
     );
 
     let system_bug_err = tool_system_bug_update(
