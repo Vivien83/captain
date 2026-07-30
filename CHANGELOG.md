@@ -40,6 +40,12 @@ operator controls, and locally attested sequential release builds.
   `Cargo.lock`; Docker architectures build one at a time with host-capacity
   checkpoints and BuildKit provenance before the multi-architecture index is
   assembled.
+- The public Alpha 10 tag dereferences to source commit
+  `48f898a9e4d38e8b8c7627644b66e22076a39364`. Its 22 GitHub assets match the
+  locally certified SHA-256 digests, and the immutable plus moving `alpha`
+  images share OCI index
+  `sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477`.
+  Anonymous ARM64/AMD64 execution passed and GitHub Actions reported zero runs.
 - Dependency release checks now audit both the configured RustSec view and a
   complete unfiltered view with an exact reviewed baseline. The vulnerable
   `time 0.3.45` and both unresolved RSA branches are gone; SSH accepts

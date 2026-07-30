@@ -401,7 +401,11 @@ require_contains "dependency gate rejects RSA packages" scripts/dependency-audit
 require_contains "dependency gate rejects RSA russh features" scripts/dependency-audit.sh '== ["aws-lc-rs", "flate2"]'
 require_contains "workspace SSH dependency disables default features" Cargo.toml 'russh = { version = "=0.62.4", default-features = false'
 require_not_contains "workspace SSH key features omit RSA" Cargo.toml '"ed25519", "rsa"'
-require_contains "SSH guide exposes the RSA security boundary" docs/ssh-setup.md 'RSA est'
+if [ "$INTERNAL_DOCS_PRESENT" = "1" ]; then
+  require_contains "maintainer SSH guide exposes the RSA security boundary" docs/ssh-setup.md 'RSA est'
+else
+  require_contains "public security guide exposes the RSA security boundary" docs/security.md 'RSA SSH private keys and RSA-only server host keys are intentionally'
+fi
 require_not_contains "public Compose omits frozen Slack credentials" docker-compose.yml 'SLACK_BOT_TOKEN'
 require_not_contains "configuration guide omits frozen Slack setup" docs/configuration.md '[channels.slack]'
 require_not_contains "provider guide has no copied model catalog" docs/providers.md '**Available Models:**'
@@ -426,9 +430,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable candidate release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10"
-  require_contains "$readme pins the immutable candidate image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10"
-  require_contains "$readme pins the candidate installer" "$readme" "releases/download/v0.1.0-alpha.10/install.sh"
+  require_contains "$readme links the immutable prerelease" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10"
+  require_contains "$readme pins the immutable prerelease image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10"
+  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.10/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -476,9 +480,9 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.10"
-require_contains "candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.10] - 2026-07-30"
-require_contains "reviewed candidate alpha release notes exist" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
+require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.10"
+require_contains "current public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.10] - 2026-07-30"
+require_contains "reviewed public alpha release notes exist" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
 require_contains "historical alpha.9 release notes remain available" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
 require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
 require_contains "historical alpha.7 release notes remain available" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
@@ -494,10 +498,16 @@ require_contains "agent changelog records the published alpha.8 multi-arch diges
 require_contains "DOC2 records the published alpha.9 provenance" docs/DOCS_STATUS.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
 require_contains "DOC2 records the published alpha.9 multi-arch digest" docs/DOCS_STATUS.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
 require_contains "agent changelog records the published alpha.9 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
-require_contains "DOC2 identifies the alpha.9 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the current public prerelease'
-require_contains "DOC2 identifies the alpha.10 candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.10` is the current locally certified release candidate'
+require_contains "DOC2 identifies the alpha.9 previous release" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the previous public prerelease'
+require_contains "DOC2 identifies the alpha.10 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.10` is the current public prerelease'
 require_contains "DOC2 pins the alpha.10 host asset count" docs/DOCS_STATUS.md 'exactly 22 files'
-require_contains "alpha.10 notes leave live provenance unset" docs/releases/v0.1.0-alpha.10.md 'unset until the live release has'
+require_contains "DOC2 records the published alpha.10 provenance" docs/DOCS_STATUS.md "48f898a9e4d38e8b8c7627644b66e22076a39364"
+require_contains "DOC2 records the published alpha.10 tag object" docs/DOCS_STATUS.md "b58f7561d0014228cc523b1770b5c411b017ef52"
+require_contains "DOC2 records the published alpha.10 multi-arch digest" docs/DOCS_STATUS.md "sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477"
+require_contains "agent changelog records the published alpha.10 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477"
+require_contains "alpha.10 notes pin live source provenance" docs/releases/v0.1.0-alpha.10.md "48f898a9e4d38e8b8c7627644b66e22076a39364"
+require_contains "alpha.10 notes pin live OCI provenance" docs/releases/v0.1.0-alpha.10.md "sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477"
+require_contains "alpha.10 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.10.md "GitHub Actions API returned zero runs"
 require_not_contains "alpha.10 notes do not copy alpha.9 source provenance" docs/releases/v0.1.0-alpha.10.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
 require_not_contains "alpha.10 notes do not copy alpha.9 OCI provenance" docs/releases/v0.1.0-alpha.10.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
 require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the previous public prerelease'
@@ -506,10 +516,10 @@ require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.m
 require_contains "agent changelog retains the alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "DOC2 retains the alpha.7 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is an earlier public prerelease'
 require_contains "DOC2 discloses the alpha.9 memory opt-out limitation" docs/DOCS_STATUS.md "core agent-loop finalizer to write one local episodic interaction"
-require_contains "DOC2 records the alpha.10 finalizer fix" docs/DOCS_STATUS.md 'The `alpha.10` candidate closes that published limitation'
+require_contains "DOC2 records the alpha.10 finalizer fix" docs/DOCS_STATUS.md 'The published `alpha.10` release closes that limitation'
 require_contains "DOC2 discloses the alpha.8 memory opt-out limitation" docs/DOCS_STATUS.md "the core agent-loop finalizer still writes its local episodic interaction"
 require_contains "memory docs disclose the alpha.8 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic"
-require_contains "memory docs expose the alpha.10 finalizer boundary" docs/captain-tools/memory.md 'The `alpha.10` candidate closes that finalizer'
+require_contains "memory docs expose the alpha.10 finalizer boundary" docs/captain-tools/memory.md 'The published `alpha.10` release closes that finalizer'
 require_contains "runtime finalizer gates episodic capture on opt-out" crates/captain-runtime/src/agent_loop_finish.rs "memory_write_opt_out(user_message)"
 require_contains "DOC2 defines the synchronized live budget contract" docs/DOCS_STATUS.md "Alpha 10 Live Budget Contract"
 require_contains "DOC2 defines the guarded host execution posture" docs/DOCS_STATUS.md "Alpha 10 Host Execution Posture"
@@ -886,7 +896,7 @@ require_file scripts/public-boundary-guard.sh
 require_file scripts/check-markdown-links.mjs
 require_file scripts/public-export-smoke.sh
 require_contains "release readiness audits the public source export" scripts/release-readiness.sh 'scripts/prepare-github-export.sh'
-require_contains "DOC2 classifies local release provenance" docs/DOCS_STATUS.md "Alpha 10 Release Provenance Contract"
+require_contains "DOC2 classifies local release provenance" docs/DOCS_STATUS.md "Alpha 10 Release Provenance"
 require_contains "release provenance binds the public source" docs/release-provenance.md 'public Git source URI, commit, and tree'
 require_contains "release provenance discloses missing independent signature" docs/release-provenance.md 'independently signed transparency-log attestation'
 require_contains "release publisher builds Docker sequentially" scripts/publish-release-local.sh 'amd64_digest="$(build_and_push_architecture amd64)"'

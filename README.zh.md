@@ -48,7 +48,7 @@
 
 ## 快速安装
 
-当前早期访问候选版本：
+当前公开预发布版本：
 [v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10)。
 不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10`；
 滚动 Alpha 通道：`ghcr.io/vivien83/captain-agent-os:alpha`。

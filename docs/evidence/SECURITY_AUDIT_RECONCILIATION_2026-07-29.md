@@ -12,8 +12,9 @@ snapshot with the current Captain source tree.
   so findings were relocated by symbol and behavior rather than by stale line
   numbers.
 - The private audit body is not copied into this repository.
-- This document records current code facts, not a claim that remediation is
-  complete.
+- This document records the closed remediation and the observed public release
+  evidence. It does not strengthen any guarantee beyond the tests and
+  publication facts listed here.
 
 The external review was static only. Captain's current baseline was therefore
 verified locally before reconciliation:
@@ -53,6 +54,35 @@ a claim that ordinary release tests are equivalent to Miri.
 | F11 | Remediated (`69e9003`) | `web_fetch`, `web_search`, and `web_research_batch` now fail closed without the Kernel-owned protected `WebToolsContext`; the raw fallback clients are gone. | Keep all three missing-context regressions. |
 | F12 | Remediated honestly (`48855ea`) | The unused local `taint` labels were removed. Code, API, CLI, and docs now describe heuristic content guards and explicitly report `provenance_tracking: false`. | Treat real typed provenance propagation as a separate design project. |
 | F13 | Remediated (`fc38ff7`) | CapSpec Telegram decision telemetry records decision kind and bounded transport error only; the opaque operator token is absent from success and failure logs. | Keep the source-bound non-disclosure regression. |
+
+## Closure Evidence
+
+The complete release-readiness gate passed from clean source before packaging:
+RustSec on 1,096 dependencies, public export and Gitleaks, 649 DOC2 controls,
+107 release-document controls, 126 workflow controls, the Runtime, Kernel,
+API, and CLI suites, and the 20-check isolated daemon smoke.
+
+The five host bundles were then built in five separate processes, one target
+at a time, with an independent checksum, platform manifest, disk checkpoint,
+and load checkpoint after every target. The deterministic provenance statement
+binds its 20 subjects to public source commit
+`48f898a9e4d38e8b8c7627644b66e22076a39364`, tree
+`ba37632b5e2b6a3923a2241e1d38d7903bdb95f1`, and the exact `Cargo.lock`.
+Together with the statement checksum, the GitHub Release contains exactly 22
+assets whose GitHub-reported SHA-256 digests match the local files.
+
+Docker AMD64 completed, pushed, and was remotely inspected before ARM64
+started. Both architecture images include BuildKit provenance. The immutable
+version and moving `alpha` channel resolve to OCI index
+`sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477`;
+anonymous execution returned `captain 0.1.0-alpha.10` on both architectures.
+The annotated tag object `b58f7561d0014228cc523b1770b5c411b017ef52`
+dereferences to the source commit above. The GitHub Actions API returned zero
+runs.
+
+The host provenance statement is checksum-bound but not independently signed,
+and guarded host execution is not OS isolation. Those disclosed limits remain
+unchanged by closure.
 
 ## Additional Confirmed Gap
 
@@ -119,7 +149,7 @@ run locally before publication.
 
 ## Exit Criteria
 
-This reconciliation can be marked closed only when:
+This reconciliation is closed because:
 
 - every confirmed finding above has a linked atomic commit and focused
   regression proof;

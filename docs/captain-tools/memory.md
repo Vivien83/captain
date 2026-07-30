@@ -60,7 +60,7 @@ stored.
 Published `0.1.0-alpha.6`, `0.1.0-alpha.7`, `0.1.0-alpha.8`, and
 `0.1.0-alpha.9` share one known limitation: their post-turn paths honor this
 opt-out, but the core agent-loop finalizer still stores one local episodic
-interaction fragment. The `alpha.10` candidate closes that finalizer
+interaction fragment. The published `alpha.10` release closes that finalizer
 path before embedding or local episodic storage. This is distinct from the
 expected transcript and audit retention. Verify the installed version before
 relying on complete per-turn semantic suppression.

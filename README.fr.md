@@ -54,7 +54,7 @@ authentifiée, Telegram ou Discord.
 
 ## Installation rapide
 
-Candidate de préversion actuelle :
+Préversion publique actuelle :
 [v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10).
 Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10` ;
 canal alpha mobile : `ghcr.io/vivien83/captain-agent-os:alpha`.

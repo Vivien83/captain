@@ -4,14 +4,14 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Current Release Candidate
+## Current Public Release
 
-`v0.1.0-alpha.10` is the current locally certified release candidate. It
-promotes the deny-by-default API and browser perimeter, guarded host execution,
-append-only audit recovery, crash-safe outbound delivery and delegation,
-evidence-bound project completion, synchronized budgets, complete memory
-write opt-out, exact Codex quota/reasoning controls, truthful compaction
-progress, and authoritative external secret sources.
+`v0.1.0-alpha.10` is the current public prerelease. It promotes the
+deny-by-default API and browser perimeter, guarded host execution, append-only
+audit recovery, crash-safe outbound delivery and delegation, evidence-bound
+project completion, synchronized budgets, complete memory write opt-out,
+exact Codex quota/reasoning controls, truthful compaction progress, and
+authoritative external secret sources.
 
 Its host release contract contains exactly 22 files: five archives, five
 SHA-256 sidecars, five platform manifests, four installers, one aggregate
@@ -19,16 +19,39 @@ manifest, one deterministic in-toto/SLSA v1 provenance statement, and its
 SHA-256 sidecar. The five host targets and both Docker architectures must be
 built strictly one at a time with disk/load checks between them.
 
-Public source commit, annotated tag object, publication timestamp, GitHub asset
-digests, OCI index and architecture digests, moving-channel parity, and
-anonymous install evidence are intentionally unset until the candidate is
-published and verified. Candidate docs must not copy provenance from an older
-release or describe the GitHub/GHCR surfaces as live before those observations
-exist.
+Its verified public surfaces are:
 
-## Current Public Release
+- release:
+  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10>
+- source commit: `48f898a9e4d38e8b8c7627644b66e22076a39364`
+- source tree: `ba37632b5e2b6a3923a2241e1d38d7903bdb95f1`
+- annotated tag object: `b58f7561d0014228cc523b1770b5c411b017ef52`
+- publication time: `2026-07-30T04:00:03Z`
+- immutable image:
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10`
+- OCI index digest:
+  `sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477`
+- `linux/amd64` manifest:
+  `sha256:c641b4e43369da4f76c20c2f775bb3cea5a2567288e22cf735aa5dc6b53cc91c`
+- `linux/arm64` manifest:
+  `sha256:d48cf9f5a1682c539c2224e3ce1de3b25b1dbe5c3c797428f2d283d3a30db96a`
+- AMD64 attestation manifest:
+  `sha256:e446c5a56f2a1e34126f4e96df8694a8ab5a6370b164d7d98082ab15791612ef`
+- ARM64 attestation manifest:
+  `sha256:060b06cd91cbf65bedbb81439e354339895a38fd8918c6eff7629d4fc5be76bb`
 
-`v0.1.0-alpha.9` is the current public prerelease. It combines durable
+The annotated tag dereferences to the source commit above. The GitHub Release
+contains exactly 22 uploaded assets, and every GitHub-reported SHA-256 digest
+matches the corresponding locally certified file. The immutable image and
+moving `:alpha` channel resolved to the same OCI index. Anonymous HTTP checks
+reached the checksum and provenance assets, and anonymous Docker pulls
+executed `captain --version` successfully on ARM64 and AMD64. The GitHub
+Actions API returned zero runs because the complete release was built and
+published locally.
+
+## Previous Public Release
+
+`v0.1.0-alpha.9` is the previous public prerelease. It combines durable
 Workflow Learning V2 with Captain's native release monitor. Its immutable
 public surfaces are:
 
@@ -56,18 +79,18 @@ Known `alpha.9` limitation: an explicit per-turn memory write opt-out still
 allows the core agent-loop finalizer to write one local episodic interaction
 fragment. Normal transcript and audit retention remain intentional.
 
-The `alpha.10` candidate closes that published limitation. The shared
+The published `alpha.10` release closes that limitation. The shared
 streaming/non-streaming finalizer checks the explicit per-turn opt-out before
 embedding or storing its episodic interaction. The normal resumable transcript
 and mandatory operational/audit records remain intentional.
 
-## Alpha 10 Release Provenance Contract
+## Alpha 10 Release Provenance
 
 Local release builds remain the source of truth and do not consume automatic
 GitHub Actions minutes. The five host targets are built sequentially with a
 disk/load checkpoint before and after each target. The publisher adds a
 deterministic in-toto/SLSA v1 statement and checksum to the 20 base assets,
-making 22 uploaded assets for the next release. The statement binds every base
+making 22 uploaded assets for this release. The statement binds every base
 asset to the public Git commit/tree and exact `Cargo.lock`; verification rejects
 asset, source, or lockfile drift.
 
@@ -81,8 +104,9 @@ The versioned public `main` policy requires reviewed pull requests for non-admin
 contributors, resolved conversations, linear history, and forbids force-pushes
 or deletion. Administrators retain the audited local publication path. No
 automatic status check is required because the complete gate runs locally;
-the three-OS workflow remains a manual fallback. The next publication must
-apply and read back that policy before claiming it is active remotely.
+the three-OS workflow remains a manual fallback. Before Alpha 10 publication,
+the policy was applied and read back from GitHub with these requirements
+intact; the release push did not trigger a hosted workflow.
 
 ## Alpha 10 Live Budget Contract
 
@@ -284,7 +308,7 @@ without silently changing runtime policy.
 
 ## Alpha 10 Credential Contract
 
-The `alpha.10` candidate has one credential resolution contract:
+The published `alpha.10` release has one credential resolution contract:
 an explicitly mapped file in `secret-sources.toml` is authoritative, followed
 only when no mapping exists by `secrets.env`, `vault.enc`, legacy `.env`, and
 the process environment. Active LLM drivers and provider status, channels,

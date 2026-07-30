@@ -166,11 +166,11 @@ require_contains \
   scripts/excellence-smoke.sh \
   '0.1.0-alpha.10'
 require_contains \
-  "public changelog exposes the candidate alpha" \
+  "public changelog exposes the current alpha" \
   CHANGELOG.md \
   '## [0.1.0-alpha.10] - 2026-07-30'
 require_contains \
-  "reviewed candidate alpha notes exist" \
+  "reviewed public alpha notes exist" \
   docs/releases/v0.1.0-alpha.10.md \
   '# Captain 0.1.0-alpha.10'
 require_contains \
@@ -282,29 +282,41 @@ require_contains \
   docs/releases/v0.1.0-alpha.9.md \
   'GitHub Actions API returned zero runs'
 require_not_contains \
-  "alpha.10 candidate notes do not copy the alpha.9 source commit" \
+  "alpha.10 notes do not copy the alpha.9 source commit" \
   docs/releases/v0.1.0-alpha.10.md \
   '1248c5928dd4968b6ff7c62ef79a607fb8d94348'
 require_not_contains \
-  "alpha.10 candidate notes do not copy the alpha.9 OCI digest" \
+  "alpha.10 notes do not copy the alpha.9 OCI digest" \
   docs/releases/v0.1.0-alpha.10.md \
   'sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692'
 require_contains \
-  "alpha.10 candidate notes keep live provenance unset" \
+  "published alpha.10 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.10.md \
-  'unset until the live release has'
+  '48f898a9e4d38e8b8c7627644b66e22076a39364'
 require_contains \
-  "alpha.10 candidate notes pin the 22-asset contract" \
+  "published alpha.10 notes pin the annotated tag object" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'b58f7561d0014228cc523b1770b5c411b017ef52'
+require_contains \
+  "published alpha.10 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477'
+require_contains \
+  "published alpha.10 notes pin the 22-asset contract" \
   docs/releases/v0.1.0-alpha.10.md \
   'exactly 22 host assets'
 require_contains \
-  "alpha.10 candidate notes pin sequential host builds" \
+  "published alpha.10 notes pin sequential host builds" \
   docs/releases/v0.1.0-alpha.10.md \
   'one target at a time'
 require_contains \
-  "alpha.10 candidate notes pin sequential Docker builds" \
+  "published alpha.10 notes pin sequential Docker builds" \
   docs/releases/v0.1.0-alpha.10.md \
   'strictly one after the other'
+require_contains \
+  "published alpha.10 notes record the zero-Actions proof" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'GitHub Actions API returned zero runs'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
@@ -399,11 +411,11 @@ require_contains \
   'asset count to 22'
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
-    "$readme pins the candidate installer" \
+    "$readme pins the prerelease installer" \
     "$readme" \
     'releases/download/v0.1.0-alpha.10/install.sh'
   require_contains \
-    "$readme pins the immutable candidate image" \
+    "$readme pins the immutable prerelease image" \
     "$readme" \
     'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10'
   require_not_contains \

@@ -35,6 +35,13 @@ Agent-facing changes:
   targets are built one architecture at a time with capacity checkpoints;
   Captain does not claim an independent signature or SLSA certification level
   for the alpha host statement.
+- The public `v0.1.0-alpha.10` prerelease contains exactly 22 assets. Its
+  annotated tag dereferences to source commit
+  `48f898a9e4d38e8b8c7627644b66e22076a39364`, while the immutable image and
+  moving `:alpha` channel share OCI index digest
+  `sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477`.
+  Anonymous ARM64 and AMD64 execution succeeded, and GitHub reports zero
+  Actions runs because the release was built and published locally.
 - Captain's SSH vault accepts Ed25519 and ECDSA P-256 private keys. RSA keys
   now fail with an actionable message because the upstream Rust RSA
   implementation still has an unresolved timing-side-channel advisory. The

@@ -82,6 +82,22 @@ if is_yes "${CAPTAIN_RELEASE_POLICY_TEST:-}"; then
     exit 0
 fi
 
+docker_auth_dir=""
+docker_metadata_dir=""
+docker_builder=""
+cleanup_publish_runtime() {
+    if [ -n "$docker_builder" ] && command -v docker >/dev/null 2>&1; then
+        docker buildx rm "$docker_builder" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$docker_metadata_dir" ]; then
+        rm -rf "$docker_metadata_dir"
+    fi
+    if [ -n "$docker_auth_dir" ]; then
+        rm -rf "$docker_auth_dir"
+    fi
+}
+trap cleanup_publish_runtime EXIT
+
 need_cmd git
 need_cmd jq
 need_cmd tar
@@ -240,16 +256,33 @@ printf '\n== Git branch\n'
 git push origin "$BRANCH"
 
 if ! is_yes "${CAPTAIN_SKIP_DOCKER_PUSH:-}"; then
+    docker_plugin_path="$(docker info --format '{{range .ClientInfo.Plugins}}{{if eq .Name "buildx"}}{{.Path}}{{end}}{{end}}')"
+    [ -x "$docker_plugin_path" ] \
+        || fail "Docker Buildx plugin path is unavailable; install or repair Docker Buildx"
+    docker_plugin_dir="$(dirname "$docker_plugin_path")"
+    docker_context="$(docker context show)"
+    docker_auth_dir="$(mktemp -d "${TMPDIR:-/tmp}/captain-docker-auth.XXXXXX")"
+    chmod 700 "$docker_auth_dir"
+    jq -n \
+        --arg context "$docker_context" \
+        --arg plugin_dir "$docker_plugin_dir" \
+        '{currentContext:$context, cliPluginsExtraDirs:[$plugin_dir]}' \
+        >"$docker_auth_dir/config.json"
+    chmod 600 "$docker_auth_dir/config.json"
+    export DOCKER_CONFIG="$docker_auth_dir"
+    docker buildx version >/dev/null \
+        || fail "Docker Buildx is unavailable through the isolated release config"
+
     printf '\n== GHCR login\n'
     gh auth token | docker login ghcr.io -u "$OWNER" --password-stdin
 
     printf '\n== sequential architecture image builds and push\n'
-    docker buildx inspect --bootstrap >/dev/null
     docker_metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/captain-docker-publish.XXXXXX")"
-    cleanup_docker_metadata() {
-        rm -rf "$docker_metadata_dir"
-    }
-    trap cleanup_docker_metadata EXIT
+    docker_builder="captain-release-${VERSION#v}-$$"
+    docker buildx create \
+        --name "$docker_builder" \
+        --driver docker-container >/dev/null
+    docker buildx inspect "$docker_builder" --bootstrap >/dev/null
 
     build_and_push_architecture() {
         local architecture="$1"
@@ -257,6 +290,7 @@ if ! is_yes "${CAPTAIN_SKIP_DOCKER_PUSH:-}"; then
         local digest
         release_host_checkpoint "before Docker linux/$architecture"
         docker buildx build \
+            --builder "$docker_builder" \
             --file Dockerfile.release \
             --platform "linux/$architecture" \
             --build-arg "CAPTAIN_RELEASE_VERSION=$VERSION" \
@@ -287,6 +321,11 @@ if ! is_yes "${CAPTAIN_SKIP_DOCKER_PUSH:-}"; then
         --tag "$IMAGE:$RELEASE_CHANNEL" \
         "$IMAGE@$amd64_digest" \
         "$IMAGE@$arm64_digest"
+    if docker buildx rm "$docker_builder" >/dev/null 2>&1; then
+        docker_builder=""
+    else
+        printf '  Warning: temporary Docker builder cleanup will be retried on exit\n' >&2
+    fi
 fi
 
 printf '\n== Git tag\n'

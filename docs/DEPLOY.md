@@ -1,7 +1,7 @@
 # Deploying Captain
 
 Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
-container image. The current release candidate is the prerelease
+container image. The current public release is the prerelease
 `v0.1.0-alpha.10`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 

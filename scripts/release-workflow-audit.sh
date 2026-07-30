@@ -131,6 +131,11 @@ done
 
 require_file_literal "local publisher validates five platforms" "$LOCAL_PUBLISHER" 'x86_64-pc-windows-msvc'
 require_file_literal "local publisher targets the isolated public image package" "$LOCAL_PUBLISHER" 'IMAGE="${CAPTAIN_IMAGE:-ghcr.io/$OWNER_LOWER/captain-agent-os}"'
+require_file_literal "local publisher isolates registry credentials" "$LOCAL_PUBLISHER" 'captain-docker-auth.XXXXXX'
+require_file_literal "local publisher preserves Buildx plugin discovery" "$LOCAL_PUBLISHER" 'cliPluginsExtraDirs:[$plugin_dir]'
+require_file_literal "local publisher cleans temporary runtime state" "$LOCAL_PUBLISHER" 'trap cleanup_publish_runtime EXIT'
+require_file_literal "local publisher creates a digest-capable builder" "$LOCAL_PUBLISHER" '--driver docker-container'
+require_file_literal "local publisher binds builds to its temporary builder" "$LOCAL_PUBLISHER" '--builder "$docker_builder"'
 require_file_literal "local publisher builds one Docker architecture at a time" "$LOCAL_PUBLISHER" '--platform "linux/$architecture"'
 if rg -Fq -- '--platform linux/amd64,linux/arm64' "$LOCAL_PUBLISHER"; then
     printf '   FAIL local publisher must not build Docker architectures concurrently\n' >&2

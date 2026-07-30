@@ -62,11 +62,11 @@ pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10' \
-    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable candidate"
+    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable prerelease"
   grep -Fq 'releases/download/v0.1.0-alpha.10/install.sh' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the candidate installer"
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the prerelease installer"
   grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable candidate image"
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable prerelease image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
   fi
@@ -76,17 +76,26 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
 done
 grep -Fq '### 0.1.0-alpha.10' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
-  || fail "agent-facing changelog does not identify the candidate alpha"
-grep -Fq 'unset until the live release has' \
+  || fail "agent-facing changelog does not identify the public alpha"
+grep -Fq '48f898a9e4d38e8b8c7627644b66e22076a39364' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md" \
-  || fail "candidate release notes do not keep live provenance explicitly unset"
+  || fail "published release notes do not pin the Alpha 10 source commit"
+grep -Fq 'b58f7561d0014228cc523b1770b5c411b017ef52' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md" \
+  || fail "published release notes do not pin the Alpha 10 tag object"
+grep -Fq 'sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md" \
+  || fail "published release notes do not pin the Alpha 10 OCI index"
+grep -Fq 'GitHub Actions API returned zero runs' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md" \
+  || fail "published release notes do not record the zero-Actions proof"
 if grep -Fq '1248c5928dd4968b6ff7c62ef79a607fb8d94348' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md"; then
-  fail "candidate release notes copied the alpha.9 public source commit"
+  fail "Alpha 10 release notes copied the alpha.9 public source commit"
 fi
 if grep -Fq 'sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md"; then
-  fail "candidate release notes copied the alpha.9 OCI digest"
+  fail "Alpha 10 release notes copied the alpha.9 OCI digest"
 fi
 grep -Fq 'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.5.md" \
@@ -105,7 +114,7 @@ if [ -n "$legacy_image_matches" ]; then
   printf '%s\n' "$legacy_image_matches" >&2
   fail "public tree still references the private historical image package"
 fi
-pass "candidate alpha version, installer, image, and prerelease policy are coherent"
+pass "public alpha version, installer, image, and prerelease policy are coherent"
 
 forbidden_paths=(
   .mcp.json

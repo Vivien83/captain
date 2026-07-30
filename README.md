@@ -52,7 +52,7 @@ app, Telegram, or Discord.
 
 ## Quick Install
 
-Current early-access release candidate:
+Current public prerelease:
 [v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10).
 Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.
