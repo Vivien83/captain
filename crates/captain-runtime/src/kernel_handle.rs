@@ -279,6 +279,58 @@ pub trait KernelHandle: Send + Sync {
         Err("Not implemented".into())
     }
 
+    /// Persist a detached sub-agent delegation and wake the bounded worker.
+    fn start_agent_delegation(
+        &self,
+        _caller_agent_id: &str,
+        _target_agent_id: &str,
+        _title: &str,
+        _task: &str,
+        _max_tokens: u64,
+        _depends_on: &[String],
+        _idempotency_key: &str,
+    ) -> Result<captain_types::agent_delegation::AgentDelegationJobRecord, String> {
+        Err("durable agent delegation is not available on this kernel".to_string())
+    }
+
+    /// Read one delegation owned by the calling agent.
+    fn agent_delegation_status(
+        &self,
+        _caller_agent_id: &str,
+        _job_id: &str,
+    ) -> Result<Option<captain_types::agent_delegation::AgentDelegationJobRecord>, String> {
+        Err("durable agent delegation is not available on this kernel".to_string())
+    }
+
+    /// List recent delegations owned by the calling agent.
+    fn list_agent_delegations(
+        &self,
+        _caller_agent_id: &str,
+        _status: Option<captain_types::agent_delegation::AgentDelegationStatus>,
+        _limit: usize,
+    ) -> Result<Vec<captain_types::agent_delegation::AgentDelegationJobRecord>, String> {
+        Err("durable agent delegation is not available on this kernel".to_string())
+    }
+
+    /// Request cancellation without claiming that a started model call was
+    /// definitely stopped.
+    fn cancel_agent_delegation(
+        &self,
+        _caller_agent_id: &str,
+        _job_id: &str,
+    ) -> Result<captain_types::agent_delegation::AgentDelegationJobRecord, String> {
+        Err("durable agent delegation is not available on this kernel".to_string())
+    }
+
+    /// Explicitly replay a failed or ambiguous delegation attempt.
+    fn resume_agent_delegation(
+        &self,
+        _caller_agent_id: &str,
+        _job_id: &str,
+    ) -> Result<captain_types::agent_delegation::AgentDelegationJobRecord, String> {
+        Err("durable agent delegation is not available on this kernel".to_string())
+    }
+
     /// Which memory backend is configured (graph or mempalace).
     fn memory_backend(&self) -> captain_types::config::MemoryBackend {
         captain_types::config::MemoryBackend::default()
@@ -351,6 +403,12 @@ pub trait KernelHandle: Send + Sync {
     fn workflow_learning_list(&self, limit: usize) -> Result<serde_json::Value, String> {
         let _ = limit;
         Err("workflow_learning_list not implemented on this kernel".into())
+    }
+
+    /// Return the exact operational state of the Skill Learning V2 worker,
+    /// queues and bound model as one public-safe snapshot.
+    fn workflow_learning_status(&self) -> Result<serde_json::Value, String> {
+        Err("workflow_learning_status not implemented on this kernel".into())
     }
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
@@ -636,15 +694,16 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Request approval for a tool execution. Blocks until approved/denied/timed out.
-    /// Returns `Ok(true)` if approved, `Ok(false)` if denied or timed out.
+    /// Returns the exact operator decision, optional reason, and durable rule id.
     async fn request_approval(
         &self,
         agent_id: &str,
         tool_name: &str,
         action_summary: &str,
-    ) -> Result<bool, String> {
-        let _ = (agent_id, tool_name, action_summary);
-        Ok(true) // Default: auto-approve
+        action_digest: &str,
+    ) -> Result<captain_types::approval::ApprovalOutcome, String> {
+        let _ = (agent_id, tool_name, action_summary, action_digest);
+        Ok(captain_types::approval::ApprovalDecision::Approved.into())
     }
 
     /// List available Hands and their activation status.
@@ -916,13 +975,13 @@ pub trait KernelHandle: Send + Sync {
         Err("Model switch apply not available".into())
     }
 
-    /// Read a secret from the centralized secrets.env.
+    /// Read a secret through the centralized authoritative resolver.
     fn secret_read(&self, key: &str) -> Result<Option<String>, String> {
         let _ = key;
         Err("Secrets not available".into())
     }
 
-    /// Write a secret to the centralized secrets.env.
+    /// Write a local secret, refusing externally managed keys.
     fn secret_write(&self, key: &str, value: &str) -> Result<(), String> {
         let _ = (key, value);
         Err("Secrets not available".into())

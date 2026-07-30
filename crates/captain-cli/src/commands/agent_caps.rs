@@ -106,6 +106,7 @@ fn agent_caps_report_lines(agent: &Value, budget: &Value) -> Vec<String> {
             agent["model"]["provider"].as_str().unwrap_or("?"),
             agent["model"]["model"].as_str().unwrap_or("?")
         ),
+        format!("  Reasoning: {}", reasoning_line(&agent["reasoning"])),
         format!(
             "  Profile: {}",
             agent["profile"].as_str().unwrap_or("custom")
@@ -170,6 +171,16 @@ fn agent_caps_report_lines(agent: &Value, budget: &Value) -> Vec<String> {
                 .unwrap_or_else(|| "unavailable".to_string())
         ),
     ]
+}
+
+fn reasoning_line(reasoning: &Value) -> String {
+    if reasoning["supported"].as_bool() != Some(true) {
+        return "provider default (not configurable)".to_string();
+    }
+    let configured = reasoning["configured_effort"].as_str().unwrap_or("auto");
+    let effective = reasoning["effective_effort"].as_str().unwrap_or("provider");
+    let source = reasoning["source"].as_str().unwrap_or("provider_default");
+    format!("{configured} -> {effective} [{source}]")
 }
 
 fn api_error(value: &Value) -> Option<&str> {
@@ -300,6 +311,11 @@ mod tests {
             "state": "Running",
             "profile": "coding",
             "model": {"provider": "codex", "model": "gpt-5.5"},
+            "reasoning": {
+                "supported": true,
+                "effective_effort": "low",
+                "source": "model_default"
+            },
             "capabilities": {"tools": [], "network": []},
             "capabilities_effective": {
                 "tools": ["file_read", "shell_exec"],
@@ -331,6 +347,7 @@ mod tests {
         assert!(report.contains("  Tools: file_read, shell_exec"));
         assert!(report.contains("  Shell: all (*)"));
         assert!(report.contains("  Agent spawn: allowed"));
+        assert!(report.contains("  Reasoning: auto -> low [model_default]"));
         assert!(report.contains("  LLM tokens/hour: 250 / 1000 (25.0%)"));
         assert!(report.contains("  Memory: 256.0 MiB"));
     }

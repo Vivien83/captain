@@ -21,12 +21,45 @@ pub struct ApprovalRequest {
     pub created_at: i64,
 }
 
+#[derive(Clone, Default)]
+pub struct ApprovalRule {
+    pub id: String,
+    pub effect: String,
+    pub agent_id: String,
+    pub tool_name: String,
+    pub action_digest: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalsFocus {
+    Pending,
+    Rules,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectScope {
+    Once,
+    Session,
+    Always,
+}
+
+struct RejectDraft {
+    id: String,
+    scope: RejectScope,
+    reason: String,
+}
+
 pub struct ApprovalsState {
     pub pending: Vec<ApprovalRequest>,
     pub list_state: ListState,
+    pub rules: Vec<ApprovalRule>,
+    pub rules_state: ListState,
+    pub focus: ApprovalsFocus,
     pub loading: bool,
     pub tick: usize,
     pub status_msg: String,
+    reject_draft: Option<RejectDraft>,
 }
 
 #[derive(Debug)]
@@ -35,11 +68,16 @@ pub enum ApprovalsAction {
     Refresh,
     /// Q.11 — approve this single occurrence (back-compat with `[a]`/`[y]`/`[o]`).
     Approve(String),
-    /// Q.11 — approve all calls to the same `(agent, tool)` until daemon restart.
+    /// Approve this exact agent/tool/action tuple until daemon restart.
     ApproveSession(String),
-    /// Q.11 — approve all calls to this tool forever (persisted to policy).
+    /// Persist a revocable allow rule for this exact agent/tool/action tuple.
     ApproveAlways(String),
-    Reject(String),
+    Reject {
+        id: String,
+        scope: RejectScope,
+        reason: String,
+    },
+    RevokeRule(String),
 }
 
 impl ApprovalsState {
@@ -47,9 +85,13 @@ impl ApprovalsState {
         Self {
             pending: Vec::new(),
             list_state: ListState::default(),
+            rules: Vec::new(),
+            rules_state: ListState::default(),
+            focus: ApprovalsFocus::Pending,
             loading: false,
             tick: 0,
             status_msg: String::new(),
+            reject_draft: None,
         }
     }
 
@@ -62,46 +104,121 @@ impl ApprovalsState {
         self.pending.get(i).map(|a| a.id.clone())
     }
 
+    fn selected_rule_id(&self) -> Option<String> {
+        let i = self.rules_state.selected()?;
+        self.rules.get(i).map(|rule| rule.id.clone())
+    }
+
+    fn start_reject(&mut self, scope: RejectScope) {
+        if let Some(id) = self.selected_id() {
+            self.reject_draft = Some(RejectDraft {
+                id,
+                scope,
+                reason: String::new(),
+            });
+            self.status_msg = "Saisis un motif puis Entrée. Échap annule.".to_string();
+        }
+    }
+
+    fn move_selection(&mut self, previous: bool) {
+        let (len, state) = match self.focus {
+            ApprovalsFocus::Pending => (self.pending.len(), &mut self.list_state),
+            ApprovalsFocus::Rules => (self.rules.len(), &mut self.rules_state),
+        };
+        if len == 0 {
+            return;
+        }
+        let current = state.selected().unwrap_or(0);
+        let next = if previous {
+            if current == 0 {
+                len - 1
+            } else {
+                current - 1
+            }
+        } else {
+            (current + 1) % len
+        };
+        state.select(Some(next));
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> ApprovalsAction {
+        if let Some(draft) = self.reject_draft.as_mut() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.reject_draft = None;
+                    self.status_msg = "Refus annulé.".to_string();
+                }
+                KeyCode::Enter => {
+                    let reason = draft.reason.trim().to_string();
+                    if draft.scope == RejectScope::Always && reason.is_empty() {
+                        self.status_msg =
+                            "Un motif est obligatoire pour une règle durable.".to_string();
+                        return ApprovalsAction::Continue;
+                    }
+                    let action = ApprovalsAction::Reject {
+                        id: draft.id.clone(),
+                        scope: draft.scope,
+                        reason,
+                    };
+                    self.reject_draft = None;
+                    return action;
+                }
+                KeyCode::Backspace => {
+                    draft.reason.pop();
+                }
+                KeyCode::Char(ch) if draft.reason.chars().count() < 280 => {
+                    draft.reason.push(ch);
+                }
+                _ => {}
+            }
+            return ApprovalsAction::Continue;
+        }
+
         match key.code {
             KeyCode::Char('r') => return ApprovalsAction::Refresh,
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.pending.is_empty() {
-                    return ApprovalsAction::Continue;
-                }
-                let i = self.list_state.selected().unwrap_or(0);
-                let next = if i == 0 {
-                    self.pending.len() - 1
-                } else {
-                    i - 1
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    ApprovalsFocus::Pending => ApprovalsFocus::Rules,
+                    ApprovalsFocus::Rules => ApprovalsFocus::Pending,
                 };
-                self.list_state.select(Some(next));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_selection(true);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.pending.is_empty() {
-                    return ApprovalsAction::Continue;
-                }
-                let i = self.list_state.selected().unwrap_or(0);
-                self.list_state.select(Some((i + 1) % self.pending.len()));
+                self.move_selection(false);
             }
-            KeyCode::Char('o') | KeyCode::Char('a') | KeyCode::Char('y') => {
+            KeyCode::Char('o') | KeyCode::Char('a') | KeyCode::Char('y')
+                if self.focus == ApprovalsFocus::Pending =>
+            {
                 if let Some(id) = self.selected_id() {
                     return ApprovalsAction::Approve(id);
                 }
             }
-            KeyCode::Char('s') => {
+            KeyCode::Char('s') if self.focus == ApprovalsFocus::Pending => {
                 if let Some(id) = self.selected_id() {
                     return ApprovalsAction::ApproveSession(id);
                 }
             }
-            KeyCode::Char('A') => {
+            KeyCode::Char('A') if self.focus == ApprovalsFocus::Pending => {
                 if let Some(id) = self.selected_id() {
                     return ApprovalsAction::ApproveAlways(id);
                 }
             }
-            KeyCode::Char('R') | KeyCode::Char('d') | KeyCode::Char('n') => {
-                if let Some(id) = self.selected_id() {
-                    return ApprovalsAction::Reject(id);
+            KeyCode::Char('R') | KeyCode::Char('d') | KeyCode::Char('n')
+                if self.focus == ApprovalsFocus::Pending =>
+            {
+                self.start_reject(RejectScope::Once)
+            }
+            KeyCode::Char('D') if self.focus == ApprovalsFocus::Pending => {
+                self.start_reject(RejectScope::Session)
+            }
+            KeyCode::Char('X') if self.focus == ApprovalsFocus::Pending => {
+                self.start_reject(RejectScope::Always)
+            }
+            KeyCode::Char('x') if self.focus == ApprovalsFocus::Rules => {
+                if let Some(id) = self.selected_rule_id() {
+                    return ApprovalsAction::RevokeRule(id);
                 }
             }
             _ => {}
@@ -113,7 +230,11 @@ impl ApprovalsState {
 pub fn draw(f: &mut Frame, area: Rect, state: &mut ApprovalsState) {
     let block = Block::default()
         .title(Line::from(vec![Span::styled(
-            format!(" Approvals ({} en attente) ", state.pending.len()),
+            format!(
+                " Approvals ({} en attente · {} règles) ",
+                state.pending.len(),
+                state.rules.len()
+            ),
             theme::title_style(),
         )]))
         .borders(Borders::ALL)
@@ -124,8 +245,10 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut ApprovalsState) {
 
     let chunks = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Min(3),
+        Constraint::Percentage(48),
         Constraint::Length(1),
+        Constraint::Min(2),
+        Constraint::Length(2),
     ])
     .split(inner);
 
@@ -171,15 +294,89 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut ApprovalsState) {
                 ]))
             })
             .collect();
-        let list = List::new(items).highlight_style(theme::selected_style());
+        let list = List::new(items).highlight_style(if state.focus == ApprovalsFocus::Pending {
+            theme::selected_style()
+        } else {
+            theme::dim_style()
+        });
         f.render_stateful_widget(list, chunks[1], &mut state.list_state);
     }
 
-    let hints =
-        "  [\u{2191}\u{2193}] nav  [o] once  [s] session  [A] always  [R] reject  [r] refresh";
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(hints, theme::hint_style()))),
+        Paragraph::new(Line::from(Span::styled(
+            "  RÈGLES DURABLES — agent · outil · empreinte exacte (jamais la commande brute)",
+            theme::table_header(),
+        ))),
         chunks[2],
+    );
+    let rule_items: Vec<ListItem> = state
+        .rules
+        .iter()
+        .map(|rule| {
+            let effect_style = if rule.effect == "deny" {
+                Style::default().fg(theme::RED)
+            } else {
+                Style::default().fg(theme::GREEN)
+            };
+            let digest: String = rule.action_digest.chars().take(10).collect();
+            let mut spans = vec![
+                Span::styled(format!("{:<8} ", rule.effect), effect_style),
+                Span::styled(
+                    format!("{:<14} ", rule.tool_name),
+                    Style::default().fg(theme::ACCENT),
+                ),
+                Span::raw(format!("{} · {}", rule.agent_id, digest)),
+            ];
+            if !rule.reason.is_empty() {
+                spans.push(Span::styled(
+                    format!(" · {}", rule.reason),
+                    theme::dim_style(),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    if rule_items.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  Aucune règle durable.",
+                theme::dim_style(),
+            ))),
+            chunks[3],
+        );
+    } else {
+        let rules =
+            List::new(rule_items).highlight_style(if state.focus == ApprovalsFocus::Rules {
+                theme::selected_style()
+            } else {
+                theme::dim_style()
+            });
+        f.render_stateful_widget(rules, chunks[3], &mut state.rules_state);
+    }
+
+    let (status, hints) = if let Some(draft) = state.reject_draft.as_ref() {
+        let scope = match draft.scope {
+            RejectScope::Once => "une fois",
+            RejectScope::Session => "session",
+            RejectScope::Always => "durable",
+        };
+        (
+            format!("  Motif ({scope}) : {}_", draft.reason),
+            "  [Entrée] confirmer  [Échap] annuler".to_string(),
+        )
+    } else {
+        (
+            format!("  {}", state.status_msg),
+            "  [Tab] zone  [↑↓] nav  [o/s/A] autoriser  [R/D/X] refuser  [x] révoquer  [r] refresh"
+                .to_string(),
+        )
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(status, theme::dim_style())),
+            Line::from(Span::styled(hints, theme::hint_style())),
+        ]),
+        chunks[4],
     );
 }
 
@@ -187,6 +384,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut ApprovalsState) {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{backend::TestBackend, Terminal};
 
     fn state_with_one_pending() -> ApprovalsState {
         let mut s = ApprovalsState::new();
@@ -249,8 +447,19 @@ mod tests {
     #[test]
     fn q11b_key_uppercase_r_returns_reject() {
         let mut s = state_with_one_pending();
-        match s.handle_key(shift_key(KeyCode::Char('R'))) {
-            ApprovalsAction::Reject(id) => assert_eq!(id, "abc"),
+        assert!(matches!(
+            s.handle_key(shift_key(KeyCode::Char('R'))),
+            ApprovalsAction::Continue
+        ));
+        for ch in "pas maintenant".chars() {
+            s.handle_key(key(KeyCode::Char(ch)));
+        }
+        match s.handle_key(key(KeyCode::Enter)) {
+            ApprovalsAction::Reject { id, scope, reason } => {
+                assert_eq!(id, "abc");
+                assert_eq!(scope, RejectScope::Once);
+                assert_eq!(reason, "pas maintenant");
+            }
             other => panic!("expected Reject, got: {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -268,12 +477,16 @@ mod tests {
         ));
         assert!(matches!(
             s.handle_key(key(KeyCode::Char('d'))),
-            ApprovalsAction::Reject(_)
+            ApprovalsAction::Continue
         ));
+        assert!(s.reject_draft.is_some());
+        s.handle_key(key(KeyCode::Esc));
         assert!(matches!(
             s.handle_key(key(KeyCode::Char('n'))),
-            ApprovalsAction::Reject(_)
+            ApprovalsAction::Continue
         ));
+        assert!(s.reject_draft.is_some());
+        s.handle_key(key(KeyCode::Esc));
         assert!(matches!(
             s.handle_key(key(KeyCode::Char('r'))),
             ApprovalsAction::Refresh
@@ -291,5 +504,72 @@ mod tests {
             s.handle_key(shift_key(KeyCode::Char('A'))),
             ApprovalsAction::Continue
         ));
+    }
+
+    #[test]
+    fn durable_deny_requires_reason_and_rule_can_be_revoked() {
+        let mut s = state_with_one_pending();
+        s.handle_key(shift_key(KeyCode::Char('X')));
+        assert!(matches!(
+            s.handle_key(key(KeyCode::Enter)),
+            ApprovalsAction::Continue
+        ));
+        assert!(s.status_msg.contains("obligatoire"));
+        for ch in "commande interdite".chars() {
+            s.handle_key(key(KeyCode::Char(ch)));
+        }
+        assert!(matches!(
+            s.handle_key(key(KeyCode::Enter)),
+            ApprovalsAction::Reject {
+                scope: RejectScope::Always,
+                ..
+            }
+        ));
+
+        s.rules.push(ApprovalRule {
+            id: "rule-1".into(),
+            effect: "deny".into(),
+            agent_id: "captain".into(),
+            tool_name: "shell_exec".into(),
+            action_digest: "a".repeat(64),
+            reason: "commande interdite".into(),
+        });
+        s.rules_state.select(Some(0));
+        s.focus = ApprovalsFocus::Rules;
+        assert!(matches!(
+            s.handle_key(key(KeyCode::Char('x'))),
+            ApprovalsAction::RevokeRule(id) if id == "rule-1"
+        ));
+    }
+
+    #[test]
+    fn approvals_render_without_overflow_on_desktop_and_compact_terminals() {
+        for (width, height) in [(100, 28), (52, 18)] {
+            let mut state = state_with_one_pending();
+            state.rules.push(ApprovalRule {
+                id: "rule-1".into(),
+                effect: "deny".into(),
+                agent_id: "captain".into(),
+                tool_name: "shell_exec".into(),
+                action_digest: "a".repeat(64),
+                reason: "utilise le staging".into(),
+            });
+            state.rules_state.select(Some(0));
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw(frame, frame.area(), &mut state))
+                .unwrap();
+
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(rendered.contains("Approvals"));
+            assert!(rendered.contains("shell_exec"));
+        }
     }
 }

@@ -1,4 +1,4 @@
-use super::screens::chat::{ChatState, PendingAskUser, Role};
+use super::screens::chat::{ChatState, PendingAskUser, PendingSuggestedReplies, Role};
 use captain_runtime::llm_driver::StreamEvent;
 
 pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
@@ -44,6 +44,9 @@ pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
                 }
             }
         }
+        StreamEvent::CompactionProgress { progress } => {
+            chat.apply_compaction_progress(progress);
+        }
         StreamEvent::ThinkingDelta { text } => {
             chat.append_thinking(&text);
         }
@@ -58,6 +61,11 @@ pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
         StreamEvent::IntermediateMessage { content } => {
             flush_streaming_text(chat);
             chat.push_message(Role::Agent, content);
+        }
+        StreamEvent::SuggestedReplies { options } => {
+            chat.quick_action_click_zones.clear();
+            chat.pending_suggested_replies =
+                (!options.is_empty()).then_some(PendingSuggestedReplies { options });
         }
         StreamEvent::AskUser { question, options } => {
             let options = options.unwrap_or_default();

@@ -31,6 +31,11 @@ fn agent_observability_tool_definitions() -> Vec<ToolDefinition> {
 fn agent_guidance_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         agent_delegate_tool_definition(),
+        agent_job_status_tool_definition(),
+        agent_job_result_tool_definition(),
+        agent_job_list_tool_definition(),
+        agent_job_cancel_tool_definition(),
+        agent_job_resume_tool_definition(),
         agent_correct_tool_definition(),
     ]
 }
@@ -159,17 +164,81 @@ fn agent_watch_tool_definition() -> ToolDefinition {
 fn agent_delegate_tool_definition() -> ToolDefinition {
     tool_definition(
         "agent_delegate",
-        "Délègue une tâche à un sub-agent avec un budget de tokens maximum. Actuellement synchrone: poste une tâche, exécute un tour du worker, complète la tâche avec le résultat et retourne ce résultat. Pour du vrai fire-and-forget, utiliser task_post/task_claim. À utiliser seulement si la tâche est indépendante, vérifiable et moins coûteuse en contexte que de la faire dans l'agent courant. Toujours fixer max_tokens à un budget serré et demander un livrable précis. Éviter pour une action locale simple, car la délégation peut consommer plus de tokens qu'elle n'en économise. Dimensionner selon la nature de la tâche: une extraction/vérification factuelle courte tient dans 800-1500 tokens, mais un rôle de critique/QA ouvert (lister risques, angles morts, améliorations) a besoin de 3000-5000 tokens pour produire un livrable complet — un budget trop serré coupe le worker en plein raisonnement (\"Budget de delegation atteint\") avant qu'il ait fini.",
+        "Crée une délégation durable et détachée vers un sub-agent avec budget, dépendances et reprise explicite. Retourne immédiatement un job_id par défaut: continuer le travail indépendant, puis revenir avec agent_job_status, agent_job_result ou agent_job_list. Plusieurs appels indépendants dans le même tour sont parallélisables; renseigner depends_on uniquement quand un job a besoin des résultats d'autres jobs. Captain attend alors leurs succès avant de démarrer le job dépendant. Ne pas inventer de parallélisme entre étapes dépendantes. wait_for_result=true reste disponible seulement quand le résultat est immédiatement nécessaire et bloque au maximum timeout_seconds. Après crash, une tâche sans effet peut repartir; une tâche dont l'effet a commencé devient uncertain et exige agent_job_resume, donc aucun replay silencieux. Toujours fixer max_tokens à un budget serré et demander un livrable précis. Une extraction factuelle courte tient souvent dans 800-1500 tokens; un rôle critique/QA ouvert requiert plutôt 3000-5000 tokens.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "agent_id": { "type": "string", "description": "UUID de l'agent à qui déléguer" },
+                "title": { "type": "string", "description": "Titre opérationnel court visible dans le suivi; dérivé de la première ligne de task si absent" },
                 "task": { "type": "string", "description": "Description de la tâche à accomplir" },
-                "max_tokens": { "type": "integer", "description": "Budget maximum en tokens (0 = illimité)", "default": 5000 }
+                "max_tokens": { "type": "integer", "description": "Budget maximum du tour délégué en tokens", "default": 5000, "minimum": 1, "maximum": 500000 },
+                "depends_on": { "type": "array", "description": "Job IDs de ce même agent appelant qui doivent réussir avant le démarrage", "items": { "type": "string" }, "maxItems": 16 },
+                "wait_for_result": { "type": "boolean", "description": "Attendre explicitement la fin au lieu de rendre la main; défaut false", "default": false },
+                "timeout_seconds": { "type": "integer", "description": "Fenêtre d'attente si wait_for_result=true", "default": 120, "minimum": 1, "maximum": 600 }
             },
             "required": ["agent_id", "task"]
         }),
     )
+}
+
+fn agent_job_status_tool_definition() -> ToolDefinition {
+    tool_definition(
+        "agent_job_status",
+        "Relit l'état courant d'une délégation durable créée par l'agent appelant, sans bloquer et sans exposer son résultat complet. Utiliser pour décider de poursuivre un autre travail, annuler, lire le résultat terminal ou reprendre explicitement un état uncertain.",
+        agent_job_id_schema(),
+    )
+}
+
+fn agent_job_result_tool_definition() -> ToolDefinition {
+    tool_definition(
+        "agent_job_result",
+        "Retourne le résultat borné et les preuves d'une délégation durable terminale appartenant à l'agent appelant. Si le job est encore actif, retourne seulement son état et les prochaines actions sans attendre.",
+        agent_job_id_schema(),
+    )
+}
+
+fn agent_job_list_tool_definition() -> ToolDefinition {
+    tool_definition(
+        "agent_job_list",
+        "Liste les délégations durables de l'agent appelant avec état, dépendances, budget et prochaines actions. Utiliser après plusieurs délégations parallèles ou pour retrouver les jobs après un restart.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["blocked", "queued", "running", "cancel_requested", "succeeded", "failed", "cancelled", "uncertain", "dependency_failed"],
+                    "description": "Filtre facultatif par état durable"
+                },
+                "limit": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 }
+            }
+        }),
+    )
+}
+
+fn agent_job_cancel_tool_definition() -> ToolDefinition {
+    tool_definition(
+        "agent_job_cancel",
+        "Demande l'annulation durable d'une délégation appartenant à l'agent appelant. Un job bloqué ou en file est annulé avant effet; un job déjà lancé reçoit une demande coopérative et conserve un résultat connu s'il termine au même instant.",
+        agent_job_id_schema(),
+    )
+}
+
+fn agent_job_resume_tool_definition() -> ToolDefinition {
+    tool_definition(
+        "agent_job_resume",
+        "Reprogramme explicitement une délégation failed, dependency_failed ou uncertain. Utiliser seulement après inspection: reprendre uncertain peut répéter un effet dont Captain ne connaît pas l'issue. Captain ne déclenche jamais ce replay automatiquement.",
+        agent_job_id_schema(),
+    )
+}
+
+fn agent_job_id_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "job_id": { "type": "string", "description": "Identifiant durable retourné par agent_delegate ou agent_job_list" }
+        },
+        "required": ["job_id"]
+    })
 }
 
 fn agent_correct_tool_definition() -> ToolDefinition {
@@ -207,6 +276,11 @@ mod tests {
                 "agent_caps",
                 "agent_watch",
                 "agent_delegate",
+                "agent_job_status",
+                "agent_job_result",
+                "agent_job_list",
+                "agent_job_cancel",
+                "agent_job_resume",
                 "agent_correct",
             ]
         );
@@ -291,10 +365,30 @@ mod tests {
             integer_field(property(delegate, "max_tokens"), "default"),
             Some(5000)
         );
-        assert_contains(&delegate.description, "budget serré");
-        assert_contains(&delegate.description, "moins coûteuse");
+        assert_contains(&delegate.description, "durable et détachée");
+        assert_contains(&delegate.description, "Plusieurs appels indépendants");
+        assert_contains(&delegate.description, "depends_on");
+        assert_contains(&delegate.description, "aucun replay silencieux");
         assert_contains(&delegate.description, "3000-5000 tokens");
-        assert_contains(&delegate.description, "Budget de delegation atteint");
+        assert_eq!(property(delegate, "wait_for_result")["default"], false);
+        assert_eq!(
+            integer_field(property(delegate, "timeout_seconds"), "default"),
+            Some(120)
+        );
+
+        for name in [
+            "agent_job_status",
+            "agent_job_result",
+            "agent_job_cancel",
+            "agent_job_resume",
+        ] {
+            assert_eq!(required_fields(tool(&tools, name)), vec!["job_id"]);
+        }
+        assert!(required_fields(tool(&tools, "agent_job_list")).is_empty());
+        assert_contains(
+            &tool(&tools, "agent_job_resume").description,
+            "jamais ce replay automatiquement",
+        );
 
         assert_eq!(required_fields(correct), vec!["agent_id", "message"]);
         assert_contains(&correct.description, "instruction système");

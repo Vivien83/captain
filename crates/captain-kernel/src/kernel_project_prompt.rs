@@ -351,14 +351,26 @@ pub(super) fn read_recent_journal(memory_dir: &Path, days: usize) -> Option<Stri
         let name_str = name.to_string_lossy();
         if let Ok(content) = std::fs::read_to_string(entry.path()) {
             if !content.trim().is_empty() {
-                combined.push_str(&format!("### {}\n", name_str.trim_end_matches(".md")));
-                let remaining = MAX_JOURNAL_BYTES.saturating_sub(combined.len());
-                if content.len() > remaining {
-                    combined.push_str(&content[..remaining]);
-                } else {
-                    combined.push_str(&content);
+                let header = format!("### {}\n", name_str.trim_end_matches(".md"));
+                let Some(remaining_after_header) = MAX_JOURNAL_BYTES
+                    .checked_sub(combined.len())
+                    .and_then(|remaining| remaining.checked_sub(header.len()))
+                else {
+                    break;
+                };
+                if remaining_after_header == 0 {
+                    break;
                 }
+
+                combined.push_str(&header);
+                let content_budget = remaining_after_header - 1;
+                let content_prefix = utf8_prefix_within_bytes(&content, content_budget);
+                combined.push_str(content_prefix);
                 combined.push('\n');
+
+                if content_prefix.len() < content.len() {
+                    break;
+                }
             }
         }
     }
@@ -368,6 +380,18 @@ pub(super) fn read_recent_journal(memory_dir: &Path, days: usize) -> Option<Stri
     } else {
         Some(combined)
     }
+}
+
+fn utf8_prefix_within_bytes(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut end = max_bytes.min(value.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 #[cfg(test)]
@@ -552,5 +576,19 @@ mod tests {
         assert!(journal.contains("### 2026-05-31\nnew"));
         assert!(!journal.contains("old"));
         assert!(journal.find("2026-05-30").unwrap() < journal.find("2026-05-31").unwrap());
+    }
+
+    #[test]
+    fn recent_journal_never_splits_a_utf8_character_at_the_byte_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!("{}àtail", "a".repeat(4079));
+        std::fs::write(dir.path().join("2026-05-31.md"), content).unwrap();
+
+        let journal = read_recent_journal(dir.path(), 1).unwrap();
+
+        assert!(journal.len() <= 4096);
+        assert!(journal.starts_with("### 2026-05-31\n"));
+        assert!(journal.ends_with('\n'));
+        assert!(!journal.contains('à'));
     }
 }

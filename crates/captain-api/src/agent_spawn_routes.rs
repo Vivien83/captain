@@ -8,8 +8,9 @@ use captain_types::{
     agent::AgentManifest,
     agent_api::{
         failed_egress_report, pending_egress_operator_action, pending_egress_report,
-        ready_egress_report, ready_ingress_report, skipped_ingress_report,
-        AgentApiEgressProvisionReport, AgentApiSpawnProvisionReport, AgentApiSpawnProvisionRequest,
+        ready_egress_report, ready_existing_ingress_report, ready_ingress_report,
+        skipped_ingress_report, AgentApiEgressProvisionReport, AgentApiSpawnProvisionReport,
+        AgentApiSpawnProvisionRequest,
     },
 };
 use std::path::Path;
@@ -57,9 +58,9 @@ pub async fn spawn_agent(
                 manager.router().register_agent(name.clone(), id);
             }
             let agent_api_provisioning =
-                provision_spawn_agent_api(&state.kernel.config.home_dir, &id, &req.agent_api);
+                provision_spawn_agent_api_with_kernel(state.kernel.as_ref(), &id, &req.agent_api);
             let (agent_api, agent_api_config_status) =
-                agent_api_spawn_fields(&state.kernel.config.home_dir, &id).await;
+                agent_api_spawn_fields_with_kernel(state.kernel.as_ref(), &id).await;
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({
@@ -77,6 +78,75 @@ pub async fn spawn_agent(
             error(StatusCode::INTERNAL_SERVER_ERROR, "Agent spawn failed")
         }
     }
+}
+
+fn provision_spawn_agent_api_with_kernel(
+    kernel: &captain_kernel::CaptainKernel,
+    agent_id: &AgentId,
+    req: &AgentApiSpawnProvisionRequest,
+) -> AgentApiSpawnProvisionReport {
+    let token_env = captain_types::agent_api::agent_api_token_env(agent_id);
+    let token_external = kernel.credential_is_externally_managed(&token_env);
+    let url_env = captain_types::agent_api::agent_api_callback_url_env(agent_id);
+    let secret_env = captain_types::agent_api::agent_api_callback_secret_env(agent_id);
+    let egress_external = kernel.credential_is_externally_managed(&url_env)
+        || kernel.credential_is_externally_managed(&secret_env);
+    if !token_external && !egress_external {
+        return provision_spawn_agent_api(&kernel.config.home_dir, agent_id, req);
+    }
+
+    let mut actions = Vec::new();
+    let ingress = if token_external {
+        if kernel
+            .resolve_credential(&token_env)
+            .is_some_and(|token| token.len() >= 32)
+        {
+            ready_existing_ingress_report(agent_id)
+        } else {
+            actions.push(format!(
+                "{token_env} is externally managed but unavailable or too short; fix its mounted file."
+            ));
+            skipped_ingress_report(agent_id)
+        }
+    } else if req.provision_ingress_token {
+        match crate::agent_api_token_routes::rotate_token(&kernel.config.home_dir, agent_id) {
+            Ok(rotation) => ready_ingress_report(agent_id, rotation.token),
+            Err(error) => {
+                actions.push(format!(
+                    "Rotate ingress token manually with {} after fixing: {error}",
+                    captain_types::agent_api::agent_api_token_rotate_url(agent_id)
+                ));
+                skipped_ingress_report(agent_id)
+            }
+        }
+    } else {
+        actions.push(format!(
+            "Rotate ingress token with {} before external callers use the agent.",
+            captain_types::agent_api::agent_api_token_rotate_url(agent_id)
+        ));
+        skipped_ingress_report(agent_id)
+    };
+
+    let egress = if egress_external {
+        let status = crate::agent_api_egress::agent_api_callback_config_status_with(
+            agent_id,
+            &|key| kernel.resolve_credential(key),
+            &|key| kernel.credential_is_externally_managed(key),
+        );
+        if status.ready {
+            ready_egress_report(agent_id, None)
+        } else {
+            let issue = status.issue.unwrap_or_else(|| {
+                "externally managed callback credentials are unavailable".to_string()
+            });
+            actions.push(format!("Fix externally managed callback egress: {issue}"));
+            failed_egress_report(agent_id, issue)
+        }
+    } else {
+        provision_spawn_egress(&kernel.config.home_dir, agent_id, req, &mut actions)
+    };
+
+    AgentApiSpawnProvisionReport::new(agent_id, ingress, egress, actions)
 }
 
 fn provision_spawn_agent_api(
@@ -139,6 +209,7 @@ fn provision_spawn_egress(
     }
 }
 
+#[cfg(test)]
 async fn agent_api_spawn_fields(
     home_dir: &Path,
     agent_id: &AgentId,
@@ -150,6 +221,27 @@ async fn agent_api_spawn_fields(
     let config_status =
         crate::agent_api_config_status::agent_api_config_status(home_dir, agent_id, &agent_api)
             .await;
+    (agent_api, config_status)
+}
+
+async fn agent_api_spawn_fields_with_kernel(
+    kernel: &captain_kernel::CaptainKernel,
+    agent_id: &AgentId,
+) -> (
+    crate::agent_api_routes::AgentApiDescriptor,
+    crate::agent_api_config_status::AgentApiConfigStatus,
+) {
+    let agent_api = crate::agent_api_routes::agent_api_descriptor_with(
+        agent_id,
+        &|key| kernel.resolve_credential(key),
+        &|key| kernel.credential_is_externally_managed(key),
+    );
+    let config_status = crate::agent_api_config_status::agent_api_config_status(
+        &kernel.config.home_dir,
+        agent_id,
+        &agent_api,
+    )
+    .await;
     (agent_api, config_status)
 }
 
@@ -218,7 +310,7 @@ fn verify_manifest_signature(
         }
         Err(e) => {
             tracing::warn!("Manifest signature verification failed: {e}");
-            state.kernel.audit_log.record(
+            state.kernel.audit_log.record_or_alert(
                 "system",
                 captain_runtime::audit::AuditAction::AuthAttempt,
                 "manifest signature verification failed",

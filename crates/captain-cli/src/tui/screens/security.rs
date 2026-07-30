@@ -37,9 +37,14 @@ impl SecuritySection {
 
 // ── Built-in feature definitions ────────────────────────────────────────────
 
-fn builtin_features() -> Vec<SecurityFeature> {
+pub(crate) fn features_for_execution_summary(
+    policy_mode: &str,
+    critical_mode: &str,
+    isolation_level: &str,
+    os_isolation: bool,
+) -> Vec<SecurityFeature> {
     vec![
-        // Core (8)
+        // Core
         SecurityFeature {
             name: "Path Traversal Prevention".into(),
             active: true,
@@ -53,9 +58,21 @@ fn builtin_features() -> Vec<SecurityFeature> {
             section: SecuritySection::Core,
         },
         SecurityFeature {
-            name: "Subprocess Isolation".into(),
+            name: "Host Subprocess Boundary".into(),
             active: true,
-            description: "env_clear() + selective vars on child processes".into(),
+            description: format!(
+                "{isolation_level}; policy {policy_mode}/{critical_mode}; bounded lifecycle"
+            ),
+            section: SecuritySection::Core,
+        },
+        SecurityFeature {
+            name: "Host OS Isolation".into(),
+            active: os_isolation,
+            description: if os_isolation {
+                "Operating-system isolation active for host subprocesses".into()
+            } else {
+                "None for shell_exec; use explicit Docker or WASM isolation".into()
+            },
             section: SecuritySection::Core,
         },
         SecurityFeature {
@@ -83,9 +100,9 @@ fn builtin_features() -> Vec<SecurityFeature> {
             section: SecuritySection::Core,
         },
         SecurityFeature {
-            name: "Taint Tracking".into(),
+            name: "Critical Command Guard".into(),
             active: true,
-            description: "Information flow tracking across tool boundaries".into(),
+            description: "Normalized lexical heuristic; not OS containment".into(),
             section: SecuritySection::Core,
         },
         // Configurable (4)
@@ -115,7 +132,7 @@ fn builtin_features() -> Vec<SecurityFeature> {
         },
         // Monitoring (3)
         SecurityFeature {
-            name: "Merkle Audit Trail".into(),
+            name: "Versioned Audit Hash Chain".into(),
             active: true,
             description: "Hash chain audit log with tamper detection".into(),
             section: SecuritySection::Monitoring,
@@ -127,12 +144,23 @@ fn builtin_features() -> Vec<SecurityFeature> {
             section: SecuritySection::Monitoring,
         },
         SecurityFeature {
-            name: "Prompt Injection Scanner".into(),
+            name: "Advisory Skill Phrase Review".into(),
             active: true,
-            description: "Detects override attempts and data exfiltration".into(),
+            description: "Bounded phrase matches; not a security proof".into(),
             section: SecuritySection::Monitoring,
         },
     ]
+}
+
+fn builtin_features() -> Vec<SecurityFeature> {
+    let policy = captain_types::config::ExecPolicy::default();
+    let posture = policy.host_execution_posture();
+    features_for_execution_summary(
+        posture.policy_mode.as_str(),
+        posture.critical_mode.as_str(),
+        posture.isolation_level,
+        posture.os_isolation,
+    )
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -323,4 +351,24 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SecurityState) {
         )])),
         chunks[2],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_phrase_review_is_presented_as_advisory() {
+        let features = features_for_execution_summary("full", "safe", "host_process", false);
+        let review = features
+            .iter()
+            .find(|feature| feature.name == "Advisory Skill Phrase Review")
+            .expect("advisory skill review must remain visible");
+
+        assert!(review.active);
+        assert!(review.description.contains("not a security proof"));
+        assert!(features
+            .iter()
+            .all(|feature| feature.name != "Prompt Injection Scanner"));
+    }
 }

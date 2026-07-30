@@ -125,6 +125,21 @@ pub fn ready_ingress_report(agent_id: &AgentId, token: String) -> AgentApiIngres
     }
 }
 
+pub fn ready_existing_ingress_report(agent_id: &AgentId) -> AgentApiIngressProvisionReport {
+    AgentApiIngressProvisionReport {
+        status: "ready".to_string(),
+        ingress_url: agent_api_ingress_url(agent_id),
+        auth_scheme: AGENT_API_AUTH_SCHEME.to_string(),
+        token_env: agent_api_token_env(agent_id),
+        token_rotate_url: agent_api_token_rotate_url(agent_id),
+        token: None,
+        warning: Some(
+            "Ingress uses an externally managed token. Captain will not disclose or overwrite it."
+                .to_string(),
+        ),
+    }
+}
+
 pub fn skipped_ingress_report(agent_id: &AgentId) -> AgentApiIngressProvisionReport {
     AgentApiIngressProvisionReport {
         status: "skipped".to_string(),
@@ -298,5 +313,17 @@ mod tests {
         assert!(req.provision_ingress_token);
         assert!(req.generate_callback_secret);
         assert!(req.egress_callback_url.is_none());
+    }
+
+    #[test]
+    fn existing_ingress_report_never_discloses_the_external_token() {
+        let report = ready_existing_ingress_report(&sample_agent_id());
+
+        assert_eq!(report.status, "ready");
+        assert!(report.token.is_none());
+        assert!(report
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("will not disclose or overwrite")));
     }
 }

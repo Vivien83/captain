@@ -41,6 +41,16 @@ function App() {
 
   useEffect(() => subscribe((s) => setAuthed(s.authed)), []);
 
+  useEffect(() => {
+    const onUnauthorized = () => setState({
+      authed: false,
+      authMode: 'session',
+      backgroundActivity: [],
+    });
+    window.addEventListener('captain:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('captain:unauthorized', onUnauthorized);
+  }, []);
+
   // auth_check always answers HTTP 200 — the actual state is the JSON body's
   // `mode`/`authenticated` fields, not the request's success. Mirrors
   // terminal.js's checkAccess() so both surfaces agree on what "logged in"
@@ -66,7 +76,7 @@ function App() {
       if (ev.type === 'agent_lifecycle') {
         const key = `agent:${ev.agent_id}`;
         if (ev.kind === 'spawned') {
-          setState({ backgroundActivity: [...s.backgroundActivity, { key, label: ev.name || 'agent' }] });
+          setState({ backgroundActivity: [...s.backgroundActivity.filter((b) => b.key !== key), { key, label: ev.name || 'agent' }] });
         } else {
           setState({ backgroundActivity: s.backgroundActivity.filter((b) => b.key !== key) });
           if (ev.kind === 'terminated' || ev.kind === 'crashed') {
@@ -77,9 +87,19 @@ function App() {
       } else if (ev.type === 'tool_run_status') {
         const key = `run:${ev.run_id}`;
         if (ev.status === 'running') {
-          setState({ backgroundActivity: [...s.backgroundActivity, { key, label: ev.tool_name }] });
+          setState({ backgroundActivity: [...s.backgroundActivity.filter((b) => b.key !== key), { key, label: ev.tool_name }] });
         } else {
           setState({ backgroundActivity: s.backgroundActivity.filter((b) => b.key !== key) });
+        }
+      } else if (ev.type === 'agent_delegation_status') {
+        const key = `delegation:${ev.job_id}`;
+        const active = ['blocked', 'queued', 'running', 'cancel_requested'].includes(ev.status);
+        if (active) {
+          setState({ backgroundActivity: [...s.backgroundActivity.filter((b) => b.key !== key), { key, label: `délégation ${ev.title}` }] });
+        } else {
+          setState({ backgroundActivity: s.backgroundActivity.filter((b) => b.key !== key) });
+          const failed = ['failed', 'uncertain', 'dependency_failed'].includes(ev.status);
+          toast(`Délégation ${ev.title} : ${ev.status}`, failed ? 'err' : 'ok');
         }
       }
     });

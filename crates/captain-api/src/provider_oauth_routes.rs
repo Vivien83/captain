@@ -21,7 +21,18 @@ struct CopilotFlowState {
 static COPILOT_FLOWS: LazyLock<DashMap<String, CopilotFlowState>> = LazyLock::new(DashMap::new);
 
 /// POST /api/providers/github-copilot/oauth/start
-pub async fn copilot_oauth_start() -> impl IntoResponse {
+pub async fn copilot_oauth_start(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state
+        .kernel
+        .credential_is_externally_managed("GITHUB_TOKEN")
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "GITHUB_TOKEN is managed by secret-sources.toml; rotate the external file instead"
+            })),
+        );
+    }
     COPILOT_FLOWS.retain(|_, flow| flow.expires_at > Instant::now());
 
     match captain_runtime::copilot_oauth::start_device_flow().await {
@@ -88,6 +99,19 @@ pub async fn copilot_oauth_poll(
             Json(serde_json::json!({"status": "pending"})),
         ),
         captain_runtime::copilot_oauth::DeviceFlowStatus::Complete { access_token } => {
+            if state
+                .kernel
+                .credential_is_externally_managed("GITHUB_TOKEN")
+            {
+                COPILOT_FLOWS.remove(&poll_id);
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "status": "error",
+                        "error": "GITHUB_TOKEN is managed by secret-sources.toml; rotate the external file instead"
+                    })),
+                );
+            }
             state.kernel.store_credential("GITHUB_TOKEN", &access_token);
 
             let secrets_path = state.kernel.config.home_dir.join("secrets.env");
@@ -106,7 +130,7 @@ pub async fn copilot_oauth_poll(
                 .model_catalog
                 .write()
                 .unwrap_or_else(|e| e.into_inner())
-                .detect_auth();
+                .detect_auth_with(&|key| state.kernel.resolve_credential(key).is_some());
             COPILOT_FLOWS.remove(&poll_id);
 
             (

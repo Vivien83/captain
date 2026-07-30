@@ -1,76 +1,22 @@
 //! Operator-facing text for channel commands.
 
+use crate::channel_commands::{format_command_help, format_command_subset, CommandLanguage};
 use captain_types::agent::AgentId;
 
 pub(crate) fn format_start_message(agents: &[(AgentId, String)]) -> String {
     let mut msg =
         "Welcome to Captain! I connect you to AI agents.\n\nAvailable agents:\n".to_string();
     append_agent_list(&mut msg, agents, "  (none running)\n");
-    msg.push_str(
-        "\nCommands:\n/agents - list agents\n/agent <name> - select an agent\n/help - show this help",
-    );
+    msg.push_str("\nCommands:\n");
+    msg.push_str(&format_command_subset(
+        &["agents", "agent", "help"],
+        CommandLanguage::English,
+    ));
     msg
 }
 
 pub(crate) fn format_help_message() -> String {
-    "Captain Bot Commands:\n\
-     \n\
-     Session:\n\
-     /agents - list running agents\n\
-     /agent <name> - select which agent to talk to\n\
-     /new - reset session (clear messages)\n\
-     /compact - trigger LLM session compaction\n\
-     /model [name] - show or switch agent model\n\
-     /stop - cancel current agent run\n\
-     /usage - show session token usage and cost\n\
-     /think [on|off] - toggle extended thinking\n\
-     \n\
-     Info:\n\
-     /models - list available AI models\n\
-     /providers - show configured providers\n\
-     /skills - list installed skills\n\
-     /hands - list available and active hands\n\
-     /status - show system status\n\
-     /health - show daemon health\n\
-     /version - show daemon version and paths\n\
-     /config - show exact config.toml (owner only)\n\
-     /reload - hot-reload config.toml (owner only)\n\
-     /restart - restart the daemon (owner only)\n\
-     /shutdown confirm - stop the daemon (owner only)\n\
-     \n\
-     Automation:\n\
-     /workflows - list workflows\n\
-     /workflow run <name> [input] - run a workflow\n\
-     /triggers - list event triggers\n\
-     /trigger add <agent> <pattern> <prompt> - create trigger\n\
-     /trigger del <id> - remove trigger\n\
-     /schedules - list cron jobs\n\
-     /schedule add <agent> <cron-5-fields> <message> - create job\n\
-     /schedule del <id> - remove job\n\
-     /schedule run <id> - run job now\n\
-     /approvals - list pending approvals\n\
-     /approve <id> - approve a request\n\
-     /reject <id> - reject a request\n\
-     /learnings - list pending learning candidates\n\
-     /learn_approve <id> - approve a learning candidate\n\
-     /learn_reject <id> - reject a learning candidate\n\
-     /skill_refinements - list existing-skill refinements\n\
-     /skill_refine_approve <id> - approve a skill refinement\n\
-     /skill_refine_reject <id> - reject a skill refinement\n\
-     /project_answer <id> <réponse> - answer a project question\n\
-     \n\
-     Monitoring:\n\
-     /budget - show spending limits and current costs\n\
-     /peers - show OFP peer network status\n\
-     /a2a - list discovered external A2A agents\n\
-     \n\
-     Channel:\n\
-     /sethome [chat_id] - register this chat as home (v3.8h)\n\
-     /gethome - show current home chat for this channel\n\
-     \n\
-     /start - show welcome message\n\
-     /help - show this help"
-        .to_string()
+    format_command_help(CommandLanguage::English)
 }
 
 pub(crate) fn format_agents_message(agents: &[(AgentId, String)]) -> String {
@@ -135,7 +81,7 @@ mod tests {
         assert!(text.contains("Available agents:"));
         assert!(text.contains("  - captain"));
         assert!(text.contains("  - vision"));
-        assert!(text.contains("/agent <name> - select an agent"));
+        assert!(text.contains("/agent <name> - Select an agent"));
     }
 
     #[test]
@@ -143,7 +89,7 @@ mod tests {
         let text = format_start_message(&[]);
 
         assert!(text.contains("  (none running)"));
-        assert!(text.contains("/help - show this help"));
+        assert!(text.contains("/help - Show every available command"));
     }
 
     #[test]
@@ -153,7 +99,9 @@ mod tests {
         assert!(text.contains("Session:"));
         assert!(text.contains("Automation:"));
         assert!(text.contains("Monitoring:"));
-        assert!(text.contains("/project_answer <id> <réponse>"));
+        assert!(text.contains("/project_answer <id> <answer>"));
+        assert!(text.contains("/reasoning [auto|level]"));
+        assert!(text.contains("/learn_approve <id>"));
     }
 
     #[test]

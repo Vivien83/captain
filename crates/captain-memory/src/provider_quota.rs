@@ -226,6 +226,7 @@ mod tests {
             }),
             secondary: None,
             credits: None,
+            spend_control: None,
             plan_type: Some("plus".to_string()),
             rate_limit_reached_type: None,
             source: ProviderQuotaSource::AccountStatus,

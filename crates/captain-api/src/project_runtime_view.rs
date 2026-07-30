@@ -41,6 +41,7 @@ pub(crate) fn project_runtime_view(runtime: &Value) -> Value {
         "orchestrator": safe_orchestrator(runtime.get("orchestrator")),
         "manager_agent": safe_manager_agent(runtime.get("manager_agent")),
         "parallelism": safe_parallelism(runtime.get("parallelism")),
+        "completion_contract": safe_completion_contract(runtime.get("completion_contract")),
         "resume_pending": safe_resume_pending(runtime.get("resume_pending")),
         "user_questions": safe_questions(runtime.get("user_questions")),
         "workers": safe_workers(runtime.get("workers")),
@@ -162,6 +163,7 @@ fn safe_worker(worker: &Value) -> Value {
         "cleanup_status": safe_worker_status_value(worker.get("cleanup_status")),
         "recovered_from_stale_run": safe_scalar(worker.get("recovered_from_stale_run"), ID_LIMIT),
         "summary": safe_scalar(worker.get("summary"), DETAIL_LIMIT),
+        "completion_contract": safe_completion_contract(worker.get("completion_contract")),
         "tool_request": safe_tool_request(
             worker.get("phase").and_then(Value::as_str).unwrap_or("unknown"),
             worker.get("tool_request")
@@ -188,12 +190,105 @@ fn safe_worker_result(phase: &str, result: &Value) -> Value {
         "blocked": safe_scalar(result.get("blocked"), ID_LIMIT),
         "summary": safe_scalar(result.get("summary"), DETAIL_LIMIT),
         "error": safe_scalar(result.get("error"), DETAIL_LIMIT),
+        "completion_contract": safe_completion_contract(result.get("completion_contract")),
         "retry_after_denied_tool_request": safe_scalar(
             result.get("retry_after_denied_tool_request"),
             ID_LIMIT
         ),
         "tool_request": safe_tool_request(phase, result.get("tool_request")),
     })
+}
+
+fn safe_completion_contract(value: Option<&Value>) -> Value {
+    let Some(contract) = value.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+    let requirements = contract
+        .get("requirements")
+        .and_then(Value::as_array)
+        .map(|requirements| {
+            requirements
+                .iter()
+                .take(LIST_LIMIT)
+                .map(|requirement| {
+                    json!({
+                        "id": safe_scalar(requirement.get("id"), ID_LIMIT),
+                        "status": safe_completion_requirement_status(requirement.get("status")),
+                        "required": requirement.get("required").and_then(Value::as_bool).unwrap_or(false),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let evidence = contract
+        .get("evidence")
+        .and_then(Value::as_array)
+        .map(|evidence| {
+            evidence
+                .iter()
+                .take(24)
+                .map(|receipt| {
+                    json!({
+                        "id": safe_scalar(receipt.get("id"), ID_LIMIT),
+                        "kind": safe_scalar(receipt.get("kind"), ID_LIMIT),
+                        "source": safe_scalar(receipt.get("source"), TOOL_LIMIT),
+                        "status": safe_completion_requirement_status(receipt.get("status")),
+                        "duration_ms": safe_scalar(receipt.get("duration_ms"), ID_LIMIT),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let phases = contract
+        .get("phases")
+        .and_then(Value::as_array)
+        .map(|phases| {
+            phases
+                .iter()
+                .take(PROJECT_PHASES.len())
+                .map(|phase| {
+                    json!({
+                        "phase": safe_phase_value(phase.get("phase")),
+                        "decision": safe_completion_decision(phase.get("decision")),
+                        "evidence_count": phase.get("evidence_count").and_then(Value::as_u64).unwrap_or(0).min(1000),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "protocol": safe_scalar(contract.get("protocol"), ID_LIMIT),
+        "scope": safe_scalar(contract.get("scope"), ID_LIMIT),
+        "phase": safe_phase_value(contract.get("phase")),
+        "decision": safe_completion_decision(contract.get("decision")),
+        "claim": safe_scalar(contract.get("claim"), ID_LIMIT),
+        "evidence_count": contract.get("evidence_count").and_then(Value::as_u64).unwrap_or(0).min(1000),
+        "passed_evidence_count": contract.get("passed_evidence_count").and_then(Value::as_u64).unwrap_or(0).min(1000),
+        "requirements": requirements,
+        "evidence": evidence,
+        "phases": phases,
+        "blocking_reason": safe_scalar(contract.get("blocking_reason"), DETAIL_LIMIT),
+        "evaluated_at": safe_scalar(contract.get("evaluated_at"), ID_LIMIT),
+    })
+}
+
+fn safe_completion_decision(value: Option<&Value>) -> Value {
+    let decision = match value.and_then(Value::as_str).unwrap_or("missing") {
+        "satisfied" => "satisfied",
+        "blocked" => "blocked",
+        "insufficient_evidence" => "insufficient_evidence",
+        _ => "missing",
+    };
+    Value::String(decision.to_string())
+}
+
+fn safe_completion_requirement_status(value: Option<&Value>) -> Value {
+    let status = match value.and_then(Value::as_str).unwrap_or("failed") {
+        "passed" => "passed",
+        "not_required" => "not_required",
+        _ => "failed",
+    };
+    Value::String(status.to_string())
 }
 
 fn safe_tool_request(phase: &str, request: Option<&Value>) -> Value {

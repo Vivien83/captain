@@ -6,8 +6,9 @@ use colored::Colorize;
 use super::auth::cmd_login_codex;
 use super::setup_support::{setup_config_string, setup_env_or_answer_any, setup_read_config_value};
 use crate::{
-    check_ollama_available, codex_auth_available, detect_best_provider, dotenv, prompt_input,
-    prompt_secret, provider_list, test_api_key, ui, write_default_model_config,
+    check_ollama_available, codex_auth_available, detect_best_provider, dotenv,
+    production_credential_resolver_at, prompt_input, prompt_secret, provider_list, test_api_key,
+    ui, write_default_model_config,
 };
 
 #[derive(Clone, Copy)]
@@ -244,10 +245,10 @@ fn setup_configure_api_key_provider(
 }
 
 fn setup_env_key_present(env_var: &str) -> bool {
-    std::env::var(env_var)
+    production_credential_resolver_at(&crate::cli_captain_home())
         .ok()
-        .filter(|s| !s.trim().is_empty())
-        .is_some()
+        .and_then(|resolver| resolver.resolve(env_var))
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn setup_prompt_and_save_api_key(env_var: &str) -> bool {

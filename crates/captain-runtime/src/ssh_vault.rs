@@ -9,7 +9,18 @@
 
 use serde::{Deserialize, Serialize};
 use ssh_key::PrivateKey;
+use std::fmt::Display;
 use zeroize::Zeroizing;
+
+const SUPPORTED_PRIVATE_KEY_ALGORITHMS: &str = "Ed25519 or ECDSA P-256";
+
+pub(crate) fn private_key_parse_error(context: &str, error: impl Display) -> String {
+    format!(
+        "{context}: {error}. Captain accepts {SUPPORTED_PRIVATE_KEY_ALGORITHMS} private keys; \
+         RSA keys are disabled because the upstream Rust implementation has an unresolved \
+         timing-side-channel advisory (RUSTSEC-2023-0071)"
+    )
+}
 
 /// A single SSH credential entry stored in the vault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +84,7 @@ fn de_opt_zeroizing<'de, D: serde::Deserializer<'de>>(
 /// Returns the standard `SHA256:base64nopad` form, matching `ssh-keygen -lf`.
 pub fn fingerprint_of(pem: &str, passphrase: Option<&str>) -> Result<String, String> {
     let private = PrivateKey::from_openssh(pem)
-        .map_err(|e| format!("Failed to parse OpenSSH private key: {e}"))?;
+        .map_err(|e| private_key_parse_error("Failed to parse OpenSSH private key", e))?;
     // If the key is encrypted, decrypt it first (otherwise we can't extract
     // the public half).
     let pubkey = if private.is_encrypted() {

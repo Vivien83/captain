@@ -88,7 +88,7 @@ fn list_message_uses_empty_fallback_or_joined_lines() {
 }
 
 #[test]
-fn session_and_agent_fallbacks_preserve_hermes_i18n_text() {
+fn session_and_agent_fallbacks_preserve_expected_i18n_text() {
     assert_eq!(sessions_not_connected_message(Lang::En), "Not connected.");
     assert_eq!(
         sessions_list_message(Vec::new(), Lang::Fr),

@@ -35,7 +35,7 @@ pub(crate) fn record_control_deferred(
     command: &str,
     work: crate::shutdown_guard::ActiveShutdownWork,
 ) {
-    kernel.audit_log.record(
+    kernel.audit_log.record_or_alert(
         "system",
         captain_runtime::audit::AuditAction::ConfigChange,
         format!("{command} deferred because active work is running"),

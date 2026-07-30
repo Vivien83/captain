@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 32;
+const SCHEMA_VERSION: u32 = 36;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -137,6 +137,22 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 32 {
         migrate_v32(conn)?;
+    }
+
+    if current_version < 33 {
+        migrate_v33(conn)?;
+    }
+
+    if current_version < 34 {
+        migrate_v34(conn)?;
+    }
+
+    if current_version < 35 {
+        migrate_v35(conn)?;
+    }
+
+    if current_version < 36 {
+        migrate_v36(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -409,7 +425,7 @@ fn migrate_v7(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
-/// Version 8: Add audit_entries table for persistent Merkle audit trail.
+/// Version 8: Add audit_entries table for the persistent audit hash chain.
 fn migrate_v8(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(
         "
@@ -428,7 +444,7 @@ fn migrate_v8(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_entries(action);
 
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
-        VALUES (8, datetime('now'), 'Add audit_entries table for persistent Merkle audit trail');
+        VALUES (8, datetime('now'), 'Add audit_entries table for persistent audit hash chain');
         ",
     )?;
     Ok(())
@@ -1494,9 +1510,205 @@ fn migrate_v32(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 33: durable, dependency-aware sub-agent delegation jobs.
+fn migrate_v33(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agent_delegation_jobs (
+             id TEXT PRIMARY KEY,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             caller_agent_id TEXT NOT NULL,
+             target_agent_id TEXT NOT NULL,
+             title TEXT NOT NULL,
+             task TEXT NOT NULL,
+             max_tokens INTEGER NOT NULL,
+             status TEXT NOT NULL,
+             state_version INTEGER NOT NULL DEFAULT 0,
+             attempt_count INTEGER NOT NULL DEFAULT 0,
+             lease_owner TEXT,
+             lease_expires_at INTEGER,
+             effect_state TEXT NOT NULL DEFAULT 'not_started',
+             result TEXT,
+             result_truncated INTEGER NOT NULL DEFAULT 0,
+             used_tokens INTEGER,
+             error_code TEXT,
+             error_message TEXT,
+             cancel_requested_at INTEGER,
+             started_at INTEGER,
+             completed_at INTEGER,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(status IN (
+                 'blocked', 'queued', 'running', 'cancel_requested',
+                 'succeeded', 'failed', 'cancelled', 'uncertain',
+                 'dependency_failed'
+             )),
+             CHECK(effect_state IN ('not_started', 'started', 'completed')),
+             CHECK(state_version >= 0),
+             CHECK(attempt_count >= 0 AND attempt_count <= 20),
+             CHECK(max_tokens BETWEEN 1 AND 500000),
+             CHECK(result_truncated IN (0, 1)),
+             CHECK(used_tokens IS NULL OR used_tokens >= 0)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_jobs_due
+             ON agent_delegation_jobs(status, created_at, id);
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_jobs_caller
+             ON agent_delegation_jobs(caller_agent_id, updated_at DESC, id);
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_jobs_target
+             ON agent_delegation_jobs(target_agent_id, status, updated_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_delegation_dependencies (
+             job_id TEXT NOT NULL,
+             depends_on_job_id TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             PRIMARY KEY (job_id, depends_on_job_id),
+             FOREIGN KEY (job_id) REFERENCES agent_delegation_jobs(id) ON DELETE CASCADE,
+             FOREIGN KEY (depends_on_job_id) REFERENCES agent_delegation_jobs(id) ON DELETE RESTRICT,
+             CHECK(job_id <> depends_on_job_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_dependencies_parent
+             ON agent_delegation_dependencies(depends_on_job_id, job_id);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (33, datetime('now'), 'Add durable dependency-aware sub-agent delegation jobs');",
+    )?;
+    Ok(())
+}
+
+/// Version 34: durable operational heartbeat for Skill Learning V2.
+fn migrate_v34(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_learning_runtime (
+             singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+             worker_id TEXT NOT NULL,
+             phase TEXT NOT NULL,
+             provider TEXT,
+             model TEXT,
+             started_at INTEGER NOT NULL,
+             heartbeat_at INTEGER NOT NULL,
+             last_scan_at INTEGER,
+             last_progress_at INTEGER,
+             last_error_scope TEXT,
+             CHECK(phase IN ('starting', 'running', 'degraded')),
+             CHECK((provider IS NULL) = (model IS NULL)),
+             CHECK(started_at >= 0 AND heartbeat_at >= started_at),
+             CHECK(last_scan_at IS NULL OR (last_scan_at >= 0 AND last_scan_at <= heartbeat_at)),
+             CHECK(last_progress_at IS NULL OR (last_progress_at >= 0 AND last_progress_at <= heartbeat_at))
+         );
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (34, datetime('now'), 'Add durable workflow-learning runtime heartbeat');",
+    )?;
+    Ok(())
+}
+
+/// Version 35: active compaction registry for exact restart reconciliation.
+fn migrate_v35(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS compaction_active_operations (
+             operation_id TEXT PRIMARY KEY,
+             runtime_instance_id TEXT NOT NULL,
+             agent_id TEXT NOT NULL,
+             session_id TEXT NOT NULL,
+             payload TEXT NOT NULL,
+             started_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(operation_id) BETWEEN 1 AND 128),
+             CHECK(length(runtime_instance_id) BETWEEN 1 AND 128),
+             CHECK(length(agent_id) BETWEEN 1 AND 128),
+             CHECK(length(session_id) BETWEEN 1 AND 128),
+             CHECK(length(payload) BETWEEN 2 AND 65536),
+             CHECK(started_at >= 0 AND updated_at >= started_at)
+         );
+         CREATE INDEX IF NOT EXISTS idx_compaction_active_runtime
+             ON compaction_active_operations(runtime_instance_id, started_at, operation_id);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (35, datetime('now'), 'Add active compaction restart reconciliation');",
+    )?;
+    Ok(())
+}
+
+/// Version 36: version audit hashes and add immutable recovery epochs.
+fn migrate_v36(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "audit_entries", "epoch") {
+        conn.execute(
+            "ALTER TABLE audit_entries ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "audit_entries", "hash_version") {
+        conn.execute(
+            "ALTER TABLE audit_entries ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS audit_epochs (
+             epoch INTEGER PRIMARY KEY,
+             start_seq INTEGER NOT NULL,
+             started_at TEXT NOT NULL,
+             predecessor_tip_hash TEXT NOT NULL,
+             status TEXT NOT NULL,
+             terminal_hash TEXT,
+             sealed_at TEXT,
+             invalid_reason TEXT,
+             CHECK(epoch >= 0),
+             CHECK(start_seq >= 0),
+             CHECK(status IN ('active', 'invalid')),
+             CHECK(length(predecessor_tip_hash) = 64),
+             CHECK(terminal_hash IS NULL OR length(terminal_hash) = 64),
+             CHECK(
+                 (status = 'active' AND terminal_hash IS NULL AND sealed_at IS NULL)
+                 OR
+                 (status = 'invalid' AND terminal_hash IS NOT NULL AND sealed_at IS NOT NULL)
+             )
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_epochs_one_active
+             ON audit_epochs(status) WHERE status = 'active';
+         CREATE INDEX IF NOT EXISTS idx_audit_entries_epoch_seq
+             ON audit_entries(epoch, seq);
+
+         INSERT OR IGNORE INTO audit_epochs (
+             epoch, start_seq, started_at, predecessor_tip_hash, status,
+             terminal_hash, sealed_at, invalid_reason
+         )
+         SELECT
+             0,
+             COALESCE(MIN(seq), 0),
+             COALESCE(MIN(timestamp), datetime('now')),
+             '0000000000000000000000000000000000000000000000000000000000000000',
+             'active',
+             NULL,
+             NULL,
+             NULL
+         FROM audit_entries;
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (36, datetime('now'), 'Version audit hashes and add immutable recovery epochs');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn create_legacy_audit_table(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE audit_entries (
+                 seq INTEGER PRIMARY KEY,
+                 timestamp TEXT NOT NULL,
+                 agent_id TEXT NOT NULL,
+                 action TEXT NOT NULL,
+                 detail TEXT NOT NULL,
+                 outcome TEXT NOT NULL,
+                 prev_hash TEXT NOT NULL,
+                 hash TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+    }
 
     fn reset_to_v31_fixture(conn: &Connection) {
         conn.execute_batch(
@@ -1590,6 +1802,7 @@ mod tests {
         assert!(tables.contains(&"workflow_learning_refinements".to_string()));
         assert!(tables.contains(&"workflow_learning_refinement_events".to_string()));
         assert!(tables.contains(&"workflow_learning_tests".to_string()));
+        assert!(tables.contains(&"workflow_learning_runtime".to_string()));
         assert!(column_exists(
             &conn,
             "workflow_learning_installations",
@@ -1620,7 +1833,77 @@ mod tests {
             "workflow_learning_proposals",
             "operator_token"
         ));
-        assert_eq!(get_schema_version(&conn), 32);
+        assert!(tables.contains(&"audit_epochs".to_string()));
+        assert!(column_exists(&conn, "audit_entries", "epoch"));
+        assert!(column_exists(&conn, "audit_entries", "hash_version"));
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn audit_epoch_migration_preserves_legacy_rows_without_rehashing() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migrations (
+                 version INTEGER PRIMARY KEY,
+                 applied_at TEXT NOT NULL,
+                 description TEXT NOT NULL
+             );
+             CREATE TABLE audit_entries (
+                 seq INTEGER PRIMARY KEY,
+                 timestamp TEXT NOT NULL,
+                 agent_id TEXT NOT NULL,
+                 action TEXT NOT NULL,
+                 detail TEXT NOT NULL,
+                 outcome TEXT NOT NULL,
+                 prev_hash TEXT NOT NULL,
+                 hash TEXT NOT NULL
+             );
+             INSERT INTO audit_entries (
+                 seq, timestamp, agent_id, action, detail, outcome, prev_hash, hash
+             ) VALUES (
+                 0, '2026-07-29T00:00:00Z', 'captain', 'ToolInvoke',
+                 'legacy', 'ok',
+                 '0000000000000000000000000000000000000000000000000000000000000000',
+                 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+             );
+             PRAGMA user_version = 35;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let row: (i64, i64, String) = conn
+            .query_row(
+                "SELECT epoch, hash_version, hash FROM audit_entries WHERE seq = 0",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 0);
+        assert_eq!(row.1, 1);
+        assert_eq!(
+            row.2,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        let epoch: (i64, i64, String) = conn
+            .query_row(
+                "SELECT epoch, start_seq, status FROM audit_epochs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(epoch, (0, 0, "active".to_string()));
+    }
+
+    #[test]
+    fn audit_epoch_migration_refuses_a_missing_history_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", 35).unwrap();
+
+        let error = run_migrations(&conn).unwrap_err();
+
+        assert!(error.to_string().contains("no such table: audit_entries"));
+        assert_eq!(get_schema_version(&conn), 35);
     }
 
     #[test]
@@ -1659,6 +1942,7 @@ mod tests {
             PRAGMA user_version = 22;",
         )
         .unwrap();
+        create_legacy_audit_table(&conn);
 
         run_migrations(&conn).unwrap();
         assert!(column_exists(&conn, "memory_writes", "operation"));
@@ -1673,7 +1957,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(operation, "add");
-        assert_eq!(get_schema_version(&conn), 32);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1697,6 +1981,7 @@ mod tests {
             PRAGMA user_version = 28;",
         )
         .unwrap();
+        create_legacy_audit_table(&conn);
 
         run_migrations(&conn).unwrap();
 
@@ -1708,7 +1993,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(token, "aaaaaaaaaaaaaaaaaaaa");
-        assert_eq!(get_schema_version(&conn), 32);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1743,7 +2028,7 @@ mod tests {
             "workflow_learning_refinements",
             "conversation_key"
         ));
-        assert_eq!(get_schema_version(&conn), 32);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1778,7 +2063,7 @@ mod tests {
             "workflow_learning_tests",
             "revision_sha256"
         ));
-        assert_eq!(get_schema_version(&conn), 32);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1840,7 +2125,7 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.to_string().contains("SkillSynthesizer is retired"));
-        assert_eq!(get_schema_version(&conn), 32);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1878,7 +2163,120 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!((proposals, patterns), (3, 1));
-            assert_eq!(get_schema_version(&conn), 32);
+            assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
         }
+    }
+
+    #[test]
+    fn v33_adds_durable_delegation_jobs_and_replays_without_data_loss() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO agent_delegation_jobs (
+                 id, idempotency_key, caller_agent_id, target_agent_id,
+                 title, task, max_tokens, status, created_at, updated_at
+             ) VALUES ('job-v33', 'idem:job-v33', 'caller', 'worker',
+                       'proof', 'produce evidence', 5000, 'queued', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_delegation_dependencies
+                 (job_id, depends_on_job_id, created_at)
+             VALUES ('job-v33', 'job-v33', 1)",
+            [],
+        )
+        .unwrap_err();
+
+        conn.pragma_update(None, "user_version", 32).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 33", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT status, effect_state, max_tokens
+                 FROM agent_delegation_jobs WHERE id = 'job-v33'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("queued".to_string(), "not_started".to_string(), 5000));
+        assert!(table_exists(&conn, "agent_delegation_dependencies").unwrap());
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v34_adds_and_replays_workflow_learning_runtime_without_data_loss() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO workflow_learning_runtime (
+                 singleton, worker_id, phase, provider, model,
+                 started_at, heartbeat_at
+             ) VALUES (1, 'worker-v34', 'running', 'codex', 'gpt-5.6-sol', 1, 2)",
+            [],
+        )
+        .unwrap();
+
+        conn.pragma_update(None, "user_version", 33).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 34", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+
+        assert!(table_exists(&conn, "workflow_learning_runtime").unwrap());
+        let row: (String, String, String, i64) = conn
+            .query_row(
+                "SELECT worker_id, provider, model, heartbeat_at
+                 FROM workflow_learning_runtime WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                "worker-v34".to_string(),
+                "codex".to_string(),
+                "gpt-5.6-sol".to_string(),
+                2,
+            )
+        );
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v35_adds_and_replays_active_compactions_without_data_loss() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO compaction_active_operations (
+                 operation_id, runtime_instance_id, agent_id, session_id,
+                 payload, started_at, updated_at
+             ) VALUES ('operation-v35', 'runtime-v35', 'agent-v35',
+                       'session-v35', '{}', 1, 2)",
+            [],
+        )
+        .unwrap();
+
+        conn.pragma_update(None, "user_version", 34).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 35", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT runtime_instance_id, session_id, updated_at
+                 FROM compaction_active_operations WHERE operation_id = 'operation-v35'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("runtime-v35".to_string(), "session-v35".to_string(), 2)
+        );
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 }

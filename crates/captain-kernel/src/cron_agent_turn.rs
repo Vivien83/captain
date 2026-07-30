@@ -159,12 +159,19 @@ fn describe_stream_event(event: &StreamEvent) -> String {
         StreamEvent::IntermediateMessage { content } => {
             format!("intermediate message ({} chars)", content.chars().count())
         }
+        StreamEvent::SuggestedReplies { options } => {
+            format!("suggested replies ({})", options.len())
+        }
         StreamEvent::AskUser { question, .. } => {
             format!("waiting for user ({} chars)", question.chars().count())
         }
         StreamEvent::UserResponse { content } => {
             format!("user response ({} chars)", content.chars().count())
         }
+        StreamEvent::CompactionProgress { progress } => format!(
+            "compaction {:?}/{:?}: {}",
+            progress.phase, progress.state, progress.detail
+        ),
     }
 }
 

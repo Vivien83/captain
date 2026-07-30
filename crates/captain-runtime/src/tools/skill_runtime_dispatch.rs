@@ -12,9 +12,10 @@ pub(crate) async fn dispatch_skill_runtime_tool(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     workspace_root: Option<&Path>,
+    exec_policy: Option<&captain_types::config::ExecPolicy>,
 ) -> Result<String, String> {
     match tool_name {
-        "skill_execute" => tool_skill_md_execute(input, kernel, workspace_root).await,
+        "skill_execute" => tool_skill_md_execute(input, kernel, workspace_root, exec_policy).await,
         "scaffold_skill" => tool_scaffold_skill(input, workspace_root).await,
         other => Err(format!("Unknown skill runtime tool: {other}")),
     }

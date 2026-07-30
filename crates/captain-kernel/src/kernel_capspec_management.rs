@@ -430,7 +430,7 @@ impl CaptainKernel {
         detail: &str,
         outcome: &str,
     ) {
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             actor,
             AuditAction::CapabilityCheck,
             format!("Captain Forge {operation}: {detail}"),

@@ -482,6 +482,8 @@ impl WorkflowLearningOperator {
     }
 }
 
+// The transition constructor keeps every durable operator field explicit.
+#[allow(clippy::too_many_arguments)]
 fn operator_transition(
     proposal: &WorkflowProposalRecord,
     token: &str,

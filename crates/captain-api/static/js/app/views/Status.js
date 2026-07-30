@@ -212,8 +212,13 @@ function providerQuotaWindows(quota) {
     .filter(Boolean)
     .map((window) => {
       const duration = quotaDuration(window.windowSeconds);
-      return `${duration} ${window.usedPercent.toFixed(1)}%`;
+      return `${duration} ${window.remainingPercent.toFixed(1)}% reste`;
     });
+  if (quota.spendControl) {
+    windows.push(
+      `mensuel ${quota.spendControl.remainingPercent}% reste (${quota.spendControl.remaining}/${quota.spendControl.limit})`,
+    );
+  }
   return windows.length > 0 ? windows.join(' · ') : quota.alert;
 }
 
@@ -227,6 +232,9 @@ function providerQuotaMeta(quota) {
     .filter((window) => window.resetsAt)
     .map((window) => `${quotaDuration(window.windowSeconds)} ${window.resetsAt}`);
   if (resets.length > 0) parts.push(`reset ${resets.join(' · ')}`);
+  if (quota.spendControl && quota.spendControl.resetsAt) {
+    parts.push(`reset mensuel ${quota.spendControl.resetsAt}`);
+  }
   return parts.join(' · ');
 }
 

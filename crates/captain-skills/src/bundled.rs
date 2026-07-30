@@ -256,21 +256,22 @@ mod tests {
     }
 
     #[test]
-    fn test_bundled_skills_pass_security_scan() {
+    fn bundled_skills_have_no_high_risk_advisory_phrase_matches() {
         use crate::verify::SkillVerifier;
 
         let skills = bundled_skills();
         for (name, content) in &skills {
             let manifest = parse_bundled(name, content).unwrap();
             if let Some(ref ctx) = manifest.prompt_context {
-                let warnings = SkillVerifier::scan_prompt_content(ctx);
-                let has_critical = warnings
+                let report = SkillVerifier::scan_prompt_content_advisory(ctx);
+                let has_critical = report
+                    .findings
                     .iter()
                     .any(|w| matches!(w.severity, crate::verify::WarningSeverity::Critical));
                 assert!(
                     !has_critical,
-                    "Bundled skill '{}' has critical security warnings: {:?}",
-                    name, warnings
+                    "Bundled skill '{}' has high-risk {:?} findings: {:?}",
+                    name, report.assurance, report.findings
                 );
             }
         }

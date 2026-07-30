@@ -660,11 +660,14 @@ pub fn spawn_telegram_capspec_routing(
                         {
                             Ok(()) => {
                                 sent.insert(identity);
-                                debug!(token = %prompt.token, "Telegram CapSpec operator prompt sent");
+                                debug!(
+                                    kind = ?prompt.kind,
+                                    "Telegram CapSpec operator prompt sent"
+                                );
                             }
                             Err(error) => warn!(
                                 error = %error,
-                                token = %prompt.token,
+                                kind = ?prompt.kind,
                                 "Telegram CapSpec operator routing send failed"
                             ),
                         }
@@ -857,6 +860,23 @@ mod tests {
         assert!(text.contains("peut répéter l'effet"));
         assert!(text.contains("sortie `null`"));
         assert_eq!(keyboard["inline_keyboard"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn capspec_routing_never_reads_prompt_tokens_for_logging() {
+        let source = include_str!("channel_routing.rs");
+        let routing = source
+            .split_once("pub fn spawn_telegram_capspec_routing")
+            .expect("routing function must remain present")
+            .1
+            .split_once("pub fn format_capspec_telegram_prompt")
+            .expect("prompt formatter must follow routing")
+            .0;
+
+        assert!(
+            !routing.contains("prompt.token"),
+            "routing/logging must use opaque helpers instead of reading prompt tokens"
+        );
     }
 
     #[test]

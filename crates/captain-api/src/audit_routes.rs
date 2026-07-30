@@ -17,23 +17,28 @@ pub async fn audit_recent(
 ) -> impl IntoResponse {
     let n: usize = params
         .get("n")
+        .or_else(|| params.get("limit"))
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
         .min(1000);
 
     let entries = state.kernel.audit_log.recent(n);
     let tip = state.kernel.audit_log.tip_hash();
+    let integrity = state.kernel.audit_log.integrity_status();
 
     let items: Vec<serde_json::Value> = entries
         .iter()
         .map(|e| {
             serde_json::json!({
                 "seq": e.seq,
+                "epoch": e.epoch,
+                "hash_version": e.hash_version,
                 "timestamp": e.timestamp,
                 "agent_id": e.agent_id,
-                "action": format!("{:?}", e.action),
+                "action": e.action.to_string(),
                 "detail": e.detail,
                 "outcome": e.outcome,
+                "prev_hash": e.prev_hash,
                 "hash": e.hash,
             })
         })
@@ -43,48 +48,55 @@ pub async fn audit_recent(
         "entries": items,
         "total": state.kernel.audit_log.len(),
         "tip_hash": tip,
+        "integrity": integrity,
     }))
 }
 
 /// GET /api/audit/verify - Verify the audit chain integrity.
 pub async fn audit_verify(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let entry_count = state.kernel.audit_log.len();
+    let integrity = state.kernel.audit_log.integrity_status();
     match state.kernel.audit_log.verify_integrity() {
         Ok(()) => {
-            if entry_count == 0 {
+            if integrity.entry_count == 0 {
                 Json(serde_json::json!({
                     "valid": true,
+                    "status": "healthy",
+                    "message": "Audit hash chain is empty and ready",
                     "entries": 0,
                     "warning": "Audit log is empty - no events have been recorded yet",
-                    "tip_hash": state.kernel.audit_log.tip_hash(),
+                    "tip_hash": integrity.tip_hash,
+                    "active_epoch": integrity.active_epoch,
+                    "active_epoch_valid": integrity.active_epoch_valid,
+                    "invalid_epochs": integrity.invalid_epochs,
                 }))
             } else {
                 Json(serde_json::json!({
                     "valid": true,
-                    "entries": entry_count,
-                    "tip_hash": state.kernel.audit_log.tip_hash(),
+                    "status": "healthy",
+                    "message": format!(
+                        "Audit hash chain verified in epoch {}",
+                        integrity.active_epoch
+                    ),
+                    "entries": integrity.entry_count,
+                    "tip_hash": integrity.tip_hash,
+                    "active_epoch": integrity.active_epoch,
+                    "active_epoch_valid": integrity.active_epoch_valid,
+                    "invalid_epochs": integrity.invalid_epochs,
                 }))
             }
         }
         Err(msg) => Json(serde_json::json!({
             "valid": false,
+            "status": "degraded",
+            "message": "Audit integrity is degraded; the active recovery epoch remains observable",
             "error": msg,
-            "entries": entry_count,
+            "entries": integrity.entry_count,
+            "tip_hash": integrity.tip_hash,
+            "active_epoch": integrity.active_epoch,
+            "active_epoch_valid": integrity.active_epoch_valid,
+            "invalid_epochs": integrity.invalid_epochs,
         })),
     }
-}
-
-/// POST /api/audit/repair - Repair the Merkle hash chain.
-pub async fn audit_repair(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let repaired = state.kernel.audit_log.repair_chain();
-    tracing::info!(repaired = repaired, "Audit chain repaired");
-    let valid = state.kernel.audit_log.verify_integrity().is_ok();
-    Json(serde_json::json!({
-        "repaired": repaired,
-        "valid": valid,
-        "entries": state.kernel.audit_log.len(),
-        "tip_hash": state.kernel.audit_log.tip_hash(),
-    }))
 }
 
 /// GET /api/logs/stream - SSE endpoint for real-time audit log streaming.
@@ -115,7 +127,7 @@ pub async fn logs_stream(
                     continue;
                 }
 
-                let action_str = format!("{:?}", entry.action);
+                let action_str = entry.action.to_string();
 
                 if !level_filter.is_empty() {
                     let classified = classify_audit_level(&action_str);
@@ -134,6 +146,7 @@ pub async fn logs_stream(
 
                 let json = serde_json::json!({
                     "seq": entry.seq,
+                    "epoch": entry.epoch,
                     "timestamp": entry.timestamp,
                     "agent_id": entry.agent_id,
                     "action": action_str,
@@ -172,5 +185,84 @@ fn classify_audit_level(action: &str) -> &'static str {
         "warn"
     } else {
         "info"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::Router;
+    use captain_kernel::CaptainKernel;
+    use captain_types::config::{DefaultModelConfig, KernelConfig};
+    use std::time::Instant;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn recent_endpoint_exposes_versioned_entries_and_integrity() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = KernelConfig {
+            home_dir: temp.path().to_path_buf(),
+            data_dir: temp.path().join("data"),
+            default_model: DefaultModelConfig {
+                provider: "ollama".to_string(),
+                model: "test-model".to_string(),
+                api_key_env: "OLLAMA_API_KEY".to_string(),
+                base_url: None,
+            },
+            ..KernelConfig::default()
+        };
+        let kernel = Arc::new(CaptainKernel::boot_with_config(config).unwrap());
+        kernel
+            .audit_log
+            .record(
+                "captain",
+                captain_runtime::audit::AuditAction::ConfigChange,
+                "api envelope proof",
+                "ok",
+            )
+            .unwrap();
+        let state = Arc::new(AppState {
+            kernel: Arc::clone(&kernel),
+            started_at: Instant::now(),
+            peer_registry: None,
+            bridge_manager: tokio::sync::Mutex::new(None),
+            channels_config: tokio::sync::RwLock::new(Default::default()),
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
+            ask_user_channels: dashmap::DashMap::new(),
+            provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
+        });
+        let app = Router::new()
+            .route("/api/audit/recent", get(audit_recent))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::get("/api/audit/recent?n=200")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let entry = payload["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["detail"] == "api envelope proof")
+            .expect("recorded entry");
+
+        assert_eq!(entry["epoch"], 0);
+        assert_eq!(entry["hash_version"], 2);
+        assert_eq!(entry["agent_id"], "captain");
+        assert_eq!(entry["action"], "ConfigChange");
+        assert_eq!(entry["prev_hash"].as_str().unwrap().len(), 64);
+        assert_eq!(payload["integrity"]["valid"], true);
+        assert_eq!(payload["integrity"]["active_epoch"], 0);
+        kernel.shutdown();
     }
 }

@@ -152,7 +152,7 @@ fn learning_review_decide_tool_definition() -> ToolDefinition {
 fn workflow_learning_list_tool_definition() -> ToolDefinition {
     tool_definition(
         "workflow_learning_list",
-        "Liste la projection durable Skill Learning V2: génération, validation, proposition, test isolé, installation, canary, activation, échec et rollback. Read-only et operator-safe. Utiliser pour expliquer ce que Captain apprend ou diagnostiquer son état; ne jamais simuler une décision. Les actions exactes restent réservées aux cartes authentifiées Telegram, TUI, Web et Desktop.",
+        "Liste la projection durable Skill Learning V2 et son état opérationnel exact: modèle réellement lié, heartbeat, scan/progression observables, files de jobs/notifications, reprises et erreurs bornées; puis génération, validation, proposition, test isolé, installation, canary, activation, échec et rollback. Read-only et operator-safe. Utiliser pour expliquer ce que Captain apprend ou diagnostiquer son état; ne jamais inventer un pourcentage ni simuler une décision. Les actions exactes restent réservées aux cartes authentifiées Telegram, TUI, Web et Desktop.",
         serde_json::json!({
             "type": "object",
             "properties": {

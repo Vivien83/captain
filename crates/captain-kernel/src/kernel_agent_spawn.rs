@@ -71,7 +71,7 @@ impl CaptainKernel {
 
         self.apply_spawn_default_model(&mut manifest);
         normalize_spawn_model_name(&mut manifest);
-        apply_budget_defaults(&self.config.budget, &mut manifest.resources);
+        apply_budget_defaults(&self.budget_config(), &mut manifest.resources);
         manifest
     }
 
@@ -144,7 +144,7 @@ impl CaptainKernel {
             ),
             &["agent", "spawned"],
         );
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             entry.id.to_string(),
             captain_runtime::audit::AuditAction::AgentSpawn,
             format!("name={}, parent={parent:?}", entry.name),

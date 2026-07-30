@@ -127,6 +127,18 @@ fn typed_daemon_stream_event(json: &serde_json::Value) -> Option<StreamEvent> {
                 })
             }),
         }),
+        "suggested_replies" => Some(StreamEvent::SuggestedReplies {
+            options: json
+                .get("options")
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }),
         _ => None,
     }
 }

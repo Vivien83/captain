@@ -38,6 +38,15 @@ pub(crate) fn memory_event_from_json(
             status: string_field(value, "status"),
             caller_agent_id: value["caller_agent_id"].as_str().map(str::to_string),
         }),
+        "agent_delegation_status" => Some(AppEvent::ToolRunStatus {
+            run_id: format!("delegation:{}", string_field(value, "job_id")),
+            tool_name: format!("délégation {}", string_field(value, "title")),
+            status: string_field(value, "status"),
+            caller_agent_id: value["caller_agent_id"].as_str().map(str::to_string),
+        }),
+        "compaction_progress" => serde_json::from_value(value.clone())
+            .ok()
+            .map(AppEvent::CompactionProgress),
         _ => None,
     }
 }

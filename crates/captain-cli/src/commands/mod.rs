@@ -53,6 +53,7 @@ pub(crate) mod service;
 mod service_render;
 mod service_runtime;
 mod session_api;
+mod session_export;
 mod session_text;
 pub(crate) mod sessions;
 pub(crate) mod setup;

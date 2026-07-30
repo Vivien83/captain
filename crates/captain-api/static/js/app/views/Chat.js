@@ -1,11 +1,12 @@
 import { h } from 'preact';
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
 import { api, openAgentWs } from '../api.js';
 import { getState, setState, subscribe, toast } from '../store.js';
 import { Markdown } from '../components/Markdown.js';
 import { ToolCard } from '../components/ToolCard.js';
 import { AskUserPrompt } from '../components/AskUserPrompt.js';
+import { SuggestedReplies } from '../components/SuggestedReplies.js';
 import {
   PROVIDER_QUOTA_REFRESH_MS,
   providerDurationLabel,
@@ -15,12 +16,26 @@ import {
   providerResetLabel,
   providerSubscriptionFromBudget,
 } from '../provider_quota_model.mjs';
+import {
+  TextDeltaBatcher,
+  isScrollNearBottom,
+  textDeltaFromMessage,
+} from '../chat_stream_batcher.mjs';
 
 const html = htm.bind(h);
 
 // Transcript items: {kind:'user'|'assistant'|'system', text, tools:[...], streaming}
 let itemSeq = 0;
 const newItem = (kind, text = '') => ({ id: ++itemSeq, kind, text, tools: [], streaming: false });
+
+function lastAssistant(list) {
+  const tail = list[list.length - 1];
+  if (tail && tail.kind === 'assistant') return tail;
+  const item = newItem('assistant');
+  item.streaming = true;
+  list.push(item);
+  return item;
+}
 
 export function Chat() {
   const [items, setItems] = useState([]);
@@ -30,10 +45,42 @@ export function Chat() {
   const [agentId, setAgentId] = useState(getState().currentAgentId);
   const [activeModel, setActiveModel] = useState(activeModelIdentity(getState()));
   const [providerQuota, setProviderQuota] = useState(providerSubscriptionFromBudget(null));
+  const [compaction, setCompaction] = useState(null);
+  const [reasoning, setReasoning] = useState(null);
+  const [reasoningBusy, setReasoningBusy] = useState(false);
   const wsRef = useRef(null);
   const scrollRef = useRef(null);
+  const pinToBottomRef = useRef(true);
+  const pinAfterRenderRef = useRef(false);
   const itemsRef = useRef(items);
+  const compactionTimerRef = useRef(null);
   itemsRef.current = items;
+
+  const preserveCompactionScrollPin = () => {
+    const scroll = scrollRef.current;
+    if (pinToBottomRef.current || (scroll && isScrollNearBottom(
+      scroll.scrollHeight,
+      scroll.scrollTop,
+      scroll.clientHeight,
+    ))) {
+      pinAfterRenderRef.current = true;
+    }
+  };
+
+  const applyCompactionProgress = (progress) => {
+    if (!progress || !progress.operation_id) return;
+    const activeSessionId = getState().currentSessionId;
+    if (activeSessionId && progress.session_id && progress.session_id !== activeSessionId) return;
+    if (compactionTimerRef.current) clearTimeout(compactionTimerRef.current);
+    preserveCompactionScrollPin();
+    setCompaction(progress);
+    if (progress.state !== 'running') {
+      compactionTimerRef.current = setTimeout(() => {
+        preserveCompactionScrollPin();
+        setCompaction(null);
+      }, 6000);
+    }
+  };
 
   useEffect(() => subscribe((s) => {
     if (s.currentAgentId !== agentId) setAgentId(s.currentAgentId);
@@ -60,7 +107,45 @@ export function Chat() {
     return () => { dead = true; if (timer) clearTimeout(timer); };
   }, []);
 
+  useEffect(() => {
+    let dead = false;
+    if (!agentId) {
+      setReasoning(null);
+      return () => { dead = true; };
+    }
+    api.agentReasoning(agentId)
+      .then((status) => { if (!dead) setReasoning(status); })
+      .catch(() => { if (!dead) setReasoning(null); });
+    return () => { dead = true; };
+  }, [agentId, activeModel]);
+
+  const setReasoningEffort = async (effort) => {
+    if (!agentId || reasoningBusy) return;
+    setReasoningBusy(true);
+    try {
+      const status = await api.setAgentReasoning(agentId, effort === 'auto' ? null : effort);
+      setReasoning(status);
+      const effective = status.effective_effort || 'provider';
+      toast(`Raisonnement : ${effort} → ${effective}`);
+    } catch (error) {
+      toast(`Raisonnement refusé : ${error.message}`, 'err');
+    } finally {
+      setReasoningBusy(false);
+    }
+  };
+
   const mutate = useCallback((fn) => {
+    const scroll = scrollRef.current;
+    if (pinToBottomRef.current || (scroll && isScrollNearBottom(
+      scroll.scrollHeight,
+      scroll.scrollTop,
+      scroll.clientHeight,
+    ))) {
+      // Keep the pre-mutation intent separate from onScroll. A delayed scroll
+      // event can otherwise observe the larger DOM and mistake growth for an
+      // operator scrolling away before Preact runs the layout effect.
+      pinAfterRenderRef.current = true;
+    }
     setItems((prev) => {
       const next = prev.map((it) => ({ ...it, tools: it.tools.slice() }));
       fn(next);
@@ -68,22 +153,24 @@ export function Chat() {
     });
   }, []);
 
-  // Only continues an existing assistant bubble if it is the very last item —
-  // a later user message (e.g. answering an onboarding question) means a
-  // fresh turn, and must start a new bubble instead of appending after it.
-  const lastAssistant = (list) => {
-    const tail = list[list.length - 1];
-    if (tail && tail.kind === 'assistant') return tail;
-    const it = newItem('assistant');
-    it.streaming = true;
-    list.push(it);
-    return it;
-  };
+  const textBatcherRef = useRef(null);
+  if (!textBatcherRef.current) {
+    textBatcherRef.current = new TextDeltaBatcher((content) => {
+      mutate((list) => {
+        const assistant = lastAssistant(list);
+        assistant.streaming = true;
+        assistant.text += content;
+      });
+    });
+  }
+  const flushTextDeltas = () => textBatcherRef.current.flush();
 
   // Load past transcript for the active session, then connect the WS.
   useEffect(() => {
     if (!agentId) return;
     let dead = false;
+    setCompaction(null);
+    pinToBottomRef.current = true;
 
     (async () => {
       try {
@@ -101,35 +188,53 @@ export function Chat() {
     let ws = null;
     let closedByUs = false;
     let retry = 0;
-    const connect = () => {
-      ws = openAgentWs(agentId, {
-        onopen: () => { retry = 0; setConnected(true); },
-        onclose: () => {
-          setConnected(false);
-          if (!closedByUs) setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
-        },
-        onmessage: (m) => handleWsMessage(m),
-      });
-      wsRef.current = ws;
+    const connect = async () => {
+      try {
+        const opened = await openAgentWs(agentId, {
+          onopen: () => { retry = 0; setConnected(true); },
+          onclose: () => {
+            flushTextDeltas();
+            setConnected(false);
+            if (!closedByUs) setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
+          },
+          onmessage: (m) => handleWsMessage(m),
+        });
+        if (closedByUs) {
+          opened.close();
+          return;
+        }
+        ws = opened;
+        wsRef.current = ws;
+      } catch {
+        setConnected(false);
+        if (!closedByUs) setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
+      }
     };
     connect();
 
-    return () => { dead = true; closedByUs = true; if (ws) ws.close(); };
+    return () => {
+      dead = true;
+      closedByUs = true;
+      if (compactionTimerRef.current) clearTimeout(compactionTimerRef.current);
+      textBatcherRef.current.clear();
+      if (ws) ws.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
   const handleWsMessage = (m) => {
+    const delta = textDeltaFromMessage(m);
+    if (delta !== null) {
+      textBatcherRef.current.push(delta);
+      return;
+    }
+    // Preserve protocol ordering: every non-text boundary observes all text
+    // received before it, even when the 34 ms visual frame has not elapsed.
+    flushTextDeltas();
     switch (m.type) {
       case 'typing':
         if (m.state === 'start') setBusy(true);
         if (m.state === 'stop') setBusy(false);
-        break;
-      case 'text_delta':
-        mutate((list) => {
-          const a = lastAssistant(list);
-          a.streaming = true;
-          a.text += m.content || '';
-        });
         break;
       case 'tool_start':
         mutate((list) => {
@@ -182,6 +287,20 @@ export function Chat() {
           list.push({ ...newItem('ask_user'), text: m.question, options: m.options || null, answered: false });
         });
         break;
+      case 'suggested_replies':
+        mutate((list) => {
+          list.forEach((item) => { item.suggestionsActive = false; });
+          const options = Array.isArray(m.options) ? m.options.filter((option) => typeof option === 'string' && option.trim()) : [];
+          if (options.length > 0) {
+            const assistant = lastAssistant(list);
+            assistant.suggestedReplies = options;
+            assistant.suggestionsActive = true;
+          }
+        });
+        break;
+      case 'compaction_progress':
+        applyCompactionProgress(m.progress);
+        break;
       case 'canvas':
         setCanvas({ title: m.title || 'Canvas', html: m.html || '' });
         break;
@@ -198,27 +317,77 @@ export function Chat() {
       case 'broadcast': {
         // Turn initiated from another surface (Telegram, TUI...) — mirror it.
         const ev = m.event || {};
-        if (ev.UserMessage) mutate((l) => l.push({ ...newItem('user'), text: ev.UserMessage.content }));
-        if (ev.TextDelta) mutate((l) => { const a = lastAssistant(l); a.streaming = true; a.text += ev.TextDelta.delta; });
-        if (ev.ToolStart) mutate((l) => lastAssistant(l).tools.push({ id: ev.ToolStart.tool_use_id, name: ev.ToolStart.tool_name, input: '', result: '', isError: false, done: false, startedAt: Date.now() }));
-        if (ev.ToolEnd) mutate((l) => {
-          const t = lastAssistant(l).tools.find((t) => t.id === ev.ToolEnd.tool_use_id);
-          if (t) { t.result = ev.ToolEnd.result_preview; t.isError = ev.ToolEnd.is_error; t.done = true; t.endedAt = Date.now(); }
+        const payload = (name) => ev[name] || (ev.chat_event === name ? ev : null);
+        const userMessage = payload('UserMessage');
+        const textDelta = payload('TextDelta');
+        const toolStart = payload('ToolStart');
+        const toolEnd = payload('ToolEnd');
+        const intermediate = payload('IntermediateMessage');
+        const response = payload('Response');
+        const askUser = payload('AskUser');
+        if (userMessage) {
+          mutate((list) => {
+            list.forEach((item) => { item.suggestionsActive = false; });
+            list.push({ ...newItem('user'), text: userMessage.content });
+          });
+        }
+        if (textDelta?.delta) mutate((list) => { lastAssistant(list).text += textDelta.delta; });
+        if (toolStart) mutate((list) => lastAssistant(list).tools.push({ id: toolStart.tool_use_id, name: toolStart.tool_name, input: '', result: '', isError: false, done: false, startedAt: Date.now() }));
+        if (toolEnd) mutate((list) => {
+          const t = lastAssistant(list).tools.find((tool) => tool.id === toolEnd.tool_use_id);
+          if (t) { t.result = toolEnd.result_preview; t.isError = toolEnd.is_error; t.done = true; t.endedAt = Date.now(); }
         });
-        if (ev.Response) mutate((l) => { const a = lastAssistant(l); a.streaming = false; if (!a.text && ev.Response.content) a.text = ev.Response.content; });
+        if (intermediate?.content) mutate((list) => { lastAssistant(list).text += intermediate.content; });
+        if (response) mutate((list) => { const a = lastAssistant(list); a.streaming = false; if (!a.text && response.content) a.text = response.content; });
+        if (askUser) {
+          setBusy(false);
+          mutate((list) => {
+            list.forEach((item) => { if (item.kind === 'ask_user' && !item.answered) item.answered = true; });
+            list.push({ ...newItem('ask_user'), text: askUser.question, options: askUser.options || null, answered: false });
+          });
+        }
+        const suggestedReplies = payload('SuggestedReplies')?.options;
+        if (suggestedReplies) {
+          mutate((list) => {
+            list.forEach((item) => { item.suggestionsActive = false; });
+            const options = suggestedReplies.filter((option) =>
+              typeof option === 'string' && option.trim());
+            if (options.length > 0) {
+              const assistant = lastAssistant(list);
+              assistant.suggestedReplies = options;
+              assistant.suggestionsActive = true;
+            }
+          });
+        }
+        const compactionProgress = payload('CompactionProgress')?.progress;
+        if (compactionProgress) applyCompactionProgress(compactionProgress);
         break;
       }
       default: break;
     }
   };
 
-  // Autoscroll pinned to bottom while streaming.
-  useEffect(() => {
+  // Preserve the operator's scrollback position, but keep a live session
+  // pinned based on its position before a batched DOM growth.
+  useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+    if (el && (pinToBottomRef.current || pinAfterRenderRef.current)) {
       el.scrollTop = el.scrollHeight;
+      pinToBottomRef.current = true;
     }
-  }, [items]);
+    pinAfterRenderRef.current = false;
+  }, [items, compaction]);
+
+  const updateScrollPin = () => {
+    const el = scrollRef.current;
+    if (el) {
+      pinToBottomRef.current = isScrollNearBottom(
+        el.scrollHeight,
+        el.scrollTop,
+        el.clientHeight,
+      );
+    }
+  };
 
   // If the last item is an unanswered ask_user, free-text Composer input
   // must answer it too — same as clicking a button — instead of starting a
@@ -238,6 +407,7 @@ export function Chat() {
       const target = list.find((it) => it.id === item.id);
       if (target) { target.answered = true; target.answer = answer; }
     });
+    pinToBottomRef.current = true;
     ws.send(JSON.stringify({ type: 'user_response', content: answer }));
     setBusy(true);
   };
@@ -250,7 +420,11 @@ export function Chat() {
       answerAskUser(pending, text);
       return true;
     }
-    setItems((prev) => [...prev, { ...newItem('user'), text }]);
+    pinToBottomRef.current = true;
+    setItems((prev) => [
+      ...prev.map((item) => item.suggestionsActive ? { ...item, suggestionsActive: false } : item),
+      { ...newItem('user'), text },
+    ]);
     ws.send(JSON.stringify({ type: 'message', content: text }));
     setBusy(true);
     return true;
@@ -275,7 +449,7 @@ export function Chat() {
   return html`
     <div class="split">
       <div class="chat-col">
-        <div class="chat-scroll" ref=${scrollRef}>
+        <div class="chat-scroll" ref=${scrollRef} onScroll=${updateScrollPin}>
           <div class="chat-inner">
             ${items.length === 0 && html`
               <div class="empty-state">
@@ -283,11 +457,15 @@ export function Chat() {
                 <div>Parle à ton agent — il a 190+ outils à disposition.</div>
               </div>
             `}
-            ${items.map((it) => html`<${Message} key=${it.id} item=${it} onAnswer=${answerAskUser} />`)}
+            ${items.map((it) => html`<${Message} key=${it.id} item=${it}
+              onAnswer=${answerAskUser} onSuggestedReply=${send} />`)}
           </div>
         </div>
+        <${CompactionProgressBar} progress=${compaction} />
         <${Composer} disabled=${!connected} busy=${busy} onSend=${send} onUpload=${onUpload} />
-        <${ProviderQuotaBar} status=${providerQuota} activeModel=${activeModel} />
+        <${ProviderQuotaBar} status=${providerQuota} activeModel=${activeModel}
+          reasoning=${reasoning} reasoningBusy=${reasoningBusy}
+          onReasoningChange=${setReasoningEffort} />
       </div>
       ${canvas && html`
         <div class="canvas-pane">
@@ -303,16 +481,55 @@ export function Chat() {
   `;
 }
 
-function ProviderQuotaBar({ status, activeModel }) {
+function CompactionProgressBar({ progress }) {
+  if (!progress) return null;
+  const labels = {
+    preparing: 'Préparation',
+    pruning: 'Élagage',
+    summarizing: 'Synthèse',
+    chunking: 'Synthèse par lots',
+    merging: 'Fusion',
+    persisting: 'Enregistrement',
+    completed: 'Terminé',
+    failed: 'Échec',
+    interrupted: 'Interrompu',
+  };
+  const completed = Number(progress.completed_units);
+  const total = Number(progress.total_units);
+  const determinate = Number.isFinite(completed) && Number.isFinite(total) && total > 0;
+  const percent = determinate ? Math.max(0, Math.min(100, Math.floor((completed * 100) / total))) : null;
+  const terminal = progress.state !== 'running';
+  return html`
+    <div class="compaction-progress ${terminal ? progress.state : 'running'}" role="status">
+      <div class="compaction-progress-head">
+        <strong>Compactage du contexte</strong>
+        <span>${labels[progress.phase] || progress.phase}</span>
+        ${determinate && html`<span>${completed}/${total} lots · ${percent}%</span>`}
+        ${!determinate && !terminal && html`<span>progression indéterminée</span>`}
+      </div>
+      <div class="compaction-progress-gauge ${determinate ? '' : 'indeterminate'}"
+        role="progressbar" aria-label="Progression du compactage"
+        aria-valuemin=${determinate ? 0 : undefined}
+        aria-valuemax=${determinate ? 100 : undefined}
+        aria-valuenow=${determinate ? percent : undefined}>
+        <span style=${determinate ? { width: `${percent}%` } : {}}></span>
+      </div>
+    </div>
+  `;
+}
+
+function ProviderQuotaBar({ status, activeModel, reasoning, reasoningBusy, onReasoningChange }) {
   const groups = providerQuotaGroups(status, activeModel);
   const activeProvider = (activeModel || '').split('/')[0];
   const hasObservation = groups.hasProviderObservation;
   const codexActive = ['codex', 'openai-codex'].includes(activeProvider.toLowerCase());
-  if (!hasObservation && !codexActive) return null;
+  if (!hasObservation && !codexActive && !reasoning) return null;
   if (!hasObservation) {
     return html`
       <div class="provider-quota-bar unavailable" role="status">
-        <strong>Codex</strong><span>quotas d'abonnement non observés</span>
+        <${ReasoningControl} status=${reasoning} busy=${reasoningBusy}
+          onChange=${onReasoningChange} />
+        ${codexActive && html`<strong>Codex</strong><span>quotas d'abonnement non observés</span>`}
       </div>
     `;
   }
@@ -325,6 +542,8 @@ function ProviderQuotaBar({ status, activeModel }) {
     : groups.alternativeTone === 'warn' ? ' sous tension' : '';
   return html`
     <div class="provider-quota-bar" role="status" aria-label="Quotas applicables au modèle actif ${meta.activeModel || meta.provider}">
+      <${ReasoningControl} status=${reasoning} busy=${reasoningBusy}
+        onChange=${onReasoningChange} />
       <div class="provider-quota-meta">
         <strong>${meta.activeModel ? `Actif : ${meta.activeModel}` : meta.provider}</strong>
         ${meta.activeModel && html`<span>${meta.provider}</span>`}
@@ -337,21 +556,41 @@ function ProviderQuotaBar({ status, activeModel }) {
           window.windowSeconds,
           window.kind === 'primary' ? 'court' : 'long',
         );
-        const percent = Number.isInteger(window.usedPercent)
-          ? window.usedPercent.toFixed(0)
-          : window.usedPercent.toFixed(1);
+        const percent = Number.isInteger(window.remainingPercent)
+          ? window.remainingPercent.toFixed(0)
+          : window.remainingPercent.toFixed(1);
         return html`
           <div class="provider-quota-window ${tone}" key=${`${window.limitId}:${window.kind}`}>
             <span class="provider-quota-label">${window.limitName} · ${duration}</span>
             <span class="provider-quota-gauge" role="progressbar"
-              aria-label="${window.limitName} ${duration}"
-              aria-valuemin="0" aria-valuemax="100" aria-valuenow=${window.usedPercent}>
-              <span style=${{ width: `${window.usedPercent}%` }}></span>
+              aria-label="${window.limitName} ${duration} restant"
+              aria-valuemin="0" aria-valuemax="100" aria-valuenow=${window.remainingPercent}>
+              <span style=${{ width: `${window.remainingPercent}%` }}></span>
             </span>
-            <strong>${percent}%</strong>
+            <strong>${percent}% reste</strong>
             <span class="provider-quota-reset">↻ ${providerResetLabel(window)}</span>
             ${window.stale && html`<span class="provider-quota-flag">stale</span>`}
             ${window.blocked && html`<span class="provider-quota-flag">bloqué</span>`}
+          </div>
+        `;
+      })}
+      ${groups.spendControls.map((control) => {
+        const tone = providerQuotaTone(control);
+        const percent = Number.isInteger(control.remainingPercent)
+          ? control.remainingPercent.toFixed(0)
+          : control.remainingPercent.toFixed(1);
+        return html`
+          <div class="provider-quota-window ${tone}" key=${`${control.limitId}:spend`}>
+            <span class="provider-quota-label">Budget mensuel</span>
+            <span class="provider-quota-gauge" role="progressbar"
+              aria-label="Budget mensuel restant" aria-valuemin="0" aria-valuemax="100"
+              aria-valuenow=${control.remainingPercent}>
+              <span style=${{ width: `${control.remainingPercent}%` }}></span>
+            </span>
+            <strong>${percent}% reste</strong>
+            <span>${control.remaining} / ${control.limit}</span>
+            <span class="provider-quota-reset">↻ ${providerResetLabel(control)}</span>
+            ${control.blocked && html`<span class="provider-quota-flag">bloqué</span>`}
           </div>
         `;
       })}
@@ -368,6 +607,38 @@ function ProviderQuotaBar({ status, activeModel }) {
   `;
 }
 
+function ReasoningControl({ status, busy, onChange }) {
+  if (!status) return null;
+  if (!status.supported) {
+    return html`<div class="reasoning-control"><span>Raisonnement</span><strong>provider</strong></div>`;
+  }
+  const configured = status.configured_effort || 'auto';
+  const effective = status.effective_effort || 'provider';
+  const title = configured === 'ultra'
+    ? 'Ultra utilise l’effort modèle max et active la délégation proactive sur l’agent racine'
+    : configured === 'auto'
+      ? `Auto omet l’override et laisse le modèle choisir (actuellement ${effective})`
+      : configured === 'none'
+        ? 'None est un niveau explicite, distinct de Auto'
+        : 'Effort de raisonnement du modèle actif';
+  return html`
+    <label class="reasoning-control" title=${title}>
+      <span>Raisonnement</span>
+      <select value=${configured} disabled=${busy}
+        onChange=${(event) => onChange(event.currentTarget.value)}>
+        <option value="auto">${configured === 'auto' ? `Auto → ${effective}` : 'Auto'}</option>
+        ${(status.options || []).map((option) => html`
+          <option value=${option.effort} key=${option.effort}>${
+            option.effort === 'ultra' ? 'Ultra · max + agents'
+              : option.effort === 'none' ? 'None · explicite'
+                : option.effort
+          }</option>
+        `)}
+      </select>
+    </label>
+  `;
+}
+
 function activeModelIdentity(state) {
   const active = (state.agents || []).find((agent) => agent.id === state.currentAgentId);
   if (!active) return '';
@@ -376,12 +647,12 @@ function activeModelIdentity(state) {
   return provider && model ? `${provider}/${model}` : provider || model;
 }
 
-function Message({ item, onAnswer }) {
+function Message({ item, onAnswer, onSuggestedReply }) {
   const who = item.kind === 'user' ? 'Toi'
     : (item.kind === 'assistant' || item.kind === 'ask_user') ? 'Captain'
     : 'Système';
   return html`
-    <div class="msg ${item.kind}">
+    <div class="msg ${item.kind} ${item.animate === false ? 'settled' : ''} ${item.streaming ? 'streaming' : ''}">
       <div class="who">${who}</div>
       ${item.tools.map((t) => html`<${ToolCard} key=${t.id} tool=${t} />`)}
       ${(item.text || item.streaming) && html`
@@ -391,6 +662,10 @@ function Message({ item, onAnswer }) {
         </div>
       `}
       ${item.kind === 'ask_user' && html`<${AskUserPrompt} item=${item} onAnswer=${onAnswer} />`}
+      ${item.kind === 'assistant' && html`
+        <${SuggestedReplies} item=${item}
+          onChoose=${(_item, option) => onSuggestedReply(option)} />
+      `}
     </div>
   `;
 }
@@ -450,12 +725,21 @@ function rebuildTranscript(events) {
   const items = [];
   let current = null;
   let pendingAsk = null; // last ask_user item still waiting for its user_response in this replay
+  let pendingSuggestions = null;
   for (const ev of events) {
     const type = ev.event_type || ev.type;
     const p = typeof ev.payload === 'string' ? safeParse(ev.payload) : (ev.payload || {});
     if (type === 'user_message') {
+      items.forEach((item) => { item.suggestionsActive = false; });
+      pendingSuggestions = null;
       items.push({ ...newItem('user'), text: p.content || p.text || '' });
       current = null;
+    } else if (type === 'suggested_replies') {
+      items.forEach((item) => { item.suggestionsActive = false; });
+      const options = Array.isArray(p.options)
+        ? p.options.filter((option) => typeof option === 'string' && option.trim())
+        : [];
+      pendingSuggestions = options.length > 0 ? options : null;
     } else if (type === 'ask_user') {
       // timeline.rs persists this as event_type:"ask_user", payload:{question,options}
       // — mirror it into the same item shape handleWsMessage's live case builds,
@@ -476,6 +760,11 @@ function rebuildTranscript(events) {
       }
     } else if (type === 'assistant_message' || type === 'response') {
       current = { ...newItem('assistant'), text: p.content || p.text || '' };
+      if (pendingSuggestions) {
+        current.suggestedReplies = pendingSuggestions;
+        current.suggestionsActive = true;
+        pendingSuggestions = null;
+      }
       items.push(current);
     } else if (type === 'tool_use_start' || type === 'tool_use_end') {
       if (!current) { current = newItem('assistant'); items.push(current); }
@@ -492,7 +781,7 @@ function rebuildTranscript(events) {
       if (t) { t.result = p.result_preview || ''; t.isError = !!p.is_error; t.done = true; }
     }
   }
-  return items;
+  return items.map((item) => ({ ...item, animate: false }));
 }
 
 function safeParse(s) {

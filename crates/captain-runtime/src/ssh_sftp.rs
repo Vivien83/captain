@@ -60,8 +60,9 @@ async fn open_sftp_session(
     key: &SshKey,
 ) -> Result<(Handle<CaptainHostKeyHandler>, SftpSession), String> {
     let pp = key.passphrase.as_ref().map(|p| p.as_str());
-    let key_pair = decode_secret_key(key.private_key.as_str(), pp)
-        .map_err(|e| format!("Failed to parse stored private key: {e}"))?;
+    let key_pair = decode_secret_key(key.private_key.as_str(), pp).map_err(|e| {
+        crate::ssh_vault::private_key_parse_error("Failed to parse stored private key", e)
+    })?;
 
     let config = Arc::new(client::Config::default());
     let handler = CaptainHostKeyHandler {
@@ -75,18 +76,10 @@ async fn open_sftp_session(
             .await
             .map_err(|e| format!("Failed to connect to {}:{}: {e}", key.host, key.port))?;
 
-    // For RSA keys the server may not accept the legacy ssh-rsa (SHA-1)
-    // signature scheme; negotiate the strongest scheme it advertises via
-    // the server-sig-algs extension. Non-RSA keys ignore this hint.
-    let hash_alg = session
-        .best_supported_rsa_hash()
-        .await
-        .map_err(|e| format!("Authentication error: {e}"))?
-        .flatten();
     let auth = session
         .authenticate_publickey(
             &key.user,
-            PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg),
+            PrivateKeyWithHashAlg::new(Arc::new(key_pair), None),
         )
         .await
         .map_err(|e| format!("Authentication error: {e}"))?;
@@ -245,5 +238,18 @@ mod tests {
             err.contains("connect") || err.contains("timed out") || err.contains("Failed"),
             "got: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_private_key_fails_before_network_with_actionable_algorithms() {
+        let mut key = fake_key();
+        key.private_key = Zeroizing::new("not a key".to_string());
+        let error = match open_sftp_session(&key).await {
+            Ok(_) => panic!("an invalid private key must fail before network access"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Failed to parse stored private key"));
+        assert!(error.contains("Ed25519 or ECDSA P-256"));
+        assert!(error.contains("RUSTSEC-2023-0071"));
     }
 }

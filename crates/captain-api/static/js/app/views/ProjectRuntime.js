@@ -22,6 +22,16 @@ const WORKER_STATUS_CLASS = {
   running: 'status-doing', done: 'status-done', failed: 'status-cancelled',
   blocked: 'status-blocked', paused: 'status-review',
 };
+const COMPLETION_LABELS = {
+  satisfied: 'preuves validées', blocked: 'preuve bloquée',
+  insufficient_evidence: 'preuves insuffisantes', missing: 'preuves absentes',
+};
+
+function completionLabel(contract) {
+  if (!contract || !contract.decision) return '';
+  const label = COMPLETION_LABELS[contract.decision] || 'preuves inconnues';
+  return `${label} · ${contract.evidence_count || 0} reçu(s)`;
+}
 
 // Runtime status/phase drive the summary strip, controls, pending asks/tool
 // requests, worker list, and a bounded timeline — everything the old
@@ -60,6 +70,9 @@ export function ProjectRuntime({ projectId, runtime, operatorStatus, onRefresh }
         ${runtime.parallelism && runtime.parallelism.max_parallel_agents != null && html`
           <div class="metric-chip">${runtime.parallelism.running || 0}/${runtime.parallelism.max_parallel_agents} worker(s)</div>
         `}
+        ${runtime.completion_contract && html`
+          <div class="metric-chip">${completionLabel(runtime.completion_contract)}</div>
+        `}
       </div>
 
       <div class="task-toolbar">
@@ -85,6 +98,9 @@ export function ProjectRuntime({ projectId, runtime, operatorStatus, onRefresh }
               <div class="item-row-main">
                 <strong>${w.role || w.id}</strong>
                 <span class="item-row-meta">${PHASE_LABELS[w.phase] || w.phase}${w.summary ? ` · ${w.summary}` : ''}</span>
+                ${w.completion_contract && html`
+                  <span class="item-row-meta">${completionLabel(w.completion_contract)}</span>
+                `}
               </div>
               <span class="status-pill ${WORKER_STATUS_CLASS[w.status] || 'status-todo'}">${w.status}</span>
             </div>

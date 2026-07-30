@@ -1,8 +1,8 @@
 use colored::Colorize;
 
 use crate::{
-    captain_home, daemon_client, daemon_json, dotenv, find_daemon, prompt_input, prompt_secret,
-    restrict_file_permissions, ui,
+    captain_home, daemon_client, daemon_json, find_daemon, production_credential_resolver_at,
+    prompt_input, prompt_secret, restrict_file_permissions, ui,
 };
 
 const ACTIVE_CHANNELS: &[(&str, &str, &str)] = &[
@@ -39,6 +39,10 @@ pub(crate) fn cmd_channel_list() {
     }
 
     let config_str = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let resolver = production_credential_resolver_at(&home).unwrap_or_else(|error| {
+        ui::error(&format!("Credential sources unavailable: {error}"));
+        std::process::exit(1);
+    });
 
     println!("Channel Integrations:\n");
     println!("{:<12} {:<10} STATUS", "CHANNEL", "ENV VAR");
@@ -46,11 +50,11 @@ pub(crate) fn cmd_channel_list() {
 
     for &(name, env_var, _) in ACTIVE_CHANNELS {
         let configured = config_str.contains(&format!("[channels.{name}]"));
-        let env_set = env_var.is_empty() || std::env::var(env_var).is_ok();
+        let credential_ready = env_var.is_empty() || resolver.has_credential(env_var);
 
-        let status = match (configured, env_set) {
+        let status = match (configured, credential_ready) {
             (true, true) => "Ready",
-            (true, false) => "Missing env",
+            (true, false) => "Missing credential",
             (false, _) => "Not configured",
         };
 
@@ -130,12 +134,10 @@ fn setup_telegram() {
 
     let config_block =
         "\n[channels.telegram]\nbot_token_env = \"TELEGRAM_BOT_TOKEN\"\ndefault_agent = \"captain\"\n";
-    maybe_write_channel_config("telegram", config_block);
-
-    match dotenv::save_env_key("TELEGRAM_BOT_TOKEN", &token) {
-        Ok(()) => ui::success("Token saved to ~/.captain/.env"),
-        Err(_) => println!("    export TELEGRAM_BOT_TOKEN={token}"),
+    if !save_channel_secret("TELEGRAM_BOT_TOKEN", &token) {
+        return;
     }
+    maybe_write_channel_config("telegram", config_block);
 
     ui::blank();
     ui::success("Telegram configured");
@@ -162,12 +164,10 @@ fn setup_discord() {
 
     let config_block =
         "\n[channels.discord]\nbot_token_env = \"DISCORD_BOT_TOKEN\"\ndefault_agent = \"captain\"\n";
-    maybe_write_channel_config("discord", config_block);
-
-    match dotenv::save_env_key("DISCORD_BOT_TOKEN", &token) {
-        Ok(()) => ui::success("Token saved to ~/.captain/.env"),
-        Err(_) => println!("    export DISCORD_BOT_TOKEN={token}"),
+    if !save_channel_secret("DISCORD_BOT_TOKEN", &token) {
+        return;
     }
+    maybe_write_channel_config("discord", config_block);
 
     ui::blank();
     ui::success("Discord configured");
@@ -188,19 +188,15 @@ fn setup_email() {
     }
 
     let password = prompt_secret("  App password (or Enter to set later): ");
-    let config_block = format!(
-        "\n[channels.email]\nimap_host = \"imap.gmail.com\"\nimap_port = 993\nsmtp_host = \"smtp.gmail.com\"\nsmtp_port = 587\nusername = \"{username}\"\npassword_env = \"EMAIL_PASSWORD\"\npoll_interval = 30\ndefault_agent = \"captain\"\n"
-    );
-    maybe_write_channel_config("email", &config_block);
-
+    let config_block = email_config_block(&username);
     if !password.is_empty() {
-        match dotenv::save_env_key("EMAIL_PASSWORD", &password) {
-            Ok(()) => ui::success("Password saved to ~/.captain/.env"),
-            Err(_) => println!("    export EMAIL_PASSWORD=your_app_password"),
+        if !save_channel_secret("EMAIL_PASSWORD", &password) {
+            return;
         }
     } else {
         ui::hint("Set later: captain config set-key email (or export EMAIL_PASSWORD=...)");
     }
+    maybe_write_channel_config("email", &config_block);
 
     ui::blank();
     ui::success("Email configured");
@@ -225,16 +221,8 @@ fn setup_signal() {
 
     let phone = prompt_input(SIGNAL_PHONE_PROMPT);
 
-    let config_block =
-        "\n[channels.signal]\nphone_env = \"SIGNAL_PHONE\"\nsocket_path = \"/tmp/signal-cli.sock\"\ndefault_agent = \"captain\"\n";
-    maybe_write_channel_config("signal", config_block);
-
-    if !phone.is_empty() {
-        match dotenv::save_env_key("SIGNAL_PHONE", &phone) {
-            Ok(()) => ui::success("Phone saved to ~/.captain/.env"),
-            Err(_) => println!("    export SIGNAL_PHONE={phone}"),
-        }
-    }
+    let config_block = signal_config_block(&phone);
+    maybe_write_channel_config("signal", &config_block);
 
     ui::blank();
     ui::success("Signal configured");
@@ -268,6 +256,44 @@ fn maybe_write_channel_config(channel: &str, config_block: &str) {
             ui::check_fail("Failed to write config.toml");
         }
     }
+}
+
+fn email_config_block(username: &str) -> String {
+    let username = toml::Value::String(username.to_string());
+    format!(
+        "\n[channels.email]\nimap_host = \"imap.gmail.com\"\nimap_port = 993\nsmtp_host = \"smtp.gmail.com\"\nsmtp_port = 587\nusername = {username}\npassword_env = \"EMAIL_PASSWORD\"\npoll_interval = 30\ndefault_agent = \"captain\"\n"
+    )
+}
+
+fn signal_config_block(phone: &str) -> String {
+    let phone = toml::Value::String(phone.to_string());
+    format!(
+        "\n[channels.signal]\napi_url = \"http://localhost:8080\"\nphone_number = {phone}\nallowed_users = []\ndefault_agent = \"captain\"\n"
+    )
+}
+
+fn save_channel_secret(key: &str, value: &str) -> bool {
+    match store_channel_secret_at(&captain_home(), key, value) {
+        Ok(()) => {
+            ui::success(&format!("{key} saved to ~/.captain/secrets.env"));
+            true
+        }
+        Err(error) => {
+            ui::error_with_fix(
+                &format!("Could not store {key}: {error}"),
+                "If the key is externally managed, rotate its mounted file; otherwise fix the credential store and retry",
+            );
+            false
+        }
+    }
+}
+
+fn store_channel_secret_at(home: &std::path::Path, key: &str, value: &str) -> Result<(), String> {
+    let mut resolver =
+        production_credential_resolver_at(home).map_err(|error| error.to_string())?;
+    resolver
+        .store_credential(key, value)
+        .map_err(|error| error.to_string())
 }
 
 fn notify_daemon_restart() {
@@ -326,7 +352,10 @@ pub(crate) fn cmd_channel_toggle(channel: &str, enable: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACTIVE_CHANNELS, FROZEN_CHANNELS, SIGNAL_PHONE_PROMPT};
+    use super::{
+        email_config_block, signal_config_block, store_channel_secret_at, ACTIVE_CHANNELS,
+        FROZEN_CHANNELS, SIGNAL_PHONE_PROMPT,
+    };
 
     #[test]
     fn active_channel_choices_stay_core_only() {
@@ -346,5 +375,57 @@ mod tests {
     fn signal_phone_prompt_uses_release_safe_example() {
         assert!(SIGNAL_PHONE_PROMPT.contains("+12345678900"));
         assert!(!SIGNAL_PHONE_PROMPT.contains(&"X".repeat(3)));
+    }
+
+    #[test]
+    fn channel_setup_uses_canonical_secret_store() {
+        let home = tempfile::tempdir().unwrap();
+
+        store_channel_secret_at(home.path(), "TELEGRAM_BOT_TOKEN", "local-token").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(home.path().join("secrets.env")).unwrap(),
+            "TELEGRAM_BOT_TOKEN=local-token\n"
+        );
+        assert!(!home.path().join(".env").exists());
+    }
+
+    #[test]
+    fn channel_setup_refuses_externally_managed_secret() {
+        let home = tempfile::tempdir().unwrap();
+        let mounted = home.path().join("mounted-telegram-token");
+        std::fs::write(&mounted, "external-token\n").unwrap();
+        std::fs::write(
+            home.path().join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.TELEGRAM_BOT_TOKEN]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+
+        let error =
+            store_channel_secret_at(home.path(), "TELEGRAM_BOT_TOKEN", "local-token").unwrap_err();
+
+        assert!(error.contains("externally managed") || error.contains("managed by"));
+        assert!(!home.path().join("secrets.env").exists());
+    }
+
+    #[test]
+    fn active_channel_config_blocks_use_runtime_fields_and_escape_values() {
+        let signal: toml::Value = signal_config_block("+12345678900").parse().unwrap();
+        let email: toml::Value = email_config_block("operator\"@example.org")
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            signal["channels"]["signal"]["phone_number"].as_str(),
+            Some("+12345678900")
+        );
+        assert!(signal["channels"]["signal"].get("phone_env").is_none());
+        assert_eq!(
+            email["channels"]["email"]["username"].as_str(),
+            Some("operator\"@example.org")
+        );
     }
 }

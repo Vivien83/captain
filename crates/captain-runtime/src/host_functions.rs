@@ -343,23 +343,32 @@ fn host_shell_exec(state: &GuestState, params: &serde_json::Value) -> serde_json
         return e;
     }
 
-    let args: Vec<&str> = params
+    let args: Vec<String> = params
         .get("args")
         .and_then(|a| a.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|value| value.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
-    // Command::new does NOT use a shell — safe from shell injection.
-    // Each argument is passed directly to the process.
-    match std::process::Command::new(command).args(&args).output() {
+    match crate::guarded_exec::run_program_blocking(crate::guarded_exec::ProgramExecRequest {
+        surface: crate::guarded_exec::ExecSurface::WasmHost,
+        executable: command,
+        args: &args,
+        policy: None,
+        workspace: None,
+        allowed_env_vars: &[],
+        explicit_env: &[],
+        timeout_secs: 30,
+    }) {
         Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             json!({
                 "ok": {
-                    "exit_code": output.status.code(),
-                    "stdout": stdout,
-                    "stderr": stderr,
+                    "exit_code": output.exit_code,
+                    "stdout": output.stdout,
+                    "stderr": output.stderr,
                 }
             })
         }

@@ -4,7 +4,18 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::Json;
+use captain_types::config::ExecPolicy;
 use std::sync::Arc;
+
+fn host_execution_status(policy: &ExecPolicy) -> serde_json::Value {
+    serde_json::to_value(policy.host_execution_posture()).unwrap_or_else(|_| {
+        serde_json::json!({
+            "backend": "host_process",
+            "isolation_level": "unknown",
+            "os_isolation": false,
+        })
+    })
+}
 
 /// GET /api/security - Security feature status.
 pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -13,7 +24,8 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
     } else {
         "bearer_token"
     };
-    let audit_count = state.kernel.audit_log.len();
+    let audit = state.kernel.audit_log.integrity_status();
+    let execution = host_execution_status(&state.kernel.config.exec_policy);
 
     Json(serde_json::json!({
         "core_protections": {
@@ -21,11 +33,13 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
             "ssrf_protection": true,
             "capability_system": true,
             "privilege_escalation_prevention": true,
-            "subprocess_isolation": true,
+            "subprocess_environment_scrub": true,
+            "subprocess_os_isolation": false,
             "security_headers": true,
             "wire_hmac_auth": true,
             "request_id_tracking": true
         },
+        "execution": execution,
         "configurable": {
             "rate_limiter": {
                 "enabled": true,
@@ -52,18 +66,18 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
         "monitoring": {
             "audit_trail": {
                 "enabled": true,
-                "algorithm": "SHA-256 Merkle Chain",
-                "entry_count": audit_count
+                "algorithm": "versioned SHA-256 hash chain",
+                "entry_count": audit.entry_count,
+                "integrity": audit.status,
+                "active_epoch": audit.active_epoch,
+                "active_epoch_valid": audit.active_epoch_valid,
+                "invalid_epochs": audit.invalid_epochs
             },
-            "taint_tracking": {
+            "content_pattern_guards": {
                 "enabled": true,
-                "tracked_labels": [
-                    "ExternalNetwork",
-                    "UserInput",
-                    "PII",
-                    "Secret",
-                    "UntrustedAgent"
-                ]
+                "mode": "heuristic",
+                "provenance_tracking": false,
+                "protected_sinks": ["shell_command", "network_url", "browser_navigation"]
             },
             "manifest_signing": {
                 "algorithm": "Ed25519",
@@ -71,6 +85,29 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
             }
         },
         "secret_zeroization": true,
-        "total_features": 15
+        "total_features": 16
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use captain_types::config::{CriticalMode, ExecSecurityMode};
+
+    #[test]
+    fn host_execution_status_is_explicit_about_missing_os_isolation() {
+        let status = host_execution_status(&ExecPolicy::default());
+
+        assert_eq!(status["backend"], "host_process");
+        assert_eq!(status["isolation_level"], "environment_scrub");
+        assert_eq!(status["os_isolation"], false);
+        assert_eq!(status["environment_scrub"], true);
+        assert_eq!(
+            status["dangerous_command_guard"],
+            "normalized_lexical_heuristic"
+        );
+        assert_eq!(status["policy_mode"], ExecSecurityMode::Full.as_str());
+        assert_eq!(status["critical_mode"], CriticalMode::Safe.as_str());
+        assert!(status.get("subprocess_isolation").is_none());
+    }
 }

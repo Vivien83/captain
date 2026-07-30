@@ -1,9 +1,9 @@
-//! Captain Marketplace client — install skills from the registry.
+//! Frozen Captain Marketplace compatibility client.
 //!
-//! For Phase 1, uses GitHub releases as the registry backend.
-//! Each skill is a GitHub repo with releases containing the skill bundle.
+//! Publisher-backed integrity is not available for this legacy GitHub-backed
+//! path. Every public operation fails before network or filesystem access.
 
-use crate::SkillError;
+use crate::{require_remote_marketplace_access, SkillError};
 use std::path::Path;
 use tracing::info;
 
@@ -25,7 +25,7 @@ impl Default for MarketplaceConfig {
     }
 }
 
-/// Client for the Captain Marketplace.
+/// Frozen compatibility client for the former Captain Marketplace.
 pub struct MarketplaceClient {
     config: MarketplaceConfig,
     http: reqwest::Client,
@@ -45,6 +45,7 @@ impl MarketplaceClient {
 
     /// Search for skills by query string.
     pub async fn search(&self, query: &str) -> Result<Vec<SkillSearchResult>, SkillError> {
+        require_remote_marketplace_access()?;
         let url = format!(
             "{}/search/repositories?q={}+org:{}&sort=stars",
             self.config.registry_url, query, self.config.github_org
@@ -92,6 +93,7 @@ impl MarketplaceClient {
     ///
     /// Downloads the latest release tarball and extracts it to the target directory.
     pub async fn install(&self, skill_name: &str, target_dir: &Path) -> Result<String, SkillError> {
+        require_remote_marketplace_access()?;
         let repo = format!("{}/{}", self.config.github_org, skill_name);
         let url = format!(
             "{}/repos/{}/releases/latest",
@@ -196,5 +198,24 @@ mod tests {
     fn test_client_creation() {
         let client = MarketplaceClient::new(MarketplaceConfig::default());
         assert_eq!(client.config.github_org, "captain-skills");
+    }
+
+    #[tokio::test]
+    async fn remote_operations_fail_before_network_or_filesystem_mutation() {
+        let target = tempfile::tempdir().unwrap();
+        let client = MarketplaceClient::new(MarketplaceConfig {
+            registry_url: "http://127.0.0.1:9".to_string(),
+            github_org: "unreachable".to_string(),
+        });
+
+        assert!(matches!(
+            client.search("demo").await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(matches!(
+            client.install("demo", target.path()).await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(!target.path().join("demo").exists());
     }
 }

@@ -302,12 +302,12 @@ The sandbox names the violated prefix so Captain can choose a different watch ro
 ### Golden path — capture and complete a todo across sessions
 
 ```
-todo_create({"title": "lire le rapport hermes #12326"})
-→ {"id":"3f6a-...","title":"lire le rapport hermes #12326","done":false,...}
+todo_create({"title": "lire le rapport de securite #12326"})
+→ {"id":"3f6a-...","title":"lire le rapport de securite #12326","done":false,...}
 
 # … days later, in a fresh session after a daemon restart …
 todo_list({})
-→ [{"id":"3f6a-...","title":"lire le rapport hermes #12326","done":false,...}]
+→ [{"id":"3f6a-...","title":"lire le rapport de securite #12326","done":false,...}]
 
 todo_complete({"id":"3f6a-..."})
 → {"id":"3f6a-...","done":true,"completed_at":1717248000000,...}

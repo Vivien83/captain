@@ -7,7 +7,7 @@ use captain_types::error::{CaptainError, CaptainResult};
 use captain_types::memory::{Memory, MemorySource};
 use captain_types::message::{Message, ReplyDirectives, TokenUsage};
 use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub(crate) async fn finish_silent_turn(
     session: &mut Session,
@@ -80,15 +80,22 @@ pub(crate) async fn finish_successful_turn(
         .await
         .map_err(|e| CaptainError::Memory(e.to_string()))?;
 
-    remember_interaction(
-        session.agent_id,
-        user_message,
-        &final_response,
-        memory,
-        embedding_driver,
-        streaming,
-    )
-    .await;
+    if crate::outcome_detector::memory_write_opt_out(user_message) {
+        debug!(
+            agent = %manifest.name,
+            "Explicit per-turn memory opt-out skipped episodic interaction capture"
+        );
+    } else {
+        remember_interaction(
+            session.agent_id,
+            user_message,
+            &final_response,
+            memory,
+            embedding_driver,
+            streaming,
+        )
+        .await;
+    }
 
     if let Some(cb) = on_phase {
         cb(LoopPhase::Done);

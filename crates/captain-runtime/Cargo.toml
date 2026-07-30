@@ -46,7 +46,6 @@ rusqlite = { workspace = true }
 moka = { workspace = true }
 blake3 = { workspace = true }
 redb = { workspace = true }
-bincode = { workspace = true }
 redis = { workspace = true, optional = true }
 bb8 = { workspace = true, optional = true }
 bb8-redis = { workspace = true, optional = true }
@@ -60,7 +59,10 @@ zip = { workspace = true }
 # already pulls transitively (0.25.x), so no extra build cost.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tempfile = { workspace = true }
-fastembed = { version = "5", optional = true, default-features = false, features = [
+# Keep FastEmbed aligned with the bundled ONNX Runtime 1.23 ABI. FastEmbed
+# 5.17 moves to ort rc13 / ONNX Runtime >= 1.28 and is intentionally deferred
+# until every release target can certify that native-runtime migration.
+fastembed = { version = "=5.13.2", optional = true, default-features = false, features = [
     "ort-load-dynamic",
     "hf-hub-rustls-tls",
 ] }

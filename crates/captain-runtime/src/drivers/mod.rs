@@ -263,6 +263,17 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
     create_driver_with_quota_observer(config, None)
 }
 
+fn configured_or_env_api_key(config: &DriverConfig, env_names: &[&str]) -> Option<String> {
+    match config.api_key.as_ref() {
+        Some(value) => (!value.trim().is_empty()).then(|| value.clone()),
+        None => env_names.iter().find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        }),
+    }
+}
+
 /// Create a driver and attach provider-owned quota telemetry when supported.
 pub fn create_driver_with_quota_observer(
     config: &DriverConfig,
@@ -272,11 +283,8 @@ pub fn create_driver_with_quota_observer(
 
     // Anthropic uses a different API format — special case
     if provider == "anthropic" {
-        let api_key = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-            .ok_or_else(|| {
+        let api_key =
+            configured_or_env_api_key(config, &["ANTHROPIC_API_KEY"]).ok_or_else(|| {
                 LlmError::MissingApiKey("Set ANTHROPIC_API_KEY environment variable".to_string())
             })?;
         let base_url = config
@@ -288,11 +296,7 @@ pub fn create_driver_with_quota_observer(
 
     // Gemini uses a different API format — special case
     if provider == "gemini" || provider == "google" {
-        let api_key = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-            .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
+        let api_key = configured_or_env_api_key(config, &["GEMINI_API_KEY", "GOOGLE_API_KEY"])
             .ok_or_else(|| {
                 LlmError::MissingApiKey(
                     "Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable".to_string(),
@@ -366,11 +370,8 @@ pub fn create_driver_with_quota_observer(
     // The CopilotDriver exchanges the GitHub PAT for a Copilot API token on demand,
     // caches it, and refreshes when expired.
     if provider == "github-copilot" || provider == "copilot" {
-        let github_token = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("GITHUB_TOKEN").ok())
-            .ok_or_else(|| {
+        let github_token =
+            configured_or_env_api_key(config, &["GITHUB_TOKEN"]).ok_or_else(|| {
                 LlmError::MissingApiKey(
                     "Set GITHUB_TOKEN environment variable for GitHub Copilot".to_string(),
                 )
@@ -387,11 +388,8 @@ pub fn create_driver_with_quota_observer(
 
     // Azure OpenAI — deployment-based URL with `api-key` header
     if provider == "azure" || provider == "azure-openai" {
-        let api_key = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("AZURE_OPENAI_API_KEY").ok())
-            .ok_or_else(|| {
+        let api_key =
+            configured_or_env_api_key(config, &["AZURE_OPENAI_API_KEY"]).ok_or_else(|| {
                 LlmError::MissingApiKey(
                     "Set AZURE_OPENAI_API_KEY environment variable for Azure OpenAI".to_string(),
                 )
@@ -407,13 +405,9 @@ pub fn create_driver_with_quota_observer(
 
     // Kimi for Code — Anthropic-compatible endpoint
     if provider == "kimi_coding" {
-        let api_key = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("KIMI_API_KEY").ok())
-            .ok_or_else(|| {
-                LlmError::MissingApiKey("Set KIMI_API_KEY environment variable".to_string())
-            })?;
+        let api_key = configured_or_env_api_key(config, &["KIMI_API_KEY"]).ok_or_else(|| {
+            LlmError::MissingApiKey("Set KIMI_API_KEY environment variable".to_string())
+        })?;
         let base_url = config
             .base_url
             .clone()
@@ -462,7 +456,7 @@ pub fn create_driver_with_quota_observer(
     // No base_url either — last resort: check if the user set an API key env var
     // using the convention {PROVIDER_UPPER}_API_KEY. If found, use OpenAI-compatible
     // driver with a default base URL derived from common patterns.
-    {
+    if config.api_key.is_none() {
         let env_var = format!("{}_API_KEY", provider.to_uppercase().replace('-', "_"));
         if let Ok(api_key) = std::env::var(&env_var) {
             if !api_key.is_empty() {
@@ -629,6 +623,29 @@ mod tests {
         };
         let driver = create_driver(&config);
         assert!(driver.is_ok());
+    }
+
+    #[test]
+    fn explicit_empty_key_blocks_stale_environment_fallback() {
+        const ENV: &str = "CAPTAIN_TEST_STALE_PROVIDER_KEY_7C1F";
+        std::env::set_var(ENV, "stale-value");
+        let explicit_missing = DriverConfig {
+            provider: "anthropic".to_string(),
+            api_key: Some(String::new()),
+            base_url: None,
+            skip_permissions: true,
+        };
+        let legacy_fallback = DriverConfig {
+            api_key: None,
+            ..explicit_missing.clone()
+        };
+
+        assert_eq!(configured_or_env_api_key(&explicit_missing, &[ENV]), None);
+        assert_eq!(
+            configured_or_env_api_key(&legacy_fallback, &[ENV]).as_deref(),
+            Some("stale-value")
+        );
+        std::env::remove_var(ENV);
     }
 
     #[test]

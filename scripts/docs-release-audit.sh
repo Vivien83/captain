@@ -24,6 +24,8 @@ DOC_FILES=(
   docs/cli-reference.md
   docs/channel-adapters.md
   docs/configuration.md
+  docs/release-provenance.md
+  docs/repository-governance.md
   docs/captain-tools/channel.md
   docs/captain-tools/memory.md
   docs/captain-tools/skill.md
@@ -35,6 +37,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
   docs/releases/v0.1.0-alpha.7.md
@@ -151,23 +154,27 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current public release has an agent-facing changelog" \
+  "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.9"
+  "### 0.1.0-alpha.10"
 require_contains \
-  "release readiness expects the current public release" \
+  "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.9'
+  '0.1.0-alpha.10'
 require_contains \
-  "excellence smoke expects the current public release" \
+  "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.9'
+  '0.1.0-alpha.10'
 require_contains \
-  "public changelog exposes the alpha" \
+  "public changelog exposes the candidate alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.9] - 2026-07-22'
+  '## [0.1.0-alpha.10] - 2026-07-30'
 require_contains \
-  "reviewed alpha notes exist" \
+  "reviewed candidate alpha notes exist" \
+  docs/releases/v0.1.0-alpha.10.md \
+  '# Captain 0.1.0-alpha.10'
+require_contains \
+  "historical alpha.9 notes remain available" \
   docs/releases/v0.1.0-alpha.9.md \
   '# Captain 0.1.0-alpha.9'
 require_contains \
@@ -274,6 +281,30 @@ require_contains \
   "published alpha.9 notes record the zero-Actions proof" \
   docs/releases/v0.1.0-alpha.9.md \
   'GitHub Actions API returned zero runs'
+require_not_contains \
+  "alpha.10 candidate notes do not copy the alpha.9 source commit" \
+  docs/releases/v0.1.0-alpha.10.md \
+  '1248c5928dd4968b6ff7c62ef79a607fb8d94348'
+require_not_contains \
+  "alpha.10 candidate notes do not copy the alpha.9 OCI digest" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692'
+require_contains \
+  "alpha.10 candidate notes keep live provenance unset" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'unset until the live release has'
+require_contains \
+  "alpha.10 candidate notes pin the 22-asset contract" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'exactly 22 host assets'
+require_contains \
+  "alpha.10 candidate notes pin sequential host builds" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'one target at a time'
+require_contains \
+  "alpha.10 candidate notes pin sequential Docker builds" \
+  docs/releases/v0.1.0-alpha.10.md \
+  'strictly one after the other'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
@@ -323,6 +354,18 @@ require_contains \
   docs/releases/v0.1.0-alpha.9.md \
   '## Native release monitor'
 require_contains \
+  "alpha.10 notes expose the security perimeter" \
+  docs/releases/v0.1.0-alpha.10.md \
+  '## Security perimeter'
+require_contains \
+  "alpha.10 notes expose guarded host execution" \
+  docs/releases/v0.1.0-alpha.10.md \
+  '## Guarded host execution'
+require_contains \
+  "alpha.10 notes expose durable operation" \
+  docs/releases/v0.1.0-alpha.10.md \
+  '## Durable operation and continuity'
+require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
   'scripts/release-workflow-audit.sh'
@@ -338,20 +381,44 @@ require_contains \
   "README documents deterministic Docker embeddings" \
   README.md \
   'checksum-pinned FastEmbed snapshot'
+require_contains \
+  "README documents sequential local release builds" \
+  README.md \
+  'sequentially, then assembles the GHCR index'
+require_contains \
+  "README links the release provenance contract" \
+  README.md \
+  'docs/release-provenance.md'
+require_contains \
+  "release provenance discloses unsigned alpha statement" \
+  docs/release-provenance.md \
+  'independently signed transparency-log attestation'
+require_contains \
+  "release provenance pins 22 uploaded assets" \
+  docs/release-provenance.md \
+  'asset count to 22'
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
-    "$readme pins the public prerelease installer" \
+    "$readme pins the candidate installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.9/install.sh'
+    'releases/download/v0.1.0-alpha.10/install.sh'
   require_contains \
-    "$readme pins the immutable alpha image" \
+    "$readme pins the immutable candidate image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
     'releases/latest/download/install.sh'
 done
+require_contains \
+  "security policy supports alpha.10" \
+  SECURITY.md \
+  '| 0.1.0-alpha.10 | :white_check_mark: |'
+require_contains \
+  "security policy retires alpha.9" \
+  SECURITY.md \
+  '| 0.1.0-alpha.9 | :x: |'
 require_contains \
   "local publisher derives prerelease channels" \
   scripts/publish-release-local.sh \

@@ -1,6 +1,6 @@
 //! Shell execution handler.
 
-use crate::tools::{emit_tool_chunk, ensure_no_secret_literal};
+use crate::tools::emit_tool_chunk;
 use std::path::Path;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -9,29 +9,41 @@ pub(crate) async fn tool_shell_exec(
     allowed_env: &[String],
     workspace_root: Option<&Path>,
     exec_policy: Option<&captain_types::config::ExecPolicy>,
+    permit: crate::guarded_exec::ExecPermit,
 ) -> Result<String, String> {
+    let command = input["command"].as_str().unwrap_or_default();
+    if !permit.authorizes(crate::guarded_exec::ExecSurface::ShellTool, command) {
+        return Err("Guarded execution permit does not authorize shell_exec".to_string());
+    }
+    crate::guarded_exec::validate_environment_inputs(allowed_env, &[])?;
     let options = parse_shell_exec_options(input, exec_policy)?;
-    let mut cmd = build_shell_command(options.command, options.use_direct_exec)?;
-    configure_shell_command(&mut cmd, workspace_root, allowed_env);
+    let mut cmd =
+        crate::guarded_exec::build_shell_command(options.command, options.use_direct_exec, false)?;
+    crate::guarded_exec::configure_tokio_command(&mut cmd, workspace_root, allowed_env, &[]);
+    let max_output_bytes = exec_policy
+        .map(|policy| policy.max_output_bytes)
+        .unwrap_or(100_000);
 
     if options.requested_timeout {
-        return run_shell_with_renewing_reviews(cmd, options.timeout_secs).await;
+        return run_shell_with_renewing_reviews(cmd, options.timeout_secs, max_output_bytes).await;
     }
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(options.timeout_secs),
-        cmd.output(),
+    let outcome = crate::guarded_exec::run_tokio_command(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        cmd,
+        options.timeout_secs,
+        0,
+        max_output_bytes,
     )
-    .await;
-    match result {
-        Ok(Ok(output)) => Ok(format_shell_output(
-            output.status.code().unwrap_or(-1),
-            &output.stdout,
-            &output.stderr,
-        )),
-        Ok(Err(e)) => Err(format!("Failed to execute command: {e}")),
-        Err(_) => Err(format!("Command timed out after {}s", options.timeout_secs)),
-    }
+    .await?;
+    Ok(format_shell_output_with_totals(
+        outcome.exit_code,
+        outcome.stdout.as_bytes(),
+        outcome.stdout_total_bytes,
+        outcome.stderr.as_bytes(),
+        outcome.stderr_total_bytes,
+        max_output_bytes,
+    ))
 }
 
 #[derive(Debug)]
@@ -49,23 +61,6 @@ fn parse_shell_exec_options<'a>(
     let command = input["command"]
         .as_str()
         .ok_or("Missing 'command' parameter")?;
-    ensure_no_secret_literal("shell_exec", "command", command)?;
-    if command_sources_secrets_env(command) {
-        return Err(
-            "Blocked unsafe secrets.env sourcing. Do not run `source ~/.captain/secrets.env`, `. ~/.captain/secrets.env`, or `set -a` around Captain secrets: some keys are logical identifiers that are not valid shell variables. Use secret_read, a native integration, or a skill with env_inject instead."
-                .to_string(),
-        );
-    }
-    if let Some(reason) = unbounded_monitoring_command_reason(command) {
-        return Err(format!(
-            "shell_exec blocked: {reason}. Use a finite snapshot command instead, or process_start for an intentional watcher."
-        ));
-    }
-    if let Some(reason) = detached_process_command_reason(command) {
-        return Err(format!(
-            "shell_exec blocked: {reason}. Use process_start with cwd/args for servers, watchers, REPLs, or any intentional background process; then inspect it with process_poll/process_list and stop it with process_kill."
-        ));
-    }
 
     let policy_timeout = exec_policy.map(|p| p.timeout_secs).unwrap_or(30);
     let requested_timeout = input["timeout_seconds"].as_u64();
@@ -81,118 +76,95 @@ fn parse_shell_exec_options<'a>(
     })
 }
 
-fn build_shell_command(
-    command: &str,
-    use_direct_exec: bool,
-) -> Result<tokio::process::Command, String> {
-    if use_direct_exec {
-        direct_shell_command(command)
-    } else {
-        Ok(interpreted_shell_command(command))
-    }
-}
-
-fn direct_shell_command(command: &str) -> Result<tokio::process::Command, String> {
-    let argv = shlex::split(command)
-        .ok_or_else(|| "Command contains unmatched quotes or invalid shell syntax".to_string())?;
-    if argv.is_empty() {
-        return Err("Empty command after parsing".to_string());
-    }
-    let mut cmd = tokio::process::Command::new(&argv[0]);
-    if argv.len() > 1 {
-        cmd.args(&argv[1..]);
-    }
-    Ok(cmd)
-}
-
-fn interpreted_shell_command(command: &str) -> tokio::process::Command {
-    #[cfg(windows)]
-    let git_sh: Option<&str> = {
-        const SH_PATHS: &[&str] = &[
-            "C:\\Program Files\\Git\\usr\\bin\\sh.exe",
-            "C:\\Program Files (x86)\\Git\\usr\\bin\\sh.exe",
-        ];
-        SH_PATHS
-            .iter()
-            .copied()
-            .find(|p| std::path::Path::new(p).exists())
-    };
-    let (shell, shell_arg) = if cfg!(windows) {
-        #[cfg(windows)]
-        {
-            if let Some(sh) = git_sh {
-                (sh, "-c")
-            } else {
-                ("cmd", "/C")
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            ("bash", "-c")
-        }
-    } else {
-        ("bash", "-c")
-    };
-    let mut cmd = tokio::process::Command::new(shell);
-    cmd.arg(shell_arg).arg(command);
-    cmd
-}
-
-fn configure_shell_command(
-    cmd: &mut tokio::process::Command,
-    workspace_root: Option<&Path>,
-    allowed_env: &[String],
-) {
-    if let Some(ws) = workspace_root {
-        cmd.current_dir(ws);
-    }
-    crate::subprocess_sandbox::sandbox_command(cmd, allowed_env);
-    #[cfg(unix)]
-    {
-        cmd.process_group(0);
-    }
-
-    #[cfg(windows)]
-    cmd.env("PYTHONIOENCODING", "utf-8");
-    cmd.stdin(std::process::Stdio::null());
-}
-
 enum ShellStreamEvent {
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
 }
 
+#[derive(Default)]
+struct ShellStreamCapture {
+    bytes: Vec<u8>,
+    total_bytes: usize,
+}
+
 async fn run_shell_with_renewing_reviews(
     mut cmd: tokio::process::Command,
     timeout_secs: u64,
+    max_output_bytes: usize,
 ) -> Result<String, String> {
+    let started = std::time::Instant::now();
+    crate::guarded_exec::audit_execution_started(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        timeout_secs,
+    );
     let ShellProcessParts {
         mut child,
         stdout,
         stderr,
-    } = spawn_shell_process_with_pipes(&mut cmd)?;
+    } = match spawn_shell_process_with_pipes(&mut cmd) {
+        Ok(parts) => parts,
+        Err(error) => {
+            crate::guarded_exec::audit_execution_failed(
+                crate::guarded_exec::ExecSurface::ShellTool,
+                "spawn_failed",
+                started.elapsed(),
+            );
+            return Err(error);
+        }
+    };
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ShellStreamEvent>(32);
 
-    let stdout_task =
-        spawn_shell_stream_reader(stdout, "stdout", tx.clone(), ShellStreamEvent::Stdout);
-    let stderr_task =
-        spawn_shell_stream_reader(stderr, "stderr", tx.clone(), ShellStreamEvent::Stderr);
+    let stdout_task = spawn_shell_stream_reader(
+        stdout,
+        "stdout",
+        tx.clone(),
+        ShellStreamEvent::Stdout,
+        max_output_bytes,
+    );
+    let stderr_task = spawn_shell_stream_reader(
+        stderr,
+        "stderr",
+        tx.clone(),
+        ShellStreamEvent::Stderr,
+        max_output_bytes,
+    );
     drop(tx);
 
     let ShellWaitResult {
         status,
         stdout_seen,
         stderr_seen,
-    } = wait_for_shell_with_review_window(&mut child, &mut rx, timeout_secs).await?;
+    } = match wait_for_shell_with_review_window(&mut child, &mut rx, timeout_secs, max_output_bytes)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            crate::guarded_exec::audit_execution_failed(
+                crate::guarded_exec::ExecSurface::ShellTool,
+                "execution_failed",
+                started.elapsed(),
+            );
+            return Err(error);
+        }
+    };
 
     let stdout_final = stdout_task.await.unwrap_or_default();
     let stderr_final = stderr_task.await.unwrap_or_default();
     let stdout = complete_shell_stream(stdout_final, stdout_seen);
     let stderr = complete_shell_stream(stderr_final, stderr_seen);
-    Ok(format_shell_output(
-        status.code().unwrap_or(-1),
-        &stdout,
-        &stderr,
+    let exit_code = status.code().unwrap_or(-1);
+    crate::guarded_exec::audit_execution_finished(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        exit_code,
+        started.elapsed().as_millis() as u64,
+    );
+    Ok(format_shell_output_with_totals(
+        exit_code,
+        &stdout.bytes,
+        stdout.total_bytes,
+        &stderr.bytes,
+        stderr.total_bytes,
+        max_output_bytes,
     ))
 }
 
@@ -237,26 +209,32 @@ fn spawn_shell_stream_reader<R>(
     label: &'static str,
     tx: tokio::sync::mpsc::Sender<ShellStreamEvent>,
     event: fn(Vec<u8>) -> ShellStreamEvent,
-) -> tokio::task::JoinHandle<Vec<u8>>
+    max_output_bytes: usize,
+) -> tokio::task::JoinHandle<ShellStreamCapture>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut collected = Vec::new();
+        let mut capture = ShellStreamCapture::default();
         let mut buf = [0u8; 4096];
         loop {
             match reader.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    let chunk = buf[..n].to_vec();
+                    capture.total_bytes = capture.total_bytes.saturating_add(n);
+                    let accepted = n.min(max_output_bytes.saturating_sub(capture.bytes.len()));
+                    if accepted == 0 {
+                        continue;
+                    }
+                    let chunk = buf[..accepted].to_vec();
                     emit_tool_chunk(label, &String::from_utf8_lossy(&chunk));
-                    collected.extend_from_slice(&chunk);
-                    let _ = tx.send(event(chunk)).await;
+                    capture.bytes.extend_from_slice(&chunk);
+                    let _ = tx.try_send(event(chunk));
                 }
                 Err(_) => break,
             }
         }
-        collected
+        capture
     })
 }
 
@@ -267,9 +245,9 @@ fn schedule_shell_process_cleanup(child: &mut tokio::process::Child) -> bool {
 
     let _ = child.start_kill();
     tokio::spawn(async move {
-        if let Err(error) = crate::subprocess_sandbox::kill_process_tree(
+        if let Err(error) = crate::subprocess_guard::kill_process_tree(
             pid,
-            crate::subprocess_sandbox::DEFAULT_GRACE_MS,
+            crate::subprocess_guard::DEFAULT_GRACE_MS,
         )
         .await
         {
@@ -287,6 +265,7 @@ async fn wait_for_shell_with_review_window(
     child: &mut tokio::process::Child,
     rx: &mut tokio::sync::mpsc::Receiver<ShellStreamEvent>,
     timeout_secs: u64,
+    max_output_bytes: usize,
 ) -> Result<ShellWaitResult, String> {
     let review_interval = std::time::Duration::from_secs(timeout_secs.clamp(1, 30));
     let hard_cap = shell_review_hard_cap(timeout_secs);
@@ -298,11 +277,13 @@ async fn wait_for_shell_with_review_window(
     let mut streams_open = true;
 
     let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|e| format!("Failed to poll command: {e}"))?
-        {
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                schedule_shell_process_cleanup(child);
+                return Err(format!("Failed to poll command: {error}"));
+            }
         }
         tokio::select! {
             maybe_event = rx.recv(), if streams_open => {
@@ -326,7 +307,7 @@ async fn wait_for_shell_with_review_window(
                     "Command exceeded bounded review window after {}s (timeout_seconds={} is reviewed, not renewed indefinitely). {cleanup_note}. Partial output:\n{}",
                     hard_cap.as_secs(),
                     timeout_secs,
-                    format_shell_output(-1, &stdout_seen, &stderr_seen)
+                    format_shell_output(-1, &stdout_seen, &stderr_seen, max_output_bytes)
                 ));
             }
         }
@@ -369,32 +350,55 @@ fn emit_shell_review_progress(timeout_secs: u64, hard_cap_secs: u64) {
     emit_tool_chunk("progress", &msg);
 }
 
-fn complete_shell_stream(final_stream: Vec<u8>, seen_stream: Vec<u8>) -> Vec<u8> {
-    if final_stream.len() >= seen_stream.len() {
+fn complete_shell_stream(
+    final_stream: ShellStreamCapture,
+    seen_stream: Vec<u8>,
+) -> ShellStreamCapture {
+    if final_stream.bytes.len() >= seen_stream.len() {
         final_stream
     } else {
-        seen_stream
+        ShellStreamCapture {
+            total_bytes: final_stream.total_bytes.max(seen_stream.len()),
+            bytes: seen_stream,
+        }
     }
 }
 
-fn format_shell_output(exit_code: i32, stdout: &[u8], stderr: &[u8]) -> String {
+fn format_shell_output(exit_code: i32, stdout: &[u8], stderr: &[u8], max_output: usize) -> String {
+    format_shell_output_with_totals(
+        exit_code,
+        stdout,
+        stdout.len(),
+        stderr,
+        stderr.len(),
+        max_output,
+    )
+}
+
+fn format_shell_output_with_totals(
+    exit_code: i32,
+    stdout: &[u8],
+    stdout_total_bytes: usize,
+    stderr: &[u8],
+    stderr_total_bytes: usize,
+    max_output: usize,
+) -> String {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
-    let max_output = 100_000;
-    let stdout_str = if stdout.len() > max_output {
+    let stdout_str = if stdout_total_bytes > max_output {
         format!(
             "{}...\n[truncated, {} total bytes]",
             crate::str_utils::safe_truncate_str(&stdout, max_output),
-            stdout.len()
+            stdout_total_bytes
         )
     } else {
         stdout.to_string()
     };
-    let stderr_str = if stderr.len() > max_output {
+    let stderr_str = if stderr_total_bytes > max_output {
         format!(
             "{}...\n[truncated, {} total bytes]",
             crate::str_utils::safe_truncate_str(&stderr, max_output),
-            stderr.len()
+            stderr_total_bytes
         )
     } else {
         stderr.to_string()
@@ -403,7 +407,7 @@ fn format_shell_output(exit_code: i32, stdout: &[u8], stderr: &[u8]) -> String {
     format!("Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}")
 }
 
-fn command_sources_secrets_env(command: &str) -> bool {
+pub(crate) fn command_sources_secrets_env(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     if !lower.contains("secrets.env") {
         return false;
@@ -418,7 +422,7 @@ fn command_sources_secrets_env(command: &str) -> bool {
         || lower.contains("set -o allexport")
 }
 
-fn unbounded_monitoring_command_reason(command: &str) -> Option<&'static str> {
+pub(crate) fn unbounded_monitoring_command_reason(command: &str) -> Option<&'static str> {
     let lower = command.to_ascii_lowercase();
     if lower.contains("pmset -g thermlog") {
         return Some("`pmset -g thermlog` is a streaming thermal log and can wait forever");
@@ -444,7 +448,7 @@ fn unbounded_monitoring_command_reason(command: &str) -> Option<&'static str> {
     None
 }
 
-fn detached_process_command_reason(command: &str) -> Option<&'static str> {
+pub(crate) fn detached_process_command_reason(command: &str) -> Option<&'static str> {
     if contains_shell_command_word(command, "nohup") {
         return Some("`nohup` detaches process lifecycle from the tool result");
     }
@@ -651,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_shell_exec_options_blocks_unbounded_monitoring_commands() {
+    fn shared_review_blocks_unbounded_monitoring_commands() {
         let policy = ExecPolicy {
             timeout_secs: 20,
             mode: ExecSecurityMode::Full,
@@ -666,24 +670,28 @@ mod tests {
             "tcpdump -i en0",
             "top",
         ] {
-            let err = parse_shell_exec_options(
-                &json!({"command": command, "timeout_seconds": 20}),
+            let err = crate::guarded_exec::review_shell(
+                crate::guarded_exec::ExecSurface::ShellTool,
+                command,
                 Some(&policy),
+                true,
             )
             .expect_err("unbounded monitoring command should be blocked");
-            assert!(err.contains("shell_exec blocked"), "{err}");
-            assert!(err.contains("finite snapshot"), "{err}");
+            assert!(err.contains("unbounded command"), "{err}");
+            assert!(err.contains("bounded snapshot"), "{err}");
         }
 
-        parse_shell_exec_options(
-            &json!({"command": "top -l 1 -n 0", "timeout_seconds": 20}),
+        crate::guarded_exec::review_shell(
+            crate::guarded_exec::ExecSurface::ShellTool,
+            "top -l 1 -n 0",
             Some(&policy),
+            true,
         )
         .expect("bounded top snapshot should be allowed");
     }
 
     #[test]
-    fn parse_shell_exec_options_blocks_detached_processes() {
+    fn shared_review_blocks_detached_processes() {
         let policy = ExecPolicy {
             timeout_secs: 20,
             mode: ExecSecurityMode::Full,
@@ -697,30 +705,38 @@ mod tests {
             "bash -lc \"python3 app.py &\"",
             "sleep 1; disown",
         ] {
-            let err = parse_shell_exec_options(
-                &json!({"command": command, "timeout_seconds": 20}),
+            let err = crate::guarded_exec::review_shell(
+                crate::guarded_exec::ExecSurface::ShellTool,
+                command,
                 Some(&policy),
+                true,
             )
             .expect_err("detached process command should be blocked");
-            assert!(err.contains("shell_exec blocked"), "{err}");
+            assert!(err.contains("detached command"), "{err}");
             assert!(err.contains("process_start"), "{err}");
         }
 
-        parse_shell_exec_options(
-            &json!({"command": "printf 'a & b' && printf done", "timeout_seconds": 20}),
+        crate::guarded_exec::review_shell(
+            crate::guarded_exec::ExecSurface::ShellTool,
+            "printf 'a & b' && printf done",
             Some(&policy),
+            true,
         )
         .expect("quoted ampersand and && should remain valid");
 
-        parse_shell_exec_options(
-            &json!({"command": "printf 'nohup' && echo disown", "timeout_seconds": 20}),
+        crate::guarded_exec::review_shell(
+            crate::guarded_exec::ExecSurface::ShellTool,
+            "printf 'nohup' && echo disown",
             Some(&policy),
+            true,
         )
         .expect("textual nohup/disown mentions should remain valid");
 
-        parse_shell_exec_options(
-            &json!({"command": "printf ok 1>&2", "timeout_seconds": 20}),
+        crate::guarded_exec::review_shell(
+            crate::guarded_exec::ExecSurface::ShellTool,
+            "printf ok 1>&2",
             Some(&policy),
+            true,
         )
         .expect("shell redirections using >& must remain valid");
     }
@@ -728,11 +744,25 @@ mod tests {
     #[test]
     fn complete_shell_stream_keeps_longest_observed_buffer() {
         assert_eq!(
-            complete_shell_stream(b"final".to_vec(), b"seen".to_vec()),
+            complete_shell_stream(
+                ShellStreamCapture {
+                    bytes: b"final".to_vec(),
+                    total_bytes: 5,
+                },
+                b"seen".to_vec(),
+            )
+            .bytes,
             b"final"
         );
         assert_eq!(
-            complete_shell_stream(b"fin".to_vec(), b"seen-longer".to_vec()),
+            complete_shell_stream(
+                ShellStreamCapture {
+                    bytes: b"fin".to_vec(),
+                    total_bytes: 3,
+                },
+                b"seen-longer".to_vec(),
+            )
+            .bytes,
             b"seen-longer"
         );
     }
@@ -765,6 +795,7 @@ mod tests {
             &[],
             None,
             Some(&policy),
+            shell_permit("sleep 2; printf healthy", &policy),
         )
         .await
         .expect("explicit timeout should not kill a healthy command");
@@ -788,6 +819,7 @@ mod tests {
             &[],
             None,
             Some(&policy),
+            shell_permit("sleep 5; printf late", &policy),
         )
         .await
         .expect_err("bounded review window should kill a stuck command");
@@ -813,6 +845,7 @@ mod tests {
                 &[],
                 None,
                 Some(&policy),
+                shell_permit("exec 1>&- 2>&-; sleep 5", &policy),
             ),
         )
         .await
@@ -821,5 +854,79 @@ mod tests {
         let output = completed.expect_err("closed stdout/stderr should hit the hard cap");
         assert!(output.contains("bounded review window"), "{output}");
         assert!(output.contains("timeout_seconds=1"), "{output}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn explicit_timeout_fast_output_is_bounded_and_cannot_deadlock() {
+        let command = "printf 'x%.0s' {1..10000}; printf 'y%.0s' {1..10000} >&2";
+        let policy = ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            max_output_bytes: 128,
+            ..ExecPolicy::default()
+        };
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tool_shell_exec(
+                &json!({"command": command, "timeout_seconds": 1}),
+                &[],
+                None,
+                Some(&policy),
+                shell_permit(command, &policy),
+            ),
+        )
+        .await
+        .expect("fast output must not deadlock")
+        .expect("command succeeds");
+
+        assert!(output.contains("Exit code: 0"), "{output}");
+        assert!(
+            output.len() < 1_000,
+            "output was not bounded: {}",
+            output.len()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_exec_never_inherits_daemon_secrets() {
+        let _guard = crate::guarded_exec::TEST_ASYNC_ENV_LOCK.lock().await;
+        let key = "CAPTAIN_SHELL_INHERITED_SECRET";
+        std::env::set_var(key, "must-not-leak");
+        let command = "printf '%s' \"${CAPTAIN_SHELL_INHERITED_SECRET-unset}\"";
+        let policy = ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+
+        let output = tool_shell_exec(
+            &json!({"command": command}),
+            &[],
+            None,
+            Some(&policy),
+            shell_permit(command, &policy),
+        )
+        .await
+        .unwrap();
+        std::env::remove_var(key);
+
+        assert!(output.contains("STDOUT:\nunset"), "{output}");
+        assert!(!output.contains("must-not-leak"), "{output}");
+    }
+
+    fn shell_permit(command: &str, policy: &ExecPolicy) -> crate::guarded_exec::ExecPermit {
+        match crate::guarded_exec::review_shell(
+            crate::guarded_exec::ExecSurface::ShellTool,
+            command,
+            Some(policy),
+            true,
+        )
+        .expect("test command should pass shared review")
+        {
+            crate::guarded_exec::ReviewDecision::Proceed(permit) => permit,
+            crate::guarded_exec::ReviewDecision::ApprovalRequired { pattern } => {
+                panic!("unexpected approval for {pattern}")
+            }
+        }
     }
 }

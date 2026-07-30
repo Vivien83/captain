@@ -88,10 +88,8 @@ impl CaptainKernel {
             return self.static_stream_result(agent_id, result);
         }
 
-        // Enforce quota before spawning the streaming task.
-        self.scheduler
-            .check_quota(agent_id)
-            .map_err(KernelError::Captain)?;
+        // Enforce the coherent global budget and the agent quota before work.
+        self.check_turn_budget(agent_id)?;
 
         if let Some(response) =
             self.consume_codex_model_update_keep_request(agent_id, request.message)?

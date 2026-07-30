@@ -11,6 +11,17 @@ const DURABLE_PRAGMAS: &str = "
     PRAGMA busy_timeout=5000;
 ";
 
+type StoredSlotRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
 const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS capspec_revisions (
         scope_key TEXT NOT NULL,
@@ -122,16 +133,7 @@ impl CapabilityStore {
                 pending_hash,
                 last_error,
                 updated_at,
-            ): (
-                String,
-                String,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                String,
-            ) = row?;
+            ): StoredSlotRow = row?;
             Ok(StoredSlot {
                 scope_key,
                 name,

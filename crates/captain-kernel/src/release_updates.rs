@@ -197,9 +197,15 @@ pub async fn scan_runtime_update_once(kernel: &CaptainKernel) -> Result<Option<S
     let current = captain_types::version::captain_version();
     let install_mode = runtime_update_install_mode();
     let now = now_unix_ms();
+    let github_token = authoritative_optional_credential(
+        "CAPTAIN_GITHUB_TOKEN",
+        kernel.resolve_credential("CAPTAIN_GITHUB_TOKEN"),
+        kernel.credential_is_externally_managed("CAPTAIN_GITHUB_TOKEN"),
+    )?;
     match fetch_release_candidate(
         &current,
         install_mode == RuntimeUpdateInstallMode::SelfUpdate,
+        github_token,
     )
     .await
     {
@@ -229,6 +235,20 @@ pub async fn scan_runtime_update_once(kernel: &CaptainKernel) -> Result<Option<S
                 .map_err(|state_error| format!("{error}; state update failed: {state_error}"))?;
             Err(error)
         }
+    }
+}
+
+fn authoritative_optional_credential(
+    key: &str,
+    value: Option<String>,
+    externally_managed: bool,
+) -> Result<Option<String>, String> {
+    if externally_managed && value.is_none() {
+        Err(format!(
+            "authoritative external source for {key} is unavailable"
+        ))
+    } else {
+        Ok(value)
     }
 }
 
@@ -306,7 +326,7 @@ impl CaptainKernel {
                 }
                 Err(error) => {
                     self.recover_failed_update_launch(&attempt.attempt_id, &error, now)?;
-                    self.audit_log.record(
+                    self.audit_log.record_or_alert(
                         actor,
                         AuditAction::ConfigChange,
                         "Captain runtime update launch failed",
@@ -321,7 +341,7 @@ impl CaptainKernel {
     }
 
     fn audit_runtime_update(&self, actor: &str, resolution: &RuntimeUpdateOperatorResolution) {
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             actor,
             AuditAction::ConfigChange,
             "Captain runtime update decision",

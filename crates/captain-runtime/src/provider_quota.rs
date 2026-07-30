@@ -7,6 +7,7 @@ use crate::drivers::codex::{extract_chatgpt_account_id, CODEX_ORIGINATOR, CODEX_
 use crate::llm_driver::LlmError;
 use captain_types::quota::{
     ProviderCreditsSnapshot, ProviderQuotaSnapshot, ProviderQuotaSource, ProviderQuotaWindow,
+    ProviderSpendControlLimitSnapshot, ProviderSpendControlSnapshot,
 };
 use chrono::{DateTime, Duration, Utc};
 use reqwest::header::HeaderMap;
@@ -70,6 +71,7 @@ pub fn parse_codex_rate_limit_headers(
                 primary,
                 secondary,
                 credits,
+                spend_control: None,
                 plan_type: None,
                 rate_limit_reached_type: reached,
                 source,
@@ -107,6 +109,7 @@ pub fn parse_codex_rate_limit_event(value: &Value) -> Option<ProviderQuotaSnapsh
         primary,
         secondary,
         credits,
+        spend_control: value.get("spend_control").and_then(parse_spend_control),
         plan_type: value.get("plan_type").and_then(value_as_text),
         rate_limit_reached_type: value.get("rate_limit_reached_type").and_then(value_as_text),
         source: ProviderQuotaSource::StreamEvent,
@@ -118,6 +121,7 @@ pub fn parse_codex_rate_limit_event(value: &Value) -> Option<ProviderQuotaSnapsh
 pub fn parse_codex_usage_payload(value: &Value) -> Vec<ProviderQuotaSnapshot> {
     let plan_type = value.get("plan_type").and_then(value_as_text);
     let credits = value.get("credits").and_then(parse_credits);
+    let spend_control = value.get("spend_control").and_then(parse_spend_control);
     let reached_type = value
         .get("rate_limit_reached_type")
         .and_then(parse_reached_type);
@@ -129,10 +133,11 @@ pub fn parse_codex_usage_payload(value: &Value) -> Vec<ProviderQuotaSnapshot> {
             Some("Codex".to_string()),
             rate_limit,
             credits.clone(),
+            spend_control.clone(),
             plan_type.clone(),
             reached_type.clone(),
         ));
-    } else if credits.is_some() || plan_type.is_some() {
+    } else if credits.is_some() || spend_control.is_some() || plan_type.is_some() {
         snapshots.push(ProviderQuotaSnapshot {
             provider: "codex".to_string(),
             limit_id: "codex".to_string(),
@@ -140,6 +145,7 @@ pub fn parse_codex_usage_payload(value: &Value) -> Vec<ProviderQuotaSnapshot> {
             primary: None,
             secondary: None,
             credits: credits.clone(),
+            spend_control: spend_control.clone(),
             plan_type: plan_type.clone(),
             rate_limit_reached_type: reached_type.clone(),
             source: ProviderQuotaSource::AccountStatus,
@@ -169,6 +175,7 @@ pub fn parse_codex_usage_payload(value: &Value) -> Vec<ProviderQuotaSnapshot> {
                 limit_id,
                 limit_name,
                 rate_limit,
+                None,
                 None,
                 plan_type.clone(),
                 None,
@@ -240,6 +247,7 @@ fn snapshot_from_usage_status(
     limit_name: Option<String>,
     status: &Value,
     credits: Option<ProviderCreditsSnapshot>,
+    spend_control: Option<ProviderSpendControlSnapshot>,
     plan_type: Option<String>,
     inherited_reached_type: Option<String>,
 ) -> ProviderQuotaSnapshot {
@@ -258,6 +266,7 @@ fn snapshot_from_usage_status(
         primary: status.get("primary_window").and_then(parse_usage_window),
         secondary: status.get("secondary_window").and_then(parse_usage_window),
         credits,
+        spend_control,
         plan_type,
         rate_limit_reached_type: inherited_reached_type
             .or_else(|| limit_reached.then(|| "provider_reported".to_string())),
@@ -342,6 +351,46 @@ fn parse_credits(value: &Value) -> Option<ProviderCreditsSnapshot> {
         has_credits: value.get("has_credits")?.as_bool()?,
         unlimited: value.get("unlimited")?.as_bool()?,
         balance: value.get("balance").and_then(value_as_text),
+    })
+}
+
+fn parse_spend_control(value: &Value) -> Option<ProviderSpendControlSnapshot> {
+    let reached = value.get("reached")?.as_bool()?;
+    let individual_limit = value
+        .get("individual_limit")
+        .filter(|limit| !limit.is_null())
+        .and_then(parse_spend_control_limit);
+    Some(ProviderSpendControlSnapshot {
+        reached,
+        individual_limit,
+    })
+}
+
+fn parse_spend_control_limit(value: &Value) -> Option<ProviderSpendControlLimitSnapshot> {
+    let reset_after_seconds = value
+        .get("reset_after_seconds")
+        .and_then(Value::as_i64)
+        .and_then(|seconds| u64::try_from(seconds).ok())?;
+    let resets_at = value
+        .get("reset_at")
+        .and_then(Value::as_i64)
+        .and_then(unix_timestamp)
+        .or_else(|| Some(Utc::now() + Duration::seconds(reset_after_seconds as i64)));
+    Some(ProviderSpendControlLimitSnapshot {
+        source: value.get("source").and_then(value_as_text),
+        limit: value.get("limit").and_then(value_as_text)?,
+        used: value.get("used").and_then(value_as_text)?,
+        remaining: value.get("remaining").and_then(value_as_text)?,
+        used_percent: value
+            .get("used_percent")
+            .and_then(Value::as_i64)
+            .and_then(|percent| i32::try_from(percent).ok())?,
+        remaining_percent: value
+            .get("remaining_percent")
+            .and_then(Value::as_i64)
+            .and_then(|percent| i32::try_from(percent).ok())?,
+        reset_after_seconds,
+        resets_at,
     })
 }
 
@@ -503,6 +552,40 @@ mod tests {
             snapshots[1].alert_level(),
             captain_types::quota::QuotaAlertLevel::Exhausted
         );
+    }
+
+    #[test]
+    fn parses_exact_codex_spend_control_headroom() {
+        let payload = json!({
+            "plan_type": "pro",
+            "spend_control": {
+                "reached": false,
+                "individual_limit": {
+                    "source": "monthly",
+                    "limit": "100.00",
+                    "used": "27.50",
+                    "remaining": "72.50",
+                    "used_percent": 28,
+                    "remaining_percent": 72,
+                    "reset_after_seconds": 86400,
+                    "reset_at": 2000000000
+                }
+            }
+        });
+
+        let snapshots = parse_codex_usage_payload(&payload);
+        let spend = snapshots[0]
+            .spend_control
+            .as_ref()
+            .and_then(|control| control.individual_limit.as_ref())
+            .unwrap();
+        assert_eq!(spend.limit, "100.00");
+        assert_eq!(spend.used, "27.50");
+        assert_eq!(spend.remaining, "72.50");
+        assert_eq!(spend.used_percent, 28);
+        assert_eq!(spend.remaining_percent, 72);
+        assert_eq!(spend.reset_after_seconds, 86_400);
+        assert_eq!(spend.resets_at.unwrap().timestamp(), 2_000_000_000);
     }
 
     #[test]

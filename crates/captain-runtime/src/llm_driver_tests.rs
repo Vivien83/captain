@@ -163,6 +163,7 @@ async fn test_default_stream_sends_events() {
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         tool_choice: None,
         cache_hints: CacheHints::default(),
     };

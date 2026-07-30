@@ -98,6 +98,36 @@ impl KernelHandle for ImprovementOutputSafetyKernel {
         }))
     }
 
+    fn workflow_learning_status(&self) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({
+            "schema_version": 1,
+            "enabled": true,
+            "mode": "approval",
+            "state": "healthy",
+            "recovery": "in_sync",
+            "expected_model": { "provider": "codex", "model": "gpt-5.6-sol" },
+            "worker": {
+                "phase": "running",
+                "bound_model": { "provider": "codex", "model": "gpt-5.6-sol" },
+                "started_at_unix_ms": 1,
+                "heartbeat_at_unix_ms": 2,
+                "heartbeat_age_ms": 0,
+                "last_scan_at_unix_ms": 2,
+                "last_progress_at_unix_ms": null,
+                "last_error_scope": null
+            },
+            "jobs": { "pending": 0, "running": 0, "retry_wait": 0, "uncertain": 0, "dead": 0,
+                "oldest_actionable_at_unix_ms": null, "next_retry_at_unix_ms": null,
+                "last_activity_at_unix_ms": null, "last_error_code": null },
+            "notifications": { "pending": 0, "delivering": 0, "retry_wait": 0, "dead": 0,
+                "oldest_actionable_at_unix_ms": null, "next_retry_at_unix_ms": null,
+                "last_activity_at_unix_ms": null },
+            "workflows": { "total": 1, "processing": 0, "awaiting_decision": 1, "active": 0,
+                "attention": 0, "last_activity_at_unix_ms": 2 },
+            "generated_at_unix_ms": 2
+        }))
+    }
+
     fn find_agents(&self, _q: &str) -> Vec<crate::kernel_handle::AgentInfo> {
         Vec::new()
     }
@@ -180,6 +210,12 @@ fn learning_and_workflow_lists_are_public_safe() {
     assert!(workflows.contains("<local-path>"));
     assert!(workflows.contains("<secret>"));
     assert!(!workflows.contains("source_agent_id"));
+    let workflow_payload: serde_json::Value = serde_json::from_str(&workflows).unwrap();
+    assert_eq!(workflow_payload["engine"]["state"], "healthy");
+    assert_eq!(
+        workflow_payload["engine"]["worker"]["bound_model"]["model"],
+        "gpt-5.6-sol"
+    );
 
     let review = tool_self_improvement_review(&serde_json::json!({"limit": 5}), Some(&kh))
         .expect("self improvement review should serialize");

@@ -34,7 +34,8 @@ fn base_commands() -> Vec<serde_json::Value> {
         serde_json::json!({"cmd": "/model", "desc": "Show or switch model (/model [name])"}),
         serde_json::json!({"cmd": "/stop", "desc": "Cancel current agent run"}),
         serde_json::json!({"cmd": "/usage", "desc": "Show session token usage & cost"}),
-        serde_json::json!({"cmd": "/think", "desc": "Toggle extended thinking (/think [on|off|stream])"}),
+        serde_json::json!({"cmd": "/reasoning", "desc": "Inspect or select real model reasoning (/reasoning [auto|level])"}),
+        serde_json::json!({"cmd": "/think", "desc": "Show or hide received reasoning blocks in the terminal UI"}),
         serde_json::json!({"cmd": "/context", "desc": "Show context window usage & pressure"}),
         serde_json::json!({"cmd": "/verbose", "desc": "Cycle tool detail level (/verbose [off|on|full])"}),
         serde_json::json!({"cmd": "/queue", "desc": "Check if agent is processing"}),
@@ -55,7 +56,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base_commands_include_stop_and_status() {
+    fn base_commands_include_stop_status_and_truthful_reasoning_controls() {
         let commands = base_commands();
         let names: Vec<&str> = commands
             .iter()
@@ -64,5 +65,14 @@ mod tests {
 
         assert!(names.contains(&"/stop"));
         assert!(names.contains(&"/status"));
+        assert!(names.contains(&"/reasoning"));
+        let think = commands
+            .iter()
+            .find(|command| command["cmd"] == "/think")
+            .unwrap();
+        assert!(!think["desc"]
+            .as_str()
+            .unwrap()
+            .contains("extended thinking"));
     }
 }

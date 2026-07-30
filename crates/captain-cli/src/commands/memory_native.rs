@@ -1511,8 +1511,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn managed_command_timeout_terminates_the_process_group() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 30"]);
+        let mut command = Command::new("sleep");
+        command.arg("30");
 
         let error = run_with_timeout(&mut command, Duration::from_millis(50)).unwrap_err();
 

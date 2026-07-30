@@ -167,6 +167,7 @@ impl CaptainKernel {
                 model: hand_model,
                 max_tokens: def.agent.max_tokens,
                 temperature: def.agent.temperature,
+                reasoning_effort: None,
                 system_prompt: def.agent.system_prompt.clone(),
                 api_key_env: def.agent.api_key_env.clone(),
                 base_url: def.agent.base_url.clone(),

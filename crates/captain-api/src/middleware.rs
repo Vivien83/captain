@@ -8,6 +8,7 @@
 use axum::body::Body;
 use axum::http::{Method, Request, Response, StatusCode};
 use axum::middleware::Next;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::info;
 
@@ -49,6 +50,8 @@ pub struct AuthState {
     pub api_key: String,
     pub home_dir: std::path::PathBuf,
     pub fallback_auth: captain_types::config::AuthConfig,
+    pub deployment: captain_types::config::DeploymentConfig,
+    pub security: Arc<crate::web_auth_security::WebAuthSecurity>,
 }
 
 /// Bearer token authentication middleware.
@@ -61,7 +64,7 @@ pub struct AuthState {
 /// When web auth is enabled, session cookies are also accepted.
 pub async fn auth(
     axum::extract::State(auth_state): axum::extract::State<AuthState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
     let method = request.method().clone();
@@ -76,6 +79,31 @@ pub async fn auth(
         &auth_state.api_key,
         &auth_state.fallback_auth,
     );
+
+    if let Some(ticket) = crate::web_auth_security::realtime_ticket_from_uri(request.uri()) {
+        let peer = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|connect| connect.0);
+        let ip = crate::web_auth_security::request_client_ip(
+            peer,
+            request.headers(),
+            &auth_state.deployment,
+        );
+        if auth_state.security.consume_realtime_ticket(
+            ticket,
+            path,
+            ip,
+            auth_snapshot.auth.session_epoch,
+            Instant::now(),
+        ) {
+            request
+                .extensions_mut()
+                .insert(crate::web_auth_security::RealtimeTicketAuthorization);
+            return next.run(request).await;
+        }
+        return unauthorized_response("Invalid or expired realtime ticket");
+    }
 
     match authorize_request(&request, &auth_snapshot) {
         AuthDecision::Allow => next.run(request).await,
@@ -93,13 +121,12 @@ enum AuthDecision {
 struct RequestCredentials<'a> {
     bearer_token: Option<&'a str>,
     header_token: Option<&'a str>,
-    query_token: Option<&'a str>,
     session_cookie: Option<String>,
 }
 
 impl<'a> RequestCredentials<'a> {
     fn web_session_token_candidate(&self) -> Option<&'a str> {
-        self.bearer_token.or(self.query_token)
+        self.bearer_token
     }
 }
 
@@ -115,63 +142,108 @@ fn is_loopback_shutdown_request(request: &Request<Body>, path: &str) -> bool {
 }
 
 fn is_public_endpoint(method: &Method, path: &str) -> bool {
-    let is_get = *method == Method::GET;
-    path == "/"
-        || public_static_or_boot_endpoint(path, is_get)
-        || public_read_api_endpoint(path, is_get)
-        || public_protocol_endpoint(method, path, is_get)
+    PUBLIC_ALLOWLIST
+        .iter()
+        .any(|rule| rule.matches(method, path))
 }
 
-fn public_static_or_boot_endpoint(path: &str, is_get: bool) -> bool {
-    (path == "/" || path.starts_with("/assets/") || path == "/terminal" || path == "/config")
-        && is_get
-        || path == "/logo.svg"
-        || path == "/favicon.ico"
-        || path == "/manifest.json"
-        || path == "/sw.js"
-        || (path == "/.well-known/agent.json" && is_get)
-        || (path.starts_with("/a2a/") && is_get)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicMethod {
+    Get,
+    Post,
 }
 
-fn public_read_api_endpoint(path: &str, is_get: bool) -> bool {
-    path == "/api/health"
-        || path == "/api/health/detail"
-        || path == "/api/status"
-        || path == "/api/version"
-        || (path == "/api/agents" && is_get)
-        || (path == "/api/profiles" && is_get)
-        || (path.starts_with("/api/uploads/") && is_get)
-        || (path == "/api/models" && is_get)
-        || (path == "/api/models/aliases" && is_get)
-        || (path == "/api/providers" && is_get)
-        || (path == "/api/budget" && is_get)
-        || (path == "/api/budget/agents" && is_get)
-        || (path.starts_with("/api/budget/agents/") && is_get)
-        || (path == "/api/network/status" && is_get)
-        || (path == "/api/a2a/agents" && is_get)
-        || (path == "/api/approvals" && is_get)
-        || (path.starts_with("/api/approvals/") && is_get)
-        || (path == "/api/channels" && is_get)
-        || (path == "/api/hands" && is_get)
-        || (path == "/api/hands/active" && is_get)
-        || (path.starts_with("/api/hands/") && is_get)
-        || (path == "/api/skills" && is_get)
-        || (path == "/api/sessions" && is_get)
-        || (path == "/api/integrations" && is_get)
-        || (path == "/api/integrations/available" && is_get)
-        || (path == "/api/integrations/health" && is_get)
-        || (path == "/api/workflows" && is_get)
-        || path == "/api/logs/stream"
-        || (path.starts_with("/api/cron/") && is_get)
+impl PublicMethod {
+    fn matches(self, method: &Method) -> bool {
+        match self {
+            Self::Get => *method == Method::GET,
+            Self::Post => *method == Method::POST,
+        }
+    }
 }
 
-fn public_protocol_endpoint(method: &Method, path: &str, is_get: bool) -> bool {
-    path.starts_with("/api/providers/github-copilot/oauth/")
-        || crate::agent_api_routes::is_agent_api_ingress_route(method, path)
-        || path == "/api/auth/login"
-        || path == "/api/auth/logout"
-        || (path == "/api/auth/check" && is_get)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicPath {
+    Exact(&'static str),
+    Prefix(&'static str),
+    AgentApiIngress,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PublicEndpoint {
+    method: PublicMethod,
+    path: PublicPath,
+}
+
+impl PublicEndpoint {
+    fn matches(self, method: &Method, path: &str) -> bool {
+        if !self.method.matches(method) {
+            return false;
+        }
+        match self.path {
+            PublicPath::Exact(expected) => path == expected,
+            PublicPath::Prefix(prefix) => path.starts_with(prefix),
+            PublicPath::AgentApiIngress => {
+                crate::agent_api_routes::is_agent_api_ingress_route(method, path)
+            }
+        }
+    }
+}
+
+/// Explicitly reviewed global-auth bypasses. Every other route is private.
+///
+/// The per-agent ingress rule is present only because that exact route applies
+/// its own rate limit and per-agent Bearer token before executing a turn.
+const PUBLIC_ALLOWLIST: &[PublicEndpoint] = &[
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Prefix("/assets/"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/logo.svg"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/favicon.ico"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/manifest.json"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/sw.js"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/api/health"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/api/version"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact("/api/auth/login"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact("/api/auth/logout"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::Exact("/api/auth/check"),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::AgentApiIngress,
+    },
+];
 
 fn authorize_request(
     request: &Request<Body>,
@@ -187,11 +259,7 @@ fn authorize_request(
     let header_auth = credentials
         .header_token
         .map(|token| api_key_matches(token, api_key));
-    let query_auth = credentials
-        .query_token
-        .map(|token| api_key_matches(token, api_key));
-
-    if header_auth == Some(true) || query_auth == Some(true) {
+    if header_auth == Some(true) {
         return AuthDecision::Allow;
     }
     if auth_enabled && web_session_matches(&credentials, auth_snapshot) {
@@ -199,7 +267,7 @@ fn authorize_request(
     }
 
     AuthDecision::Deny(auth_error_message(
-        header_auth.is_some() || query_auth.is_some(),
+        header_auth.is_some(),
         auth_enabled,
         api_key.is_empty(),
     ))
@@ -210,15 +278,9 @@ fn request_credentials(request: &Request<Body>) -> RequestCredentials<'_> {
         header_value(request, "authorization").and_then(|v| v.strip_prefix("Bearer "));
     let x_api_key = header_value(request, "x-api-key");
     let header_token = bearer_token.or(x_api_key);
-    let query_token = request
-        .uri()
-        .query()
-        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")));
-
     RequestCredentials {
         bearer_token,
         header_token,
-        query_token,
         session_cookie: extract_session_cookie(request),
     }
 }
@@ -331,22 +393,6 @@ mod tests {
     }
 
     #[test]
-    fn public_endpoint_policy_keeps_mutations_private() {
-        assert!(is_public_endpoint(&Method::GET, "/api/agents"));
-        assert!(!is_public_endpoint(&Method::POST, "/api/agents"));
-        assert!(is_public_endpoint(&Method::GET, "/config"));
-        assert!(!is_public_endpoint(&Method::GET, "/api/config"));
-        assert!(is_public_endpoint(&Method::POST, "/api/auth/logout"));
-    }
-
-    #[test]
-    fn agent_api_ingress_route_uses_route_specific_auth() {
-        let path = "/hooks/agents/00000000-0000-0000-0000-000000000000/ingress";
-        assert!(is_public_endpoint(&Method::POST, path));
-        assert!(!is_public_endpoint(&Method::GET, path));
-    }
-
-    #[test]
     fn shutdown_auth_bypass_is_loopback_only() {
         let mut request = Request::builder()
             .uri("/api/shutdown")
@@ -362,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn request_credentials_prefer_bearer_and_extract_cookie() {
+    fn request_credentials_never_treat_query_strings_as_credentials() {
         let request = Request::builder()
             .uri("/api/logs/stream?token=query-token")
             .header("authorization", "Bearer bearer-token")
@@ -377,7 +423,6 @@ mod tests {
         let credentials = request_credentials(&request);
         assert_eq!(credentials.bearer_token, Some("bearer-token"));
         assert_eq!(credentials.header_token, Some("bearer-token"));
-        assert_eq!(credentials.query_token, Some("query-token"));
         assert_eq!(credentials.session_cookie.as_deref(), Some("session-token"));
     }
 
@@ -389,7 +434,10 @@ mod tests {
                 enabled: true,
                 username: "admin".to_string(),
                 password_hash: "hash".to_string(),
+                session_secret: captain_types::config::generate_session_secret().unwrap(),
+                session_epoch: 0,
                 session_ttl_hours: 1,
+                ..Default::default()
             },
         };
         let request = Request::builder()
@@ -412,11 +460,18 @@ mod tests {
                 enabled: true,
                 username: "admin".to_string(),
                 password_hash: "hash".to_string(),
+                session_secret: captain_types::config::generate_session_secret().unwrap(),
+                session_epoch: 0,
                 session_ttl_hours: 1,
+                ..Default::default()
             },
         };
-        let token =
-            crate::session_auth::create_session_token("admin", &snapshot.session_secret(), 1);
+        let token = crate::session_auth::create_session_token(
+            "admin",
+            &snapshot.session_secret().unwrap(),
+            1,
+            snapshot.auth.session_epoch,
+        );
         let request = Request::builder()
             .uri("/api/commands")
             .header("authorization", format!("Bearer {token}"))
@@ -425,4 +480,25 @@ mod tests {
 
         assert_eq!(authorize_request(&request, &snapshot), AuthDecision::Allow);
     }
+
+    #[test]
+    fn query_string_token_never_authorizes_a_protected_route() {
+        let snapshot = crate::session_auth::WebAuthSnapshot {
+            api_key: "query-token".to_string(),
+            auth: captain_types::config::AuthConfig::default(),
+        };
+        let request = Request::builder()
+            .uri("/api/commands?token=query-token")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            authorize_request(&request, &snapshot),
+            AuthDecision::Deny("Missing Authorization: Bearer <api_key> header")
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "middleware_auth_matrix_tests.rs"]
+mod middleware_auth_matrix_tests;

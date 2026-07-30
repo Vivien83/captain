@@ -8,6 +8,13 @@
 
 Captain is the principal agent — it orchestrates ad-hoc workers and is the only path the user has when Captain genuinely needs a human in the loop. Manager fleets, Hands, peers, and A2A remain compiled but are frozen out of the active discovery path until the core is stable.
 
+When a root Codex agent selects a catalogue-advertised `ultra` reasoning mode,
+Captain may use the durable delegation primitives below proactively for
+independent, long-running, or genuinely parallel work. It still handles simple
+or tightly coupled work directly, preserves dependency order, assigns bounded
+budgets and success criteria, monitors detached jobs, and verifies results
+before synthesis. The policy is never injected into a sub-agent.
+
 ### Direct agent control
 
 #### `agent_spawn`
@@ -169,18 +176,49 @@ Tail an agent's recent events (tool calls, messages, state transitions).
 
 Assign a scoped task to an agent with a token budget. Captain's primary
 delegation primitive — use this rather than `agent_send` when you want a
-bounded sub-task with a persisted task record.
+bounded sub-task that survives restart and does not hold the parent turn.
 
-Current runtime contract: this is synchronous today. Captain posts a task,
-runs one worker turn under a scoped run budget, completes the task with the
-worker response, and returns the measured usage. Use `task_post` / `task_claim`
-for true fire-and-forget queueing.
+The default contract is durable and detached. The call returns a `job_id`
+immediately. Captain can continue other work, then inspect the job with
+`agent_job_status`, read the terminal output with `agent_job_result`, or recover
+the inventory with `agent_job_list`. Independent jobs are claimed concurrently
+with a bounded worker pool. A job with `depends_on` remains `blocked` until all
+listed jobs owned by the same caller have succeeded; dependency results are
+injected as bounded, explicitly untrusted evidence.
+
+`wait_for_result=true` is an explicit compatibility mode for a result needed in
+the current reasoning step. It waits only up to `timeout_seconds` and returns
+the live record on timeout; the durable job continues in the background.
 
 | Field | Required | Notes |
 |---|---|---|
 | `agent_id` | yes | Target. |
 | `task` | yes | Task description. |
-| `max_tokens` | yes | Scoped run budget. It can stop further tool steps once reached; one LLM call can still overshoot before Captain can interrupt it. |
+| `title` | no | Short operator label; derived from the first task line when absent. |
+| `max_tokens` | no | Scoped run budget, default 5000 and maximum 500000. One LLM call can still overshoot before Captain can interrupt the next step. |
+| `depends_on` | no | Up to 16 prior job IDs owned by this same caller. Use only for real data dependencies. |
+| `wait_for_result` | no | Default `false`. Set only when the current turn cannot proceed without the result. |
+| `timeout_seconds` | no | Wait window for compatibility mode, clamped to 1–600 seconds. |
+
+Durable states are `blocked`, `queued`, `running`, `cancel_requested`,
+`succeeded`, `failed`, `cancelled`, `uncertain`, and `dependency_failed`.
+Captain never silently replays a job whose model effect had started when the
+worker or daemon stopped: it becomes `uncertain` and requires an explicit
+`agent_job_resume` after inspection.
+
+#### Durable delegation control
+
+- `agent_job_status({job_id})` — inspect current state, attempts, dependencies,
+  budget, usage, error code and next actions without returning the raw task.
+- `agent_job_result({job_id})` — retrieve the bounded terminal result. Active
+  jobs return their current state without blocking.
+- `agent_job_list({status?,limit?})` — list the caller's recent jobs after a
+  long turn or restart. Results and raw task bodies are omitted.
+- `agent_job_cancel({job_id})` — cancel before effect, or request cooperative
+  cancellation after start. A known result wins a simultaneous cancel race.
+- `agent_job_resume({job_id})` — explicitly replay `failed`,
+  `dependency_failed`, or `uncertain` work. Replaying `uncertain` may duplicate
+  an external effect and must be an intentional decision.
 
 #### `agent_correct`
 
@@ -272,12 +310,14 @@ the corresponding tool completion event so chat/TUI/web surfaces must clear the
 ## Limites
 
 - `agent_send` is synchronous — Captain blocks while the target agent runs.
-- `agent_delegate` is also synchronous in the current runtime, but records and
-  completes a task around the worker turn. Use `task_post` when the caller must
-  continue immediately.
+- `agent_delegate` is detached by default. `wait_for_result=true` intentionally
+  makes only that invocation wait for a bounded review window.
 - `agent_delegate` budget is scoped to the delegated run, but it is still not a
   hard pre-call meter: a single LLM request can overshoot before Captain can
   observe usage and interrupt the next tool step.
+- Cancellation after an effect starts is cooperative. If Captain cannot prove
+  whether the effect completed, it reports `uncertain` rather than claiming a
+  clean cancellation or replaying automatically.
 - `agent_correct` is best-effort — a correction injected mid-tool-call only takes effect on the next tool decision; it does not abort the in-flight tool call.
 - Frozen fleet autoscale ticks every `CAPTAIN_AUTOSCALE_TICK_SECS` seconds (default 30). Newly-bursting workloads will see a cold-start delay of up to one tick.
 - `task_claim` returns `null` rather than blocking; loop with a short sleep when polling. There is no built-in long-poll.

@@ -3,6 +3,19 @@ use std::path::{Path, PathBuf};
 
 use crate::cli_captain_home;
 
+pub(crate) fn production_credential_resolver_at(
+    home: &Path,
+) -> captain_extensions::ExtensionResult<captain_extensions::credentials::CredentialResolver> {
+    let vault_path = home.join("vault.enc");
+    let vault = if vault_path.exists() {
+        let mut vault = captain_extensions::vault::CredentialVault::new(vault_path);
+        vault.unlock().ok().map(|()| vault)
+    } else {
+        None
+    };
+    captain_extensions::credentials::CredentialResolver::from_home(vault, home)
+}
+
 #[cfg(unix)]
 pub(crate) fn restrict_file_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -69,6 +82,7 @@ pub(crate) fn path_eq_best_effort(a: &Path, b: &Path) -> bool {
 pub(crate) fn open_in_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
+        // guarded-exec-audit: fixed-command (OS browser launcher, no agent shell)
         std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
             .spawn()
@@ -110,11 +124,19 @@ pub(crate) fn open_in_browser(url: &str) -> bool {
 }
 
 pub(crate) fn test_api_key(provider: &str, env_var: &str) -> bool {
-    let key = match std::env::var(env_var) {
-        Ok(k) => k,
+    let resolver = match production_credential_resolver_at(&cli_captain_home()) {
+        Ok(resolver) => resolver,
         Err(_) => return false,
     };
+    let key = match resolver.resolve(env_var) {
+        Some(key) => key,
+        None => return false,
+    };
 
+    test_api_key_value(provider, &key)
+}
+
+pub(crate) fn test_api_key_value(provider: &str, key: &str) -> bool {
     let client = match reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -126,16 +148,16 @@ pub(crate) fn test_api_key(provider: &str, env_var: &str) -> bool {
     let result = match provider.to_lowercase().as_str() {
         "groq" => client
             .get("https://api.groq.com/openai/v1/models")
-            .bearer_auth(&key)
+            .bearer_auth(key)
             .send(),
         "anthropic" => client
             .get("https://api.anthropic.com/v1/models")
-            .header("x-api-key", &key)
+            .header("x-api-key", key)
             .header("anthropic-version", "2023-06-01")
             .send(),
         "openai" => client
             .get("https://api.openai.com/v1/models")
-            .bearer_auth(&key)
+            .bearer_auth(key)
             .send(),
         "gemini" | "google" => client
             .get(format!(
@@ -144,11 +166,11 @@ pub(crate) fn test_api_key(provider: &str, env_var: &str) -> bool {
             .send(),
         "deepseek" => client
             .get("https://api.deepseek.com/models")
-            .bearer_auth(&key)
+            .bearer_auth(key)
             .send(),
         "openrouter" => client
             .get("https://openrouter.ai/api/v1/models")
-            .bearer_auth(&key)
+            .bearer_auth(key)
             .send(),
         _ => return true,
     };

@@ -316,14 +316,24 @@ fn setup_detect_vps_public_host(answers: Option<&toml::Value>) -> String {
 
     #[cfg(target_os = "linux")]
     {
-        if let Ok(output) = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([^ ]*\\).*/\\1/p' | head -1")
-            .output()
-        {
-            let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !value.is_empty() && value != "127.0.0.1" {
-                return value;
+        let args = ["route", "get", "1.1.1.1"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let mut command = captain_runtime::guarded_exec::build_std_program_command("ip", &args);
+        captain_runtime::guarded_exec::configure_std_command(&mut command, None, &[], &[]);
+        if let Ok(output) = command.output() {
+            let fields = String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(String::from)
+                .collect::<Vec<_>>();
+            if let Some(value) = fields
+                .windows(2)
+                .find_map(|pair| (pair[0] == "src").then(|| pair[1].clone()))
+            {
+                if value != "127.0.0.1" {
+                    return value;
+                }
             }
         }
         if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {

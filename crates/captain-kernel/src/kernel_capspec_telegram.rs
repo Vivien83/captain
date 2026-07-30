@@ -156,7 +156,7 @@ impl CaptainKernel {
                 .map_err(|error| error.to_string());
                 let decision = if approve { "approved" } else { "rejected" };
                 let decision_display = if approve { "approuvé" } else { "refusé" };
-                self.audit_log.record(
+                self.audit_log.record_or_alert(
                     actor,
                     AuditAction::CapabilityCheck,
                     format!(

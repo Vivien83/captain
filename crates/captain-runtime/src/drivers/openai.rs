@@ -1626,6 +1626,7 @@ mod tests {
             temperature: 0.3,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: Default::default(),
         }

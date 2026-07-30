@@ -1,20 +1,37 @@
-//! Merkle hash chain audit trail for security-critical actions.
+//! Versioned SHA-256 hash-chain audit trail for security-critical actions.
 //!
-//! Every auditable event is appended to an append-only log where each entry
-//! contains the SHA-256 hash of its own contents concatenated with the hash of
-//! the previous entry, forming a tamper-evident chain (similar to a blockchain).
-//!
-//! When a database connection is provided (`with_db`), entries are persisted to
-//! the `audit_entries` table (schema V8) so the trail survives daemon restarts.
+//! Entries are append-only. Each epoch is independently verifiable and starts
+//! from an explicit predecessor digest. If the active epoch is corrupt at boot,
+//! Captain seals it as invalid and opens a new epoch with a `ChainRecovery`
+//! entry. Existing audit rows are never rewritten.
 
 use chrono::Utc;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+#[path = "audit_chain.rs"]
+mod audit_chain;
+#[path = "audit_persistence.rs"]
+mod audit_persistence;
+
+#[cfg(test)]
+use audit_chain::compute_entry_hash;
+use audit_chain::{
+    build_entry, epoch_by_id, epoch_tip, invalid_epoch_ids, next_sequence, unique_active_epoch,
+    verify_epoch,
+};
+use audit_persistence::{
+    insert_entry, load_entries, load_epochs, lock_db, seal_epoch_and_open_recovery,
+};
+
+const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const LEGACY_HASH_VERSION: u8 = 1;
+const CURRENT_HASH_VERSION: u8 = 2;
+const MAX_INTEGRITY_ERROR_CHARS: usize = 512;
 
 /// Categories of auditable actions within the agent runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditAction {
     ToolInvoke,
     CapabilityCheck,
@@ -29,327 +46,407 @@ pub enum AuditAction {
     WireConnect,
     ConfigChange,
     LearningDecision,
+    ApprovalDecision,
+    ChainRecovery,
+    /// Preserves future or third-party action names without changing meaning.
+    Unknown(String),
+}
+
+impl AuditAction {
+    fn from_stored(value: String) -> Self {
+        match value.as_str() {
+            "ToolInvoke" => Self::ToolInvoke,
+            "CapabilityCheck" => Self::CapabilityCheck,
+            "AgentSpawn" => Self::AgentSpawn,
+            "AgentKill" => Self::AgentKill,
+            "AgentMessage" => Self::AgentMessage,
+            "MemoryAccess" => Self::MemoryAccess,
+            "FileAccess" => Self::FileAccess,
+            "NetworkAccess" => Self::NetworkAccess,
+            "ShellExec" => Self::ShellExec,
+            "AuthAttempt" => Self::AuthAttempt,
+            "WireConnect" => Self::WireConnect,
+            "ConfigChange" => Self::ConfigChange,
+            "LearningDecision" => Self::LearningDecision,
+            "ApprovalDecision" => Self::ApprovalDecision,
+            "ChainRecovery" => Self::ChainRecovery,
+            _ => Self::Unknown(value),
+        }
+    }
 }
 
 impl std::fmt::Display for AuditAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        let value = match self {
+            Self::ToolInvoke => "ToolInvoke",
+            Self::CapabilityCheck => "CapabilityCheck",
+            Self::AgentSpawn => "AgentSpawn",
+            Self::AgentKill => "AgentKill",
+            Self::AgentMessage => "AgentMessage",
+            Self::MemoryAccess => "MemoryAccess",
+            Self::FileAccess => "FileAccess",
+            Self::NetworkAccess => "NetworkAccess",
+            Self::ShellExec => "ShellExec",
+            Self::AuthAttempt => "AuthAttempt",
+            Self::WireConnect => "WireConnect",
+            Self::ConfigChange => "ConfigChange",
+            Self::LearningDecision => "LearningDecision",
+            Self::ApprovalDecision => "ApprovalDecision",
+            Self::ChainRecovery => "ChainRecovery",
+            Self::Unknown(value) => value,
+        };
+        f.write_str(value)
     }
 }
 
-/// A single entry in the Merkle hash chain audit log.
+fn legacy_hash_version() -> u8 {
+    LEGACY_HASH_VERSION
+}
+
+/// A single append-only entry in the audit hash chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
-    /// Monotonically increasing sequence number (0-indexed).
+    /// Monotonically increasing sequence number across all epochs.
     pub seq: u64,
+    /// Epoch containing this entry.
+    #[serde(default)]
+    pub epoch: u64,
+    /// Hash encoding version. Version 1 is retained only for compatibility.
+    #[serde(default = "legacy_hash_version")]
+    pub hash_version: u8,
     /// ISO-8601 timestamp of when this entry was recorded.
     pub timestamp: String,
     /// The agent that triggered (or is the subject of) this action.
     pub agent_id: String,
     /// The category of action being audited.
     pub action: AuditAction,
-    /// Free-form detail about the action (e.g. tool name, file path).
+    /// Free-form detail about the action.
     pub detail: String,
-    /// The outcome of the action (e.g. "ok", "denied", an error message).
+    /// The outcome of the action.
     pub outcome: String,
-    /// SHA-256 hash of the previous entry (or all-zeros for the genesis).
+    /// SHA-256 hash anchoring this entry.
     pub prev_hash: String,
-    /// SHA-256 hash of this entry's content concatenated with `prev_hash`.
+    /// SHA-256 hash of this entry.
     pub hash: String,
 }
 
-/// Computes the SHA-256 hash for a single audit entry from its fields.
-fn compute_entry_hash(
-    seq: u64,
-    timestamp: &str,
-    agent_id: &str,
-    action: &AuditAction,
-    detail: &str,
-    outcome: &str,
-    prev_hash: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(seq.to_string().as_bytes());
-    hasher.update(timestamp.as_bytes());
-    hasher.update(agent_id.as_bytes());
-    hasher.update(action.to_string().as_bytes());
-    hasher.update(detail.as_bytes());
-    hasher.update(outcome.as_bytes());
-    hasher.update(prev_hash.as_bytes());
-    hex::encode(hasher.finalize())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EpochState {
+    Active,
+    Invalid,
 }
 
-/// An append-only, tamper-evident audit log using a Merkle hash chain.
-///
-/// Thread-safe — all access is serialised through internal mutexes.
-/// Optionally backed by SQLite for persistence across daemon restarts.
+impl EpochState {
+    fn parse(value: &str) -> Result<Self, AuditError> {
+        match value {
+            "active" => Ok(Self::Active),
+            "invalid" => Ok(Self::Invalid),
+            _ => Err(AuditError::InvalidSchema(format!(
+                "unknown audit epoch state {value:?}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AuditEpoch {
+    id: u64,
+    start_seq: u64,
+    started_at: String,
+    predecessor_tip_hash: String,
+    state: EpochState,
+    terminal_hash: Option<String>,
+    sealed_at: Option<String>,
+    invalid_reason: Option<String>,
+}
+
+#[derive(Debug)]
+struct AuditState {
+    entries: Vec<AuditEntry>,
+    epochs: Vec<AuditEpoch>,
+    active_epoch: u64,
+    next_seq: u64,
+    tip: String,
+    runtime_write_error: Option<String>,
+}
+
+/// Public, redacted integrity state used by health, CLI and TUI surfaces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditIntegrityStatus {
+    pub valid: bool,
+    pub status: String,
+    pub active_epoch: u64,
+    pub active_epoch_valid: bool,
+    pub invalid_epochs: Vec<u64>,
+    pub entry_count: usize,
+    pub tip_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+/// Errors that prevent an audit event from becoming a validated entry.
+#[derive(Debug, thiserror::Error)]
+pub enum AuditError {
+    #[error("audit database error: {0}")]
+    Database(#[from] rusqlite::Error),
+    #[error("audit database lock is poisoned")]
+    DatabaseLockPoisoned,
+    #[error("audit state lock is poisoned")]
+    StateLockPoisoned,
+    #[error("invalid audit schema: {0}")]
+    InvalidSchema(String),
+    #[error("audit sequence exhausted")]
+    SequenceExhausted,
+}
+
+/// Append-only, tamper-evident audit log backed by a versioned hash chain.
 pub struct AuditLog {
-    entries: Mutex<Vec<AuditEntry>>,
-    tip: Mutex<String>,
-    /// Optional database connection for persistent storage.
+    state: Mutex<AuditState>,
     db: Option<Arc<Mutex<Connection>>>,
 }
 
 impl AuditLog {
-    /// Creates a new empty audit log (in-memory only, no persistence).
-    ///
-    /// The initial tip hash is 64 zero characters (the "genesis" sentinel).
+    /// Creates an in-memory audit log with one empty active epoch.
     pub fn new() -> Self {
         Self {
-            entries: Mutex::new(Vec::new()),
-            tip: Mutex::new("0".repeat(64)),
+            state: Mutex::new(AuditState {
+                entries: Vec::new(),
+                epochs: vec![initial_epoch()],
+                active_epoch: 0,
+                next_seq: 0,
+                tip: GENESIS_HASH.to_string(),
+                runtime_write_error: None,
+            }),
             db: None,
         }
     }
 
-    /// Creates an audit log backed by a database connection.
-    ///
-    /// On construction, loads all existing entries from the `audit_entries`
-    /// table and verifies the Merkle chain integrity. New entries are written
-    /// to both the in-memory chain and the database.
-    pub fn with_db(conn: Arc<Mutex<Connection>>) -> Self {
-        let mut entries = Vec::new();
-        let mut tip = "0".repeat(64);
-
-        // Load existing entries from database
-        if let Ok(db) = conn.lock() {
-            let result = db.prepare(
-                "SELECT seq, timestamp, agent_id, action, detail, outcome, prev_hash, hash FROM audit_entries ORDER BY seq ASC",
-            );
-            if let Ok(mut stmt) = result {
-                let rows = stmt.query_map([], |row| {
-                    let action_str: String = row.get(3)?;
-                    let action = match action_str.as_str() {
-                        "ToolInvoke" => AuditAction::ToolInvoke,
-                        "CapabilityCheck" => AuditAction::CapabilityCheck,
-                        "AgentSpawn" => AuditAction::AgentSpawn,
-                        "AgentKill" => AuditAction::AgentKill,
-                        "AgentMessage" => AuditAction::AgentMessage,
-                        "MemoryAccess" => AuditAction::MemoryAccess,
-                        "FileAccess" => AuditAction::FileAccess,
-                        "NetworkAccess" => AuditAction::NetworkAccess,
-                        "ShellExec" => AuditAction::ShellExec,
-                        "AuthAttempt" => AuditAction::AuthAttempt,
-                        "WireConnect" => AuditAction::WireConnect,
-                        "ConfigChange" => AuditAction::ConfigChange,
-                        "LearningDecision" => AuditAction::LearningDecision,
-                        _ => AuditAction::ToolInvoke, // fallback
-                    };
-                    Ok(AuditEntry {
-                        seq: row.get(0)?,
-                        timestamp: row.get(1)?,
-                        agent_id: row.get(2)?,
-                        action,
-                        detail: row.get(4)?,
-                        outcome: row.get(5)?,
-                        prev_hash: row.get(6)?,
-                        hash: row.get(7)?,
-                    })
-                });
-                if let Ok(rows) = rows {
-                    for entry in rows.flatten() {
-                        tip = entry.hash.clone();
-                        entries.push(entry);
-                    }
-                }
-            }
-        }
-
-        let count = entries.len();
-        let log = Self {
-            entries: Mutex::new(entries),
-            tip: Mutex::new(tip),
-            db: Some(conn),
+    /// Loads a persistent log and opens a recovery epoch if the active epoch
+    /// was altered. Loading or recovery I/O failures abort boot.
+    pub fn with_db(conn: Arc<Mutex<Connection>>) -> Result<Self, AuditError> {
+        let (mut entries, mut epochs) = {
+            let db = lock_db(&conn)?;
+            (load_entries(&db)?, load_epochs(&db)?)
         };
 
-        // Verify chain integrity on load
-        if count > 0 {
-            if let Err(e) = log.verify_integrity() {
-                tracing::error!("Audit trail integrity check FAILED on boot: {e}");
-            } else {
-                tracing::info!("Audit trail loaded: {count} entries, chain integrity OK");
-            }
+        let active_epoch = unique_active_epoch(&epochs)?;
+        if let Err(reason) = verify_epoch(&entries, epoch_by_id(&epochs, active_epoch)?) {
+            seal_epoch_and_open_recovery(&conn, &mut entries, &mut epochs, active_epoch, &reason)?;
         }
 
-        log
+        let active_epoch = unique_active_epoch(&epochs)?;
+        let active = epoch_by_id(&epochs, active_epoch)?;
+        verify_epoch(&entries, active).map_err(AuditError::InvalidSchema)?;
+        let tip = epoch_tip(&entries, active);
+        let next_seq = next_sequence(&entries)?;
+        let invalid_count = epochs
+            .iter()
+            .filter(|epoch| epoch.state == EpochState::Invalid)
+            .count();
+        let count = entries.len();
+
+        if invalid_count == 0 {
+            tracing::info!(
+                entries = count,
+                epoch = active_epoch,
+                "Audit hash chain loaded and verified"
+            );
+        } else {
+            tracing::error!(
+                entries = count,
+                active_epoch,
+                invalid_epochs = invalid_count,
+                "Audit history contains sealed invalid epochs; active recovery epoch is writable"
+            );
+        }
+
+        Ok(Self {
+            state: Mutex::new(AuditState {
+                entries,
+                epochs,
+                active_epoch,
+                next_seq,
+                tip,
+                runtime_write_error: None,
+            }),
+            db: Some(conn),
+        })
     }
 
-    /// Records a new auditable event and returns the SHA-256 hash of the entry.
+    /// Persists and validates a new event.
     ///
-    /// The entry is atomically appended to the chain with the current tip as
-    /// its `prev_hash`, and the tip is advanced to the new hash.
-    /// If a database connection is available, the entry is also persisted.
+    /// Persistence happens before the in-memory chain advances. On any write
+    /// failure, the candidate entry is discarded, the health state degrades,
+    /// and the error is returned.
     pub fn record(
         &self,
         agent_id: impl Into<String>,
         action: AuditAction,
         detail: impl Into<String>,
         outcome: impl Into<String>,
-    ) -> String {
-        let agent_id = agent_id.into();
-        let detail = detail.into();
-        let outcome = outcome.into();
-        let timestamp = Utc::now().to_rfc3339();
+    ) -> Result<String, AuditError> {
+        let result = self.try_record(agent_id.into(), action, detail.into(), outcome.into());
+        if let Err(error) = &result {
+            self.mark_runtime_write_error(error);
+            tracing::error!(
+                error = %error,
+                "Audit append failed; candidate event was not added to the validated chain"
+            );
+        }
+        result
+    }
 
-        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let mut tip = self.tip.lock().unwrap_or_else(|e| e.into_inner());
+    /// Explicit fail-loud policy for operations that cannot be rolled back
+    /// after their audit append. The error remains visible in health surfaces.
+    pub fn record_or_alert(
+        &self,
+        agent_id: impl Into<String>,
+        action: AuditAction,
+        detail: impl Into<String>,
+        outcome: impl Into<String>,
+    ) {
+        if self.record(agent_id, action, detail, outcome).is_err() {
+            // `record` already emitted the alert and degraded health.
+        }
+    }
 
-        let seq = entries.len() as u64;
-        let prev_hash = tip.clone();
-
-        let hash = compute_entry_hash(
-            seq, &timestamp, &agent_id, &action, &detail, &outcome, &prev_hash,
-        );
-
-        let entry = AuditEntry {
-            seq,
-            timestamp,
+    fn try_record(
+        &self,
+        agent_id: String,
+        action: AuditAction,
+        detail: String,
+        outcome: String,
+    ) -> Result<String, AuditError> {
+        let mut state = self.lock_state()?;
+        let entry = build_entry(
+            state.next_seq,
+            state.active_epoch,
+            Utc::now().to_rfc3339(),
             agent_id,
             action,
             detail,
             outcome,
-            prev_hash,
-            hash: hash.clone(),
-        };
+            state.tip.clone(),
+        )?;
 
-        // Persist to database if available
-        if let Some(ref db) = self.db {
-            if let Ok(conn) = db.lock() {
-                let _ = conn.execute(
-                    "INSERT INTO audit_entries (seq, timestamp, agent_id, action, detail, outcome, prev_hash, hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    rusqlite::params![
-                        entry.seq as i64,
-                        &entry.timestamp,
-                        &entry.agent_id,
-                        entry.action.to_string(),
-                        &entry.detail,
-                        &entry.outcome,
-                        &entry.prev_hash,
-                        &entry.hash,
-                    ],
-                );
-            }
+        if let Some(db) = &self.db {
+            let conn = lock_db(db)?;
+            insert_entry(&conn, &entry)?;
         }
 
-        entries.push(entry);
-        *tip = hash.clone();
-        hash
+        state.next_seq = state
+            .next_seq
+            .checked_add(1)
+            .ok_or(AuditError::SequenceExhausted)?;
+        state.tip.clone_from(&entry.hash);
+        state.entries.push(entry.clone());
+        Ok(entry.hash)
     }
 
-    /// Walks the entire chain and recomputes every hash to detect tampering.
-    ///
-    /// Returns `Ok(())` if the chain is intact, or `Err(msg)` describing
-    /// the first inconsistency found.
+    fn mark_runtime_write_error(&self, error: &AuditError) {
+        let message = clip_integrity_error(&error.to_string());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        state.runtime_write_error = Some(message);
+    }
+
+    fn lock_state(&self) -> Result<MutexGuard<'_, AuditState>, AuditError> {
+        self.state.lock().map_err(|_| AuditError::StateLockPoisoned)
+    }
+
+    /// Verifies the active epoch and reports any sealed invalid history or
+    /// runtime write failure.
     pub fn verify_integrity(&self) -> Result<(), String> {
-        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let mut expected_prev = "0".repeat(64);
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let active = epoch_by_id(&state.epochs, state.active_epoch).map_err(|e| e.to_string())?;
+        verify_epoch(&state.entries, active)?;
 
-        for entry in entries.iter() {
-            if entry.prev_hash != expected_prev {
-                return Err(format!(
-                    "chain break at seq {}: expected prev_hash {} but found {}",
-                    entry.seq, expected_prev, entry.prev_hash
-                ));
-            }
-
-            let recomputed = compute_entry_hash(
-                entry.seq,
-                &entry.timestamp,
-                &entry.agent_id,
-                &entry.action,
-                &entry.detail,
-                &entry.outcome,
-                &entry.prev_hash,
-            );
-
-            if recomputed != entry.hash {
-                return Err(format!(
-                    "hash mismatch at seq {}: expected {} but found {}",
-                    entry.seq, recomputed, entry.hash
-                ));
-            }
-
-            expected_prev = entry.hash.clone();
+        let invalid = invalid_epoch_ids(&state.epochs);
+        if !invalid.is_empty() {
+            let reason = state
+                .epochs
+                .iter()
+                .find(|epoch| epoch.state == EpochState::Invalid)
+                .and_then(|epoch| epoch.invalid_reason.as_deref())
+                .unwrap_or("historical audit epoch failed integrity verification");
+            return Err(format!(
+                "sealed invalid audit epoch(s) {}: {reason}",
+                invalid
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
         }
-
+        if let Some(error) = &state.runtime_write_error {
+            return Err(format!("runtime audit append failure: {error}"));
+        }
         Ok(())
     }
 
-    /// Repair the hash chain by recalculating all hashes from scratch.
-    /// This fixes chain breaks caused by DB corruption or migration.
-    /// Returns the number of entries repaired.
-    pub fn repair_chain(&self) -> usize {
-        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let mut prev = "0".repeat(64);
-        let mut repaired = 0;
-
-        for entry in entries.iter_mut() {
-            if entry.prev_hash != prev {
-                entry.prev_hash = prev.clone();
-                repaired += 1;
-            }
-            let correct_hash = compute_entry_hash(
-                entry.seq,
-                &entry.timestamp,
-                &entry.agent_id,
-                &entry.action,
-                &entry.detail,
-                &entry.outcome,
-                &entry.prev_hash,
-            );
-            if entry.hash != correct_hash {
-                entry.hash = correct_hash.clone();
-                repaired += 1;
-            }
-            prev = entry.hash.clone();
-        }
-
-        // Update tip
-        if let Ok(mut tip) = self.tip.lock() {
-            *tip = prev;
-        }
-
-        // Persist repaired entries to DB
-        if repaired > 0 {
-            if let Some(ref db) = self.db {
-                if let Ok(conn) = db.lock() {
-                    for entry in entries.iter() {
-                        let _ = conn.execute(
-                            "UPDATE audit_entries SET prev_hash = ?1, hash = ?2 WHERE seq = ?3",
-                            rusqlite::params![entry.prev_hash, entry.hash, entry.seq],
-                        );
-                    }
-                }
-            }
-        }
-
-        repaired
-    }
-
-    /// Returns the current tip hash (the hash of the most recent entry,
-    /// or the genesis sentinel if the log is empty).
-    pub fn tip_hash(&self) -> String {
-        self.tip.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    /// Returns the number of entries in the log.
-    pub fn len(&self) -> usize {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
-    /// Returns whether the log is empty.
-    pub fn is_empty(&self) -> bool {
-        self.entries
+    /// Returns the redacted integrity state without exposing audit contents.
+    pub fn integrity_status(&self) -> AuditIntegrityStatus {
+        let state = self
+            .state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_empty()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let active_epoch_valid = epoch_by_id(&state.epochs, state.active_epoch)
+            .ok()
+            .is_some_and(|epoch| verify_epoch(&state.entries, epoch).is_ok());
+        let invalid_epochs = invalid_epoch_ids(&state.epochs);
+        let last_error = state.runtime_write_error.clone().or_else(|| {
+            state
+                .epochs
+                .iter()
+                .find(|epoch| epoch.state == EpochState::Invalid)
+                .and_then(|epoch| epoch.invalid_reason.clone())
+        });
+        let valid = active_epoch_valid && invalid_epochs.is_empty() && last_error.is_none();
+
+        AuditIntegrityStatus {
+            valid,
+            status: if valid { "healthy" } else { "degraded" }.to_string(),
+            active_epoch: state.active_epoch,
+            active_epoch_valid,
+            invalid_epochs,
+            entry_count: state.entries.len(),
+            tip_hash: state.tip.clone(),
+            last_error,
+        }
     }
 
-    /// Returns up to the most recent `n` entries (cloned).
+    pub fn tip_hash(&self) -> String {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .tip
+            .clone()
+    }
+
+    pub fn len(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entries
+            .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn recent(&self, n: usize) -> Vec<AuditEntry> {
-        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let start = entries.len().saturating_sub(n);
-        entries[start..].to_vec()
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let start = state.entries.len().saturating_sub(n);
+        state.entries[start..].to_vec()
     }
 }
 
@@ -359,117 +456,27 @@ impl Default for AuditLog {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_audit_chain_integrity() {
-        let log = AuditLog::new();
-        log.record(
-            "agent-1",
-            AuditAction::ToolInvoke,
-            "read_file /etc/passwd",
-            "ok",
-        );
-        log.record("agent-1", AuditAction::ShellExec, "ls -la", "ok");
-        log.record("agent-2", AuditAction::AgentSpawn, "spawning helper", "ok");
-        log.record(
-            "agent-1",
-            AuditAction::NetworkAccess,
-            "https://example.com",
-            "denied",
-        );
-
-        assert_eq!(log.len(), 4);
-        assert!(log.verify_integrity().is_ok());
-
-        // Verify the chain links are correct
-        let entries = log.recent(4);
-        assert_eq!(entries[0].prev_hash, "0".repeat(64));
-        assert_eq!(entries[1].prev_hash, entries[0].hash);
-        assert_eq!(entries[2].prev_hash, entries[1].hash);
-        assert_eq!(entries[3].prev_hash, entries[2].hash);
-    }
-
-    #[test]
-    fn test_audit_tamper_detection() {
-        let log = AuditLog::new();
-        log.record("agent-1", AuditAction::ToolInvoke, "read_file /tmp/a", "ok");
-        log.record("agent-1", AuditAction::ShellExec, "rm -rf /", "denied");
-        log.record("agent-1", AuditAction::MemoryAccess, "read key foo", "ok");
-
-        // Tamper with an entry
-        {
-            let mut entries = log.entries.lock().unwrap();
-            entries[1].detail = "echo hello".to_string(); // change the detail
-        }
-
-        let result = log.verify_integrity();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("hash mismatch at seq 1"));
-    }
-
-    #[test]
-    fn test_audit_tip_changes() {
-        let log = AuditLog::new();
-        let genesis_tip = log.tip_hash();
-        assert_eq!(genesis_tip, "0".repeat(64));
-
-        let h1 = log.record("a", AuditAction::AgentSpawn, "spawn", "ok");
-        assert_eq!(log.tip_hash(), h1);
-        assert_ne!(log.tip_hash(), genesis_tip);
-
-        let h2 = log.record("b", AuditAction::AgentKill, "kill", "ok");
-        assert_eq!(log.tip_hash(), h2);
-        assert_ne!(h2, h1);
-    }
-
-    #[test]
-    fn test_audit_persists_to_db() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE audit_entries (
-                seq INTEGER PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                detail TEXT NOT NULL,
-                outcome TEXT NOT NULL,
-                prev_hash TEXT NOT NULL,
-                hash TEXT NOT NULL
-            )",
-        )
-        .unwrap();
-
-        let db = Arc::new(Mutex::new(conn));
-
-        // Record entries with DB
-        let log = AuditLog::with_db(Arc::clone(&db));
-        log.record("agent-1", AuditAction::AgentSpawn, "spawn test", "ok");
-        log.record("agent-1", AuditAction::ShellExec, "ls", "ok");
-        assert_eq!(log.len(), 2);
-
-        // Verify entries in database
-        let db_conn = db.lock().unwrap();
-        let count: i64 = db_conn
-            .query_row("SELECT COUNT(*) FROM audit_entries", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 2);
-        drop(db_conn);
-
-        // Simulate restart: create new AuditLog from same DB
-        let log2 = AuditLog::with_db(Arc::clone(&db));
-        assert_eq!(log2.len(), 2);
-        assert!(log2.verify_integrity().is_ok());
-
-        // Chain continues correctly after restart
-        log2.record("agent-2", AuditAction::ToolInvoke, "file_read", "ok");
-        assert_eq!(log2.len(), 3);
-        assert!(log2.verify_integrity().is_ok());
-
-        // Verify tip is correct
-        let entries = log2.recent(3);
-        assert_eq!(entries[2].prev_hash, entries[1].hash);
+fn initial_epoch() -> AuditEpoch {
+    AuditEpoch {
+        id: 0,
+        start_seq: 0,
+        started_at: Utc::now().to_rfc3339(),
+        predecessor_tip_hash: GENESIS_HASH.to_string(),
+        state: EpochState::Active,
+        terminal_hash: None,
+        sealed_at: None,
+        invalid_reason: None,
     }
 }
+
+fn clip_integrity_error(value: &str) -> String {
+    let cleaned = value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    cleaned.chars().take(MAX_INTEGRITY_ERROR_CHARS).collect()
+}
+
+#[cfg(test)]
+#[path = "audit_tests.rs"]
+mod tests;

@@ -48,7 +48,7 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
 /// POST /api/config/reload - Reload configuration from disk.
 pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         "system",
         captain_runtime::audit::AuditAction::ConfigChange,
         "config reload requested via API",
@@ -86,13 +86,19 @@ pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoRespo
 pub async fn config_raw_get(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config_path = state.kernel.config.home_dir.join("config.toml");
     match std::fs::read_to_string(&config_path) {
-        Ok(content) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "content": content,
-                "path": config_path.display().to_string(),
-            })),
-        ),
+        Ok(content) => match captain_types::config::redact_auth_secrets(&content) {
+            Ok(content) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "content": content,
+                    "path": config_path.display().to_string(),
+                })),
+            ),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to redact managed auth state"})),
+            ),
+        },
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to read config: {e}")})),
@@ -115,13 +121,17 @@ pub async fn config_raw_put(
     }
 
     let config_path = state.kernel.config.home_dir.join("config.toml");
+    let content = match merge_managed_session_signing_state(&config_path, content) {
+        Ok(content) => content,
+        Err(response) => return response,
+    };
     let backup_dir = state.kernel.config.home_dir.join("config-backups");
     let snapshot_path = match create_config_snapshot(&config_path, &backup_dir) {
         Ok(snapshot_path) => snapshot_path,
         Err(error) => return raw_config_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
 
-    match write_raw_config_atomically(&config_path, content) {
+    match write_raw_config_atomically(&config_path, &content) {
         Ok(()) => {
             tracing::info!("Config updated via raw editor");
             record_raw_config_audit(&state);
@@ -169,8 +179,117 @@ fn write_raw_config_atomically(config_path: &Path, content: &str) -> Result<(), 
         .and_then(|_| {
             let written = std::fs::read_to_string(config_path)
                 .map_err(|error| format!("Failed to re-read config.toml: {error}"))?;
-            validate_raw_config_content(&written)
+            validate_managed_config_content(&written)
         })
+}
+
+fn merge_managed_session_signing_state(
+    config_path: &Path,
+    content: &str,
+) -> Result<String, ConfigJsonResponse> {
+    let mut candidate = content
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|_| raw_config_error(StatusCode::BAD_REQUEST, "Invalid TOML"))?;
+    let candidate_auth = candidate
+        .get("auth")
+        .and_then(toml_edit::Item::as_table_like);
+    if candidate_auth
+        .and_then(|auth| auth.get("password_hash"))
+        .is_some_and(|item| item.as_str().is_none_or(|value| !value.trim().is_empty()))
+    {
+        return Err(raw_config_error(
+            StatusCode::BAD_REQUEST,
+            "auth.password_hash is Captain-managed and cannot be supplied",
+        ));
+    }
+    if candidate_auth
+        .and_then(|auth| auth.get("session_secret"))
+        .is_some_and(|item| item.as_str().is_none_or(|value| !value.trim().is_empty()))
+    {
+        return Err(raw_config_error(
+            StatusCode::BAD_REQUEST,
+            "auth.session_secret is Captain-managed and cannot be supplied",
+        ));
+    }
+
+    let persisted = std::fs::read_to_string(config_path).map_err(|_| {
+        raw_config_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Managed auth state is unavailable",
+        )
+    })?;
+    let persisted: toml::Value = persisted.parse().map_err(|_| {
+        raw_config_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Managed auth state is invalid",
+        )
+    })?;
+    let persisted_auth = persisted
+        .get("auth")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| {
+            raw_config_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Managed auth state is unavailable",
+            )
+        })?;
+    let session_secret = persisted_auth
+        .get("session_secret")
+        .and_then(toml::Value::as_str)
+        .filter(|secret| captain_types::config::decode_session_secret(secret).is_some())
+        .ok_or_else(|| {
+            raw_config_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Managed auth state is unavailable",
+            )
+        })?;
+    let password_hash = persisted_auth
+        .get("password_hash")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_default();
+    let session_epoch = persisted_auth
+        .get("session_epoch")
+        .and_then(toml::Value::as_integer)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| {
+            raw_config_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Managed auth state is unavailable",
+            )
+        })?;
+
+    if let Some(candidate_epoch) = candidate
+        .get("auth")
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|auth| auth.get("session_epoch"))
+    {
+        if candidate_epoch.as_integer() != i64::try_from(session_epoch).ok() {
+            return Err(raw_config_error(
+                StatusCode::BAD_REQUEST,
+                "auth.session_epoch is Captain-managed and cannot be changed directly",
+            ));
+        }
+    }
+
+    if !candidate.as_table().contains_key("auth") {
+        candidate["auth"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let auth = candidate
+        .get_mut("auth")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or_else(|| raw_config_error(StatusCode::BAD_REQUEST, "[auth] must be a TOML table"))?;
+    auth.insert("password_hash", toml_edit::value(password_hash));
+    auth.insert("session_secret", toml_edit::value(session_secret));
+    auth.insert(
+        "session_epoch",
+        toml_edit::value(i64::try_from(session_epoch).map_err(|_| {
+            raw_config_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Managed auth state is invalid",
+            )
+        })?),
+    );
+    Ok(candidate.to_string())
 }
 
 fn rollback_config_snapshot(config_path: &Path, snapshot_path: &Path) -> bool {
@@ -183,7 +302,7 @@ fn rollback_config_snapshot(config_path: &Path, snapshot_path: &Path) -> bool {
 }
 
 fn record_raw_config_audit(state: &AppState) {
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         "system",
         captain_runtime::audit::AuditAction::ConfigChange,
         "config.toml updated via raw editor",
@@ -390,6 +509,12 @@ pub async fn config_set(
         Ok(request) => request,
         Err(response) => return response,
     };
+    if captain_types::config::is_managed_auth_config_path(&request.path) {
+        return config_set_error(
+            StatusCode::BAD_REQUEST,
+            format!("{} is Captain-managed", request.path),
+        );
+    }
 
     let config_path = state.kernel.config.home_dir.join("config.toml");
     let mut table = read_config_table(&config_path);
@@ -484,7 +609,7 @@ fn validate_and_write_config_table(
     config_path: &Path,
     table: &toml::value::Table,
 ) -> Result<(), ConfigJsonResponse> {
-    validate_config_value(toml::Value::Table(table.clone()))
+    validate_managed_config_value(toml::Value::Table(table.clone()))
         .map_err(|error| config_set_error(StatusCode::BAD_REQUEST, error))?;
     let toml_string = toml::to_string_pretty(table).map_err(|error| {
         config_set_error(
@@ -509,7 +634,7 @@ fn config_reload_status(state: &AppState) -> &'static str {
 }
 
 fn record_config_set_audit(state: &AppState, path: &str) {
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         "system",
         captain_runtime::audit::AuditAction::ConfigChange,
         format!("config set: {path}"),
@@ -539,8 +664,38 @@ fn validate_raw_config_content(content: &str) -> Result<(), String> {
     validate_config_value(root)
 }
 
-fn validate_config_value(mut root: toml::Value) -> Result<(), String> {
+fn validate_managed_config_content(content: &str) -> Result<(), String> {
+    let root: toml::Value = content.parse().map_err(|e| format!("Invalid TOML: {e}"))?;
+    validate_managed_config_value(root)
+}
+
+fn validate_config_value(root: toml::Value) -> Result<(), String> {
     reject_direct_secret_assignments(&root)?;
+    validate_config_schema(root)
+}
+
+fn validate_managed_config_value(root: toml::Value) -> Result<(), String> {
+    let mut disclosure_view = root.clone();
+    if let Some(auth) = disclosure_view
+        .get_mut("auth")
+        .and_then(toml::Value::as_table_mut)
+    {
+        auth.remove("password_hash");
+        if let Some(secret) = auth.get("session_secret") {
+            let secret = secret
+                .as_str()
+                .ok_or_else(|| "auth.session_secret must be a string".to_string())?;
+            if captain_types::config::decode_session_secret(secret).is_none() {
+                return Err("auth.session_secret must encode exactly 32 bytes".to_string());
+            }
+            auth.remove("session_secret");
+        }
+    }
+    reject_direct_secret_assignments(&disclosure_view)?;
+    validate_config_schema(root)
+}
+
+fn validate_config_schema(mut root: toml::Value) -> Result<(), String> {
     if let toml::Value::Table(ref mut table) = root {
         if let Some(toml::Value::Table(api_section)) = table.get("api").cloned() {
             for key in &["api_key", "api_listen", "log_level"] {
@@ -656,6 +811,57 @@ password_hash = ""
 "#,
         )
         .expect("empty direct fields and env references must stay valid");
+    }
+
+    #[test]
+    fn raw_editor_preserves_managed_auth_state_without_disclosing_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config_path = temporary.path().join("config.toml");
+        let session_secret = captain_types::config::generate_session_secret().unwrap();
+        std::fs::write(
+            &config_path,
+            format!(
+                "[auth]\nenabled = true\nusername = \"admin\"\npassword_hash = \"legacy-hash\"\nsession_secret = \"{session_secret}\"\nsession_epoch = 9\nsession_ttl_hours = 72\n"
+            ),
+        )
+        .unwrap();
+        let displayed = captain_types::config::redact_auth_secrets(
+            &std::fs::read_to_string(&config_path).unwrap(),
+        )
+        .unwrap();
+        assert!(!displayed.contains("legacy-hash"));
+        assert!(!displayed.contains(&session_secret));
+
+        let merged = merge_managed_session_signing_state(&config_path, &displayed).unwrap();
+        validate_managed_config_content(&merged).unwrap();
+        assert!(merged.contains("legacy-hash"));
+        assert!(merged.contains(&session_secret));
+        assert!(merged.contains("session_epoch = 9"));
+    }
+
+    #[test]
+    fn raw_editor_cannot_replace_or_roll_back_managed_auth_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config_path = temporary.path().join("config.toml");
+        let session_secret = captain_types::config::generate_session_secret().unwrap();
+        std::fs::write(
+            &config_path,
+            format!(
+                "[auth]\npassword_hash = \"legacy-hash\"\nsession_secret = \"{session_secret}\"\nsession_epoch = 9\n"
+            ),
+        )
+        .unwrap();
+
+        let replacement_secret = captain_types::config::generate_session_secret().unwrap();
+        let replacement =
+            format!("[auth]\nsession_secret = \"{replacement_secret}\"\nsession_epoch = 9\n");
+        let secret_error =
+            merge_managed_session_signing_state(&config_path, &replacement).unwrap_err();
+        assert_eq!(secret_error.0, StatusCode::BAD_REQUEST);
+
+        let rollback = "[auth]\nsession_epoch = 8\n";
+        let epoch_error = merge_managed_session_signing_state(&config_path, rollback).unwrap_err();
+        assert_eq!(epoch_error.0, StatusCode::BAD_REQUEST);
     }
 
     #[test]

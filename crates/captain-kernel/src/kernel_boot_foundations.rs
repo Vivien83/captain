@@ -40,10 +40,20 @@ pub(super) fn prepare_boot_config(mut config: KernelConfig) -> KernelResult<Kern
         config.api_listen = listen;
     }
 
-    if config.api_key.trim().is_empty() {
-        if let Some((source, key)) = resolve_daemon_api_key(&config.home_dir) {
-            info!("Using API key from {source}");
-            config.api_key = key;
+    captain_types::config::ensure_session_signing_state(
+        &config.home_dir.join("config.toml"),
+        &mut config.auth,
+    )
+    .map_err(|error| {
+        KernelError::BootFailed(format!("Web session signing state unavailable: {error}"))
+    })?;
+
+    if let Some(resolved) = resolve_daemon_api_key(&config.home_dir)
+        .map_err(|error| KernelError::BootFailed(format!("Secret sources unavailable: {error}")))?
+    {
+        if config.api_key.trim().is_empty() || resolved.externally_managed {
+            info!("Using API key from {}", resolved.key_name);
+            config.api_key = resolved.value;
         }
     }
 
@@ -56,7 +66,7 @@ pub(super) fn prepare_boot_config(mut config: KernelConfig) -> KernelResult<Kern
 
 pub(super) fn build_boot_core(config: &KernelConfig) -> KernelResult<BootCore> {
     let memory = open_boot_memory(config)?;
-    let credential_resolver = build_boot_credential_resolver(config);
+    let credential_resolver = build_boot_credential_resolver(config)?;
     let metering = Arc::new(MeteringEngine::new(Arc::new(
         captain_memory::usage::UsageStore::new(memory.usage_conn()),
     )));
@@ -65,14 +75,24 @@ pub(super) fn build_boot_core(config: &KernelConfig) -> KernelResult<BootCore> {
     let wasm_sandbox = captain_runtime::sandbox::WasmSandbox::new()
         .map_err(|e| KernelError::BootFailed(format!("WASM sandbox init failed: {e}")))?;
     let auth = build_boot_auth(config);
-    let model_catalog = build_boot_model_catalog(config);
+    let model_catalog = build_boot_model_catalog(config, &credential_resolver);
+    let audit_log = Arc::new(
+        AuditLog::with_db(memory.usage_conn())
+            .map_err(|error| KernelError::BootFailed(format!("Audit log unavailable: {error}")))?,
+    );
+    let approval_manager = crate::approval::ApprovalManager::with_persistence(
+        config.approval.clone(),
+        &config.home_dir,
+        Arc::clone(&audit_log),
+    )
+    .map_err(|e| KernelError::BootFailed(format!("Approval rules unavailable: {e}")))?;
 
     Ok(BootCore {
-        audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
+        audit_log,
         web_ctx: build_boot_web_context(config),
         cron_scheduler: build_boot_cron_scheduler(config),
         goal_store: build_boot_goal_store(config),
-        approval_manager: crate::approval::ApprovalManager::new(config.approval.clone()),
+        approval_manager,
         bindings: config.bindings.clone(),
         broadcast: config.broadcast.clone(),
         auto_reply_engine: AutoReplyEngine::new(config.auto_reply.clone()),
@@ -132,15 +152,10 @@ fn boot_memory_db_path(config: &KernelConfig) -> PathBuf {
 
 fn build_boot_credential_resolver(
     config: &KernelConfig,
-) -> captain_extensions::credentials::CredentialResolver {
+) -> KernelResult<captain_extensions::credentials::CredentialResolver> {
     let vault = unlock_boot_vault(config);
-    let secrets_path = config.home_dir.join("secrets.env");
-    let dotenv_path = config.home_dir.join(".env");
-    captain_extensions::credentials::CredentialResolver::new_with_secrets(
-        vault,
-        Some(&secrets_path),
-        Some(&dotenv_path),
-    )
+    captain_extensions::credentials::CredentialResolver::from_home(vault, &config.home_dir)
+        .map_err(|error| KernelError::BootFailed(format!("Secret sources unavailable: {error}")))
 }
 
 fn unlock_boot_vault(config: &KernelConfig) -> Option<captain_extensions::vault::CredentialVault> {
@@ -170,9 +185,11 @@ fn build_boot_auth(config: &KernelConfig) -> AuthManager {
     auth
 }
 
-fn build_boot_model_catalog(config: &KernelConfig) -> captain_runtime::model_catalog::ModelCatalog {
+fn build_boot_model_catalog(
+    config: &KernelConfig,
+    credentials: &captain_extensions::credentials::CredentialResolver,
+) -> captain_runtime::model_catalog::ModelCatalog {
     let mut model_catalog = captain_runtime::model_catalog::ModelCatalog::new();
-    model_catalog.detect_auth();
     if !config.provider_urls.is_empty() {
         model_catalog.apply_url_overrides(&config.provider_urls);
         info!(
@@ -182,6 +199,7 @@ fn build_boot_model_catalog(config: &KernelConfig) -> captain_runtime::model_cat
     }
 
     model_catalog.load_custom_models(&config.home_dir.join("custom_models.json"));
+    model_catalog.detect_auth_with(&|key| credentials.has_credential(key));
     let available_count = model_catalog.available_models().len();
     let total_count = model_catalog.list_models().len();
     let local_count = model_catalog
@@ -293,5 +311,72 @@ mod tests {
             boot_memory_db_path(&config),
             PathBuf::from("/tmp/custom/captain.sqlite")
         );
+    }
+
+    #[test]
+    fn boot_fails_closed_when_external_secret_registry_is_malformed() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path()
+                .join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME),
+            "version = 1\n[sources.INVALID]\ntype = \"file\"\npath = \"relative\"\n",
+        )
+        .unwrap();
+        let config = KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            ..Default::default()
+        };
+
+        let error = prepare_boot_config(config).unwrap_err().to_string();
+
+        assert!(error.contains("Secret sources unavailable"), "{error}");
+        assert!(!error.contains("secret-value"), "{error}");
+    }
+
+    #[test]
+    fn authoritative_external_daemon_key_overrides_stale_config_literal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mounted = tmp.path().join("daemon-key");
+        std::fs::write(&mounted, "fresh-external-key\n").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME),
+            format!(
+                "version = 1\n[sources.CAPTAIN_DAEMON_API_KEY]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+        let config = KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            api_key: "stale-config-key".to_string(),
+            ..Default::default()
+        };
+
+        let prepared = prepare_boot_config(config).unwrap();
+
+        assert_eq!(prepared.api_key, "fresh-external-key");
+    }
+
+    #[test]
+    fn boot_provisions_one_private_session_signing_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = KernelConfig {
+            home_dir: temporary.path().to_path_buf(),
+            data_dir: temporary.path().join("data"),
+            ..Default::default()
+        };
+
+        let prepared = prepare_boot_config(config).unwrap();
+        let persisted = std::fs::read_to_string(temporary.path().join("config.toml")).unwrap();
+        let persisted: KernelConfig = toml::from_str(&persisted).unwrap();
+
+        assert!(
+            captain_types::config::decode_session_secret(&prepared.auth.session_secret).is_some()
+        );
+        assert_eq!(prepared.auth.session_secret, persisted.auth.session_secret);
+        assert_eq!(prepared.auth.session_epoch, persisted.auth.session_epoch);
     }
 }

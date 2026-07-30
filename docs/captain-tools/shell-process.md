@@ -17,7 +17,11 @@ Run a shell command, capture combined stdout+stderr, return the exit code.
 | `command` | yes | Full shell line (`cargo build --release`, `ls -la /tmp`). |
 | `timeout_seconds` | no | Explicit value is a bounded review window with a hard cap; omitted value keeps the short default guard. |
 
-Use **`file_read`** / **`file_write`** for plain file ops (safer, sandboxed). Reach for `shell_exec` for anything that needs a real shell. Critical patterns (`rm -rf /`, `mkfs`, …) are blocked at the policy layer before the spawn — see Sandbox below.
+Use **`file_read`** / **`file_write`** for plain file ops (safer, sandboxed). Reach for `shell_exec` for anything that needs a real shell. Critical patterns (`rm -rf /`, `mkfs`, …) are blocked at the policy layer before the spawn — see Host execution boundary below.
+
+Before approval or spawn, `guarded_exec` reviews the exact command and binds
+the resulting permit to that command digest and the `shell_exec` surface. The
+permit cannot authorize a modified command or another execution surface.
 
 Do not use `shell_exec` to start a server, watcher, REPL, or any intentional
 background process. `nohup`, `disown`, unquoted `&`, and nested shell
@@ -37,6 +41,11 @@ Inline Python / Node / Bash snippet without creating a file.
 | `timeout_secs` | no | Default 60, max 300. |
 
 Use this for quick API probes, on-the-fly data munging, or prototyping a script. For persistent code, **`file_write` then `shell_exec`** is the right path. The subprocess inherits a stripped env (B.1: PATH, HOME, TMPDIR/TMP/TEMP, LANG/LC_ALL, TERM only), so snippets that need API keys must run through a native integration or a per-skill `env_inject` path.
+
+`execute_code`, its allowlisted Python package installer, and Bash snippets
+cross the same guarded boundary as `shell_exec`: policy, critical/literal-secret
+guards, exact workspace, environment isolation, timeouts, output bounds, and
+command-free lifecycle audit are applied before execution.
 
 Never embed the raw API key in the snippet or command. If an API call requires a credential, store it with `secret_write`, confirm with masked `secret_read`, then use a native integration or a skill with `[requirements.env_inject]`. `execute_code`, `shell_exec`, `docker_exec`, `process_start` and `process_write` refuse obvious raw secret literals and return a recovery hint instead of running.
 
@@ -210,15 +219,44 @@ Sub-commands: `install, ci, run, test, build, list, outdated, audit, version, vi
 
 Sub-commands: `install, list, freeze, show, check, search, download`. Package security still rides on the external `pip-allowlist` configured elsewhere — this wrapper only blocks shell injection.
 
-## Sandbox
+## Host execution boundary
 
-- **env_clear (B.1, B.2)** — every spawn (`shell_exec`, `execute_code`, `process_start`, the wrappers, the per-skill runtimes) goes through `env_sandbox::apply_minimal_env`, which drops the parent env and re-attaches only `PATH`, `HOME`, `LANG`, `USER`. API keys held by the daemon never reach the child.
+- **One guarded boundary** — `guarded_exec` is the mandatory subprocess entry
+  point for `shell_exec`, `execute_code`, package wrappers, goal checks and
+  recovery, skill syntax checks and execution, workflow shell actions, Hand
+  installation, and WASM host execution. It applies policy, content guards,
+  workspace, timeout/output bounds, process-tree cleanup, and structured audit.
+- **Content-bound permit** — a reviewed command or program receives an opaque
+  permit bound to its SHA-256 digest and execution surface. A caller cannot
+  reuse that permit after changing the content or for a different sink.
+- **env_clear (B.1, B.2)** — every guarded spawn clears the parent environment
+  and re-attaches only `PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`, `LANG`,
+  `LC_ALL`, and `TERM` when present, plus Windows platform essentials.
+  Surface-specific allowlisted variables and explicit values are added only
+  afterwards. `process_start` retains its dedicated sandbox with the same
+  clear-first rule. API keys held by the daemon never reach an ordinary child.
 - **Per-skill secrets (B.3)** — when the spawn runs a skill, the manifest's `[requirements.env_inject]` map decides which entries from `~/.captain/secrets.env` cross over (and under which target name). Other skills' secrets stay invisible.
 - **No raw secrets.env sourcing** — `~/.captain/secrets.env` is not a shell profile. Do not run `source ~/.captain/secrets.env`, `. ~/.captain/secrets.env`, or `set -a` around it: some entries can be logical Captain identifiers rather than shell-safe variable names. Use `secret_read`, a native integration, or skill `env_inject`.
-- **Critical patterns** — destructive commands (`rm -rf /`, `mkfs`, `:(){:|:&};:`, `dd of=/dev/sda`, …) are matched and rejected before spawn (`critical_patterns`). The block also covers `shell_exec` snippets that contain those patterns inside `eval` / `bash -c` payloads.
+- **Critical patterns** — destructive commands (`rm -rf /`, `mkfs`, `:(){:|:&};:`, `dd of=/dev/sda`, …) are matched and rejected before spawn (`critical_patterns`) on every guarded surface. The block also covers shell snippets that contain those patterns inside `eval` / `bash -c` payloads.
+- **Normalized heuristic, not proof** — recognition normalizes case,
+  whitespace, short/long and reordered flags, common wrappers, and nested
+  shell payloads. It is a lexical/structural guard, not a proof that arbitrary
+  shell code is safe.
+- **Command-free audit** — lifecycle events identify the surface, decision,
+  duration and outcome but never copy the command, script, arguments, or
+  explicit environment values into telemetry.
 - **Docker isolation** — `docker_exec` adds another layer: read-only rootfs, dropped capabilities, no `--privileged`, optional network namespace.
 - **Per-agent quota** — `process_*` is capped at 5 concurrent processes per agent.
 - **CWD** — one-shot spawns run with `current_dir` set to the agent's workspace root (or the skill dir for `skill_execute`). `process_start` may override this with its `cwd` field for supervised project processes. `..` escapes are rejected upstream (`validate_path`) where a workspace-relative path is expected.
+
+The ordinary host backend is `host_process`, with isolation level
+`environment_scrub` and `os_isolation: false`. Environment clearing, command
+classification, workspace validation, process-tree cleanup, and bounded
+runtime/output do not create a namespace, seccomp, Landlock, chroot, or
+container boundary. New installations use `full`/`safe`: routine commands are
+available and recognized catastrophic commands fail closed. `open` requires an
+explicit operator opt-in and content-bound approval. Use `docker_exec` or the
+WASM backend for untrusted code that requires real isolation.
 
 ## Limites
 

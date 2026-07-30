@@ -108,7 +108,6 @@ async fn start_test_server_with_config(tmp: tempfile::TempDir, config: KernelCon
         bridge_manager: tokio::sync::Mutex::new(None),
         channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         ask_user_channels: dashmap::DashMap::new(),
         provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
     });
@@ -144,6 +143,10 @@ async fn start_test_server_with_config(tmp: tempfile::TempDir, config: KernelCon
                 .delete(routes::kill_agent)
                 .put(routes::update_agent)
                 .patch(routes::patch_agent),
+        )
+        .route(
+            "/api/agents/{id}/reasoning",
+            axum::routing::get(routes::get_agent_reasoning).put(routes::set_agent_reasoning),
         )
         .route(
             "/api/triggers",
@@ -230,6 +233,35 @@ async fn start_test_server_with_config(tmp: tempfile::TempDir, config: KernelCon
         state,
         _tmp: tmp,
     }
+}
+
+#[tokio::test]
+async fn raw_config_api_never_discloses_managed_auth_secrets() {
+    let server = start_test_server().await;
+    let config_path = server.state.kernel.config.home_dir.join("config.toml");
+    let source = std::fs::read_to_string(&config_path).unwrap();
+    let mut document = source.parse::<toml_edit::DocumentMut>().unwrap();
+    let session_secret = document["auth"]["session_secret"]
+        .as_str()
+        .expect("boot must provision a session secret")
+        .to_string();
+    let password_hash = "legacy-password-hash-for-redaction";
+    document["auth"]["password_hash"] = toml_edit::value(password_hash);
+    std::fs::write(&config_path, document.to_string()).unwrap();
+
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/config/raw", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let displayed = body["content"].as_str().unwrap();
+
+    assert!(!displayed.contains(&session_secret));
+    assert!(!displayed.contains(password_hash));
+    assert!(!displayed.contains("session_secret"));
+    assert!(!displayed.contains("password_hash"));
 }
 
 /// Manifest that uses ollama (no API key required, won't make real LLM calls).
@@ -426,6 +458,7 @@ async fn test_spawn_list_kill_agent() {
     let test_agent = agents.iter().find(|a| a["name"] == "test-agent").unwrap();
     assert_eq!(test_agent["id"], agent_id);
     assert_eq!(test_agent["model_provider"], "ollama");
+    assert_eq!(test_agent["reasoning"]["supported"], false);
     assert!(
         test_agent["context_window_tokens"]
             .as_u64()
@@ -448,6 +481,7 @@ async fn test_spawn_list_kill_agent() {
         .effective_context_window_for_agent(parsed_agent_id)
         .expect("effective context window");
     assert_eq!(detail["context_window_tokens"], expected_context);
+    assert_eq!(detail["reasoning"]["source"], "unsupported");
 
     // --- Kill ---
     let resp = client
@@ -469,6 +503,70 @@ async fn test_spawn_list_kill_agent() {
     let agents: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0]["name"], "captain");
+}
+
+#[tokio::test]
+async fn test_reasoning_endpoint_validates_persists_and_resets_override() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let captain = server
+        .state
+        .kernel
+        .registry
+        .find_by_name("captain")
+        .expect("default Captain");
+    server
+        .state
+        .kernel
+        .registry
+        .update_model_and_provider(captain.id, "gpt-5-test".to_string(), "codex".to_string())
+        .unwrap();
+
+    let url = format!("{}/api/agents/{}/reasoning", server.base_url, captain.id);
+    let initial: serde_json::Value = client.get(&url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(initial["supported"], true);
+    assert_eq!(initial["source"], "provider_default");
+    assert!(initial["configured_effort"].is_null());
+
+    let configured: serde_json::Value = client
+        .put(&url)
+        .json(&serde_json::json!({"effort": "high"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(configured["configured_effort"], "high");
+    assert_eq!(configured["effective_effort"], "high");
+    assert_eq!(configured["source"], "agent_override");
+    assert_eq!(
+        server
+            .state
+            .kernel
+            .memory
+            .load_agent(captain.id)
+            .unwrap()
+            .unwrap()
+            .manifest
+            .model
+            .reasoning_effort
+            .as_ref()
+            .map(captain_types::reasoning::ReasoningEffort::as_str),
+        Some("high")
+    );
+
+    let reset: serde_json::Value = client
+        .put(&url)
+        .json(&serde_json::json!({"effort": "auto"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(reset["configured_effort"].is_null());
+    assert_eq!(reset["source"], "provider_default");
 }
 
 #[tokio::test]
@@ -1283,7 +1381,6 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         bridge_manager: tokio::sync::Mutex::new(None),
         channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         ask_user_channels: dashmap::DashMap::new(),
         provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
     });
@@ -1293,7 +1390,10 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         api_key: api_key.clone(),
         home_dir: state.kernel.config.home_dir.clone(),
         fallback_auth: state.kernel.config.auth.clone(),
+        deployment: state.kernel.config.deployment.clone(),
+        security: Arc::new(captain_api::web_auth_security::WebAuthSecurity::default()),
     };
+    let web_auth_security = auth_state.security.clone();
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
@@ -1357,6 +1457,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
+        .layer(axum::Extension(web_auth_security))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1375,6 +1476,98 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     }
 }
 
+async fn start_test_server_with_legacy_web_auth(password: &str) -> TestServer {
+    use sha2::{Digest, Sha256};
+
+    let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+    let legacy_hash = format!("{:x}", Sha256::digest(password.as_bytes()));
+    let config = KernelConfig {
+        home_dir: tmp.path().to_path_buf(),
+        data_dir: tmp.path().join("data"),
+        auth: captain_types::config::AuthConfig {
+            enabled: true,
+            username: "owner".to_string(),
+            password_hash: legacy_hash.clone(),
+            session_cookie_secure: captain_types::config::SessionCookieSecurePolicy::Always,
+            ..Default::default()
+        },
+        default_model: DefaultModelConfig {
+            provider: "ollama".to_string(),
+            model: "test-model".to_string(),
+            api_key_env: "OLLAMA_API_KEY".to_string(),
+            base_url: None,
+        },
+        ..KernelConfig::default()
+    };
+    let kernel = CaptainKernel::boot_with_config(config).expect("Kernel should boot");
+    let config_path = kernel.config.home_dir.join("config.toml");
+    let mut document = std::fs::read_to_string(&config_path)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    document["auth"]["enabled"] = toml_edit::value(true);
+    document["auth"]["username"] = toml_edit::value("owner");
+    document["auth"]["password_hash"] = toml_edit::value(legacy_hash);
+    document["auth"]["session_cookie_secure"] = toml_edit::value("always");
+    captain_types::durable_fs::atomic_write(&config_path, document.to_string().as_bytes()).unwrap();
+    let kernel = Arc::new(kernel);
+    kernel.set_self_handle();
+    let state = Arc::new(AppState {
+        kernel,
+        started_at: Instant::now(),
+        peer_registry: None,
+        bridge_manager: tokio::sync::Mutex::new(None),
+        channels_config: tokio::sync::RwLock::new(Default::default()),
+        shutdown_notify: Arc::new(tokio::sync::Notify::new()),
+        ask_user_channels: dashmap::DashMap::new(),
+        provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
+    });
+    let security = Arc::new(captain_api::web_auth_security::WebAuthSecurity::default());
+    let auth_state = middleware::AuthState {
+        api_key: String::new(),
+        home_dir: state.kernel.config.home_dir.clone(),
+        fallback_auth: state.kernel.config.auth.clone(),
+        deployment: state.kernel.config.deployment.clone(),
+        security: security.clone(),
+    };
+
+    let app = Router::new()
+        .route("/api/auth/login", axum::routing::post(routes::auth_login))
+        .route(
+            "/api/auth/realtime-ticket",
+            axum::routing::post(routes::auth_realtime_ticket),
+        )
+        .route(
+            "/api/memory/events",
+            axum::routing::get(|| async { "event" }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            middleware::auth,
+        ))
+        .layer(axum::Extension(security))
+        .with_state(state.clone());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test server");
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    TestServer {
+        base_url: format!("http://{addr}"),
+        state,
+        _tmp: tmp,
+    }
+}
+
 #[tokio::test]
 async fn test_auth_health_is_public() {
     let server = start_test_server_with_auth("secret-key-123").await;
@@ -1387,6 +1580,149 @@ async fn test_auth_health_is_public() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let object = body.as_object().expect("health response must be an object");
+    assert_eq!(object.len(), 2);
+    assert!(matches!(
+        object.get("status").and_then(serde_json::Value::as_str),
+        Some("ok" | "degraded")
+    ));
+    assert!(object
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .is_some());
+}
+
+#[tokio::test]
+async fn legacy_web_login_migrates_to_argon2id_and_sets_secure_cookie() {
+    let server = start_test_server_with_legacy_web_auth("legacy-password").await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/api/auth/login", server.base_url))
+        .json(&serde_json::json!({
+            "username": "owner",
+            "password": "legacy-password",
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(cookie.contains("HttpOnly"));
+    assert!(cookie.contains("SameSite=Strict"));
+    assert!(cookie.contains("; Secure"));
+
+    let raw =
+        std::fs::read_to_string(server.state.kernel.config.home_dir.join("config.toml")).unwrap();
+    let parsed = raw.parse::<toml::Value>().unwrap();
+    let auth = parsed.get("auth").and_then(toml::Value::as_table).unwrap();
+    let migrated = auth
+        .get("password_hash")
+        .and_then(toml::Value::as_str)
+        .unwrap();
+    assert!(migrated.starts_with("$argon2id$"));
+    assert_eq!(
+        captain_types::config::verify_web_password("legacy-password", migrated),
+        captain_types::config::WebPasswordVerification::Argon2id
+    );
+    assert_eq!(
+        auth.get("session_epoch").and_then(toml::Value::as_integer),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn sixth_consecutive_web_login_failure_returns_429() {
+    let server = start_test_server_with_legacy_web_auth("correct-password").await;
+    let client = reqwest::Client::new();
+
+    for _ in 0..5 {
+        let response = client
+            .post(format!("{}/api/auth/login", server.base_url))
+            .json(&serde_json::json!({
+                "username": "owner",
+                "password": "wrong-password",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    }
+    let response = client
+        .post(format!("{}/api/auth/login", server.base_url))
+        .json(&serde_json::json!({
+            "username": "owner",
+            "password": "wrong-password",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+}
+
+#[tokio::test]
+async fn realtime_ticket_is_single_use_even_while_session_cookie_remains_valid() {
+    let server = start_test_server_with_legacy_web_auth("legacy-password").await;
+    let client = reqwest::Client::new();
+    let login = client
+        .post(format!("{}/api/auth/login", server.base_url))
+        .json(&serde_json::json!({
+            "username": "owner",
+            "password": "legacy-password",
+        }))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let grant: serde_json::Value = client
+        .post(format!("{}/api/auth/realtime-ticket", server.base_url))
+        .header(reqwest::header::COOKIE, &cookie)
+        .json(&serde_json::json!({"path": "/api/memory/events"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ticket = grant["ticket"].as_str().unwrap();
+    let url = format!("{}/api/memory/events?ticket={}", server.base_url, ticket);
+
+    let first = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    let replay = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -1394,16 +1730,31 @@ async fn test_auth_rejects_no_token() {
     let server = start_test_server_with_auth("secret-key-123").await;
     let client = reqwest::Client::new();
 
-    // Protected endpoint without auth header → 401
-    // Note: /api/status is public, so use a protected endpoint.
-    let resp = client
-        .get(format!("{}/api/commands", server.base_url))
+    for path in ["/api/status", "/api/agents", "/api/sessions", "/api/config"] {
+        let resp = client
+            .get(format!("{}{path}", server.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401, "{path} must require authentication");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["error"].as_str().unwrap().contains("Missing"));
+    }
+}
+
+#[tokio::test]
+async fn test_auth_rejects_api_key_in_query_string() {
+    let server = start_test_server_with_auth("secret-key-123").await;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/api/commands?token=secret-key-123",
+            server.base_url
+        ))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap().contains("Missing"));
+
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -1411,10 +1762,8 @@ async fn test_auth_rejects_wrong_token() {
     let server = start_test_server_with_auth("secret-key-123").await;
     let client = reqwest::Client::new();
 
-    // Wrong bearer token → 401
-    // Note: /api/status is public, so use a protected endpoint.
     let resp = client
-        .get(format!("{}/api/commands", server.base_url))
+        .get(format!("{}/api/status", server.base_url))
         .header("authorization", "Bearer wrong-key")
         .send()
         .await
@@ -1429,7 +1778,6 @@ async fn test_auth_accepts_correct_token() {
     let server = start_test_server_with_auth("secret-key-123").await;
     let client = reqwest::Client::new();
 
-    // Correct bearer token → 200
     let resp = client
         .get(format!("{}/api/status", server.base_url))
         .header("authorization", "Bearer secret-key-123")

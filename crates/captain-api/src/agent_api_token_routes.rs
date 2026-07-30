@@ -38,18 +38,32 @@ pub async fn rotate_agent_api_token(
         return error(StatusCode::NOT_FOUND, "Agent not found");
     }
 
+    let token_env = crate::agent_api_routes::agent_api_token_env(&agent_id);
+    if state.kernel.credential_is_externally_managed(&token_env) {
+        return error(
+            StatusCode::CONFLICT,
+            &format!(
+                "{token_env} is managed by secret-sources.toml; rotate the external file instead"
+            ),
+        );
+    }
+
     let rotation = match rotate_token(&state.kernel.config.home_dir, &agent_id) {
         Ok(rotation) => rotation,
         Err(err) => return error(StatusCode::INTERNAL_SERVER_ERROR, &err),
     };
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         agent_id.to_string(),
         AuditAction::ConfigChange,
         "agent_api token rotated",
         format!("token_env={} stored_in=secrets.env", rotation.token_env),
     );
 
-    let api = crate::agent_api_routes::agent_api_descriptor(&agent_id);
+    let api = crate::agent_api_routes::agent_api_descriptor_with(
+        &agent_id,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
+    );
     let config_status =
         agent_api_config_status(&state.kernel.config.home_dir, &agent_id, &api).await;
 

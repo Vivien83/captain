@@ -7,6 +7,7 @@ pub(crate) async fn tool_skill_md_execute(
     input: &serde_json::Value,
     _kernel: Option<&Arc<dyn KernelHandle>>,
     workspace_root: Option<&Path>,
+    exec_policy: Option<&captain_types::config::ExecPolicy>,
 ) -> Result<String, String> {
     let skill_name = input["skill"].as_str().ok_or("Missing 'skill' parameter")?;
     let capability = input["capability"]
@@ -28,7 +29,15 @@ pub(crate) async fn tool_skill_md_execute(
         .find(|p| p.exists())
         .ok_or_else(|| format!("Skill '{skill_name}' not found"))?;
 
-    match crate::skill_execute::execute_capability(&skill_path, capability, &[], &args).await {
+    match crate::skill_execute::execute_capability(
+        &skill_path,
+        capability,
+        &[],
+        &args,
+        exec_policy,
+    )
+    .await
+    {
         Ok(output) => Ok(output),
         Err(error) if crate::skill_execute::is_syntax_preflight_error(&error) => {
             Ok(serde_json::json!({
@@ -120,6 +129,7 @@ mod tests {
             &serde_json::json!({"skill": "broken", "capability": "run"}),
             None,
             Some(dir.path()),
+            None,
         )
         .await
         .unwrap();

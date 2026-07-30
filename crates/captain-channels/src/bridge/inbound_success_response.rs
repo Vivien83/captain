@@ -1,8 +1,9 @@
 //! Successful inbound agent responses and delivery audit.
 
+use super::command_response::{send_durable_response, DurableResponseContext};
 use super::inbound_delivery::record_inbound_delivery_success;
 use super::inbound_lifecycle::send_inbound_lifecycle_done;
-use super::{send_response, ChannelBridgeHandle};
+use super::ChannelBridgeHandle;
 use crate::types::{ChannelAdapter, ChannelMessage};
 use captain_types::agent::AgentId;
 use captain_types::config::OutputFormat;
@@ -50,9 +51,28 @@ pub(super) async fn relay_inbound_agent_success(
     output_format: OutputFormat,
 ) {
     if !posted_inline {
-        send_response(adapter, &message.sender, response, thread_id, output_format).await;
+        if let Err(error) = send_durable_response(
+            adapter,
+            &message.sender,
+            response,
+            thread_id,
+            output_format,
+            DurableResponseContext {
+                handle,
+                agent_id: Some(agent_id),
+                channel: channel_type,
+                source_message_id: &message.platform_message_id,
+                purpose: "agent_final",
+            },
+        )
+        .await
+        {
+            tracing::error!(%error, %agent_id, channel = %channel_type, "durable final response delivery failed");
+        }
+    } else {
+        // A successful streaming path has already posted the complete response.
+        record_inbound_delivery_success(handle, agent_id, channel_type, message, thread_id).await;
     }
-    record_inbound_delivery_success(handle, agent_id, channel_type, message, thread_id).await;
 }
 
 #[cfg(test)]

@@ -92,8 +92,9 @@ fn append_approval_denial_guidance(tool_result_blocks: &mut Vec<ContentBlock>) {
     tool_result_blocks.push(ContentBlock::Text {
         text: format!(
             "[System: {} tool call(s) were denied by approval policy. \
-             Do NOT retry denied tools. Explain to the user what you \
-             wanted to do and that it requires their approval. \
+             Do NOT retry the same denied action unchanged. Preserve and follow \
+             any operator reason included in the tool result; choose a safe \
+             alternative or explain what remains blocked. \
              Hint: set auto_approve = true in [approval] section of \
              config.toml, or start with --yolo flag, to auto-approve \
              all tool calls.]",
@@ -274,7 +275,7 @@ mod tests {
             &appended[3],
             ContentBlock::Text { text, .. }
                 if text.contains("2 tool call(s) were denied")
-                    && text.contains("Do NOT retry denied tools")
+                    && text.contains("Do NOT retry the same denied action unchanged")
         ));
     }
 

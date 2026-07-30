@@ -231,6 +231,33 @@ fn ask_user_with_options_opens_modal_instead_of_a_message() {
 }
 
 #[test]
+fn suggested_replies_are_non_blocking_and_can_be_cleared() {
+    let mut chat = ChatState::new();
+
+    apply_stream_event(
+        &mut chat,
+        StreamEvent::SuggestedReplies {
+            options: vec!["Court".to_string(), "Détaillé".to_string()],
+        },
+    );
+
+    let pending = chat
+        .pending_suggested_replies
+        .as_ref()
+        .expect("suggested replies");
+    assert_eq!(pending.options, vec!["Court", "Détaillé"]);
+    assert!(chat.pending_ask_user.is_none());
+
+    apply_stream_event(
+        &mut chat,
+        StreamEvent::SuggestedReplies {
+            options: Vec::new(),
+        },
+    );
+    assert!(chat.pending_suggested_replies.is_none());
+}
+
+#[test]
 fn ask_user_tool_result_closes_running_tool_block() {
     let mut chat = ChatState::new();
 

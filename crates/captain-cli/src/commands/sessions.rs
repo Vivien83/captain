@@ -5,9 +5,10 @@ use super::session_api::{
     agent_display_name, fetch_agents, fetch_session_detail, fetch_session_rows, require_agent_id,
     session_agent_id, session_id_of, session_last_active, session_sort_key,
 };
-use super::session_text::{
-    contains_ci, format_session_markdown, match_snippet, session_detail_text,
+use super::session_export::{
+    render_session_export, write_private_session_export, SessionExportItem,
 };
+use super::session_text::{contains_ci, match_snippet, session_detail_text};
 use crate::{
     daemon_client, daemon_json, require_daemon, truncate_display, ui, SessionExportFormat,
     SessionsCommands,
@@ -51,9 +52,11 @@ pub(crate) fn cmd_sessions(
         }
         Some(SessionsCommands::Export {
             session_id,
+            all,
+            agent,
             out,
             format,
-        }) => cmd_sessions_export(&session_id, out, format),
+        }) => cmd_sessions_export(session_id.as_deref(), all, agent.as_deref(), out, format),
         Some(SessionsCommands::Prune {
             agent,
             keep,
@@ -279,22 +282,73 @@ fn cmd_sessions_search(query: &str, agent: Option<&str>, limit: usize, json: boo
     }
 }
 
-fn cmd_sessions_export(session_id: &str, out: Option<PathBuf>, format: SessionExportFormat) {
+fn cmd_sessions_export(
+    session_id: Option<&str>,
+    all: bool,
+    agent: Option<&str>,
+    out: Option<PathBuf>,
+    format: Option<SessionExportFormat>,
+) {
     let base = require_daemon("sessions export");
     let client = daemon_client();
-    let detail = fetch_session_detail(&base, &client, session_id);
-    let rendered = match format {
-        SessionExportFormat::Json => serde_json::to_string_pretty(&detail).unwrap_or_default(),
-        SessionExportFormat::Markdown => format_session_markdown(&detail),
+    let format = format.unwrap_or(if all {
+        SessionExportFormat::Jsonl
+    } else {
+        SessionExportFormat::Json
+    });
+    if all && format != SessionExportFormat::Jsonl {
+        ui::error("A catalog export uses JSONL. Remove --format or pass --format jsonl.");
+        std::process::exit(2);
+    }
+    let items = if all {
+        fetch_session_rows(&base, &client, agent)
+            .into_iter()
+            .map(|catalog| {
+                let session_id = session_id_of(&catalog)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        ui::error("The daemon returned a session catalog row without an ID.");
+                        std::process::exit(1);
+                    });
+                let session = fetch_session_detail(&base, &client, &session_id);
+                SessionExportItem {
+                    catalog: Some(catalog),
+                    session,
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let Some(session_id) = session_id else {
+            ui::error("Pass a session UUID or use --all.");
+            std::process::exit(2);
+        };
+        vec![SessionExportItem {
+            catalog: None,
+            session: fetch_session_detail(&base, &client, session_id),
+        }]
     };
+    let exported_at = chrono::Utc::now().to_rfc3339();
+    let rendered =
+        render_session_export(&items, format, all, &exported_at).unwrap_or_else(|error| {
+            ui::error(&error);
+            std::process::exit(2);
+        });
     if let Some(path) = out {
-        if let Err(e) = std::fs::write(&path, rendered) {
+        if let Err(e) = write_private_session_export(&path, &rendered) {
             ui::error(&format!("Failed to write {}: {e}", path.display()));
             std::process::exit(1);
         }
-        ui::success(&format!("Exported session to {}", path.display()));
+        ui::success(&format!(
+            "Exported {} session{} to {}",
+            items.len(),
+            if items.len() == 1 { "" } else { "s" },
+            path.display()
+        ));
     } else {
-        println!("{rendered}");
+        print!("{rendered}");
+        if !rendered.ends_with('\n') {
+            println!();
+        }
     }
 }
 

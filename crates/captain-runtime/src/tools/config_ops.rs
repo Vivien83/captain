@@ -8,6 +8,11 @@ pub(crate) fn tool_config_read(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+    if captain_types::config::is_secret_auth_config_path(path) {
+        return Ok(format!(
+            "Config path '{path}' is Captain-managed and redacted."
+        ));
+    }
     match kh.config_read(path)? {
         Some(val) => Ok(val),
         None => Ok(format!("Config path '{}' not found or empty.", path)),
@@ -21,6 +26,11 @@ pub(crate) async fn tool_config_write(
     let kh = require_kernel(kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let value = input["value"].as_str().ok_or("Missing 'value' parameter")?;
+    if captain_types::config::is_managed_auth_config_path(path) {
+        return Err(format!(
+            "Config path '{path}' is Captain-managed. Use web_credentials_update for web login changes."
+        ));
+    }
     if matches!(path, "default_model.provider" | "default_model.model") {
         return Err(
             "Direct default_model provider/model writes are refused. Use model_switch_plan first, then model_switch_apply with explicit session_strategy (new_session or compact_session)."
@@ -251,20 +261,20 @@ pub(crate) fn tool_secret_read(
     let kh = require_kernel(kernel)?;
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     match kh.secret_read(key)? {
-        Some(val) => {
-            let masked = if val.len() > 8 {
-                format!(
-                    "{}...{} ({} chars)",
-                    &val[..4],
-                    &val[val.len() - 4..],
-                    val.len()
-                )
-            } else {
-                format!("****** ({} chars)", val.len())
-            };
-            Ok(format!("Secret '{}': {}", key, masked))
-        }
+        Some(val) => Ok(format!("Secret '{}': {}", key, mask_secret_presence(&val))),
         None => Ok(format!("Secret '{}' not found.", key)),
+    }
+}
+
+fn mask_secret_presence(value: &str) -> String {
+    let characters = value.chars().collect::<Vec<_>>();
+    let count = characters.len();
+    if count > 8 {
+        let prefix = characters[..4].iter().collect::<String>();
+        let suffix = characters[count - 4..].iter().collect::<String>();
+        format!("{prefix}...{suffix} ({count} chars)")
+    } else {
+        format!("****** ({count} chars)")
     }
 }
 
@@ -410,5 +420,14 @@ mod tests {
             classify_config_path(&s, "dynamic.anything.goes"),
             PathClass::Known
         ));
+    }
+
+    #[test]
+    fn secret_presence_mask_is_unicode_safe_and_never_returns_the_full_value() {
+        assert_eq!(
+            mask_secret_presence("ééééabcdéééé"),
+            "éééé...éééé (12 chars)"
+        );
+        assert_eq!(mask_secret_presence("clé"), "****** (3 chars)");
     }
 }

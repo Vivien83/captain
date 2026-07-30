@@ -258,7 +258,8 @@ fn version_text(kernel: &CaptainKernel) -> String {
 fn config_text(kernel: &CaptainKernel) -> String {
     let path = config_path(kernel);
     match std::fs::read_to_string(&path) {
-        Ok(content) => content,
+        Ok(content) => captain_types::config::redact_auth_secrets(&content)
+            .unwrap_or_else(|_| "Impossible de rediger la configuration.".to_string()),
         Err(e) => format!("Impossible de lire {}: {e}", path.display()),
     }
 }

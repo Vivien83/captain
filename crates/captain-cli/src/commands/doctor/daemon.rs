@@ -128,7 +128,11 @@ fn print_health_detail(report: &mut DoctorReport, body: &serde_json::Value) {
         }
         report.push(serde_json::json!({"check": "daemon_agents", "status": "ok", "count": agents}));
     }
-    if let Some(uptime) = body.get("uptime_secs").and_then(|v| v.as_u64()) {
+    if let Some(uptime) = body
+        .get("uptime_seconds")
+        .or_else(|| body.get("uptime_secs"))
+        .and_then(|v| v.as_u64())
+    {
         let hours = uptime / 3600;
         let mins = (uptime % 3600) / 60;
         if !report.json {
@@ -148,6 +152,31 @@ fn print_health_detail(report: &mut DoctorReport, body: &serde_json::Value) {
             report.fail();
         }
         report.push(serde_json::json!({"check": "daemon_db", "status": db_status}));
+    }
+    if let Some(audit) = body.get("audit") {
+        let valid = audit["valid"].as_bool().unwrap_or(false);
+        let status = audit["status"].as_str().unwrap_or("unknown");
+        let active_epoch = audit["active_epoch"].as_u64().unwrap_or(0);
+        if !report.json {
+            if valid {
+                ui::check_ok(&format!("Audit integrity: {status} (epoch {active_epoch})"));
+            } else {
+                ui::check_fail(&format!(
+                    "Audit integrity: {status} (active epoch {active_epoch})"
+                ));
+                if let Some(error) = audit["last_error"].as_str() {
+                    ui::hint(error);
+                }
+            }
+        }
+        if !valid {
+            report.fail();
+        }
+        report.push(serde_json::json!({
+            "check": "audit_integrity",
+            "status": if valid { "ok" } else { "fail" },
+            "audit": audit,
+        }));
     }
 }
 

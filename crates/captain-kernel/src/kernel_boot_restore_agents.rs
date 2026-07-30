@@ -126,7 +126,7 @@ fn prepare_restored_agent(kernel: &CaptainKernel, entry: AgentEntry, name: &str)
     restored_entry.state = AgentState::Running;
     ensure_restored_exec_policy(kernel, &mut restored_entry);
     apply_budget_defaults(
-        &kernel.config.budget,
+        &kernel.budget_config(),
         &mut restored_entry.manifest.resources,
     );
 

@@ -119,6 +119,7 @@ impl ReflectionCompleter for LlmDriverCompleter {
             temperature: self.temperature,
             system: Some(system.to_string()),
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };

@@ -1,7 +1,8 @@
 use super::*;
 use crate::tui::screens::approvals::ApprovalRequest;
 use crate::tui::screens::chat::{
-    ChatAction, PendingAskUser, PendingModelSwitch, QuickActionChoiceId,
+    ChatAction, ChatMouseAction, PendingAskUser, PendingModelSwitch, PendingSuggestedReplies,
+    QuickActionChoiceId,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -145,7 +146,7 @@ fn choice_lines_register_click_zones_and_wrap_when_needed() {
 }
 
 #[test]
-fn approval_quick_action_keys_match_hermes_mapping() {
+fn approval_quick_action_keys_match_expected_mapping() {
     let cases = [
         (KeyCode::Char('y'), Some(QuickActionChoiceId::ApprovalOnce)),
         (KeyCode::Char('o'), Some(QuickActionChoiceId::ApprovalOnce)),
@@ -353,4 +354,80 @@ fn ask_user_without_options_does_not_take_over_key_handling() {
     let action = state.handle_key(key(KeyCode::Char('x')));
     assert_eq!(action, ChatAction::Continue);
     assert!(state.pending_ask_user.is_none());
+}
+
+#[test]
+fn suggested_replies_use_optional_numbered_choices() {
+    let mut state = ChatState::new();
+    state.pending_suggested_replies = Some(PendingSuggestedReplies {
+        options: vec!["Court".into(), "Détaillé".into()],
+    });
+
+    let prompt = build_quick_action_prompt(&state).expect("suggested replies");
+    assert_eq!(prompt.title, "Réponses rapides");
+    assert_eq!(prompt.risk, "optionnel");
+    assert_eq!(prompt.choices[0].id, QuickActionChoiceId::SuggestedReply(0));
+    assert_eq!(prompt.choices[0].label, "[1] Court");
+}
+
+#[test]
+fn suggested_reply_number_sends_a_normal_message() {
+    let mut state = ChatState::new();
+    state.pending_suggested_replies = Some(PendingSuggestedReplies {
+        options: vec!["Court".into(), "Détaillé".into()],
+    });
+
+    let action = state.handle_key(key(KeyCode::Char('2')));
+
+    assert_eq!(action, ChatAction::SendMessage("Détaillé".to_string()));
+    assert!(state.pending_suggested_replies.is_none());
+    assert_eq!(
+        state.messages.last().map(|message| message.text.as_str()),
+        Some("Détaillé")
+    );
+}
+
+#[test]
+fn suggested_reply_click_sends_a_normal_message() {
+    let mut state = ChatState::new();
+    state.pending_suggested_replies = Some(PendingSuggestedReplies {
+        options: vec!["Court".into(), "Détaillé".into()],
+    });
+    state.quick_action_click_zones.push(QuickActionClickZone {
+        x_start: 10,
+        x_end: 30,
+        y: 5,
+        choice: QuickActionChoiceId::SuggestedReply(1),
+    });
+
+    assert_eq!(
+        state.handle_mouse_click(12, 5),
+        Some(ChatMouseAction::SendMessage("Détaillé".to_string()))
+    );
+    assert!(state.pending_suggested_replies.is_none());
+    assert_eq!(
+        state.messages.last().map(|message| message.text.as_str()),
+        Some("Détaillé")
+    );
+}
+
+#[test]
+fn suggested_replies_do_not_block_free_text() {
+    let mut state = ChatState::new();
+    state.pending_suggested_replies = Some(PendingSuggestedReplies {
+        options: vec!["Court".into(), "Détaillé".into()],
+    });
+
+    assert_eq!(
+        state.handle_key(key(KeyCode::Char('m'))),
+        ChatAction::Continue
+    );
+    assert_eq!(state.input, "m");
+    assert!(state.pending_suggested_replies.is_some());
+
+    assert_eq!(
+        state.handle_key(key(KeyCode::Enter)),
+        ChatAction::SendMessage("m".to_string())
+    );
+    assert!(state.pending_suggested_replies.is_none());
 }

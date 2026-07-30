@@ -1,14 +1,14 @@
 //! Active channel configuration route handlers.
 
 use crate::channel_config_store::{remove_channel_config, upsert_channel_config};
-use crate::channel_readiness::channel_readiness;
+use crate::channel_readiness::channel_readiness_with;
 use crate::channel_registry::{
-    active_channel_names, build_field_json, channel_config_values, field_is_ready,
+    active_channel_names, build_field_json_with, channel_config_values, field_is_ready_with,
     find_channel_meta, is_channel_configured, is_frozen_channel, FieldType, CHANNEL_REGISTRY,
     FROZEN_CHANNEL_NAMES,
 };
 use crate::channel_test_delivery::send_channel_test_message;
-use crate::secret_env::{remove_secret_env, write_secret_env};
+use crate::secret_env::remove_secret_env;
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -17,7 +17,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::Path as FsPath;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +29,7 @@ pub async fn list_channels(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let live_channels = state.channels_config.read().await;
     let mut channels = Vec::new();
     let mut configured_count = 0u32;
+    let resolve = |key: &str| state.kernel.resolve_credential(key);
 
     for meta in CHANNEL_REGISTRY {
         let configured = is_channel_configured(&live_channels, meta.name);
@@ -38,9 +38,9 @@ pub async fn list_channels(State(state): State<Arc<AppState>>) -> impl IntoRespo
         let fields: Vec<serde_json::Value> = meta
             .fields
             .iter()
-            .map(|field| build_field_json(field, config_values.as_ref()))
+            .map(|field| build_field_json_with(field, config_values.as_ref(), &resolve))
             .collect();
-        let readiness = channel_readiness(meta, config_values.as_ref());
+        let readiness = channel_readiness_with(meta, config_values.as_ref(), &resolve);
 
         channels.push(serde_json::json!({
             "name": meta.name,
@@ -96,10 +96,8 @@ pub async fn configure_channel(
         None => return bad_request("Missing 'fields' object"),
     };
 
-    let home = captain_kernel::config::captain_home();
-    let secrets_path = home.join("secrets.env");
-    let config_path = home.join("config.toml");
-    let config_fields = match collect_channel_config_fields(meta, fields, &secrets_path) {
+    let config_path = state.kernel.config.home_dir.join("config.toml");
+    let config_fields = match collect_channel_config_fields(meta, fields, state.kernel.as_ref()) {
         Ok(fields) => fields,
         Err(e) => return server_error(e),
     };
@@ -147,12 +145,14 @@ pub async fn remove_channel(
         Some(meta) => meta,
         None => return unknown_channel(&name),
     };
-    let home = captain_kernel::config::captain_home();
-    let secrets_path = home.join("secrets.env");
-    let config_path = home.join("config.toml");
+    let secrets_path = state.kernel.config.home_dir.join("secrets.env");
+    let config_path = state.kernel.config.home_dir.join("config.toml");
 
     for field in meta.fields {
         if let Some(env_var) = field.env_var {
+            if state.kernel.credential_is_externally_managed(env_var) {
+                continue;
+            }
             let _ = remove_secret_env(&secrets_path, env_var);
             unsafe {
                 std::env::remove_var(env_var);
@@ -198,10 +198,11 @@ pub async fn test_channel(
     };
     let live_channels = state.channels_config.read().await;
     let config_values = channel_config_values(&live_channels, &name);
+    let resolve = |key: &str| state.kernel.resolve_credential(key);
     let missing = meta
         .fields
         .iter()
-        .filter(|field| !field_is_ready(field, config_values.as_ref()))
+        .filter(|field| !field_is_ready_with(field, config_values.as_ref(), &resolve))
         .map(|field| field.env_var.unwrap_or(field.key))
         .collect::<Vec<_>>();
     drop(live_channels);
@@ -228,7 +229,9 @@ pub async fn test_channel(
         .and_then(|value| value.as_str());
 
     if let Some(target_id) = target {
-        return match send_channel_test_message(&name, target_id, config_values.as_ref()).await {
+        return match send_channel_test_message(&name, target_id, config_values.as_ref(), &resolve)
+            .await
+        {
             Ok(()) => (
                 StatusCode::OK,
                 Json(serde_json::json!({"status": "ok", "message": "Test message sent."})),
@@ -303,29 +306,46 @@ pub async fn clear_inbound_dead_letters(
 fn collect_channel_config_fields(
     meta: &crate::channel_registry::ChannelMeta,
     fields: &serde_json::Map<String, serde_json::Value>,
-    secrets_path: &FsPath,
+    kernel: &captain_kernel::CaptainKernel,
 ) -> Result<HashMap<String, (String, FieldType)>, String> {
     let mut config_fields = HashMap::new();
 
     for field in meta.fields {
-        let value = fields
+        let supplied = fields
             .get(field.key)
             .and_then(|field_value| field_value.as_str())
-            .unwrap_or("");
-        if value.is_empty() {
-            continue;
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if supplied.is_some()
+            && field
+                .env_var
+                .is_some_and(|key| kernel.credential_is_externally_managed(key))
+        {
+            let key = field.env_var.unwrap_or_default();
+            return Err(format!(
+                "{key} is managed by secret-sources.toml; rotate the external file instead"
+            ));
         }
+    }
+
+    for field in meta.fields {
+        let supplied = fields
+            .get(field.key)
+            .and_then(|field_value| field_value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         if let Some(env_var) = field.env_var {
-            write_secret_env(secrets_path, env_var, value)
-                .map_err(|e| format!("Failed to write secret: {e}"))?;
-            unsafe {
-                std::env::set_var(env_var, value);
+            if let Some(value) = supplied {
+                captain_runtime::kernel_handle::KernelHandle::secret_write(kernel, env_var, value)
+                    .map_err(|error| format!("Failed to write secret: {error}"))?;
             }
             config_fields.insert(
                 field.key.to_string(),
                 (env_var.to_string(), FieldType::Text),
             );
-        } else {
+            continue;
+        }
+        if let Some(value) = supplied {
             config_fields.insert(field.key.to_string(), (value.to_string(), field.field_type));
         }
     }
@@ -392,12 +412,21 @@ pub(crate) fn frozen_channel_response(
 }
 
 pub(crate) fn frozen_channel_reason() -> &'static str {
-    "Non-core channels are frozen from the active setup surface until Captain's core is Hermes-level. Use Telegram, Discord, Signal, Email, web, CLI, or the per-agent API."
+    "Non-core channels are frozen from the active setup surface until Captain's core is production-grade. Use Telegram, Discord, Signal, Email, web, CLI, or the per-agent API."
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_kernel(home: &std::path::Path) -> captain_kernel::CaptainKernel {
+        captain_kernel::CaptainKernel::boot_with_config(captain_types::config::KernelConfig {
+            home_dir: home.to_path_buf(),
+            data_dir: home.join("data"),
+            ..Default::default()
+        })
+        .expect("test kernel")
+    }
 
     #[test]
     fn frozen_channel_returns_actionable_response() {
@@ -425,6 +454,7 @@ mod tests {
         let meta = find_channel_meta("email").unwrap();
         let temp = tempfile::tempdir().unwrap();
         let secrets_path = temp.path().join("secrets.env");
+        let kernel = test_kernel(temp.path());
         let fields = serde_json::json!({
             "username": "captain@example.com",
             "password_env": "app-secret",
@@ -434,8 +464,7 @@ mod tests {
         });
         let fields = fields.as_object().unwrap();
 
-        let config_fields =
-            collect_channel_config_fields(meta, fields, &secrets_path).expect("fields");
+        let config_fields = collect_channel_config_fields(meta, fields, &kernel).expect("fields");
 
         assert_eq!(
             config_fields.get("password_env"),
@@ -456,14 +485,62 @@ mod tests {
     fn email_config_rejects_multiline_secret() {
         let meta = find_channel_meta("email").unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let secrets_path = temp.path().join("secrets.env");
+        let kernel = test_kernel(temp.path());
         let fields = serde_json::json!({
             "password_env": "app-secret\nINJECTED=value"
         });
         let fields = fields.as_object().unwrap();
 
-        let err = collect_channel_config_fields(meta, fields, &secrets_path).unwrap_err();
+        let err = collect_channel_config_fields(meta, fields, &kernel).unwrap_err();
 
-        assert!(err.contains("single line"));
+        assert!(err.contains("single-line"), "{err}");
+    }
+
+    fn external_telegram_kernel(home: &std::path::Path) -> captain_kernel::CaptainKernel {
+        let mounted = home.join("telegram-token");
+        std::fs::write(&mounted, "123456:external-token\n").unwrap();
+        std::fs::write(
+            home.join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.TELEGRAM_BOT_TOKEN]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+        test_kernel(home)
+    }
+
+    #[test]
+    fn external_channel_secret_bootstraps_pointer_without_local_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = external_telegram_kernel(temp.path());
+        let meta = find_channel_meta("telegram").unwrap();
+        let fields = serde_json::json!({
+            "allowed_users": "12345",
+            "default_agent": "captain"
+        });
+
+        let config_fields =
+            collect_channel_config_fields(meta, fields.as_object().unwrap(), &kernel).unwrap();
+
+        assert_eq!(
+            config_fields.get("bot_token_env"),
+            Some(&(String::from("TELEGRAM_BOT_TOKEN"), FieldType::Text))
+        );
+        assert!(!temp.path().join("secrets.env").exists());
+    }
+
+    #[test]
+    fn external_channel_secret_rejects_form_overwrite_before_local_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = external_telegram_kernel(temp.path());
+        let meta = find_channel_meta("telegram").unwrap();
+        let fields = serde_json::json!({"bot_token_env": "123456:local-token"});
+
+        let error =
+            collect_channel_config_fields(meta, fields.as_object().unwrap(), &kernel).unwrap_err();
+
+        assert!(error.contains("managed by secret-sources.toml"));
+        assert!(!temp.path().join("secrets.env").exists());
     }
 }

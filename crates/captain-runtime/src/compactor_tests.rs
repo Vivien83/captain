@@ -4,7 +4,7 @@ use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmErr
 use async_trait::async_trait;
 use captain_memory::session::Session;
 use captain_types::message::{ContentBlock, Message, MessageContent, Role, TokenUsage};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_needs_compaction_below_threshold() {
@@ -77,6 +77,56 @@ async fn test_compact_session_few_messages() {
     assert_eq!(result.kept_messages.len(), 2);
     assert_eq!(result.chunks_used, 0);
     assert!(!result.used_fallback);
+}
+
+#[tokio::test]
+async fn compaction_progress_keeps_opaque_model_work_indeterminate() {
+    struct FakeDriver;
+
+    #[async_trait]
+    impl LlmDriver for FakeDriver {
+        async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+            Ok(text_response("Summary of conversation"))
+        }
+    }
+
+    let session = Session {
+        id: captain_types::agent::SessionId::new(),
+        agent_id: captain_types::agent::AgentId::new(),
+        messages: (0..40)
+            .map(|index| Message::user(format!("message {index}")))
+            .collect(),
+        context_window_tokens: 0,
+        label: None,
+    };
+    let updates = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&updates);
+    let observer: CompactionStageObserver = Arc::new(move |update| {
+        captured.lock().unwrap().push(update);
+    });
+
+    compact_session_with_progress(
+        Arc::new(FakeDriver),
+        "test-model",
+        &session,
+        &CompactionConfig::default(),
+        0,
+        Some(observer),
+    )
+    .await
+    .unwrap();
+
+    let updates = updates.lock().unwrap();
+    assert_eq!(
+        updates[0].phase,
+        captain_types::compaction::CompactionPhase::Pruning
+    );
+    let summarizing = updates
+        .iter()
+        .find(|update| update.phase == captain_types::compaction::CompactionPhase::Summarizing)
+        .expect("summarizing update");
+    assert_eq!(summarizing.completed_units, None);
+    assert_eq!(summarizing.total_units, None);
 }
 
 /// Pruning old tool outputs brings the session back under the token
@@ -155,6 +205,64 @@ async fn test_compact_session_pruning_alone_skips_llm() {
         result.kept_messages.last().unwrap().content.text_content(),
         "continue"
     );
+}
+
+#[tokio::test]
+async fn coherent_active_turn_never_issues_an_empty_summary_request() {
+    struct PanickingDriver;
+
+    #[async_trait]
+    impl LlmDriver for PanickingDriver {
+        async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+            panic!("a protected coherent turn must not issue an empty LLM request");
+        }
+    }
+
+    let mut messages = vec![Message::user("inspect the current project")];
+    messages.extend(
+        (0..33).map(|index| Message::assistant(format!("tool activity and progress {index}"))),
+    );
+    let session = Session {
+        id: captain_types::agent::SessionId::new(),
+        agent_id: captain_types::agent::AgentId::new(),
+        messages: messages.clone(),
+        context_window_tokens: 0,
+        label: None,
+    };
+    let updates = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&updates);
+    let observer: CompactionStageObserver = Arc::new(move |update| {
+        captured.lock().unwrap().push(update);
+    });
+
+    let result = compact_session_with_progress(
+        Arc::new(PanickingDriver),
+        "test-model",
+        &session,
+        &CompactionConfig {
+            threshold: 30,
+            keep_recent: 10,
+            ..CompactionConfig::default()
+        },
+        0,
+        Some(observer),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.is_unchanged());
+    assert_eq!(result.chunks_used, 0);
+    assert!(result.summary.is_empty());
+    assert_eq!(
+        serde_json::to_value(&result.kept_messages).unwrap(),
+        serde_json::to_value(&messages).unwrap()
+    );
+    assert!(!result.pruned_only);
+    assert!(updates
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|update| update.phase != captain_types::compaction::CompactionPhase::Summarizing));
 }
 
 #[test]

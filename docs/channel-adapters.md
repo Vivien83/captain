@@ -68,10 +68,25 @@ control-plane card: the adapter acknowledges the click, the bridge resolves it
 before session dispatch, and the kernel validates the exact durable identity
 without asking the model. Pending cards are rebuilt from state after restart;
 accepted and stale decisions edit the original message and remove its buttons.
+Non-blocking suggested replies, including bounded first-use preferences, use a
+one-turn Telegram reply keyboard attached to Captain's normal Rich response.
+Choosing one sends an ordinary inbound message; typing a different answer
+remains valid. An empty suggestion event removes any prior reply keyboard and
+never creates an `ask_user` wait.
 User-visible errors are sanitized before rendering. If a Telegram
 server explicitly lacks the Rich endpoints, Captain caches that result and
 uses the existing HTML/plain fallback. Ambiguous network or server failures do
 not trigger a second send that could duplicate a message.
+
+Sensitive tool calls use their own Rich approval card with six explicit
+choices: allow or deny once, for this daemon session, or durably for this exact
+action. A button callback is resolved before model dispatch and remains bound
+to the pending request. Durable choices store only the action digest and stay
+revocable through `/approval_rule_revoke`; `/reject`, `/reject_session`, and
+`/reject_always` accept a free-form reason, while the durable denial command
+requires one. Button-only Telegram denials receive an explicit operator reason
+from the selected scope so the blocked agent gets actionable context rather
+than a silent boolean.
 
 Captain release notices use the same model-independent control plane. The
 daemon checks the compatible official release channel after startup and every
@@ -141,6 +156,20 @@ Long-running channel work is detached from the adapter receive loop so one
 slow tool call does not block unrelated messages. A daemon restart preserves
 durable sessions and memory; in-flight work is reported as interrupted or
 recoverable rather than silently lost.
+
+Final replies use a separate durable outbound ledger. Captain writes the exact
+formatted payload before invoking the adapter, leases each attempt, and commits
+only the real transport result. A failed send is retried with bounded backoff;
+three failed attempts become an operator-visible dead delivery. After a crash,
+the new process reclaims the old lease and sends the stored response without
+rerunning the model or any tools. Because a network interruption can happen
+after the remote service accepted a message but before Captain received its
+receipt, such a replay is explicitly marked as a possible duplicate.
+
+`captain status` and `captain status --json | jq '.outbound_delivery'` expose
+pending, attempting, dead, ambiguous, oldest-age, and last-error state. The
+ledger caps individual and aggregate live payload size, and removes response
+content plus display identity from terminal records.
 
 ## Troubleshooting
 

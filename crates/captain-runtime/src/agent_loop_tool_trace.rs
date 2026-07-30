@@ -41,7 +41,10 @@ pub fn tool_emoji(tool_name: &str) -> &'static str {
         | "browser_network_log" => "🧭",
         "screenshot" => "📸",
         "agent_send" | "agent_spawn" | "agent_list" | "agent_kill" | "agent_delegate"
-        | "agent_status" | "agent_watch" | "agent_correct" | "agent_find" => "🤖",
+        | "agent_job_status" | "agent_job_result" | "agent_job_list" | "agent_job_cancel"
+        | "agent_job_resume" | "agent_status" | "agent_watch" | "agent_correct" | "agent_find" => {
+            "🤖"
+        }
         "execute_code" | "python_runtime" => "▸",
         "skill_execute" | "scaffold_skill" => "📚",
         "cron_create" | "cron_list" | "cron_update" | "cron_cancel" | "schedule_create"
@@ -83,11 +86,16 @@ pub fn tool_input_preview(tool_name: &str, input: &serde_json::Value) -> String 
             .to_string(),
         "memory_store" => input["key"].as_str().unwrap_or("").to_string(),
         "memory_recall" | "knowledge_query" => input["query"].as_str().unwrap_or("").to_string(),
-        "agent_send" | "agent_spawn" => input["agent"]
+        "agent_send" | "agent_spawn" | "agent_delegate" => input["agent"]
             .as_str()
+            .or_else(|| input["agent_id"].as_str())
             .or_else(|| input["name"].as_str())
             .unwrap_or("")
             .to_string(),
+        "agent_job_status" | "agent_job_result" | "agent_job_cancel" | "agent_job_resume" => {
+            input["job_id"].as_str().unwrap_or("").to_string()
+        }
+        "agent_job_list" => input["status"].as_str().unwrap_or("all").to_string(),
         "channel_send" => format!(
             "{} → {}",
             input["channel"].as_str().unwrap_or("?"),

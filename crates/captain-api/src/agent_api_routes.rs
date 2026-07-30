@@ -8,7 +8,7 @@ use crate::{
     },
     agent_api_config_status::agent_api_config_status,
     agent_api_egress::{
-        agent_api_egress_descriptor, clip_for_callback, deliver_agent_api_callback,
+        agent_api_egress_descriptor_with, clip_for_callback, deliver_agent_api_callback,
         AgentApiEgressDescriptor,
     },
     agent_api_egress_queue::agent_api_egress_queue_summary,
@@ -118,7 +118,11 @@ pub async fn agent_api_status(
         None => return error(StatusCode::NOT_FOUND, "Agent not found"),
     };
     let agent_name = entry.name.clone();
-    let api = agent_api_descriptor(&agent_id);
+    let api = agent_api_descriptor_with(
+        &agent_id,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
+    );
     let config_status =
         agent_api_config_status(&state.kernel.config.home_dir, &agent_id, &api).await;
 
@@ -273,7 +277,9 @@ fn ensure_agent_api_authorized(
     agent_id: &AgentId,
     headers: &HeaderMap,
 ) -> Result<(), axum::response::Response> {
-    if validate_agent_api_token(headers, agent_id) {
+    if validate_agent_api_token_with(headers, agent_id, &|key| {
+        state.kernel.resolve_credential(key)
+    }) {
         return Ok(());
     }
     record_ingress_denied(
@@ -555,7 +561,13 @@ async fn deliver_agent_api_ingress_callback(
     agent_id: &AgentId,
     payload: &serde_json::Value,
 ) -> crate::agent_api_egress::AgentApiCallbackDelivery {
-    let mut egress = deliver_agent_api_callback(agent_id, payload).await;
+    let mut egress = deliver_agent_api_callback(
+        agent_id,
+        payload,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
+    )
+    .await;
     queue_failed_callback(state, agent_id, payload, &mut egress).await;
     record_callback_audit(state, agent_id, payload, &egress);
     egress
@@ -573,18 +585,27 @@ fn agent_api_sender_name(sender_name: Option<String>) -> Option<String> {
     Some(sender_name.unwrap_or_else(|| "Agent API".to_string()))
 }
 
+#[cfg(test)]
 pub fn agent_api_descriptor(agent_id: &AgentId) -> AgentApiDescriptor {
+    agent_api_descriptor_with(agent_id, &|key| std::env::var(key).ok(), &|_| false)
+}
+
+pub fn agent_api_descriptor_with(
+    agent_id: &AgentId,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    is_externally_managed: &dyn Fn(&str) -> bool,
+) -> AgentApiDescriptor {
     AgentApiDescriptor {
         ingress_url: agent_api_ingress_url(agent_id),
         token_env: agent_api_token_env(agent_id),
-        token_configured: agent_api_token_configured(agent_id),
+        token_configured: agent_api_token_configured_with(agent_id, resolve),
         token_rotate_url: agent_api_token_rotate_url(agent_id),
         auth_scheme: AGENT_API_AUTH_SCHEME,
         channel_type: AGENT_API_CHANNEL_TYPE,
         max_body_bytes: MAX_AGENT_API_BODY_SIZE,
         max_message_bytes: MAX_AGENT_API_MESSAGE_SIZE,
         rate_limit_per_minute: AGENT_API_RATE_LIMIT_PER_MINUTE,
-        egress: agent_api_egress_descriptor(agent_id),
+        egress: agent_api_egress_descriptor_with(agent_id, resolve, is_externally_managed),
         audit_events_url: agent_api_audit_events_url(agent_id),
         manifest_url: agent_api_manifest_url(agent_id),
         idempotency_key: "request_id",
@@ -593,22 +614,43 @@ pub fn agent_api_descriptor(agent_id: &AgentId) -> AgentApiDescriptor {
 }
 
 pub fn is_agent_api_ingress_route(method: &Method, path: &str) -> bool {
-    method == Method::POST && path.starts_with("/hooks/agents/") && path.ends_with("/ingress")
+    if method != Method::POST {
+        return false;
+    }
+    let Some(agent_id) = path
+        .strip_prefix("/hooks/agents/")
+        .and_then(|value| value.strip_suffix("/ingress"))
+    else {
+        return false;
+    };
+    !agent_id.is_empty() && !agent_id.contains('/') && agent_id.parse::<AgentId>().is_ok()
 }
 
 pub(crate) fn agent_api_token_env(agent_id: &AgentId) -> String {
     shared_agent_api_token_env(agent_id)
 }
 
-fn agent_api_token_configured(agent_id: &AgentId) -> bool {
-    std::env::var(agent_api_token_env(agent_id))
+fn agent_api_token_configured_with(
+    agent_id: &AgentId,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    resolve(&agent_api_token_env(agent_id))
         .map(|token| token.len() >= MIN_AGENT_API_TOKEN_LEN)
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn validate_agent_api_token(headers: &HeaderMap, agent_id: &AgentId) -> bool {
-    let expected = match std::env::var(agent_api_token_env(agent_id)) {
-        Ok(token) if token.len() >= MIN_AGENT_API_TOKEN_LEN => token,
+    validate_agent_api_token_with(headers, agent_id, &|key| std::env::var(key).ok())
+}
+
+fn validate_agent_api_token_with(
+    headers: &HeaderMap,
+    agent_id: &AgentId,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    let expected = match resolve(&agent_api_token_env(agent_id)) {
+        Some(token) if token.len() >= MIN_AGENT_API_TOKEN_LEN => token,
         _ => return false,
     };
 

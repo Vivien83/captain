@@ -26,7 +26,7 @@ pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     tracing::info!("Shutdown requested via API");
     shutdown_drain_state().clear();
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         "system",
         captain_runtime::audit::AuditAction::ConfigChange,
         "shutdown requested via API",

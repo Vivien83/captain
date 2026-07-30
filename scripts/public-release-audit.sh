@@ -35,6 +35,9 @@ required_files=(
   Cargo.toml
   README.md
   SECURITY.md
+  docs/release-provenance.md
+  docs/repository-governance.md
+  docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
   docs/releases/v0.1.0-alpha.7.md
@@ -47,6 +50,10 @@ required_files=(
   scripts/check-markdown-links.mjs
   scripts/install.sh
   scripts/install.ps1
+  scripts/public-boundary-guard.sh
+  scripts/release-provenance.sh
+  scripts/release-provenance-test.sh
+  scripts/github-governance.sh
 )
 for relative in "${required_files[@]}"; do
   [ -f "$ROOT_DIR/$relative" ] || fail "required file is missing: $relative"
@@ -54,12 +61,12 @@ done
 pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
-  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9' \
-    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable alpha"
-  grep -Fq 'releases/download/v0.1.0-alpha.9/install.sh' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the prerelease installer"
-  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable alpha image"
+  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10' \
+    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable candidate"
+  grep -Fq 'releases/download/v0.1.0-alpha.10/install.sh' \
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the candidate installer"
+  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10' \
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable candidate image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
   fi
@@ -67,9 +74,20 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
     fail "$readme still exposes the private release candidate"
   fi
 done
-grep -Fq '### 0.1.0-alpha.9' \
+grep -Fq '### 0.1.0-alpha.10' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
-  || fail "agent-facing changelog does not identify the public alpha"
+  || fail "agent-facing changelog does not identify the candidate alpha"
+grep -Fq 'unset until the live release has' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md" \
+  || fail "candidate release notes do not keep live provenance explicitly unset"
+if grep -Fq '1248c5928dd4968b6ff7c62ef79a607fb8d94348' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md"; then
+  fail "candidate release notes copied the alpha.9 public source commit"
+fi
+if grep -Fq 'sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md"; then
+  fail "candidate release notes copied the alpha.9 OCI digest"
+fi
 grep -Fq 'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc873' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.5.md" \
   || fail "last published release notes do not pin the multi-architecture image"
@@ -87,7 +105,7 @@ if [ -n "$legacy_image_matches" ]; then
   printf '%s\n' "$legacy_image_matches" >&2
   fail "public tree still references the private historical image package"
 fi
-pass "public alpha version, installer, image, and prerelease policy are coherent"
+pass "candidate alpha version, installer, image, and prerelease policy are coherent"
 
 forbidden_paths=(
   .mcp.json
@@ -120,7 +138,7 @@ forbidden_paths=(
   docs/ssh-setup.md
   scripts/build-launch-site.sh
   scripts/deploy-launch-site.sh
-  scripts/hermes-vs-captain-benchmark.sh
+  scripts/runtime-capability-benchmark.sh
   scripts/launch-site-audit.sh
   scripts/launch-site-browser-smoke.mjs
   skills/resawod.md
@@ -134,6 +152,10 @@ if find "$ROOT_DIR/docs" -maxdepth 1 -type f -name 'v3*.md' -print -quit | grep 
   fail "historical v3 design documents are present"
 fi
 pass "maintainer-only, historical, site, and generated paths are absent"
+
+"$ROOT_DIR/scripts/public-boundary-guard.sh" "$ROOT_DIR" >/dev/null \
+  || fail "public boundary guard rejected the source tree"
+pass "maintainer-only references are absent"
 
 historical_nav_matches=$(rg -n \
   'MIGRATION\.md|SECURITY-PROFILES\.md|ssh-setup\.md' \

@@ -11,7 +11,7 @@ use sha2::Digest;
 use std::path::{Path, PathBuf};
 
 use super::service_runtime::installed_captain_binary;
-use crate::{prompt_input, ui, ServiceManagerArg};
+use crate::{captain_home, production_credential_resolver_at, prompt_input, ui, ServiceManagerArg};
 use captain_types::release_update::{
     current_release_platform, select_newest_compatible_release, ReleaseDescriptor,
     RuntimeUpdateAttemptResult, RuntimeUpdateAttemptStatus, RUNTIME_UPDATE_RESULT_FILENAME,
@@ -254,7 +254,7 @@ fn resolve_latest_version(platform: &str, current: &str) -> Result<String, Strin
     let repo = github_repo();
     let url = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
     let mut request = http_client()?.get(&url).header("User-Agent", "captain-cli");
-    if let Some(token) = github_token() {
+    if let Some(token) = github_token()? {
         request = request.bearer_auth(token);
     }
     let releases: Vec<ReleaseDescriptor> = request
@@ -329,7 +329,7 @@ fn download_release_asset(version: &str, asset: &str) -> Result<Vec<u8>, String>
     // Private repos reject the browser download URL even with a Bearer token
     // (plain 404) — assets must go through the API. Public repos work either
     // way, so token presence decides the path.
-    if github_token().is_some() {
+    if github_token()?.is_some() {
         return download_github_asset_via_api(version, asset);
     }
     let url = format!(
@@ -341,7 +341,7 @@ fn download_release_asset(version: &str, asset: &str) -> Result<Vec<u8>, String>
 
 fn download_github_asset_via_api(version: &str, asset: &str) -> Result<Vec<u8>, String> {
     let repo = github_repo();
-    let token = github_token().expect("checked by caller");
+    let token = github_token()?.ok_or_else(|| "CAPTAIN_GITHUB_TOKEN is unavailable".to_string())?;
     let release_url = format!("https://api.github.com/repos/{repo}/releases/tags/{version}");
     let release: serde_json::Value = http_client()?
         .get(&release_url)
@@ -404,11 +404,24 @@ fn github_repo() -> String {
         .unwrap_or_else(|| DEFAULT_GITHUB_REPO.to_string())
 }
 
-fn github_token() -> Option<String> {
-    std::env::var("CAPTAIN_GITHUB_TOKEN")
-        .ok()
+fn github_token() -> Result<Option<String>, String> {
+    let resolver = production_credential_resolver_at(&captain_home())
+        .map_err(|error| format!("Secret sources unavailable: {error}"))?;
+    github_token_with_resolver(&resolver)
+}
+
+fn github_token_with_resolver(
+    resolver: &captain_extensions::credentials::CredentialResolver,
+) -> Result<Option<String>, String> {
+    let token = resolver
+        .resolve("CAPTAIN_GITHUB_TOKEN")
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.is_empty());
+    if resolver.is_externally_managed("CAPTAIN_GITHUB_TOKEN") && token.is_none() {
+        Err("authoritative external source for CAPTAIN_GITHUB_TOKEN is unavailable".to_string())
+    } else {
+        Ok(token)
+    }
 }
 
 fn versions_match(left: &str, right: &str) -> bool {
@@ -490,5 +503,26 @@ mod tests {
         );
         assert!(parse_sha256("abc captain.tar.gz", "sum").is_err());
         assert!(parse_sha256(&"z".repeat(64), "sum").is_err());
+    }
+
+    #[test]
+    fn updater_reports_unavailable_authoritative_github_token() {
+        let home = tempfile::tempdir().unwrap();
+        let missing = home.path().join("missing-token");
+        std::fs::write(
+            home.path().join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.CAPTAIN_GITHUB_TOKEN]\ntype = \"file\"\npath = {:?}\n",
+                missing.display().to_string()
+            ),
+        )
+        .unwrap();
+        let resolver =
+            captain_extensions::credentials::CredentialResolver::from_home(None, home.path())
+                .unwrap();
+
+        assert!(github_token_with_resolver(&resolver)
+            .unwrap_err()
+            .contains("authoritative external source"));
     }
 }

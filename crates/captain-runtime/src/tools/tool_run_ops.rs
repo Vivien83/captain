@@ -271,7 +271,14 @@ async fn execute_detached_tool(
         "ssh_exec" | "ssh_health_check" => {
             dispatch_ssh_tool(target_tool, &target_input, ctx.exec_policy.as_ref()).await
         }
-        "execute_code" => tool_execute_code(&target_input, ctx.workspace_root.as_deref()).await,
+        "execute_code" => {
+            tool_execute_code(
+                &target_input,
+                ctx.workspace_root.as_deref(),
+                ctx.exec_policy.as_ref(),
+            )
+            .await
+        }
         "cargo" | "npm" | "pip" => {
             dispatch_package_tool(
                 target_tool,

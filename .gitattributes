@@ -36,7 +36,7 @@
 /docs/v3*.md export-ignore
 /scripts/build-launch-site.sh export-ignore
 /scripts/deploy-launch-site.sh export-ignore
-/scripts/hermes-vs-captain-benchmark.sh export-ignore
+/scripts/runtime-capability-benchmark.sh export-ignore
 /scripts/launch-site-audit.sh export-ignore
 /scripts/launch-site-browser-smoke.mjs export-ignore
 /skills/resawod.md export-ignore

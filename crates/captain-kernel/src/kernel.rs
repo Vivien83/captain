@@ -46,6 +46,8 @@ use tracing::{debug, info};
 
 #[path = "kernel_agent_api_provision.rs"]
 mod kernel_agent_api_provision;
+#[path = "kernel_agent_delegation.rs"]
+mod kernel_agent_delegation;
 #[path = "kernel_agent_lifecycle.rs"]
 mod kernel_agent_lifecycle;
 #[path = "kernel_agent_runtime.rs"]
@@ -87,6 +89,8 @@ mod kernel_boot_restore_agents;
 mod kernel_boot_restore_tool_runs;
 #[path = "kernel_boot_workflow_learning.rs"]
 mod kernel_boot_workflow_learning;
+#[path = "kernel_budget_config.rs"]
+mod kernel_budget_config;
 #[path = "kernel_capspec_management.rs"]
 mod kernel_capspec_management;
 #[path = "kernel_capspec_projection.rs"]
@@ -186,6 +190,8 @@ mod kernel_prompt_context_tests;
 #[cfg(test)]
 #[path = "kernel_prompt_tests.rs"]
 mod kernel_prompt_tests;
+#[path = "kernel_reasoning.rs"]
+mod kernel_reasoning;
 #[path = "kernel_reflection_support.rs"]
 mod kernel_reflection_support;
 #[path = "kernel_running_tasks.rs"]
@@ -250,7 +256,9 @@ use kernel_boot_registries::build_boot_registries;
 use kernel_boot_restore_agents::restore_persisted_agents;
 use kernel_boot_restore_tool_runs::restore_persisted_tool_runs;
 use kernel_boot_workflow_learning::reconcile_workflow_learning;
+pub use kernel_budget_config::BudgetConfigUpdateError;
 pub use kernel_capspec_telegram::{CapSpecTelegramPrompt, CapSpecTelegramPromptKind};
+pub use kernel_compaction_runtime::CompactionProgressSink;
 pub use kernel_delivery_tracker::DeliveryTracker;
 #[cfg(test)]
 pub(crate) use kernel_fleet_autoscale::worker_tools_for_domain;
@@ -268,6 +276,10 @@ pub use kernel_workspace_security::{default_blocked_workspace_paths, shared_memo
 pub struct CaptainKernel {
     /// Kernel configuration.
     pub config: KernelConfig,
+    /// Coherent runtime budget snapshot, updated only after durable persistence.
+    pub(crate) live_budget_config: std::sync::RwLock<captain_types::config::BudgetConfig>,
+    /// Serializes budget validation, persistence, and live publication.
+    pub(crate) budget_config_update_lock: std::sync::Mutex<()>,
     /// Agent registry.
     pub registry: AgentRegistry,
     /// Capability manager.
@@ -286,7 +298,7 @@ pub struct CaptainKernel {
     pub triggers: TriggerEngine,
     /// Background agent executor.
     pub background: BackgroundExecutor,
-    /// Merkle hash chain audit trail.
+    /// Versioned SHA-256 audit hash chain.
     pub audit_log: Arc<AuditLog>,
     /// Cost metering engine.
     pub metering: Arc<MeteringEngine>,
@@ -306,6 +318,8 @@ pub struct CaptainKernel {
     pub(crate) codex_model_update_lock: std::sync::Mutex<()>,
     /// Serializes durable Captain runtime update state mutations.
     pub(crate) runtime_update_lock: std::sync::Mutex<()>,
+    /// Serializes the generic multichannel final-response ledger.
+    pub(crate) outbound_delivery_lock: std::sync::Mutex<()>,
     /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
     pub skill_registry: std::sync::RwLock<captain_skills::registry::SkillRegistry>,
     /// Versioned readable capability registry.
@@ -316,6 +330,10 @@ pub struct CaptainKernel {
     pub(crate) capspec_watcher: Option<captain_capspec::CapabilityWatcher>,
     /// Tracks running agent tasks for cancellation support.
     pub running_tasks: dashmap::DashMap<AgentId, RunningTaskHandle>,
+    /// Wakes the bounded durable delegation scheduler after enqueue/resume.
+    pub(crate) agent_delegation_notify: Arc<tokio::sync::Notify>,
+    /// Per-job cancellation signals for delegation turns active in this process.
+    pub(crate) agent_delegation_cancellations: dashmap::DashMap<String, Arc<tokio::sync::Notify>>,
     /// MCP server connections (lazily initialized at start_background_agents).
     pub mcp_connections: Arc<tokio::sync::Mutex<Vec<captain_runtime::mcp::McpConnection>>>,
     /// MCP tool definitions cache (populated after connections are established).
@@ -695,6 +713,10 @@ impl CaptainKernel {
     /// Boot the kernel with an explicit configuration.
     pub fn boot_with_config(config: KernelConfig) -> KernelResult<Self> {
         let mut config = prepare_boot_config(config)?;
+        config
+            .budget
+            .validate()
+            .map_err(|error| KernelError::BootFailed(format!("Invalid budget config: {error}")))?;
         let boot_core = build_boot_core(&config)?;
 
         let boot_driver = build_boot_llm_driver(&mut config, &boot_core.credential_resolver);
@@ -717,9 +739,12 @@ impl CaptainKernel {
         let media_engine = boot_devices.media_engine;
         let tts_engine = boot_devices.tts_engine;
         let pairing = boot_devices.pairing;
+        let live_budget_config = config.budget.clone();
 
         let kernel = Self {
             config,
+            live_budget_config: std::sync::RwLock::new(live_budget_config),
+            budget_config_update_lock: std::sync::Mutex::new(()),
             registry: AgentRegistry::new(),
             capabilities: CapabilityManager::new(),
             event_bus: EventBus::new(),
@@ -739,11 +764,14 @@ impl CaptainKernel {
             model_catalog: std::sync::RwLock::new(boot_core.model_catalog),
             codex_model_update_lock: std::sync::Mutex::new(()),
             runtime_update_lock: std::sync::Mutex::new(()),
+            outbound_delivery_lock: std::sync::Mutex::new(()),
             skill_registry: std::sync::RwLock::new(skill_registry),
             capspec_registry: boot_capspec.registry,
             capspec_executor: boot_capspec.executor,
             capspec_watcher: boot_capspec.watcher,
             running_tasks: dashmap::DashMap::new(),
+            agent_delegation_notify: Arc::new(tokio::sync::Notify::new()),
+            agent_delegation_cancellations: dashmap::DashMap::new(),
             mcp_connections: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             mcp_tools: std::sync::Mutex::new(Vec::new()),
             a2a_task_store: captain_runtime::a2a::A2aTaskStore::default(),
@@ -1039,6 +1067,7 @@ impl CaptainKernel {
                 reply_to: None,
                 current_thread: false,
                 silent: false,
+                suggested_replies: None,
             },
             tool_calls: Vec::new(),
         }
@@ -1204,13 +1233,21 @@ impl CaptainKernel {
     /// stored in the model catalog but NOT in `self.config.provider_urls` (which is
     /// the boot-time snapshot). This helper checks both sources so that custom
     /// providers work immediately without a daemon restart.
-    /// Resolve a credential by env var name using the vault → dotenv → env var chain.
+    /// Resolve a credential through the authoritative external/source/vault/env chain.
     pub fn resolve_credential(&self, key: &str) -> Option<String> {
         self.credential_resolver
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .resolve(key)
             .map(|z| z.to_string())
+    }
+
+    /// Return whether a key is owned by the external secret-source registry.
+    pub fn credential_is_externally_managed(&self, key: &str) -> bool {
+        self.credential_resolver
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_externally_managed(key)
     }
 
     /// Store a credential in the vault (best-effort — falls through silently if no vault).
@@ -1259,7 +1296,14 @@ impl KernelHandle for CaptainKernel {
     }
 
     fn blocked_workspace_paths(&self) -> Vec<std::path::PathBuf> {
-        default_blocked_workspace_paths(&self.config.home_dir)
+        let mut blocked = default_blocked_workspace_paths(&self.config.home_dir);
+        blocked.extend(
+            self.credential_resolver
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .external_source_paths(),
+        );
+        blocked
     }
 
     fn tool_is_blocked_for_agent(&self, caller_agent_id: Option<&str>, tool_name: &str) -> bool {
@@ -1462,6 +1506,60 @@ impl KernelHandle for CaptainKernel {
         self.handle_delegate_task(agent_id, task, max_tokens).await
     }
 
+    fn start_agent_delegation(
+        &self,
+        caller_agent_id: &str,
+        target_agent_id: &str,
+        title: &str,
+        task: &str,
+        max_tokens: u64,
+        depends_on: &[String],
+        idempotency_key: &str,
+    ) -> Result<captain_types::agent_delegation::AgentDelegationJobRecord, String> {
+        self.handle_start_agent_delegation(
+            caller_agent_id,
+            target_agent_id,
+            title,
+            task,
+            max_tokens,
+            depends_on,
+            idempotency_key,
+        )
+    }
+
+    fn agent_delegation_status(
+        &self,
+        caller_agent_id: &str,
+        job_id: &str,
+    ) -> Result<Option<captain_types::agent_delegation::AgentDelegationJobRecord>, String> {
+        self.handle_agent_delegation_status(caller_agent_id, job_id)
+    }
+
+    fn list_agent_delegations(
+        &self,
+        caller_agent_id: &str,
+        status: Option<captain_types::agent_delegation::AgentDelegationStatus>,
+        limit: usize,
+    ) -> Result<Vec<captain_types::agent_delegation::AgentDelegationJobRecord>, String> {
+        self.handle_list_agent_delegations(caller_agent_id, status, limit)
+    }
+
+    fn cancel_agent_delegation(
+        &self,
+        caller_agent_id: &str,
+        job_id: &str,
+    ) -> Result<captain_types::agent_delegation::AgentDelegationJobRecord, String> {
+        self.handle_cancel_agent_delegation(caller_agent_id, job_id)
+    }
+
+    fn resume_agent_delegation(
+        &self,
+        caller_agent_id: &str,
+        job_id: &str,
+    ) -> Result<captain_types::agent_delegation::AgentDelegationJobRecord, String> {
+        self.handle_resume_agent_delegation(caller_agent_id, job_id)
+    }
+
     fn memory_backend(&self) -> captain_types::config::MemoryBackend {
         self.handle_memory_backend()
     }
@@ -1510,6 +1608,11 @@ impl KernelHandle for CaptainKernel {
     fn workflow_learning_list(&self, limit: usize) -> Result<serde_json::Value, String> {
         let projection = CaptainKernel::workflow_learning_list(self, limit)?;
         serde_json::to_value(projection).map_err(|error| error.to_string())
+    }
+
+    fn workflow_learning_status(&self) -> Result<serde_json::Value, String> {
+        let status = CaptainKernel::workflow_learning_status(self)?;
+        serde_json::to_value(status).map_err(|error| error.to_string())
     }
 
     fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
@@ -1776,8 +1879,9 @@ impl KernelHandle for CaptainKernel {
         agent_id: &str,
         tool_name: &str,
         action_summary: &str,
-    ) -> Result<bool, String> {
-        self.handle_request_approval(agent_id, tool_name, action_summary)
+        action_digest: &str,
+    ) -> Result<captain_types::approval::ApprovalOutcome, String> {
+        self.handle_request_approval(agent_id, tool_name, action_summary, action_digest)
             .await
     }
 

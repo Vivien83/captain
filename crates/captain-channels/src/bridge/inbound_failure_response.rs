@@ -1,6 +1,5 @@
 //! Failed inbound agent responses and delivery audit.
 
-use super::inbound_delivery::record_inbound_delivery_failure;
 use super::inbound_error_response::send_inbound_agent_error_response;
 use super::inbound_lifecycle::send_inbound_lifecycle_error;
 use super::ChannelBridgeHandle;
@@ -51,15 +50,18 @@ pub(super) async fn relay_inbound_agent_failure(
     output_format: OutputFormat,
 ) {
     let err_msg = send_inbound_agent_error_response(
+        handle,
         adapter,
         &message.sender,
+        agent_id,
+        channel_type,
+        &message.platform_message_id,
         raw_error,
         thread_id,
         output_format,
     )
     .await;
-    record_inbound_delivery_failure(handle, agent_id, channel_type, message, &err_msg, thread_id)
-        .await;
+    let _ = err_msg;
 }
 
 #[cfg(test)]
@@ -233,7 +235,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failure_sends_sanitized_response_and_records_delivery() {
+    async fn failure_sends_sanitized_response_and_records_transport_success() {
         let handle = handle();
         let handle_trait: Arc<dyn ChannelBridgeHandle> = handle.clone();
         let adapter = adapter(false);
@@ -265,15 +267,15 @@ mod tests {
                 agent_id,
                 "telegram".to_string(),
                 "1001".to_string(),
-                false,
-                Some("Service temporarily unavailable.".to_string()),
+                true,
+                None,
                 Some("topic-7".to_string())
             )]
         );
     }
 
     #[tokio::test]
-    async fn suppressed_failure_still_records_sanitized_delivery() {
+    async fn suppressed_failure_does_not_fabricate_a_delivery_receipt() {
         let handle = handle();
         let handle_trait: Arc<dyn ChannelBridgeHandle> = handle.clone();
         let adapter = adapter(true);
@@ -293,17 +295,7 @@ mod tests {
         .await;
 
         assert!(adapter.sent.lock().unwrap().is_empty());
-        assert_eq!(
-            handle.deliveries.lock().unwrap().as_slice(),
-            &[(
-                agent_id,
-                "telegram".to_string(),
-                "1001".to_string(),
-                false,
-                Some("Request timed out, please try again.".to_string()),
-                None
-            )]
-        );
+        assert!(handle.deliveries.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -346,8 +338,8 @@ mod tests {
                 agent_id,
                 "telegram".to_string(),
                 "1001".to_string(),
-                false,
-                Some("Request timed out, please try again.".to_string()),
+                true,
+                None,
                 Some("topic-7".to_string())
             )]
         );

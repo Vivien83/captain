@@ -204,7 +204,10 @@ impl AgentRegistry {
             .agents
             .get_mut(&id)
             .ok_or_else(|| CaptainError::AgentNotFound(id.to_string()))?;
-        entry.manifest.model.model = new_model;
+        if entry.manifest.model.model != new_model {
+            entry.manifest.model.model = new_model;
+            entry.manifest.model.reasoning_effort = None;
+        }
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -221,6 +224,7 @@ impl AgentRegistry {
             .get_mut(&id)
             .ok_or_else(|| CaptainError::AgentNotFound(id.to_string()))?;
         let provider_changed = entry.manifest.model.provider != new_provider;
+        let model_changed = entry.manifest.model.model != new_model;
         entry.manifest.model.model = new_model;
         entry.manifest.model.provider = new_provider;
         // When provider changes, clear provider-specific overrides so the new provider
@@ -231,6 +235,24 @@ impl AgentRegistry {
             entry.manifest.model.api_key_env = None;
             entry.manifest.model.base_url = None;
         }
+        if provider_changed || model_changed {
+            entry.manifest.model.reasoning_effort = None;
+        }
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
+    /// Update a durable model reasoning override for an agent.
+    pub fn update_reasoning_effort(
+        &self,
+        id: AgentId,
+        effort: Option<captain_types::reasoning::ReasoningEffort>,
+    ) -> CaptainResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| CaptainError::AgentNotFound(id.to_string()))?;
+        entry.manifest.model.reasoning_effort = effort;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -367,18 +389,23 @@ impl AgentRegistry {
             .agents
             .get_mut(&id)
             .ok_or_else(|| CaptainError::AgentNotFound(id.to_string()))?;
+        let mut resources = entry.manifest.resources.clone();
         if let Some(v) = hourly {
-            entry.manifest.resources.max_cost_per_hour_usd = v;
+            resources.max_cost_per_hour_usd = v;
         }
         if let Some(v) = daily {
-            entry.manifest.resources.max_cost_per_day_usd = v;
+            resources.max_cost_per_day_usd = v;
         }
         if let Some(v) = monthly {
-            entry.manifest.resources.max_cost_per_month_usd = v;
+            resources.max_cost_per_month_usd = v;
         }
         if let Some(v) = tokens_per_hour {
-            entry.manifest.resources.max_llm_tokens_per_hour = v;
+            resources.max_llm_tokens_per_hour = v;
         }
+        resources
+            .validate_budget_limits()
+            .map_err(CaptainError::InvalidInput)?;
+        entry.manifest.resources = resources;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -489,5 +516,65 @@ mod tests {
         registry.register(entry).unwrap();
         registry.remove(id).unwrap();
         assert!(registry.get(id).is_none());
+    }
+
+    #[test]
+    fn reasoning_override_is_durable_until_the_model_changes() {
+        let registry = AgentRegistry::new();
+        let entry = test_entry("reasoning-agent");
+        let id = entry.id;
+        registry.register(entry).unwrap();
+        registry
+            .update_reasoning_effort(id, Some("high".parse().unwrap()))
+            .unwrap();
+        assert_eq!(
+            registry
+                .get(id)
+                .unwrap()
+                .manifest
+                .model
+                .reasoning_effort
+                .as_ref()
+                .map(captain_types::reasoning::ReasoningEffort::as_str),
+            Some("high")
+        );
+
+        registry
+            .update_model(id, "gpt-5.6-sol".to_string())
+            .unwrap();
+        assert!(registry
+            .get(id)
+            .unwrap()
+            .manifest
+            .model
+            .reasoning_effort
+            .is_none());
+    }
+
+    #[test]
+    fn selecting_the_same_model_preserves_reasoning_override() {
+        let registry = AgentRegistry::new();
+        let mut entry = test_entry("stable-reasoning-agent");
+        entry.manifest.model.model = "gpt-5.6-sol".to_string();
+        let id = entry.id;
+        registry.register(entry).unwrap();
+        registry
+            .update_reasoning_effort(id, Some("ultra".parse().unwrap()))
+            .unwrap();
+
+        registry
+            .update_model(id, "gpt-5.6-sol".to_string())
+            .unwrap();
+        assert_eq!(
+            registry
+                .get(id)
+                .unwrap()
+                .manifest
+                .model
+                .reasoning_effort
+                .as_ref()
+                .map(captain_types::reasoning::ReasoningEffort::as_str),
+            Some("ultra")
+        );
     }
 }

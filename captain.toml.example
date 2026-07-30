@@ -34,6 +34,9 @@ digest_enabled = false
 # workspaces_dir = "~/.captain/workspaces"
 # workflows_dir = "~/.captain/workflows"
 
+[api]
+allowed_origins = []                      # exact trusted HTTP(S) origins beyond local Control
+
 [default_model]
 provider = "codex"                        # default: ChatGPT/Codex subscription via OAuth
 model = "gpt-5.5"
@@ -197,7 +200,7 @@ allowed_commands = []
 timeout_secs = 30
 max_output_bytes = 102400
 no_output_timeout_secs = 30
-critical_mode = "open"                     # open | safe | paranoid
+critical_mode = "safe"                     # safe (default) | open (approval) | paranoid
 
 [broadcast]
 strategy = "parallel"                      # parallel | sequential | first_success
@@ -309,7 +312,10 @@ default_max_llm_tokens_per_hour = 0
 enabled = false
 username = "admin"
 password_hash = ""
+session_secret = ""                       # Captain generates 32 random bytes at first boot; never edit or copy
+session_epoch = 0                         # Captain increments this when credentials rotate
 session_ttl_hours = 72
+session_cookie_secure = "auto"             # auto, always, or never (local HTTP development only)
 
 [a2a]
 enabled = false

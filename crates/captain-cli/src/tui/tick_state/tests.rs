@@ -88,7 +88,7 @@ fn auto_poll_ignores_non_polling_tabs() {
 }
 
 #[test]
-fn screen_tick_routes_keep_hermes_order() {
+fn screen_tick_routes_keep_expected_order() {
     assert_eq!(
         screen_tick_routes(),
         &[

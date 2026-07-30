@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn split_slash_command_matches_hermes_space_split() {
+fn split_slash_command_matches_expected_space_split() {
     assert_eq!(
         split_slash_command("/shutdown confirm"),
         ("/shutdown".to_string(), "confirm")

@@ -76,10 +76,12 @@ async fn test_wait_or_kill_with_idle_captures_output() {
     use tokio::process::Command;
 
     let mut child = if cfg!(windows) {
+        // guarded-exec-audit: fixed-command (environment scrub regression fixture)
         let mut command = Command::new("cmd");
         command.args(["/C", "echo hello"]);
         command
     } else {
+        // guarded-exec-audit: fixed-command (environment scrub regression fixture)
         let mut command = Command::new("sh");
         command.args(["-c", "printf hello"]);
         command
@@ -108,10 +110,12 @@ async fn test_wait_or_kill_with_idle_no_output_timeout() {
     use tokio::process::Command;
 
     let mut child = if cfg!(windows) {
+        // guarded-exec-audit: fixed-command (environment scrub regression fixture)
         let mut command = Command::new("cmd");
         command.args(["/C", "ping -n 6 127.0.0.1 >NUL"]);
         command
     } else {
+        // guarded-exec-audit: fixed-command (environment scrub regression fixture)
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 5"]);
         command
@@ -200,6 +204,17 @@ fn test_full_mode_blocks_blocklisted() {
 }
 
 #[test]
+fn test_full_mode_blocklist_rejects_normalized_variants() {
+    let policy = ExecPolicy {
+        mode: ExecSecurityMode::Full,
+        ..ExecPolicy::default()
+    };
+    assert!(validate_command_allowlist("rm -fr  /", &policy).is_err());
+    assert!(validate_command_allowlist("git push --FORCE origin MAIN", &policy).is_err());
+    assert!(validate_command_allowlist("psql -c 'drop   database prod'", &policy).is_err());
+}
+
+#[test]
 fn test_full_mode_allows_single_quoted_json() {
     let policy = ExecPolicy {
         mode: ExecSecurityMode::Full,
@@ -261,6 +276,10 @@ fn test_default_policy_works() {
     assert!(policy.allowed_commands.is_empty());
     assert_eq!(policy.timeout_secs, 30);
     assert_eq!(policy.max_output_bytes, 100 * 1024);
+    assert_eq!(
+        policy.critical_mode,
+        captain_types::config::CriticalMode::Safe
+    );
 }
 
 #[test]

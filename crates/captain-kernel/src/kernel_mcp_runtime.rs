@@ -262,10 +262,13 @@ impl CaptainKernel {
             .iter()
             .chain(server_config.auth_token_env.iter())
         {
-            if std::env::var(var_name).is_err() {
-                if let Some(val) = self.resolve_credential(var_name) {
-                    std::env::set_var(var_name, &val);
-                }
+            if let Some(value) = self.resolve_credential(var_name) {
+                std::env::set_var(var_name, value);
+            } else {
+                // A configured external source is authoritative. Removing a
+                // stale process value prevents MCP from bypassing fail-closed
+                // resolution when a mounted file disappears.
+                std::env::remove_var(var_name);
             }
         }
     }

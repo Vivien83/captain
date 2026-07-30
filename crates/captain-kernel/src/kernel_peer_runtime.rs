@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn listen_addr_parser_matches_hermes_defaults() {
+    fn listen_addr_parser_matches_documented_defaults() {
         assert_eq!(
             parse_listen_addr("/ip4/127.0.0.1/tcp/9091"),
             "127.0.0.1:9091".parse::<SocketAddr>().unwrap()

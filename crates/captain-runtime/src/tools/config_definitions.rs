@@ -219,7 +219,7 @@ fn codex_login_poll_tool_definition() -> ToolDefinition {
 fn secret_read_tool_definition() -> ToolDefinition {
     tool_definition(
         "secret_read",
-        "[CREDENTIALS] Lit un secret ou credential depuis le store centralisé (~/.captain/secrets.env). À utiliser SPONTANÉMENT dès que tu as besoin d'une clé API, token ou mot de passe pour une intégration tierce — n'invente jamais de credential et NE DEMANDE PAS à l'utilisateur si la clé pourrait déjà être dans le vault. Cas typiques : (1) avant un appel HTTP nécessitant un Bearer/API key (Anthropic, OpenAI, Mistral...), (2) pour vérifier si un token Telegram/Discord ou le mot de passe Email est déjà configuré, (3) pour récupérer un mot de passe d'application avant un login automatisé. Chaque accès est audité dans les logs de sécurité. Ne pas utiliser pour des valeurs de configuration standard — utiliser config_read à la place. Retourne la valeur du secret ou une erreur si la clé n'existe pas.",
+        "[CREDENTIALS] Vérifie un secret ou credential via le résolveur centralisé: source fichier externe déclarée dans secret-sources.toml (autoritaire), puis secrets.env, vault, .env et environnement. À utiliser SPONTANÉMENT dès que tu dois savoir si une clé API, un token ou un mot de passe est disponible — n'invente jamais de credential et NE DEMANDE PAS à l'utilisateur si la clé pourrait déjà être présente. Cas typiques : (1) avant une intégration native nécessitant un Bearer/API key (Anthropic, OpenAI, Mistral...), (2) pour vérifier si un token Telegram/Discord ou le mot de passe Email est configuré, (3) avant un login automatisé pris en charge par un outil natif. Chaque accès est audité dans les logs de sécurité. Ne pas utiliser pour des valeurs de configuration standard — utiliser config_read à la place. Retourne uniquement une présence masquée ou une erreur; ne jamais lire directement les fichiers protégés ni demander d'exposer la valeur brute.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -233,7 +233,7 @@ fn secret_read_tool_definition() -> ToolDefinition {
 fn secret_write_tool_definition() -> ToolDefinition {
     tool_definition(
         "secret_write",
-        "Stocke un secret ou credential dans le store centralisé (~/.captain/secrets.env) avec persistance immédiate. Utiliser pour enregistrer des clés API, tokens OAuth ou mots de passe fournis par l'utilisateur. Chaque écriture est auditée dans les logs de sécurité. Ne pas stocker de données non-sensibles ici — utiliser config_write pour la configuration standard. Retourne une confirmation d'écriture.",
+        "Stocke un secret ou credential dans le store local centralisé (~/.captain/secrets.env) avec persistance immédiate. Utiliser pour enregistrer des clés API, tokens OAuth ou mots de passe fournis par l'utilisateur. Si la clé est gérée par secret-sources.toml, l'écriture est refusée: il faut faire tourner le fichier externe puis recharger l'adapter qui conserve le token en mémoire. Chaque écriture est auditée dans les logs de sécurité. Ne pas stocker de données non-sensibles ici — utiliser config_write pour la configuration standard. Retourne une confirmation d'écriture.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -248,7 +248,7 @@ fn secret_write_tool_definition() -> ToolDefinition {
 fn web_credentials_update_tool_definition() -> ToolDefinition {
     tool_definition(
         "web_credentials_update",
-        "[AUTH WEB - MUTATION SÉCURISÉE] Modifie les identifiants de connexion du terminal web à partir d'une demande en langage naturel. Met à jour [auth] dans config.toml, active auth.enabled, hash le mot de passe en SHA256, écrit un backup, puis déclenche le hot-reload config. Utiliser quand l'utilisateur dit \"change mon login web\", \"mets le mot de passe du terminal à ...\", \"génère un nouveau mot de passe web\" ou \"renomme l'utilisateur admin\". Préférer generate_password=true si l'utilisateur demande un nouveau mot de passe sans en fournir. Ne jamais mémoriser le mot de passe généré.",
+        "[AUTH WEB - MUTATION SÉCURISÉE] Modifie les identifiants de connexion du terminal web à partir d'une demande en langage naturel. Met à jour [auth] dans config.toml, active auth.enabled, sale et hash le mot de passe avec Argon2id, invalide les anciennes sessions, écrit un backup, puis déclenche le hot-reload config. Utiliser quand l'utilisateur dit \"change mon login web\", \"mets le mot de passe du terminal à ...\", \"génère un nouveau mot de passe web\" ou \"renomme l'utilisateur admin\". Préférer generate_password=true si l'utilisateur demande un nouveau mot de passe sans en fournir. Ne jamais mémoriser le mot de passe généré.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -357,6 +357,8 @@ mod tests {
         assert!(!secret_read.description.contains("WhatsApp"));
         assert!(secret_read.description.contains("Telegram/Discord"));
         assert!(secret_read.description.contains("Email"));
+        assert!(secret_read.description.contains("présence masquée"));
+        assert!(secret_read.description.contains("secret-sources.toml"));
         assert_eq!(required_fields(secret_read), vec!["key"]);
         assert_eq!(
             enum_values(&property(config_setup, "integration")["enum"]),

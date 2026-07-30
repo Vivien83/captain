@@ -28,18 +28,18 @@ pub(super) const FIRST_USE_ONBOARDING_QUESTIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "voice_preference",
-        "Pour l'audio, préfères-tu OpenAI Nova, ElevenLabs, ou pas de voix ?",
-        "For audio, do you prefer OpenAI Nova, ElevenLabs, or no voice?",
+        "Pour l'audio, préfères-tu la voix locale sans clé, un service cloud déjà configuré, ou aucune voix ?",
+        "For audio, do you prefer local key-free voice, an already configured cloud service, or no voice?",
     ),
     (
         "notifications",
-        "Comment veux-tu que je gère les notifications ?",
-        "How should I handle notifications?",
+        "Quelles notifications proactives veux-tu recevoir ? Tu pourras modifier les canaux plus tard.",
+        "Which proactive notifications should I send? You can change channels later.",
     ),
     (
         "privacy",
-        "Y a-t-il des limites de confidentialité ou des sujets à ne jamais mémoriser ?",
-        "Are there privacy boundaries or topics I should never memorize?",
+        "Quelle règle de confidentialité dois-je respecter pour la mémoire ?",
+        "Which privacy rule should I follow for memory?",
     ),
 ];
 

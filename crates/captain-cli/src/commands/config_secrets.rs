@@ -2,10 +2,19 @@ use std::io::{self, Write};
 
 use colored::Colorize;
 
-use crate::{captain_home, dotenv, prompt_secret, test_api_key, ui};
+use crate::{
+    captain_home, dotenv, production_credential_resolver_at, prompt_secret, test_api_key_value, ui,
+};
 
 pub(crate) fn cmd_config_set_key(provider: &str) {
     let env_var = provider_to_env_var(provider);
+    let mut resolver = production_credential_resolver();
+    if resolver.is_externally_managed(&env_var) {
+        ui::error(&format!(
+            "{env_var} is managed by secret-sources.toml; rotate the external file instead."
+        ));
+        std::process::exit(2);
+    }
 
     let key = prompt_secret(&format!("  Paste your {provider} API key: "));
     if key.is_empty() {
@@ -13,14 +22,12 @@ pub(crate) fn cmd_config_set_key(provider: &str) {
         return;
     }
 
-    save_credential_prefer_vault(&env_var, &key);
-
-    match dotenv::save_secret_key(&env_var, &key) {
+    match resolver.store_credential(&env_var, &key) {
         Ok(()) => {
             ui::success(&format!("Saved {env_var} to ~/.captain/secrets.env"));
             print!("  Testing key... ");
             let _ = io::stdout().flush();
-            if test_api_key(provider, &env_var) {
+            if test_api_key_value(provider, &key) {
                 println!("{}", "OK".bright_green());
             } else {
                 println!("{}", "could not verify (may still work)".bright_yellow());
@@ -35,6 +42,13 @@ pub(crate) fn cmd_config_set_key(provider: &str) {
 
 pub(crate) fn cmd_config_delete_key(provider: &str) {
     let env_var = provider_to_env_var(provider);
+    let resolver = production_credential_resolver();
+    if resolver.is_externally_managed(&env_var) {
+        ui::error(&format!(
+            "{env_var} is managed by secret-sources.toml; remove that mapping to stop using it."
+        ));
+        std::process::exit(2);
+    }
     remove_from_vault_best_effort(&env_var);
 
     let secrets_result = dotenv::remove_secret_key(&env_var);
@@ -63,16 +77,16 @@ pub(crate) fn cmd_config_delete_key(provider: &str) {
 
 pub(crate) fn cmd_config_test_key(provider: &str) {
     let env_var = provider_to_env_var(provider);
-
-    if std::env::var(&env_var).is_err() {
+    let resolver = production_credential_resolver();
+    let Some(key) = resolver.resolve(&env_var) else {
         ui::error(&format!("{env_var} not set"));
         ui::hint(&format!("Set it: captain config set-key {provider}"));
         std::process::exit(1);
-    }
+    };
 
     print!("  Testing {provider} ({env_var})... ");
     let _ = io::stdout().flush();
-    if test_api_key(provider, &env_var) {
+    if test_api_key_value(provider, &key) {
         println!("{}", "OK".bright_green());
     } else {
         println!("{}", "FAILED (401/403)".bright_red());
@@ -98,25 +112,16 @@ fn provider_to_env_var(provider: &str) -> String {
         "xai" => "XAI_API_KEY".to_string(),
         "brave" => "BRAVE_API_KEY".to_string(),
         "tavily" => "TAVILY_API_KEY".to_string(),
-        other => format!("{}_API_KEY", other.to_uppercase()),
+        other => format!("{}_API_KEY", other.to_uppercase().replace('-', "_")),
     }
 }
 
-fn save_credential_prefer_vault(env_var: &str, value: &str) {
-    use zeroize::Zeroizing;
-
+fn production_credential_resolver() -> captain_extensions::credentials::CredentialResolver {
     let home = captain_home();
-    let vault_path = home.join("vault.enc");
-    if !vault_path.exists() {
-        return;
-    }
-    let mut vault = captain_extensions::vault::CredentialVault::new(vault_path);
-    if vault.unlock().is_err() {
-        return;
-    }
-    if let Ok(()) = vault.set(env_var.to_string(), Zeroizing::new(value.to_string())) {
-        println!("  {}", "Also stored in encrypted vault".dimmed());
-    }
+    production_credential_resolver_at(&home).unwrap_or_else(|error| {
+        ui::error(&format!("Secret sources unavailable: {error}"));
+        std::process::exit(1);
+    })
 }
 
 fn remove_from_vault_best_effort(env_var: &str) {

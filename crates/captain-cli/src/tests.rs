@@ -415,10 +415,14 @@ args = ["-y", "@modelcontextprotocol/server-github"]
 }
 
 #[test]
-fn test_doctor_skill_injection_scan_clean() {
+fn doctor_skill_phrase_scan_reports_advisory_assurance() {
     let clean_content = "This is a normal skill prompt with helpful instructions.";
-    let warnings = captain_skills::verify::SkillVerifier::scan_prompt_content(clean_content);
-    assert!(warnings.is_empty(), "Clean content should have no warnings");
+    let report = captain_skills::verify::SkillVerifier::scan_prompt_content_advisory(clean_content);
+    assert_eq!(report.assurance.as_str(), "advisory_heuristic");
+    assert!(
+        report.findings.is_empty(),
+        "Clean content should have no configured phrase matches"
+    );
 }
 
 #[test]

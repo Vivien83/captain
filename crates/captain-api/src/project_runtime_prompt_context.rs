@@ -109,8 +109,9 @@ pub(crate) fn runtime_worker_system_prompt_for_tools(
          You are not the project manager: Captain coordinates the full run and you own only this phase.\n\
          Authorized tools: {tools}.\n\
          Work pragmatically inside the provided project workspace, preserve unrelated user changes, and do not claim completion without evidence.\n\
+         Captain validates STATUS: complete against the real tool receipts from this turn; text alone cannot satisfy execution or verification phases.\n\
          Use only the authorized tools. If a required tool is missing, do not improvise a workaround outside your scope: return STATUS: blocked with TOOL_REQUEST and REASON so Captain can approve or deny the extension.\n\
-         Return a concise handoff with these headings exactly: STATUS, SUMMARY, ACTIONS, FILES, VERIFY, NEXT, LEARN.\n\
+         Return a concise handoff with these headings exactly: STATUS, SUMMARY, CHANGED_FILES, VERIFY, NEXT.\n\
          Use STATUS: blocked if you hit a real blocker."
     )
 }
@@ -135,6 +136,7 @@ pub(crate) fn runtime_worker_prompt_text(parts: RuntimeWorkerPromptParts<'_>) ->
          - Use only the authorized tools listed above. If you need another tool, stop with STATUS: blocked and include TOOL_REQUEST: <tool name> and REASON: <why Captain should approve it>.\n\
          - When the right capability is unclear, call capability_search or tool_search before claiming it is unavailable.\n\
          - Use tools when needed; for code work, inspect before editing and verify after editing.\n\
+         - VERIFY must name checks actually run and their result. Never write none, n/a, or a claimed pass without an execution receipt.\n\
          - If dependencies, credentials, or environment prevent completion, use STATUS: blocked and explain the smallest next action.\n\
          - Keep the handoff short but operationally useful for Captain and the user.\n\
          - End with this exact handoff block, without raw tool-call transcripts:\n\

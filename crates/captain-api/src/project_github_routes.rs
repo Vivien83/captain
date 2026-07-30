@@ -47,6 +47,17 @@ pub async fn configure_github_token(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GithubTokenReq>,
 ) -> impl IntoResponse {
+    if state
+        .kernel
+        .credential_is_externally_managed(GITHUB_TOKEN_ENV)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "GITHUB_TOKEN is managed by secret-sources.toml; rotate the external file instead"
+            })),
+        );
+    }
     let token = match normalize_github_token(&req.token) {
         Ok(token) => token,
         Err(error) => return bad_request(error),
@@ -91,6 +102,17 @@ pub async fn configure_github_token(
 }
 
 pub async fn delete_github_token(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state
+        .kernel
+        .credential_is_externally_managed(GITHUB_TOKEN_ENV)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "GITHUB_TOKEN is managed by secret-sources.toml; remove that mapping to manage it here"
+            })),
+        );
+    }
     state.kernel.remove_credential(GITHUB_TOKEN_ENV);
     if let Err(error) = remove_secret_env_safe(
         &state.kernel.config.home_dir.join("secrets.env"),

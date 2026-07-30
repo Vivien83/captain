@@ -148,14 +148,17 @@ ignore = "0.4"
 globset = "0.4"
 
 # R.1.1 — pure-Rust mDNS service discovery (no async runtime dep)
-mdns-sd = { version = "0.19", default-features = false, features = ["async"] }
+mdns-sd = { version = "0.20.3", default-features = false, features = ["async"] }
 
-# Q.6 — SSH private key parsing + fingerprinting
-ssh-key = { version = "0.6", default-features = false, features = ["alloc", "ed25519", "rsa", "p256", "encryption"] }
+# Q.6 — SSH private key parsing + fingerprinting. RSA remains disabled until
+# its upstream timing-side-channel advisory has a fixed implementation.
+ssh-key = { version = "=0.6.7", default-features = false, features = ["alloc", "ed25519", "p256", "encryption"] }
 
 # Q.7/Q.8 — pure-Rust SSH client (tokio-native). `russh-keys` was merged
 # into `russh::keys` as of 0.5x — no separate dependency needed anymore.
-russh = "0.62"
+# Keep compression and the audited crypto backend, but do not activate RSA:
+# RUSTSEC-2023-0071 has no fixed upstream release.
+russh = { version = "=0.62.4", default-features = false, features = ["flate2", "aws-lc-rs"] }
 russh-sftp = "2"
 
 # In-memory async cache with TTL and capacity eviction (v3.10)
@@ -167,7 +170,6 @@ blake3 = "1"
 
 # Persistent embedded cache (v3.10b) — WAL + ACID, survives daemon restart
 redb = "2"
-bincode = { version = "1.3", features = ["i128"] }
 
 # Distributed cache backend (v3.10d, optional feature `redis-cache`)
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "aio"] }

@@ -12,6 +12,8 @@ const SHARED_RECALL_LIMIT: usize = 2;
 const LOCAL_JOURNAL_RECALL_LIMIT: usize = 3;
 const TOTAL_RECALL_LIMIT: usize = 5;
 
+// Turn recall needs the full runtime context to keep streaming and direct paths aligned.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn recall_turn_memories(
     user_message: &str,
     agent_id: AgentId,

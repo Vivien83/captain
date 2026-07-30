@@ -28,6 +28,10 @@ export function providerQuotaWindows(status) {
         blocked: Boolean(item.rate_limit_reached_type) || item.alert_level === 'exhausted',
         kind,
         usedPercent: Math.max(0, Math.min(100, Number(value.used_percent))),
+        remainingPercent: remainingPercent(value),
+        remainingSource: typeof value.remaining_source === 'string'
+          ? value.remaining_source
+          : 'derived_from_provider_used_percent',
         windowSeconds: numberOrNull(value.window_seconds),
         resetAfterSeconds: numberOrNull(value.reset_after_seconds),
         resetsAt: typeof value.resets_at === 'string' ? value.resets_at : null,
@@ -35,6 +39,36 @@ export function providerQuotaWindows(status) {
     }
   }
   return windows;
+}
+
+export function providerSpendControls(status) {
+  const controls = [];
+  for (const item of status.items || []) {
+    const control = item && item.spend_control;
+    const limit = control && control.individual_limit;
+    if (!limit || !Number.isFinite(Number(limit.remaining_percent))) continue;
+    controls.push({
+      provider: item.provider || 'provider',
+      limitId: item.limit_id || 'quota',
+      limitName: item.limit_name || item.limit_id || 'Quota',
+      planType: item.plan_type || null,
+      alertLevel: item.alert_level || 'normal',
+      stale: item.stale === true,
+      blocked: control.reached === true,
+      source: typeof limit.source === 'string' ? limit.source : null,
+      limit: String(limit.limit ?? ''),
+      used: String(limit.used ?? ''),
+      remaining: String(limit.remaining ?? ''),
+      usedPercent: clampPercent(limit.used_percent),
+      remainingPercent: clampPercent(limit.remaining_percent),
+      remainingSource: typeof limit.remaining_source === 'string'
+        ? limit.remaining_source
+        : 'provider_reported',
+      resetAfterSeconds: numberOrNull(limit.reset_after_seconds),
+      resetsAt: typeof limit.resets_at === 'string' ? limit.resets_at : null,
+    });
+  }
+  return controls;
 }
 
 export function providerQuotaGroups(status, activeModel = '') {
@@ -54,6 +88,7 @@ export function providerQuotaGroups(status, activeModel = '') {
   return {
     providerItems,
     windows: providerQuotaWindows({ ...status, items: applicableItems }),
+    spendControls: providerSpendControls({ ...status, items: applicableItems }),
     alternativeLimitCount: alternativeItems.length,
     alternativeTone,
     hasProviderObservation: status.reported === true && providerItems.length > 0,
@@ -109,6 +144,17 @@ export function providerQuotaTone(window) {
   if (window.blocked || window.usedPercent >= 90) return 'err';
   if (window.stale || window.usedPercent >= 70) return 'warn';
   return 'ok';
+}
+
+function remainingPercent(value) {
+  if (Number.isFinite(Number(value.remaining_percent))) {
+    return clampPercent(value.remaining_percent);
+  }
+  return clampPercent(100 - Number(value.used_percent));
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Number(value)));
 }
 
 function numberOrNull(value) {

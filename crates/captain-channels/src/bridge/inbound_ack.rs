@@ -48,7 +48,7 @@ async fn send_inbound_status_ack(
         None
     };
 
-    send_response(
+    let _ = send_response(
         adapter,
         &message.sender,
         text.to_string(),

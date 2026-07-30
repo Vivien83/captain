@@ -29,7 +29,6 @@ fn test_state() -> (tempfile::TempDir, AppState) {
         bridge_manager: tokio::sync::Mutex::new(None),
         channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         ask_user_channels: dashmap::DashMap::new(),
         provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
     };

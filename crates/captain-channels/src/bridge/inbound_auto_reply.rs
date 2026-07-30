@@ -1,7 +1,7 @@
 //! Auto-reply handling for inbound channel turns.
 
-use super::inbound_delivery::record_inbound_delivery_success;
-use super::{send_response, ChannelBridgeHandle};
+use super::command_response::{send_durable_response, DurableResponseContext};
+use super::ChannelBridgeHandle;
 use crate::types::{ChannelAdapter, ChannelMessage};
 use captain_types::agent::AgentId;
 use captain_types::config::OutputFormat;
@@ -22,8 +22,24 @@ pub(super) async fn handle_auto_reply(
         return false;
     };
 
-    send_response(adapter, &message.sender, reply, thread_id, output_format).await;
-    record_inbound_delivery_success(handle, agent_id, channel_type, message, thread_id).await;
+    if let Err(error) = send_durable_response(
+        adapter,
+        &message.sender,
+        reply,
+        thread_id,
+        output_format,
+        DurableResponseContext {
+            handle,
+            agent_id: Some(agent_id),
+            channel: channel_type,
+            source_message_id: &message.platform_message_id,
+            purpose: "auto_reply",
+        },
+    )
+    .await
+    {
+        tracing::error!(%error, %agent_id, channel = %channel_type, "durable auto-reply delivery failed");
+    }
     true
 }
 

@@ -53,15 +53,32 @@ const budget = {
         stale: false,
         primary: {
           used_percent: 72.5,
+          remaining_percent: 27.5,
+          remaining_source: 'derived_from_provider_used_percent',
           window_seconds: 18000,
           reset_after_seconds: 3600,
         },
         secondary: {
           used_percent: 41,
+          remaining_percent: 59,
+          remaining_source: 'derived_from_provider_used_percent',
           window_seconds: 604800,
           reset_after_seconds: 86400,
         },
         credits: { has_credits: true, unlimited: false, balance: '17.50' },
+        spend_control: {
+          reached: false,
+          individual_limit: {
+            source: 'monthly',
+            limit: '200.00',
+            used: '56.00',
+            remaining: '144.00',
+            used_percent: 28,
+            remaining_percent: 72,
+            remaining_source: 'provider_reported',
+            reset_after_seconds: 86400,
+          },
+        },
       },
       {
         provider: 'codex',
@@ -80,6 +97,23 @@ const budget = {
   },
 };
 
+const reasoningStatus = {
+  provider: 'codex',
+  model: 'gpt-5.6-sol',
+  supported: true,
+  configured_effort: null,
+  effective_effort: 'low',
+  source: 'model_default',
+  override_valid: true,
+  options: [
+    { effort: 'none' },
+    { effort: 'low' },
+    { effort: 'medium' },
+    { effort: 'high' },
+    { effort: 'ultra' },
+  ],
+  reported_by_provider: true,
+};
 const jsonRoutes = new Map([
   ['/api/auth/check', { mode: 'session', authenticated: true }],
   ['/api/agents', [{ id: 'captain', name: 'captain', model_provider: 'codex', model_name: 'gpt-5.6-sol' }]],
@@ -87,6 +121,7 @@ const jsonRoutes = new Map([
   ['/api/models/updates', { pending: [], agents: [] }],
   ['/api/approvals', { approvals: [] }],
   ['/api/agents/captain/sessions', { sessions: [] }],
+  ['/api/agents/captain/reasoning', reasoningStatus],
   ['/api/budget', budget],
 ]);
 const appAssetAliases = new Map([
@@ -101,6 +136,15 @@ const server = createServer(async (request, response) => {
   const pathname = new URL(request.url || '/', 'http://127.0.0.1').pathname;
   if (pathname === '/') return send(response, 200, 'text/html; charset=utf-8', appHtml);
   if (pathname === '/assets/logo.png') return send(response, 200, 'image/png', logo);
+  if (pathname === '/api/agents/captain/reasoning' && request.method === 'PUT') {
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    const effort = JSON.parse(raw).effort;
+    reasoningStatus.configured_effort = effort;
+    reasoningStatus.effective_effort = effort || 'low';
+    reasoningStatus.source = effort ? 'agent_override' : 'model_default';
+    return send(response, 200, 'application/json', JSON.stringify(reasoningStatus));
+  }
   if (jsonRoutes.has(pathname)) {
     return send(response, 200, 'application/json', JSON.stringify(jsonRoutes.get(pathname)));
   }
@@ -139,6 +183,9 @@ try {
     { name: 'desktop', viewport: { width: 1280, height: 800 } },
     { name: 'mobile', viewport: { width: 390, height: 844 } },
   ]) {
+    reasoningStatus.configured_effort = null;
+    reasoningStatus.effective_effort = 'low';
+    reasoningStatus.source = 'model_default';
     const page = await browser.newPage({ viewport: surface.viewport });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await page.waitForSelector('.provider-quota-window');
@@ -146,28 +193,65 @@ try {
       const windows = [...document.querySelectorAll('.provider-quota-window')];
       const bar = document.querySelector('.provider-quota-bar').getBoundingClientRect();
       const composer = document.querySelector('.composer-wrap').getBoundingClientRect();
+      const visibleWindows = windows.map((item) => {
+        const rect = item.getBoundingClientRect();
+        return rect.left >= bar.left - 1 && rect.right <= bar.right + 1 &&
+          rect.top >= bar.top - 1 && rect.bottom <= bar.bottom + 1;
+      });
       return {
         windowCount: windows.length,
         progressValues: windows.map((item) => Number(item.querySelector('[role="progressbar"]').getAttribute('aria-valuenow'))),
         text: document.querySelector('.provider-quota-bar').textContent,
+        reasoningValue: document.querySelector('.reasoning-control select')?.value || '',
+        reasoningOptions: [...document.querySelectorAll('.reasoning-control option')].map((option) => option.textContent),
+        reasoningBackground: getComputedStyle(document.querySelector('.reasoning-control select')).backgroundColor,
+        visibleWindows,
         alternativeText: document.querySelector('.provider-quota-more')?.textContent || '',
         bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
         overlap: composer.bottom - bar.top,
         barBottom: bar.bottom,
+        barHeight: bar.height,
         viewportHeight: window.innerHeight,
       };
     });
-    assert.equal(snapshot.windowCount, 2, `${surface.name}: one gauge per provider window`);
-    assert.deepEqual(snapshot.progressValues, [72.5, 41]);
+    assert.equal(snapshot.windowCount, 3, `${surface.name}: rolling and monthly gauges`);
+    assert.deepEqual(snapshot.progressValues, [27.5, 59, 72]);
+    assert.deepEqual(snapshot.visibleWindows, [true, true, true], `${surface.name}: every gauge is visible`);
     assert.match(snapshot.text, /Codex/);
     assert.match(snapshot.text, /Actif\s*:\s*gpt-5\.6-sol/);
     assert.match(snapshot.text, /17\.50/);
+    assert.match(snapshot.text, /144\.00\s*\/\s*200\.00/);
+    assert.match(snapshot.text, /27\.5% reste/);
+    assert.equal(snapshot.reasoningValue, 'auto');
+    assert.ok(snapshot.reasoningOptions.includes('Auto → low'));
+    assert.ok(snapshot.reasoningOptions.includes('high'));
+    assert.ok(snapshot.reasoningOptions.includes('None · explicite'));
+    assert.ok(snapshot.reasoningOptions.includes('Ultra · max + agents'));
+    assert.notEqual(snapshot.reasoningBackground, 'rgb(255, 255, 255)');
+    assert.notEqual(snapshot.reasoningBackground, 'rgba(0, 0, 0, 0)');
     assert.doesNotMatch(snapshot.text, /GPT-5\.3-Codex-Spark/);
     assert.match(snapshot.alternativeText, /\+1 quota annexe/);
     assert.match(snapshot.alternativeText, /hors modèle actif/);
     assert.ok(snapshot.bodyOverflow <= 1, `${surface.name}: page overflow ${snapshot.bodyOverflow}px`);
     assert.ok(snapshot.overlap <= 1, `${surface.name}: quota bar overlaps composer by ${snapshot.overlap}px`);
     assert.ok(snapshot.barBottom <= snapshot.viewportHeight + 1, `${surface.name}: quota bar leaves viewport`);
+    assert.ok(snapshot.barHeight <= snapshot.viewportHeight * 0.37, `${surface.name}: quota bar consumes too much height`);
+    await page.selectOption('.reasoning-control select', 'ultra');
+    await page.waitForFunction(() =>
+      document.querySelector('.reasoning-control select')?.value === 'ultra'
+    );
+    const ultraSnapshot = await page.evaluate(() => {
+      const control = document.querySelector('.reasoning-control');
+      const selected = control.querySelector('option:checked');
+      return {
+        selected: selected?.textContent || '',
+        title: control.getAttribute('title') || '',
+        bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    assert.equal(ultraSnapshot.selected, 'Ultra · max + agents');
+    assert.match(ultraSnapshot.title, /effort modèle max/);
+    assert.ok(ultraSnapshot.bodyOverflow <= 1, `${surface.name}: Ultra causes page overflow`);
     await page.screenshot({
       path: `/private/tmp/captain-provider-quota-${surface.name}.png`,
       fullPage: false,

@@ -24,7 +24,7 @@ pub async fn kill_process(
 
     match state.kernel.process_manager.kill(&process_id).await {
         Ok(()) => {
-            state.kernel.audit_log.record(
+            state.kernel.audit_log.record_or_alert(
                 "system",
                 AuditAction::ConfigChange,
                 "managed background process stopped by operator",

@@ -116,8 +116,18 @@ impl AgentApiCallbackDelivery {
     }
 }
 
+#[cfg(test)]
 pub fn agent_api_egress_descriptor(agent_id: &AgentId) -> AgentApiEgressDescriptor {
-    let config_status = agent_api_callback_config_status(agent_id);
+    agent_api_egress_descriptor_with(agent_id, &|key| std::env::var(key).ok(), &|_| false)
+}
+
+pub fn agent_api_egress_descriptor_with(
+    agent_id: &AgentId,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    is_externally_managed: &dyn Fn(&str) -> bool,
+) -> AgentApiEgressDescriptor {
+    let config_status =
+        agent_api_callback_config_status_with(agent_id, resolve, is_externally_managed);
     AgentApiEgressDescriptor {
         callback_url_env: agent_api_callback_url_env(agent_id),
         callback_secret_env: agent_api_callback_secret_env(agent_id),
@@ -135,11 +145,19 @@ pub fn agent_api_egress_descriptor(agent_id: &AgentId) -> AgentApiEgressDescript
     }
 }
 
+#[cfg(test)]
 pub fn agent_api_callback_config_status(agent_id: &AgentId) -> AgentApiCallbackConfigStatus {
+    agent_api_callback_config_status_with(agent_id, &|key| std::env::var(key).ok(), &|_| false)
+}
+
+pub fn agent_api_callback_config_status_with(
+    agent_id: &AgentId,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    is_externally_managed: &dyn Fn(&str) -> bool,
+) -> AgentApiCallbackConfigStatus {
     let url_env = agent_api_callback_url_env(agent_id);
     let secret_env = agent_api_callback_secret_env(agent_id);
-    let url = std::env::var(&url_env)
-        .ok()
+    let url = resolve(&url_env)
         .map(|url| url.trim().to_string())
         .filter(|url| !url.is_empty());
     let callback_url_configured = url.is_some();
@@ -147,11 +165,29 @@ pub fn agent_api_callback_config_status(agent_id: &AgentId) -> AgentApiCallbackC
         .as_deref()
         .and_then(|url| validate_agent_api_callback_url(url).err());
     let callback_url_valid = callback_url_configured && url_issue.is_none();
-    let callback_secret_configured = std::env::var(&secret_env)
+    let callback_secret_configured = resolve(&secret_env)
         .map(|secret| secret.len() >= MIN_AGENT_API_CALLBACK_SECRET_LEN)
         .unwrap_or(false);
+    let unavailable_external_url = is_externally_managed(&url_env) && !callback_url_configured;
+    let unavailable_external_secret =
+        is_externally_managed(&secret_env) && !callback_secret_configured;
 
-    let (state, issue) = if !callback_url_configured && !callback_secret_configured {
+    let (state, issue) = if unavailable_external_url || unavailable_external_secret {
+        let unavailable = [
+            unavailable_external_url.then_some(url_env.as_str()),
+            unavailable_external_secret.then_some(secret_env.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+        (
+            "unavailable",
+            Some(format!(
+                "authoritative external credential source unavailable: {unavailable}"
+            )),
+        )
+    } else if !callback_url_configured && !callback_secret_configured {
         ("disabled", None)
     } else if callback_url_valid && callback_secret_configured {
         ("ready", None)
@@ -187,11 +223,15 @@ pub fn agent_api_callback_config_status(agent_id: &AgentId) -> AgentApiCallbackC
 pub(crate) async fn deliver_agent_api_callback(
     agent_id: &AgentId,
     payload: &serde_json::Value,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
+    is_externally_managed: &(dyn Fn(&str) -> bool + Send + Sync),
 ) -> AgentApiCallbackDelivery {
     deliver_agent_api_callback_with_local_policy(
         agent_id,
         payload,
         local_agent_api_callbacks_allowed(),
+        resolve,
+        is_externally_managed,
     )
     .await
 }
@@ -204,10 +244,19 @@ async fn deliver_agent_api_callback_with_local_policy(
     agent_id: &AgentId,
     payload: &serde_json::Value,
     allow_local: bool,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
+    is_externally_managed: &(dyn Fn(&str) -> bool + Send + Sync),
 ) -> AgentApiCallbackDelivery {
     let url_env = agent_api_callback_url_env(agent_id);
-    let url = match std::env::var(&url_env) {
-        Ok(url) if !url.trim().is_empty() => url.trim().to_string(),
+    let url = match resolve(&url_env) {
+        Some(url) if !url.trim().is_empty() => url.trim().to_string(),
+        _ if is_externally_managed(&url_env) => {
+            return callback_failed_with_retryable(
+                0,
+                format!("{url_env}: authoritative external source is unavailable"),
+                true,
+            )
+        }
         _ => return callback_not_attempted(),
     };
     if let Err(err) = validate_agent_api_callback_url_with_local_policy(&url, allow_local) {
@@ -215,8 +264,15 @@ async fn deliver_agent_api_callback_with_local_policy(
     }
 
     let secret_env = agent_api_callback_secret_env(agent_id);
-    let secret = match std::env::var(&secret_env) {
-        Ok(secret) if secret.len() >= MIN_AGENT_API_CALLBACK_SECRET_LEN => secret,
+    let secret = match resolve(&secret_env) {
+        Some(secret) if secret.len() >= MIN_AGENT_API_CALLBACK_SECRET_LEN => secret,
+        _ if is_externally_managed(&secret_env) => {
+            return callback_failed_with_retryable(
+                0,
+                format!("{secret_env}: authoritative external source is unavailable"),
+                true,
+            )
+        }
         _ => return callback_failed(0, format!("{secret_env} is missing or too short")),
     };
 
@@ -464,6 +520,53 @@ mod tests {
     }
 
     #[test]
+    fn callback_config_uses_the_injected_credential_resolver() {
+        let agent_id = sample_agent_id();
+        let url_env = agent_api_callback_url_env(&agent_id);
+        let secret_env = agent_api_callback_secret_env(&agent_id);
+        let status = agent_api_callback_config_status_with(
+            &agent_id,
+            &|key| {
+                if key == url_env {
+                    Some("https://example.com/hook".to_string())
+                } else if key == secret_env {
+                    Some("0123456789abcdef".to_string())
+                } else {
+                    None
+                }
+            },
+            &|_| false,
+        );
+
+        assert!(status.ready);
+    }
+
+    #[tokio::test]
+    async fn unavailable_external_callback_is_visible_and_retryable() {
+        let agent_id = sample_agent_id();
+        let url_env = agent_api_callback_url_env(&agent_id);
+        let status =
+            agent_api_callback_config_status_with(&agent_id, &|_| None, &|key| key == url_env);
+        let delivery = deliver_agent_api_callback_with_local_policy(
+            &agent_id,
+            &serde_json::json!({"event": "agent_api.completed"}),
+            false,
+            &|_| None,
+            &|key| key == url_env,
+        )
+        .await;
+
+        assert_eq!(status.state, "unavailable");
+        assert!(!status.ready);
+        assert!(delivery.attempted);
+        assert!(delivery.retryable);
+        assert!(delivery.should_queue());
+        assert!(delivery
+            .error_message()
+            .is_some_and(|error| error.contains("authoritative external source")));
+    }
+
+    #[test]
     fn local_callback_urls_require_explicit_smoke_escape_hatch() {
         assert!(validate_agent_api_callback_url_with_local_policy(
             "http://127.0.0.1:48888/hook",
@@ -559,8 +662,14 @@ mod tests {
         std::env::set_var(agent_api_callback_secret_env(&agent_id), "0123456789abcdef");
 
         let payload = serde_json::json!({ "event": "agent_api.completed" });
-        let delivery =
-            deliver_agent_api_callback_with_local_policy(&agent_id, &payload, true).await;
+        let delivery = deliver_agent_api_callback_with_local_policy(
+            &agent_id,
+            &payload,
+            true,
+            &|key| std::env::var(key).ok(),
+            &|_| false,
+        )
+        .await;
 
         std::env::remove_var(agent_api_callback_url_env(&agent_id));
         std::env::remove_var(agent_api_callback_secret_env(&agent_id));

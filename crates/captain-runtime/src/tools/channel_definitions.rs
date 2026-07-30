@@ -59,7 +59,7 @@ fn channel_delivery_batch_tool_definition() -> ToolDefinition {
 fn channel_send_tool_definition() -> ToolDefinition {
     tool_definition(
         "channel_send",
-        "Envoie un message proactif, un média ou du contenu interactif via un canal actif: Telegram, Discord, Signal ou Email. Les autres channels sont gelés jusqu'à ce que le coeur soit Hermes-level. Utiliser pour notifier d'un événement, envoyer un rapport, ou proposer des choix via boutons inline Telegram. Ne pas utiliser pour répondre dans le flux normal de conversation ni pour retransmettre un secret brut; cite seulement le nom de clé vault ou une valeur masquée. Le markdown est automatiquement converti en HTML Telegram. Les file_path audio sont envoyés comme audio natif Telegram, pas comme document générique. Retourne un statut de livraison.",
+        "Envoie un message proactif, un média ou du contenu interactif via un canal actif: Telegram, Discord, Signal ou Email. Les autres channels sont gelés jusqu'à ce que le coeur soit production-grade. Utiliser pour notifier d'un événement, envoyer un rapport, ou proposer des choix via boutons inline Telegram. Ne pas utiliser pour répondre dans le flux normal de conversation ni pour retransmettre un secret brut; cite seulement le nom de clé vault ou une valeur masquée. Le markdown est automatiquement converti en HTML Telegram. Les file_path audio sont envoyés comme audio natif Telegram, pas comme document générique. Retourne un statut de livraison.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -92,7 +92,7 @@ fn channel_send_tool_definition() -> ToolDefinition {
 fn channel_reconfigure_tool_definition() -> ToolDefinition {
     tool_definition(
         "channel_reconfigure",
-        "[CANAUX] Demande à la bridge de canaux de (re)démarrer UN adapter actif (Telegram, Discord, Signal ou Email) à partir de la config + secrets.env live. Les autres channels sont gelés et doivent être ignorés pour l'instant. Couvre DEUX cas : (1) ROTATION d'un canal déjà actif après que tu viens d'écrire un nouveau token / une nouvelle config, et (2) BOOTSTRAP d'un canal actif jamais activé — section `[channels.<name>]` ajoutée à config.toml + token posé via `secret_write` — l'adapter passe alors de CONFIGURED à ACTIVE sans redémarrer le daemon (le hot-reload re-lit `secrets.env` à chaque appel). À utiliser SPONTANÉMENT — sans qu'on te le demande — quand l'utilisateur dit 'change le bot Telegram', 'mets le nouveau token X dans Y', 'configure Discord et envoie un test'. Le `channel` doit correspondre à une section active `[channels.<name>]` du config.toml live (sinon retour d'erreur listant les noms valides ou indiquant que le channel est gelé). L'adapter ciblé est arrêté + ré-instancié avec la config fraîche, les autres canaux restent connectés. WORKFLOW BRAND-NEW : `secret_write` du token → `config_setup`/`config_write` de la section → `channel_reconfigure({channel})` → `channel_send` direct. EXEMPLE : après avoir posé `DISCORD_BOT_TOKEN` via secret_write et écrit `[channels.discord]` dans config.toml, appelle channel_reconfigure({\"channel\":\"discord\"}) et `channel_send` marche directement.",
+        "[CANAUX] Demande à la bridge de canaux de (re)démarrer UN adapter actif (Telegram, Discord, Signal ou Email) à partir de la config et du résolveur de credentials live (source externe autoritaire, secrets.env, vault, .env, environnement). Les autres channels sont gelés et doivent être ignorés pour l'instant. Couvre DEUX cas : (1) ROTATION d'un canal déjà actif après modification de son secret ou de sa config, et (2) BOOTSTRAP d'un canal actif jamais activé — section `[channels.<name>]` ajoutée à config.toml et credential prêt — l'adapter passe alors de CONFIGURED à ACTIVE sans redémarrer le daemon. À utiliser SPONTANÉMENT — sans qu'on te le demande — quand l'utilisateur dit 'change le bot Telegram', 'mets le nouveau token X dans Y', 'configure Discord et envoie un test'. Le `channel` doit correspondre à une section active `[channels.<name>]` du config.toml live. L'adapter ciblé est arrêté puis ré-instancié avec la config fraîche, les autres canaux restent connectés. WORKFLOW LOCAL : `secret_write` du token → `config_setup`/`config_write` de la section → `channel_reconfigure({channel})` → `channel_send`. WORKFLOW EXTERNE : l'opérateur fait tourner le fichier monté → `channel_reconfigure({channel})` → `channel_send`; ne jamais tenter `secret_write` sur une clé externe.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -191,7 +191,7 @@ mod tests {
             serde_json::json!(["telegram", "discord", "signal", "email"])
         );
         assert_contains(&reconfigure.description, "SPONTANÉMENT");
-        assert_contains(&reconfigure.description, "WORKFLOW BRAND-NEW");
+        assert_contains(&reconfigure.description, "BOOTSTRAP");
         assert_contains(&reconfigure.description, "Les autres channels sont gelés");
         assert_not_contains(&reconfigure.description, "Slack");
         assert_not_contains(&reconfigure.description, "WhatsApp");

@@ -4,11 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/gate.sh --check <package> --test <package> <filter> [--test <package> <filter> ...] [--script-check <path> ...] [--run-script <path> ...]
+  scripts/gate.sh [--clippy-workspace] [--test-workspace] --check <package> --test <package> <filter> [--test <package> <filter> ...] [--script-check <path> ...] [--run-script <path> ...]
 
 Runs the tranche gate:
   cargo fmt --all --check
+  scripts/guarded-exec-audit.sh
+  cargo clippy --workspace -- -D warnings
   cargo check -p <package>...
+  cargo test --workspace
   cargo test -p <package> <filter>...
   bash -n <path>...
   execute <path>...
@@ -29,9 +32,19 @@ checks=()
 tests=()
 script_checks=()
 run_scripts=()
+clippy_workspace=0
+test_workspace=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --clippy-workspace)
+      clippy_workspace=1
+      shift
+      ;;
+    --test-workspace)
+      test_workspace=1
+      shift
+      ;;
     --check)
       if [[ $# -lt 2 ]]; then
         echo "missing package after --check" >&2
@@ -80,8 +93,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ${#checks[@]} -eq 0 && ${#tests[@]} -eq 0 && ${#script_checks[@]} -eq 0 && ${#run_scripts[@]} -eq 0 ]]; then
-  echo "at least one --check, --test, --script-check or --run-script is required" >&2
+if [[ $clippy_workspace -eq 0 && $test_workspace -eq 0 && ${#checks[@]} -eq 0 && ${#tests[@]} -eq 0 && ${#script_checks[@]} -eq 0 && ${#run_scripts[@]} -eq 0 ]]; then
+  echo "at least one workspace, check, test, script-check or run-script gate is required" >&2
   usage >&2
   exit 2
 fi
@@ -103,6 +116,15 @@ case "$cargo_profile" in
 esac
 
 run cargo fmt --all --check
+run scripts/guarded-exec-audit.sh
+
+if [[ $clippy_workspace -eq 1 ]]; then
+  if [[ "$cargo_profile" == "release" ]]; then
+    run cargo clippy --release --workspace -- -D warnings
+  else
+    run cargo clippy --workspace -- -D warnings
+  fi
+fi
 
 if [[ ${#checks[@]} -gt 0 ]]; then
   for package in "${checks[@]}"; do
@@ -112,6 +134,14 @@ if [[ ${#checks[@]} -gt 0 ]]; then
       run cargo check -p "$package"
     fi
   done
+fi
+
+if [[ $test_workspace -eq 1 ]]; then
+  if [[ "$cargo_profile" == "release" ]]; then
+    run cargo test --release --workspace
+  else
+    run cargo test --workspace
+  fi
 fi
 
 if [[ ${#tests[@]} -gt 0 ]]; then

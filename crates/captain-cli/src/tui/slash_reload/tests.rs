@@ -15,12 +15,12 @@ fn empty_or_unknown_args_reload_local_session() {
 }
 
 #[test]
-fn matching_stays_case_sensitive_like_hermes() {
+fn matching_stays_case_sensitive_by_design() {
     assert_eq!(reload_for("CONFIG"), SlashReload::ReloadSession);
 }
 
 #[test]
-fn reload_messages_preserve_hermes_full_tui_text() {
+fn reload_messages_preserve_expected_full_tui_text() {
     assert_eq!(
         no_active_session_message(Lang::Fr),
         "Pas de session active à recharger."

@@ -289,6 +289,7 @@ fn urlencoding_encode(s: &str) -> String {
 fn open_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        // guarded-exec-audit: fixed-command (OS browser launcher, no agent shell)
         std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
             .spawn()

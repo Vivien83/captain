@@ -163,6 +163,7 @@ fn web_credentials_update_tool_schema_supports_generation() {
     assert!(props.get("generate_password").is_some());
     assert!(props.get("session_ttl_hours").is_some());
     assert!(tool.description.contains("config.toml"));
+    assert!(tool.description.contains("Argon2id"));
     assert!(tool.description.contains("hot-reload"));
 }
 
@@ -179,7 +180,7 @@ log_level = "info"
 [auth]
 enabled = false
 username = "admin"
-password_hash = ""
+password_hash = "old-password-hash"
 session_ttl_hours = 72
 
 [web_terminal]
@@ -188,7 +189,7 @@ enabled = true
     )
     .unwrap();
 
-    let hash = hash_web_password("new-password-123");
+    let hash = hash_web_password("new-password-123").unwrap();
     let backup =
         write_web_credentials_config(dir.path(), Some("owner"), Some(&hash), Some(24)).unwrap();
     assert!(backup.exists());
@@ -198,6 +199,27 @@ enabled = true
     assert!(updated.contains("enabled = true"));
     assert!(updated.contains("username = \"owner\""));
     assert!(updated.contains(&format!("password_hash = \"{hash}\"")));
+    assert!(updated.contains("session_secret = "));
+    assert!(updated.contains("session_epoch = 1"));
     assert!(updated.contains("session_ttl_hours = 24"));
     assert!(!updated.contains("new-password-123"));
+}
+
+#[test]
+fn web_credentials_update_without_password_keeps_session_epoch() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let secret = captain_types::config::generate_session_secret().unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            "[auth]\nenabled = true\nusername = \"admin\"\npassword_hash = \"old-hash\"\nsession_secret = \"{secret}\"\nsession_epoch = 8\nsession_ttl_hours = 72\n"
+        ),
+    )
+    .unwrap();
+
+    write_web_credentials_config(dir.path(), Some("owner"), None, Some(24)).unwrap();
+    let updated = std::fs::read_to_string(&config_path).unwrap();
+    assert!(updated.contains("password_hash = \"old-hash\""));
+    assert!(updated.contains("session_epoch = 8"));
 }

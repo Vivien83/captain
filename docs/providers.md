@@ -120,6 +120,19 @@ system_prompt = "Work within the declared role and report uncertainty."
 Do not write `model = "codex:gpt-5.5"`. Inspect the live catalog before using
 an example model ID; examples document structure, not perpetual availability.
 
+## Reasoning Levels
+
+Use `/reasoning` in Chat or `captain agent set <AGENT_ID> reasoning <VALUE>`
+to inspect or persist a level published by the selected model/account.
+`reasoning auto` removes the override entirely, so the model/provider default
+applies; it is not equivalent to an explicit `none`.
+
+For Codex, `ultra` is a control mode exposed by the live Codex catalogue.
+Captain keeps `ultra` visible and durable, maps the actual provider request to
+the accepted `max` effort, and lets only the root agent proactively delegate
+independent, long-running, or genuinely parallel work. Delegated workers do
+not inherit that proactive policy.
+
 ## Switching a Running Agent
 
 A provider or model change must not silently reinterpret an existing

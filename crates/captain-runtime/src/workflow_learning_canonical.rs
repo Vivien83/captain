@@ -293,13 +293,6 @@ pub(crate) fn tool_role(tool_name: &str) -> &'static str {
         "file_write" | "apply_patch" | "edit_file" | "multi_edit"
     ) {
         "file_write"
-    } else if tool_name.starts_with("channel_")
-        || tool_name.starts_with("email_")
-        || tool_name.starts_with("telegram_")
-        || tool_name.starts_with("discord_")
-        || tool_name.starts_with("signal_")
-    {
-        "integration"
     } else {
         "integration"
     }

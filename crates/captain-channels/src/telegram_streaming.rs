@@ -143,6 +143,7 @@ pub struct TelegramStreamTarget {
     thread_id: Option<i64>,
     flood_strikes: AtomicU32,
     pending_reply_to: Arc<Mutex<Option<i64>>>,
+    pending_reply_markup: Arc<Mutex<Option<serde_json::Value>>>,
     armed_quote: AtomicBool,
     draft_fallback_message: Mutex<Option<(i64, i64)>>,
     progress_state: Arc<Mutex<TelegramProgressState>>,
@@ -157,6 +158,7 @@ impl TelegramStreamTarget {
             thread_id,
             flood_strikes: AtomicU32::new(0),
             pending_reply_to: Arc::new(Mutex::new(None)),
+            pending_reply_markup: Arc::new(Mutex::new(None)),
             armed_quote: AtomicBool::new(false),
             draft_fallback_message: Mutex::new(None),
             progress_state: Arc::new(Mutex::new(TelegramProgressState {
@@ -189,6 +191,12 @@ impl TelegramStreamTarget {
         Arc::clone(&self.pending_reply_to)
     }
 
+    /// Shareable slot used by the Telegram stream tee to associate a reply
+    /// keyboard with the next persistent response.
+    pub fn reply_markup_handle(&self) -> Arc<Mutex<Option<serde_json::Value>>> {
+        Arc::clone(&self.pending_reply_markup)
+    }
+
     /// Chainable builder that arms the next `send_new_message` to quote the user.
     pub fn with_reply_to(self, user_message_id: Option<i64>) -> Self {
         self.set_reply_to(user_message_id);
@@ -212,19 +220,58 @@ impl TelegramStreamTarget {
             .and_then(|mut guard| guard.take())
     }
 
+    fn has_pending_reply_markup(&self) -> bool {
+        self.pending_reply_markup
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
+    }
+
+    fn take_pending_reply_markup(&self) -> Option<serde_json::Value> {
+        self.pending_reply_markup
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+    }
+
+    fn restore_pending_reply_markup(&self, markup: serde_json::Value) {
+        if let Ok(mut guard) = self.pending_reply_markup.lock() {
+            if guard.is_none() {
+                *guard = Some(markup);
+            }
+        }
+    }
+
     async fn send_persistent(&self, text: &str) -> Result<String, String> {
         let reply_to = self.take_armed_reply_to();
-        match self
+        let reply_markup = self.take_pending_reply_markup();
+        let result = self
             .adapter
-            .api_send_message_rich_full(self.chat_id, text, self.thread_id, None, reply_to)
-            .await
-        {
+            .api_send_message_rich_full(
+                self.chat_id,
+                text,
+                self.thread_id,
+                reply_markup.as_ref(),
+                reply_to,
+            )
+            .await;
+        match result {
             Ok(Some(message_id)) => {
                 self.mark_visible_activity();
                 Ok(message_id.to_string())
             }
-            Ok(None) => Err("send_new_message: Telegram returned no message_id".into()),
-            Err(err) => Err(format!("send_new_message HTTP error: {err}")),
+            Ok(None) => {
+                if let Some(markup) = reply_markup {
+                    self.restore_pending_reply_markup(markup);
+                }
+                Err("send_new_message: Telegram returned no message_id".into())
+            }
+            Err(err) => {
+                if let Some(markup) = reply_markup {
+                    self.restore_pending_reply_markup(markup);
+                }
+                Err(format!("send_new_message HTTP error: {err}"))
+            }
         }
     }
 
@@ -335,7 +382,7 @@ impl TelegramStreamTarget {
 #[async_trait]
 impl crate::stream_consumer::StreamingChannelAdapter for TelegramStreamTarget {
     async fn send_new_message(&self, text: &str) -> Result<String, String> {
-        if self.chat_id > 0 && text.ends_with(STREAM_CURSOR) {
+        if self.chat_id > 0 && text.ends_with(STREAM_CURSOR) && !self.has_pending_reply_markup() {
             let draft_id = Self::next_draft_id();
             match self
                 .adapter
@@ -457,6 +504,49 @@ mod tests {
             "## Analyse\n\nTerminé"
         );
         assert_eq!(final_body["reply_parameters"]["message_id"], 99);
+    }
+
+    #[tokio::test]
+    async fn suggested_replies_attach_to_the_next_persistent_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 78, "rich_message": {"blocks": []}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = Arc::new(TelegramAdapter::new(
+            "123:ABC".to_string(),
+            vec!["*".to_string()],
+            Duration::from_secs(1),
+            Some(server.uri()),
+        ));
+        let target = TelegramStreamTarget::new(adapter, 42, None);
+        *target.reply_markup_handle().lock().unwrap() =
+            Some(crate::telegram_callbacks::build_suggested_replies_keyboard(
+                &["Court".to_string(), "Détaillé".to_string()],
+            ));
+
+        let message_id = target
+            .send_new_message(&format!("Quel style ?{STREAM_CURSOR}"))
+            .await
+            .expect("persistent suggestion message");
+        assert_eq!(message_id, "78");
+
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].url.path().ends_with("sendRichMessage"));
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("rich message body");
+        assert_eq!(body["reply_markup"]["one_time_keyboard"], true);
+        assert_eq!(body["reply_markup"]["keyboard"][0][0]["text"], "Court");
+        assert_eq!(body["reply_markup"]["keyboard"][0][1]["text"], "Détaillé");
     }
 
     #[tokio::test]

@@ -32,12 +32,31 @@ pub(super) fn print_verbose_runtime(body: &serde_json::Value) {
     );
     print_verbose_runtime_health(body);
     print_verbose_channels(body);
+    print_verbose_outbound_delivery(body);
     print_verbose_agent_api(body);
     print_verbose_consciousness(body);
     print_verbose_media(body);
     print_verbose_tts(body);
     print_verbose_native_voice(body);
     print_verbose_native_embeddings(body);
+}
+
+fn print_verbose_outbound_delivery(body: &serde_json::Value) {
+    let delivery = &body["outbound_delivery"];
+    if delivery.is_null() {
+        return;
+    }
+    let pending = delivery["pending"].as_u64().unwrap_or(0);
+    let attempting = delivery["attempting"].as_u64().unwrap_or(0);
+    let dead = delivery["dead"].as_u64().unwrap_or(0);
+    let ambiguous = delivery["possible_duplicates"].as_u64().unwrap_or(0);
+    let summary =
+        format!("{pending} pending, {attempting} attempting, {dead} dead, {ambiguous} ambiguous");
+    if pending > 0 || attempting > 0 || dead > 0 || ambiguous > 0 {
+        ui::kv_warn("Outbound delivery", &summary);
+    } else {
+        ui::kv("Outbound delivery", &summary);
+    }
 }
 
 fn print_verbose_channels(body: &serde_json::Value) {

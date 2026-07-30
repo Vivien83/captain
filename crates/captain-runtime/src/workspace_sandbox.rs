@@ -74,8 +74,8 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
 ///
 /// Used by Captain (the principal agent) to grant access beyond its own
 /// workspace — the kernel hands in `~/.captain/` and any user-declared
-/// `workspace_add` paths. Any subagent / hand keeps the legacy single-
-/// root `resolve_sandbox_path` because they have no business roaming.
+/// `workspace_add` paths. Subagents keep only their workspace root, while
+/// the same blocklist still protects secret-backed paths for every caller.
 ///
 /// Semantics:
 /// - The path must canonicalize *inside* one of the `allowed_roots`.

@@ -48,7 +48,7 @@ impl CaptainKernel {
             &format!("Agent {} arrêté", entry.manifest.name),
         );
 
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             agent_id.to_string(),
             captain_runtime::audit::AuditAction::AgentKill,
             format!("name={}", entry.name),

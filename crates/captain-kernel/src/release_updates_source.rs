@@ -13,6 +13,7 @@ use super::DEFAULT_GITHUB_REPO;
 pub(super) async fn fetch_release_candidate(
     current: &str,
     self_update_supported: bool,
+    github_token: Option<String>,
 ) -> Result<Option<ReleaseDescriptor>, String> {
     if let Some(base) = dist_base_url() {
         let url = format!("{base}/latest.txt");
@@ -43,7 +44,7 @@ pub(super) async fn fetch_release_candidate(
     let mut request = release_http_client()?
         .get(&url)
         .header("User-Agent", "captain-runtime-update-monitor");
-    if let Some(token) = github_token() {
+    if let Some(token) = github_token {
         request = request.bearer_auth(token);
     }
     let releases = request
@@ -131,11 +132,4 @@ fn github_repo() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_GITHUB_REPO.to_string())
-}
-
-fn github_token() -> Option<String> {
-    std::env::var("CAPTAIN_GITHUB_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }

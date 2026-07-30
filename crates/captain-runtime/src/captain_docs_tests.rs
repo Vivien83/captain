@@ -113,6 +113,10 @@ fn runtime_changelog_latest_query_returns_only_top_entry() {
 /// and the four canonical sections (Tools / Sandbox / Limites /
 /// Exemples) stay in place so captain_docs (C.2) renders predictably.
 fn assert_family_doc(slug: &str, family_tools: &[&str]) {
+    assert_family_doc_with_boundary(slug, family_tools, "## Sandbox");
+}
+
+fn assert_family_doc_with_boundary(slug: &str, family_tools: &[&str], boundary_heading: &str) {
     let path = docs_root().join(format!("{slug}.md"));
     let body =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
@@ -141,7 +145,7 @@ fn assert_family_doc(slug: &str, family_tools: &[&str]) {
         "{slug} family lists names not in builtin_tool_definitions(): {ghost:?}\n→ remove the entry or restore the tool."
     );
 
-    for heading in ["## Tools", "## Sandbox", "## Limites", "## Exemples"] {
+    for heading in ["## Tools", boundary_heading, "## Limites", "## Exemples"] {
         assert!(
             body.contains(heading),
             "{slug}.md must keep section {heading}"
@@ -156,10 +160,24 @@ fn d1_file_family_audit() {
 }
 
 /// D.2 — shell+process family audit (one-shot exec, persistent
-/// processes, language wrappers, Docker sandbox).
+/// processes, language wrappers, guarded host execution, and explicit
+/// Docker/WASM isolation).
 #[test]
 fn d2_shell_process_family_audit() {
-    assert_family_doc("shell-process", captain_docs::SHELL_PROCESS_FAMILY_TOOLS);
+    let slug = "shell-process";
+    assert_family_doc_with_boundary(
+        slug,
+        captain_docs::SHELL_PROCESS_FAMILY_TOOLS,
+        "## Host execution boundary",
+    );
+
+    let path = docs_root().join(format!("{slug}.md"));
+    let body =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    assert!(
+        !body.contains("## Sandbox"),
+        "{slug}.md must not describe guarded host execution as a sandbox"
+    );
 }
 
 /// D.3 — network family audit (outbound HTTP + multi-provider search).

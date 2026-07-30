@@ -1,5 +1,21 @@
 use super::*;
 
+fn satisfied_workers() -> serde_json::Value {
+    serde_json::Value::Array(
+        [
+            "observe", "think", "plan", "build", "execute", "verify", "learn",
+        ]
+        .into_iter()
+        .map(|phase| {
+            serde_json::json!({
+                "phase": phase,
+                "completion_contract": { "decision": "satisfied", "evidence_count": 1 }
+            })
+        })
+        .collect(),
+    )
+}
+
 #[test]
 fn activate_runtime_orchestrator_reuses_existing_run_id() {
     let mut runtime = serde_json::json!({
@@ -215,10 +231,16 @@ fn mark_runtime_completed_sets_done_state_event_and_closes_questions() {
             { "run_id": "run-2", "status": "pending", "delivery": "waiting_for_user" },
             { "run_id": "run-1", "status": "answered", "delivery": "web" }
         ],
+        "workers": satisfied_workers(),
         "timeline": []
     });
 
-    mark_runtime_completed(&mut runtime, "run-1", "project-1", "slug-1");
+    assert!(mark_runtime_completed(
+        &mut runtime,
+        "run-1",
+        "project-1",
+        "slug-1"
+    ));
 
     assert_eq!(runtime["status"], "done");
     assert_eq!(runtime["current_phase"], "learn");
@@ -242,9 +264,14 @@ fn mark_runtime_completed_sets_done_state_event_and_closes_questions() {
 
 #[test]
 fn mark_runtime_completed_initializes_missing_timeline() {
-    let mut runtime = serde_json::json!({});
+    let mut runtime = serde_json::json!({ "workers": satisfied_workers() });
 
-    mark_runtime_completed(&mut runtime, "run-2", "project-2", "slug-2");
+    assert!(mark_runtime_completed(
+        &mut runtime,
+        "run-2",
+        "project-2",
+        "slug-2"
+    ));
 
     let timeline = runtime["timeline"].as_array().unwrap();
     assert_eq!(timeline.len(), 1);
@@ -252,4 +279,35 @@ fn mark_runtime_completed_initializes_missing_timeline() {
     assert_eq!(timeline[0]["data"]["run_id"], "run-2");
     assert_eq!(runtime["orchestrator"]["active"], false);
     assert_eq!(runtime["orchestrator"]["stopped_reason"], "completed");
+}
+
+#[test]
+fn mark_runtime_completed_rejects_missing_phase_evidence() {
+    let mut runtime = serde_json::json!({
+        "orchestrator": { "active": true },
+        "workers": [{
+            "phase": "observe",
+            "completion_contract": { "decision": "satisfied", "evidence_count": 1 }
+        }]
+    });
+
+    assert!(!mark_runtime_completed(
+        &mut runtime,
+        "run-3",
+        "project-3",
+        "slug-3"
+    ));
+    assert_eq!(runtime["status"], "blocked");
+    assert_eq!(
+        runtime["completion_contract"]["decision"],
+        "insufficient_evidence"
+    );
+    assert_eq!(
+        runtime["timeline"][0]["kind"],
+        "project.completion_rejected"
+    );
+    assert_eq!(
+        runtime["orchestrator"]["stopped_reason"],
+        "completion_evidence_missing"
+    );
 }

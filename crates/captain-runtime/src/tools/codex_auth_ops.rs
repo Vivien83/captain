@@ -211,6 +211,7 @@ fn codex_probe_request(model: &str) -> CompletionRequest {
                 .to_string(),
         ),
         thinking: None,
+        reasoning_effort: None,
         tool_choice: Some(serde_json::json!("required")),
         cache_hints: CacheHints::default(),
     }

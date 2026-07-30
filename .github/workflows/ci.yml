@@ -133,7 +133,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
-      - run: cargo audit
+      - run: scripts/dependency-audit.sh
 
   # ── Secrets scanning (prevent accidental credential commits) ──────────────
   secrets:

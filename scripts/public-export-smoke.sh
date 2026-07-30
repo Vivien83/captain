@@ -21,6 +21,30 @@ CAPTAIN_INIT_GIT=0 \
 git -C "$EXPORT_DIR" init -q -b main
 git -C "$EXPORT_DIR" add -A
 
+blocked_probe="$(printf '\150\145\162\155\145\163')"
+printf '%s\n' "$blocked_probe" >"$EXPORT_DIR/.public-boundary-probe"
+if guard_output=$("$EXPORT_DIR/scripts/public-boundary-guard.sh" "$EXPORT_DIR" 2>&1); then
+  printf 'Public export smoke failed: content guard accepted a blocked probe\n' >&2
+  exit 1
+fi
+if printf '%s\n' "$guard_output" | grep -Fqi "$blocked_probe"; then
+  printf 'Public export smoke failed: content guard disclosed a blocked probe\n' >&2
+  exit 1
+fi
+rm -f -- "$EXPORT_DIR/.public-boundary-probe"
+
+mkdir "$EXPORT_DIR/$blocked_probe"
+if guard_output=$("$EXPORT_DIR/scripts/public-boundary-guard.sh" "$EXPORT_DIR" 2>&1); then
+  printf 'Public export smoke failed: path guard accepted a blocked probe\n' >&2
+  exit 1
+fi
+if printf '%s\n' "$guard_output" | grep -Fqi "$blocked_probe"; then
+  printf 'Public export smoke failed: path guard disclosed a blocked probe\n' >&2
+  exit 1
+fi
+rmdir "$EXPORT_DIR/$blocked_probe"
+"$EXPORT_DIR/scripts/public-boundary-guard.sh" "$EXPORT_DIR" >/dev/null
+
 (
   cd "$EXPORT_DIR"
   scripts/docs-global-audit.sh

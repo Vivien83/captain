@@ -2,7 +2,7 @@
 
 Captain exposes a REST API, WebSocket endpoints, and SSE streaming when the daemon is running. The default listen address is `http://127.0.0.1:50051`.
 
-All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS) and are protected by a GCRA cost-aware rate limiter with per-IP token bucket tracking and automatic stale entry cleanup. Captain implements defense-in-depth runtime protections including Merkle audit trails, taint tracking, WASM dual metering, Ed25519 manifest signing, SSRF protection, subprocess sandboxing, and secret zeroization.
+All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS) and are protected by a GCRA cost-aware rate limiter with per-IP token bucket tracking and automatic stale entry cleanup. Captain implements defense-in-depth runtime protections including audit chaining, heuristic content guards, WASM dual metering, Ed25519 manifest signing, SSRF protection, host subprocess environment scrubbing, and secret zeroization. The native host backend reports `os_isolation: false`; Docker and WASM are separate explicit isolation backends. Content guards classify reviewed shell and URL patterns; they do not provide provenance tracking or prove arbitrary code safe.
 
 ## Table of Contents
 
@@ -11,7 +11,9 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Workflow Endpoints](#workflow-endpoints)
 - [Trigger Endpoints](#trigger-endpoints)
 - [Memory Endpoints](#memory-endpoints)
+- [Learning Endpoints](#learning-endpoints)
 - [Channel Endpoints](#channel-endpoints)
+- [Approval Endpoints](#approval-endpoints)
 - [Template Endpoints](#template-endpoints)
 - [System Endpoints](#system-endpoints)
 - [Model Catalog Endpoints](#model-catalog-endpoints)
@@ -31,7 +33,8 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 
 ## Authentication
 
-When an API key is configured in `config.toml`, all endpoints (except `/api/health` and `/`) require a Bearer token:
+When an API key is configured in `config.toml`, every endpoint outside the
+reviewed public allowlist requires a Bearer token:
 
 ```
 Authorization: Bearer <your-api-key>
@@ -47,12 +50,52 @@ api_key = "your-secret-api-key"
 
 ### No Authentication
 
-If `api_key` is empty or not set, the API is accessible without authentication. CORS is restricted to localhost origins in this mode.
+If `api_key` is empty and browser authentication is disabled, the API is
+accessible without authentication. Captain refuses a non-loopback daemon bind
+without an API key; this local development mode is not a public deployment
+configuration.
 
 ### Public Endpoints (No Auth Required)
 
-- `GET /api/health`
-- `GET /` (authenticated six-hub Control web UI)
+- `GET /`, which boots Control but does not expose operational API data
+- `GET /assets/*`, `/logo.svg`, `/favicon.ico`, `/manifest.json`, and `/sw.js`
+- `GET /api/health`, which returns only `status` and `version`
+- `GET /api/version`
+- `GET /api/auth/check`
+- `POST /api/auth/login` and `/api/auth/logout`
+- `POST /hooks/agents/{agent_id}/ingress`, which bypasses global auth only for
+  an exact UUID route and enforces its own per-agent Bearer token and rate limit
+
+Every other route is private, including `/terminal`, `/config`, frozen
+agent-to-agent discovery/task compatibility surfaces, detailed health/status,
+agents, sessions, approvals, budgets, logs, models/providers, and the GitHub
+Copilot OAuth start/poll flow. Agent-to-agent discovery reveals manifests and
+task state; the OAuth flow can persist a provider credential, so neither is
+treated as self-authenticating. Control returns to its login screen when any
+protected request reports `401`.
+
+### Browser Sessions
+
+Browser login issues an HttpOnly HMAC-SHA256 session token. Its key is a
+per-install 32-byte random `auth.session_secret` generated and durably
+persisted by Captain at first boot; it is never derived from the daemon API key
+or password hash. The token carries the current managed `session_epoch`.
+Changing the password through setup or `web_credentials_update` advances that
+epoch, so an older token fails verification even when it has not expired.
+New passwords use salted Argon2id PHC strings. A successful login against a
+legacy SHA-256 hash atomically migrates the persisted value before Captain
+issues the session. Five failed attempts arm a dedicated per-IP and
+per-username exponential backoff; an immediate sixth attempt returns `429`.
+
+The browser exchanges its HttpOnly cookie for a 30-second single-use ticket
+before opening WebSocket or SSE. Tickets are bound to the exact path, effective
+client IP, and current session epoch. Protected routes do not accept API keys
+or session tokens from `?token=`.
+
+`GET /api/config/raw` and other config-display surfaces remove
+`auth.password_hash` and `auth.session_secret` from their response. Raw config
+writes preserve the current managed values server-side and reject a supplied
+signing key or any direct epoch change.
 
 ---
 
@@ -73,6 +116,12 @@ List all running agents.
     "created_at": "2025-01-15T10:30:00Z",
     "model_provider": "groq",
     "model_name": "llama-3.3-70b-versatile",
+    "reasoning": {
+      "supported": false,
+      "configured_effort": null,
+      "effective_effort": null,
+      "source": "unsupported"
+    },
     "context_window_tokens": 131072
   }
 ]
@@ -94,6 +143,15 @@ Returns detailed information about a single agent.
   "model": {
     "provider": "groq",
     "model": "llama-3.3-70b-versatile"
+  },
+  "reasoning": {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "supported": false,
+    "source": "unsupported",
+    "override_valid": true,
+    "options": [],
+    "reported_by_provider": false
   },
   "context_window_tokens": 131072,
   "capabilities": {
@@ -777,6 +835,84 @@ Delete a key-value pair.
 
 ---
 
+## Learning Endpoints
+
+### GET /api/learning/status
+
+Return the shared, public-safe operational state of Skill Learning V2. Counts,
+worker identity, and timestamps come from one SQLite snapshot. `bound_model`
+is present only after the worker successfully binds that exact proposer.
+
+**Response** `200 OK`:
+
+```json
+{
+  "schema_version": 1,
+  "enabled": true,
+  "mode": "approval",
+  "state": "recovering",
+  "recovery": "automatic_retry_active",
+  "expected_model": {"provider": "codex", "model": "gpt-5.6-sol"},
+  "worker": {
+    "phase": "running",
+    "bound_model": {"provider": "codex", "model": "gpt-5.6-sol"},
+    "started_at_unix_ms": 1784700000000,
+    "heartbeat_at_unix_ms": 1784700100000,
+    "heartbeat_age_ms": 2000,
+    "last_scan_at_unix_ms": 1784700095000,
+    "last_progress_at_unix_ms": 1784700080000,
+    "last_error_scope": null
+  },
+  "jobs": {
+    "pending": 1, "running": 0, "retry_wait": 1,
+    "uncertain": 0, "dead": 0,
+    "oldest_actionable_at_unix_ms": 1784700080000,
+    "next_retry_at_unix_ms": 1784700120000,
+    "last_activity_at_unix_ms": 1784700100000,
+    "last_error_code": "provider_busy"
+  },
+  "notifications": {
+    "pending": 0, "delivering": 0, "retry_wait": 0, "dead": 0,
+    "oldest_actionable_at_unix_ms": null,
+    "next_retry_at_unix_ms": null,
+    "last_activity_at_unix_ms": 1784700090000
+  },
+  "workflows": {
+    "total": 5, "processing": 1, "awaiting_decision": 1,
+    "active": 3, "attention": 0,
+    "last_activity_at_unix_ms": 1784700100000
+  },
+  "generated_at_unix_ms": 1784700102000
+}
+```
+
+No percentage is returned: opaque model work has no observable fractional
+progress. A heartbeat older than the runtime threshold yields `stalled`; a
+model binding failure yields `degraded`.
+
+### GET /api/learning/workflows
+
+Return the durable Skill/CapSpec/Automation/refinement projection consumed by
+TUI, Control Web, Desktop, and operator cards. Optional `limit` is clamped to
+500 for the HTTP surface.
+
+### POST /api/learning/workflows/{operator_token}/decide
+
+Apply one exact authenticated operator action using `decision_version`,
+`action`, and an authenticated `surface`. Stale revisions return `409`; there
+is no agent-facing positive-decision tool.
+
+The generic memory-learning endpoints remain separate:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/learning/committed` | Recent committed memory learnings |
+| `GET /api/learning/review` | Memory candidates awaiting review |
+| `POST /api/learning/review/{id}/decide` | Human decision for one memory candidate |
+| `GET /api/learning/metrics` | Memory journal and review aggregate |
+
+---
+
 ## Channel Endpoints
 
 ### GET /api/channels
@@ -784,7 +920,7 @@ Delete a key-value pair.
 List configured channel adapters and their status. The active core channel
 surface is Telegram, Discord, Signal, and Email. Other channel adapters may
 remain compiled or configurable for compatibility, but they are frozen out of
-normal setup and bridge startup until the core is Hermes-level.
+normal setup and bridge startup until the core is production-grade.
 
 **Response** `200 OK`:
 
@@ -805,6 +941,95 @@ normal setup and bridge startup until the core is Hermes-level.
   "total": 2
 }
 ```
+
+---
+
+## Approval Endpoints
+
+Tool approvals are authenticated operator decisions. Interactive session and
+durable choices are bound to the exact agent, tool, and BLAKE3 action digest;
+they never widen the administrator-owned `[approval].allow_always` list. Raw
+commands are shown only on the pending request and are never persisted in the
+durable rule file. Captain computes the digest from the complete untruncated
+tool input; the bounded display preview is never the authorization key.
+
+### GET /api/approvals
+
+Returns pending requests plus the current durable exact-action rules. Rule
+objects expose the digest, effect, creator, optional bounded reason, and rule
+ID, but not the raw action.
+
+```json
+{
+  "approvals": [
+    {
+      "id": "53a7a698-05aa-4933-92dd-c8c7af86e62b",
+      "agent_id": "captain",
+      "agent_name": "captain",
+      "tool_name": "shell_exec",
+      "action_summary": "deploy the verified release",
+      "risk_level": "critical",
+      "status": "pending"
+    }
+  ],
+  "total": 1,
+  "rules": [
+    {
+      "id": "e56de4c6-4956-47e0-b918-934c3b69d18e",
+      "effect": "deny",
+      "agent_id": "captain",
+      "tool_name": "shell_exec",
+      "action_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_by": "channel:123456",
+      "reason": "Use the staging host"
+    }
+  ],
+  "rules_total": 1
+}
+```
+
+### POST /api/approvals/{id}/approve
+
+Approves this occurrence only.
+
+### POST /api/approvals/{id}/approve_session
+
+Approves this exact action for this agent until daemon restart or an explicit
+session-approval cache clear.
+
+### POST /api/approvals/{id}/approve_always
+
+Creates a durable, revocable allow rule for this exact action.
+
+### POST /api/approvals/{id}/reject
+
+### POST /api/approvals/{id}/reject_session
+
+### POST /api/approvals/{id}/reject_always
+
+All rejection routes accept an optional bounded operator reason:
+
+```json
+{ "reason": "Use the staging host instead" }
+```
+
+`reject` keeps an empty request body for compatibility. `reject_always`
+requires a non-empty reason. Every reason is whitespace-normalized, limited to
+280 characters, checked for secret-like material, returned to the blocked
+tool, and recorded in the audit decision. The agent is told not to retry the
+same action unchanged.
+
+### DELETE /api/approvals/rules/{id}
+
+Revokes one durable exact-action rule. Revocation is audited. Invalid input is
+`400`, a missing or already-resolved request/rule is `404`, an expired request
+is `410`, and persistence failures remain `500` rather than being reported as
+an operator rejection.
+
+### POST /api/approvals/clear_session
+
+Clears every in-memory exact-action session decision. Durable rules are not
+affected.
 
 ---
 
@@ -876,11 +1101,13 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.9"
+  "version": "0.1.0-alpha.10"
 }
 ```
 
-The `status` field is `"ok"` when all systems are healthy, or `"degraded"` when the database is unreachable.
+The `status` field is `"ok"` when the database and audit integrity are
+healthy. It is `"degraded"` when either check fails; no internal detail is
+included in this public response.
 
 ### GET /api/health/detail
 
@@ -891,13 +1118,22 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.10",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
   "restart_count": 0,
   "agent_count": 3,
   "database": "connected",
+  "audit": {
+    "valid": true,
+    "status": "healthy",
+    "active_epoch": 0,
+    "active_epoch_valid": true,
+    "invalid_epochs": [],
+    "entry_count": 42,
+    "tip_hash": "8f6d..."
+  },
   "config_warnings": []
 }
 ```
@@ -923,6 +1159,7 @@ provider, uptime, path, deployment, and access fields:
 | `streaming` | Active/completed stream timing telemetry |
 | `disk`, `shutdown` | Free-space policy and graceful-drain state |
 | `runtime_update` | Last successful release check, next 12-hour check, pending version, detached-install state, and notification retry/dead-letter counts |
+| `outbound_delivery` | Exact final-response transport state: pending, attempting, delivered, dead, possible duplicate, oldest pending age, and bounded last error |
 | `native_voice`, `native_embeddings`, `media`, `tts` | Native capability readiness |
 
 `consciousness.supervisor.failure_count` counts recoverable turn failures since
@@ -961,7 +1198,7 @@ historical failures alone do not keep operational awareness in warning state.
     "next_check_at": "2026-07-20T20:00:00Z",
     "last_error": null,
     "consecutive_failures": 0,
-    "pending_version": "0.1.0-alpha.9",
+    "pending_version": "0.1.0-alpha.10",
     "update_in_progress": false,
     "undelivered_notifications": 1,
     "dead_notifications": 0
@@ -980,13 +1217,30 @@ historical failures alone do not keep operational awareness in warning state.
           "limit_id": "codex",
           "primary": {
             "used_percent": 28.0,
+            "remaining_percent": 72.0,
+            "remaining_source": "derived_from_provider_used_percent",
             "window_seconds": 18000,
             "resets_at": "2026-07-18T15:00:00Z"
           },
           "secondary": {
             "used_percent": 47.0,
+            "remaining_percent": 53.0,
+            "remaining_source": "derived_from_provider_used_percent",
             "window_seconds": 604800,
             "resets_at": "2026-07-22T10:00:00Z"
+          },
+          "spend_control": {
+            "reached": false,
+            "individual_limit": {
+              "source": "monthly",
+              "limit": "200.00",
+              "used": "56.00",
+              "remaining": "144.00",
+              "used_percent": 28,
+              "remaining_percent": 72,
+              "remaining_source": "provider_reported",
+              "resets_at": "2026-08-01T00:00:00Z"
+            }
           },
           "source": "account_status",
           "alert_level": "normal",
@@ -1676,7 +1930,10 @@ failure.
 
 ## Skills Endpoints
 
-Manage the skill registry. Skills extend agent capabilities with Python, Node.js, WASM, or prompt-only modules. All skill installations go through SHA256 verification and prompt injection scanning.
+Manage installed, bundled, and generated local skills. Remote marketplace
+search and installation are deliberately absent from the active API because
+publisher-backed integrity is unavailable. The former remote paths return
+`404`; local installation is an operator CLI action.
 
 ### GET /api/skills
 
@@ -1703,29 +1960,6 @@ List all installed skills.
     }
   ],
   "total": 60
-}
-```
-
-### POST /api/skills/install
-
-Install a skill from a local path or URL. The skill manifest is verified (SHA256 checksum) and scanned for prompt injection before installation.
-
-**Request Body**:
-
-```json
-{
-  "source": "/path/to/skill",
-  "verify": true
-}
-```
-
-**Response** `201 Created`:
-
-```json
-{
-  "status": "installed",
-  "skill": "my-custom-skill",
-  "version": "1.0.0"
 }
 ```
 
@@ -1850,14 +2084,17 @@ MCP HTTP transport endpoint. Accepts JSON-RPC 2.0 requests and exposes Captain t
 
 ## Audit & Security Endpoints
 
-Captain maintains a Merkle hash chain audit trail for all security-relevant operations. These endpoints allow inspection and verification of the audit log integrity.
+Captain maintains a linear, versioned SHA-256 hash chain for security-relevant
+operations. Version-2 entries length-prefix every field. If the active epoch is
+corrupt at boot, Captain seals it as invalid and opens an anchored recovery
+epoch without rewriting historical entries.
 
 ### GET /api/audit/recent
 
-Retrieve recent audit log entries.
+Retrieve recent entries and the current integrity state.
 
 **Query Parameters:**
-- `limit` (optional): Number of entries to return (default: 50, max: 500)
+- `n` or `limit` (optional): Number of entries (default: 50, max: 1000)
 
 **Response** `200 OK`:
 
@@ -1865,44 +2102,55 @@ Retrieve recent audit log entries.
 {
   "entries": [
     {
-      "id": 1042,
-      "timestamp": "2025-01-15T10:30:00Z",
-      "event_type": "agent_spawned",
+      "seq": 1042,
+      "epoch": 0,
+      "hash_version": 2,
+      "timestamp": "2026-07-29T10:30:00Z",
       "agent_id": "a1b2c3d4-...",
-      "details": "Agent 'coder' spawned with model groq/llama-3.3-70b-versatile",
-      "hash": "a1b2c3d4e5f6...",
-      "prev_hash": "f6e5d4c3b2a1..."
+      "action": "AgentSpawn",
+      "detail": "Agent created",
+      "outcome": "ok",
+      "prev_hash": "f6e5d4c3b2a1...",
+      "hash": "a1b2c3d4e5f6..."
     }
   ],
-  "total": 1042
+  "total": 1043,
+  "tip_hash": "a1b2c3d4e5f6...",
+  "integrity": {
+    "valid": true,
+    "status": "healthy",
+    "active_epoch": 0,
+    "active_epoch_valid": true,
+    "invalid_epochs": [],
+    "entry_count": 1043,
+    "tip_hash": "a1b2c3d4e5f6..."
+  }
 }
 ```
 
 ### GET /api/audit/verify
 
-Verify the integrity of the Merkle hash chain audit trail. Walks the entire chain and reports any broken links.
+Verify the active epoch and report any sealed invalid history or runtime append
+failure.
 
 **Response** `200 OK`:
 
 ```json
 {
-  "status": "valid",
-  "chain_length": 1042,
-  "first_entry": "2025-01-10T08:00:00Z",
-  "last_entry": "2025-01-15T10:30:00Z"
+  "valid": true,
+  "status": "healthy",
+  "message": "Audit hash chain verified in epoch 0",
+  "entries": 1043,
+  "tip_hash": "a1b2c3d4e5f6...",
+  "active_epoch": 0,
+  "active_epoch_valid": true,
+  "invalid_epochs": []
 }
 ```
 
-**Response** `200 OK` (chain broken):
-
-```json
-{
-  "status": "broken",
-  "chain_length": 1042,
-  "break_at": 847,
-  "error": "Hash mismatch at entry 847"
-}
-```
+A degraded response keeps `active_epoch_valid: true` when recovery succeeded,
+lists the sealed invalid epochs, and includes a redacted `error`. There is no
+repair endpoint: Captain never re-hashes altered historical content.
 
 ### GET /api/security
 
@@ -1912,28 +2160,42 @@ Security status overview showing the state of runtime security systems.
 
 ```json
 {
-  "security_systems": {
-    "merkle_audit_trail": "active",
-    "taint_tracking": "active",
-    "wasm_dual_metering": "active",
-    "security_headers": "active",
-    "health_redaction": "active",
-    "subprocess_sandbox": "active",
-    "manifest_signing": "active",
-    "gcra_rate_limiter": "active",
-    "secret_zeroization": "active",
-    "path_traversal_prevention": "active",
-    "ssrf_protection": "active",
-    "capability_inheritance_validation": "active",
-    "ofp_hmac_auth": "active",
-    "prompt_injection_scanning": "active",
-    "loop_guard": "active",
-    "session_repair": "active"
+  "core_protections": {
+    "path_traversal": true,
+    "ssrf_protection": true,
+    "capability_system": true,
+    "subprocess_environment_scrub": true,
+    "subprocess_os_isolation": false
   },
-  "total_systems": 16,
-  "all_active": true
+  "execution": {
+    "backend": "host_process",
+    "isolation_level": "environment_scrub",
+    "os_isolation": false,
+    "environment_scrub": true,
+    "dangerous_command_guard": "normalized_lexical_heuristic",
+    "policy_mode": "full",
+    "critical_mode": "safe"
+  },
+  "monitoring": {
+    "audit_trail": {
+      "enabled": true,
+      "algorithm": "versioned SHA-256 hash chain",
+      "entry_count": 1043,
+      "integrity": "healthy",
+      "active_epoch": 0,
+      "active_epoch_valid": true,
+      "invalid_epochs": []
+    }
+  },
+  "secret_zeroization": true,
+  "total_features": 16
 }
 ```
+
+The `execution` object is also present in authenticated
+`GET /api/health/detail` and `GET /api/status`. It reports the live
+`[exec_policy]` values. `environment_scrub` is a host-process protection, not
+an operating-system isolation claim.
 
 ---
 
@@ -2023,7 +2285,11 @@ provider-subscription observations. The top-level cost fields are
 `warning`, `critical`, or `exhausted`. Each item carries the provider's limit
 family, primary/secondary windows, optional plan/credits, observation source,
 age, and alert level. Window durations and reset timestamps are live
-provider-reported values.
+provider-reported values. `used_percent` remains the official observation;
+`remaining_percent` on rolling windows is its explicit derived complement and
+is labelled `derived_from_provider_used_percent`. Codex `spend_control` keeps
+the provider-reported limit, used amount, remaining amount, percentages, and
+reset without converting them into a guessed subscription allowance.
 
 Ratatui Chat, the xterm Web terminal, Control web, and its retained desktop
 compatibility wrapper poll this authenticated local endpoint every five
@@ -2039,8 +2305,18 @@ persisted.
 
 Update any supplied global fields: `max_hourly_usd`, `max_daily_usd`,
 `max_monthly_usd`, `alert_threshold`, or
-`default_max_llm_tokens_per_hour`. The authenticated route persists every
-supplied limit to `config.toml` and returns the current budget snapshot.
+`default_max_llm_tokens_per_hour`. The body must be an object containing at
+least one recognized field. Cost values must be finite, non-negative, and no
+greater than `1_000_000_000`; `alert_threshold` must be in `[0,1]`; token
+limits must fit a signed TOML integer. Invalid values return `400` rather than
+being clamped.
+
+The authenticated route serializes updates, validates the complete candidate,
+atomically persists that exact snapshot to `config.toml`, and only then
+publishes it to the live runtime. A write failure returns `500` and leaves the
+previous live snapshot in force. Readers therefore observe either the complete
+old budget or the complete new budget, never a field-by-field intermediate
+state.
 
 ### GET /api/budget/agents
 
@@ -2071,7 +2347,10 @@ Return one agent's hourly/daily/monthly spend and its `tokens` object:
 Update at least one of `max_cost_per_hour_usd`, `max_cost_per_day_usd`,
 `max_cost_per_month_usd`, or `max_llm_tokens_per_hour`. Setting the token
 limit to `0` is an explicit opt-out from Captain's internal token guard; it
-does not change the provider subscription allowance.
+does not change the provider subscription allowance. The same finite,
+non-negative, upper-bound, and TOML-integer validation applies. A successful
+token-limit update is published immediately to the scheduler used by the next
+turn.
 
 ---
 
@@ -2095,7 +2374,11 @@ only an explicit history deletion is destructive.
 
 ### POST /api/agents/{id}/session/compact
 
-Trigger LLM-based session compaction. The agent's conversation is summarized by an LLM, keeping only the most recent messages plus a generated summary.
+Trigger LLM-based session compaction. The agent's conversation is summarized by
+an LLM, keeping only the most recent messages plus a generated summary. The
+operation is serialized with other turns for that agent. Progress is available
+on the agent WebSocket and daemon event stream using the canonical persisted
+session ID.
 
 **Response** `200 OK`:
 
@@ -2151,15 +2434,82 @@ Switch an agent's LLM model at runtime.
 
 ---
 
+### GET /api/agents/{id}/reasoning
+
+Read the agent's durable reasoning selection and the effective value for its
+current model. `configured_effort: null` means **Auto**: Captain omits the
+provider field instead of inventing a default. Auto is not the explicit
+`none` effort. `source` identifies whether the effective value comes from an
+agent override, the live model catalogue, or the provider default.
+
+**Response** `200 OK`:
+
+```json
+{
+  "provider": "codex",
+  "model": "gpt-5.6-sol",
+  "supported": true,
+  "configured_effort": null,
+  "effective_effort": "low",
+  "source": "model_default",
+  "override_valid": true,
+  "options": [
+    {"effort": "low", "description": null},
+    {"effort": "medium", "description": null},
+    {"effort": "high", "description": null},
+    {"effort": "xhigh", "description": null},
+    {"effort": "max", "description": null},
+    {"effort": "ultra", "description": null}
+  ],
+  "reported_by_provider": true
+}
+```
+
+### PUT /api/agents/{id}/reasoning
+
+Persist one effort for the agent. The value must be one of the current model
+catalogue options. The persisted value is open rather than a frozen Captain
+enum, so new catalogue levels remain forward-compatible. Send `null` (or use
+`auto` in an operator UI) to remove the override and return control to the
+model/provider. An explicit `none`, when advertised, remains distinct from
+Auto.
+
+Codex `ultra` is a product-level mode rather than a wire-level API effort.
+Captain preserves `ultra` in the agent configuration and status, sends `max`
+to the Codex response endpoint, and enables bounded proactive delegation only
+for the root agent. A sub-agent never inherits the proactive policy
+recursively.
+
+```json
+{"effort": "ultra"}
+```
+
+The response is the same complete status object as `GET`. Reset example:
+
+```json
+{"effort": null}
+```
+
+---
+
 ## WebSocket Protocol
 
 ### Connecting
 
 ```
-GET /api/agents/{id}/ws
+POST /api/auth/realtime-ticket
+{"path":"/api/agents/{id}/ws"}
+
+GET /api/agents/{id}/ws?ticket={single-use-ticket}
 ```
 
-Upgrades to a WebSocket connection for real-time bidirectional chat with an agent. Returns `400` if the agent ID is invalid, or `404` if the agent does not exist.
+Browser clients mint the ticket with their authenticated HttpOnly session
+cookie. It expires after 30 seconds and is consumed by the first upgrade
+attempt. Technical clients that can set headers may use the normal
+`Authorization` or `X-API-Key` header instead. A `token` query parameter never
+authenticates the request. A valid request upgrades to a real-time
+bidirectional agent chat; invalid agent IDs return `400`, missing agents
+return `404`.
 
 ### Message Format
 
@@ -2178,7 +2528,13 @@ All messages are JSON-encoded strings.
 
 Plain text (non-JSON) is also accepted and treated as a message.
 
-**Chat commands** (sent as messages with `/` prefix):
+**Command messages** use the explicit protocol shape below. Ratatui turns its
+local slash syntax into the same kernel controls; Control web and Desktop also
+expose reasoning as a direct selector backed by the REST endpoint above.
+
+```json
+{"type": "command", "command": "reasoning", "args": "high"}
+```
 
 | Command | Description |
 |---------|-------------|
@@ -2187,9 +2543,12 @@ Plain text (non-JSON) is also accepted and treated as a message.
 | `/model <name>` | Switch the agent's model |
 | `/stop` | Cancel current LLM run |
 | `/usage` | Show token usage and cost |
-| `/think` | Toggle extended thinking mode |
-| `/models` | List available models |
-| `/providers` | List LLM providers and auth status |
+| `/reasoning [auto\|level]` | Inspect or persist the real model reasoning effort |
+| `/think` | Terminal-only visibility toggle for reasoning blocks already received; it does not change the model |
+| `/context` | Show context-window pressure |
+| `/verbose [off\|on\|full]` | Select streamed tool detail |
+| `/queue` | Show whether the agent is processing |
+| `/budget` | Show Captain's internal cost budget |
 
 **Ping:**
 
@@ -2226,6 +2585,21 @@ Plain text (non-JSON) is also accepted and treated as a message.
   "content": "The weather"
 }
 ```
+
+**Suggested replies** (non-blocking choices for the next user message):
+
+```json
+{
+  "type": "suggested_replies",
+  "options": ["Concise", "Detailed"]
+}
+```
+
+Clients may render these as clickable choices, but must keep normal free-text
+input available. Selecting a choice sends the standard client message shape
+(`{"type":"message","content":"..."}`), not `user_response`. An empty
+`options` array clears previous suggestions. This event is distinct from
+`ask_user`, which blocks an active tool call and expects `user_response`.
 
 **Tool use started** (sent when the agent invokes a tool):
 
@@ -2274,6 +2648,37 @@ Plain text (non-JSON) is also accepted and treated as a message.
   ]
 }
 ```
+
+**Compaction progress:**
+
+```json
+{
+  "type": "compaction_progress",
+  "progress": {
+    "schema_version": 1,
+    "operation_id": "7ecfd49c-...",
+    "runtime_instance_id": "dc50a22b-...",
+    "agent_id": "a1b2c3d4-...",
+    "session_id": "3a1e6f4c-...",
+    "phase": "chunking",
+    "state": "running",
+    "detail": "Processed chunk 2 of 4",
+    "message_count": 180,
+    "estimated_tokens": 42000,
+    "context_window_tokens": 200000,
+    "completed_units": 2,
+    "total_units": 4,
+    "unit": "chunks",
+    "started_at_ms": 1784770000000,
+    "updated_at_ms": 1784770001200
+  }
+}
+```
+
+The wire contract has no percentage field. Derive one only when both unit
+counts are present and `total_units > 0`. During an opaque model call all three
+unit fields are `null`; render indeterminate progress. Terminal states are
+`succeeded`, `failed`, or `interrupted`.
 
 **Pong** (response to ping):
 
@@ -2332,6 +2737,9 @@ data: {"tool":"web_search"}
 event: tool_result
 data: {"tool":"web_search","input":{"query":"quantum computing basics"}}
 
+event: suggested_replies
+data: {"type":"suggested_replies","options":["Concise","Detailed"]}
+
 event: done
 data: {"done":true,"usage":{"input_tokens":150,"output_tokens":340}}
 ```
@@ -2343,7 +2751,27 @@ data: {"done":true,"usage":{"input_tokens":150,"output_tokens":340}}
 | `chunk` | Text delta from the LLM. `"done": false` indicates more tokens are coming. |
 | `tool_use` | The agent is invoking a tool. Contains the tool name. |
 | `tool_result` | A tool invocation has completed. Contains the tool name and input. |
+| `suggested_replies` | Non-blocking choices. Send a selected value as a normal message; an empty list clears prior choices. |
+| `ask_user` | Blocking operator question. Answer it through the session-scoped message answer endpoint. |
 | `done` | Final event. Contains `"done": true` and token usage statistics. |
+
+---
+
+### GET /api/memory/events
+
+Open the authenticated daemon-wide Server-Sent Events stream used by live
+operator surfaces. Context compaction is emitted as a named event whose data is
+the `progress` object shown in the WebSocket example above:
+
+```text
+event: compaction_progress
+data: {"schema_version":1,"operation_id":"7ecfd49c-...","phase":"summarizing","state":"running","completed_units":null,"total_units":null,"unit":null}
+```
+
+Filter by `agent_id` and `session_id` before rendering. Repeated updates for the
+same `operation_id` replace one live operation; they are not independent jobs.
+The persisted session timeline remains the recovery source after reconnect or
+restart.
 
 ---
 
@@ -2553,6 +2981,8 @@ as source of truth when validating exact route availability.
 | GET | `/api/agents/{id}` | Get agent details |
 | PUT | `/api/agents/{id}/update` | Update agent config |
 | PUT | `/api/agents/{id}/mode` | Set agent mode (Stable/Normal) |
+| GET | `/api/agents/{id}/reasoning` | Read configured and effective reasoning |
+| PUT | `/api/agents/{id}/reasoning` | Set reasoning effort or reset to Auto |
 | DELETE | `/api/agents/{id}` | Kill agent |
 | POST | `/api/agents/{id}/message` | Send message (blocking) |
 | POST | `/api/agents/{id}/message/stream` | Send message (SSE stream) |
@@ -2630,7 +3060,6 @@ as source of truth when validating exact route availability.
 | POST | `/api/capabilities/native/runs/{run_id}/decision` | Resolve an exact uncertain node and resume or fail the run |
 | **Skills** | | |
 | GET | `/api/skills` | List installed/bundled/generated skills |
-| POST | `/api/skills/install` | Install skill |
 | POST | `/api/skills/uninstall` | Uninstall skill |
 | POST | `/api/skills/create` | Create new skill |
 | **MCP** | | |
@@ -2638,7 +3067,7 @@ as source of truth when validating exact route availability.
 | POST | `/mcp` | MCP HTTP transport (JSON-RPC 2.0) |
 | **Audit & Security** | | |
 | GET | `/api/audit/recent` | Recent audit logs |
-| GET | `/api/audit/verify` | Verify Merkle chain integrity |
+| GET | `/api/audit/verify` | Verify hash-chain and epoch integrity |
 | GET | `/api/security` | Security status |
 | **Usage & Analytics** | | |
 | GET | `/api/usage` | Usage statistics |

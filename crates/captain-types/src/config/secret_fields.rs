@@ -22,6 +22,10 @@ const DIRECT_SECRET_PATHS: &[DirectSecretPath] = &[
         label: "auth.password_hash",
         segments: &["auth", "password_hash"],
     },
+    DirectSecretPath {
+        label: "auth.session_secret",
+        segments: &["auth", "session_secret"],
+    },
 ];
 
 pub fn find_direct_secret_assignments(source: &str) -> Result<Vec<&'static str>, toml::de::Error> {
@@ -71,6 +75,7 @@ shared_secret = "ofp-shared-secret"
 
 [auth]
 password_hash = "$argon2id$v=19$m=4096,t=3,p=1$hash"
+session_secret = "captain-session-secret"
 "#;
 
         let leaks = find_direct_secret_assignments(raw).unwrap();
@@ -80,7 +85,8 @@ password_hash = "$argon2id$v=19$m=4096,t=3,p=1$hash"
                 "api_key",
                 "api.api_key",
                 "network.shared_secret",
-                "auth.password_hash"
+                "auth.password_hash",
+                "auth.session_secret"
             ]
         );
     }
@@ -98,6 +104,7 @@ shared_secret = ""
 
 [auth]
 password_hash = ""
+session_secret = ""
 "#;
 
         let leaks = find_direct_secret_assignments(raw).unwrap();

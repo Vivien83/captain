@@ -33,7 +33,7 @@ fn empty_history_has_no_retry_target() {
 }
 
 #[test]
-fn retry_nothing_message_preserves_hermes_i18n_text() {
+fn retry_nothing_message_preserves_expected_i18n_text() {
     assert_eq!(
         retry_nothing_message(crate::i18n::Lang::Fr),
         "Rien à renvoyer (aucun message précédent)."

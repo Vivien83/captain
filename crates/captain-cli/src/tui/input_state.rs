@@ -62,6 +62,9 @@ pub(crate) fn chat_mouse_effect_for_action(
         chat::ChatMouseAction::RejectRequest(id) => Some(ChatMouseEffect::ChatAction(
             chat::ChatAction::RejectRequest(id),
         )),
+        chat::ChatMouseAction::SendMessage(message) => Some(ChatMouseEffect::ChatAction(
+            chat::ChatAction::SendMessage(message),
+        )),
         chat::ChatMouseAction::ModelSwitchCancelled | chat::ChatMouseAction::ToolToggled => None,
     }
 }

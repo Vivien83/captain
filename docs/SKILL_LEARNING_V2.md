@@ -164,6 +164,23 @@ TUI and Control show the same proposal, evidence, state, and decisions under the
 existing Learning hub. Capabilities lists active artifacts, not pending drafts.
 No new primary navigation entry is introduced.
 
+## Operational visibility
+
+Learning has one versioned operational status contract, read from one SQLite
+snapshot. It reports the exact configured model and the model the worker
+actually bound, worker phase and heartbeat age, last completed scan and
+meaningful progress timestamps, job and notification queues, bounded retry and
+dead/uncertain counts, and recovery state. A model binding failure is degraded,
+not silently described as startup.
+
+`GET /api/learning/status`, TUI Learning, Control Web and its Desktop wrapper,
+Telegram `/learning`, and the `engine` section of `workflow_learning_list`
+consume this same contract. Telegram renders it as a Rich operational card;
+`/learnings` remains the distinct queue of memory candidates awaiting review.
+The status never derives a percentage from elapsed time or queue size. Work
+performed inside an opaque model call is therefore shown as active or waiting,
+not as fabricated progress.
+
 ## Migration
 
 Schema v32 retires the legacy sliding-window detector transactionally. Existing
@@ -174,6 +191,11 @@ evidence because it lacks immutable staging and validation proof. Existing
 generated files are preserved as installed artifacts. The old REST routes
 return HTTP `410 Gone` with `/api/learning/workflows` as the replacement,
 and old Telegram callbacks render an archive notice without a decision.
+
+Schema v34 adds the singleton durable worker heartbeat used by the operational
+status contract. A restart replaces the old process identity immediately;
+otherwise a heartbeat older than the bounded stale threshold is reported as a
+stalled worker and requires operator attention.
 
 ## Certification gate
 

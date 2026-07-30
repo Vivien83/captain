@@ -235,6 +235,75 @@ fn safe_runtime_events_strip_data_payloads() {
 }
 
 #[test]
+fn project_runtime_view_exposes_only_bounded_completion_receipts() {
+    let runtime = json!({
+        "completion_contract": {
+            "protocol": "captain.completion.v1",
+            "scope": "project_run",
+            "decision": "satisfied",
+            "evidence_count": 4,
+            "phases": [{
+                "phase": "verify",
+                "decision": "satisfied",
+                "evidence_count": 2,
+                "raw": "phase-secret"
+            }],
+            "raw_command": "token-secret-command"
+        },
+        "workers": [{
+            "id": "verify-worker",
+            "phase": "verify",
+            "status": "done",
+            "completion_contract": {
+                "protocol": "captain.completion.v1",
+                "scope": "project_phase",
+                "phase": "verify",
+                "decision": "satisfied",
+                "evidence_count": 2,
+                "passed_evidence_count": 2,
+                "requirements": [{
+                    "id": "independent_verification",
+                    "status": "passed",
+                    "required": true,
+                    "detail": "requirement-secret"
+                }],
+                "evidence": [{
+                    "id": "receipt-id",
+                    "kind": "tool_receipt",
+                    "source": "shell_exec",
+                    "status": "passed",
+                    "duration_ms": 9,
+                    "input": "token-secret-input",
+                    "output": "token-secret-output"
+                }]
+            }
+        }]
+    });
+
+    let view = project_runtime_view(&runtime);
+
+    assert_eq!(view["completion_contract"]["decision"], "satisfied");
+    assert_eq!(
+        view["workers"][0]["completion_contract"]["evidence_count"],
+        2
+    );
+    assert_eq!(
+        view["workers"][0]["completion_contract"]["evidence"][0]["source"],
+        "shell_exec"
+    );
+    let encoded = serde_json::to_string(&view).unwrap();
+    for forbidden in [
+        "token-secret-command",
+        "phase-secret",
+        "requirement-secret",
+        "token-secret-input",
+        "token-secret-output",
+    ] {
+        assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+    }
+}
+
+#[test]
 fn project_runtime_view_limits_timeline_to_recent_tail() {
     let timeline = (0..105)
         .map(|idx| {

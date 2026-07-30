@@ -77,11 +77,11 @@ impl CachedLlmDriver {
         Self {
             inner,
             cache,
-            key_prefix: "llm:v1:".to_string(),
+            key_prefix: "llm:v2:".to_string(),
         }
     }
 
-    /// Overrides the default `"llm:v1:"` prefix. Useful for tests and
+    /// Overrides the default `"llm:v2:"` prefix. Useful for tests and
     /// for running two independent caches against the same Redis DB.
     pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.key_prefix = prefix.into();
@@ -173,6 +173,8 @@ struct CanonicalRequest<'a> {
     /// Rounded to 2 decimals so `0.1999` and `0.2001` don't produce
     /// different keys due to floating-point drift.
     temperature_x100: i32,
+    thinking: Option<&'a captain_types::config::ThinkingConfig>,
+    reasoning_effort: Option<&'a str>,
     tool_choice: Option<&'a serde_json::Value>,
 }
 
@@ -185,6 +187,8 @@ impl<'a> From<&'a CompletionRequest> for CanonicalRequest<'a> {
             tools: &r.tools,
             max_tokens: r.max_tokens,
             temperature_x100: (r.temperature * 100.0).round() as i32,
+            thinking: r.thinking.as_ref(),
+            reasoning_effort: r.reasoning_effort.as_ref().map(|effort| effort.as_str()),
             tool_choice: r.tool_choice.as_ref(),
         }
     }
@@ -254,6 +258,7 @@ mod tests {
             temperature: 0.0,
             system: Some("You are helpful".into()),
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         }
@@ -328,5 +333,17 @@ mod tests {
         let b = CachedLlmDriver::hash_request(&base_request());
         assert_eq!(a, b);
         assert_eq!(a.len(), 64, "sha256 hex is 64 chars");
+    }
+
+    #[test]
+    fn reasoning_effort_changes_the_cache_key() {
+        let automatic = base_request();
+        let mut explicit = base_request();
+        explicit.reasoning_effort = Some("ultra".parse().unwrap());
+
+        assert_ne!(
+            CachedLlmDriver::hash_request(&automatic),
+            CachedLlmDriver::hash_request(&explicit)
+        );
     }
 }

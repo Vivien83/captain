@@ -38,9 +38,9 @@ impl WorkflowLearningStore {
                 )
             })?;
         if current.state == WorkflowProposalState::Snoozed
-            && current.snoozed_until_unix_ms.map_or(true, |deadline| {
-                deadline > request.proposal_transition.occurred_at_unix_ms
-            })
+            && current
+                .snoozed_until_unix_ms
+                .is_none_or(|deadline| deadline > request.proposal_transition.occurred_at_unix_ms)
         {
             return Err(WorkflowLearningControlError::Conflict(
                 "snoozed proposal is not due yet".to_string(),

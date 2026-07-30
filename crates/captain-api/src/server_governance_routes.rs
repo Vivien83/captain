@@ -17,6 +17,14 @@ pub(crate) fn mount_governance_routes(router: Router<Arc<AppState>>) -> Router<A
             axum::routing::post(routes::reject_request),
         )
         .route(
+            "/api/approvals/{id}/reject_session",
+            axum::routing::post(routes::reject_session_request),
+        )
+        .route(
+            "/api/approvals/{id}/reject_always",
+            axum::routing::post(routes::reject_always_request),
+        )
+        .route(
             "/api/approvals/{id}/approve_session",
             axum::routing::post(routes::approve_session_request),
         )
@@ -27,6 +35,10 @@ pub(crate) fn mount_governance_routes(router: Router<Arc<AppState>>) -> Router<A
         .route(
             "/api/approvals/clear_session",
             axum::routing::post(routes::clear_session_approvals),
+        )
+        .route(
+            "/api/approvals/rules/{id}",
+            axum::routing::delete(routes::revoke_approval_rule),
         )
         .route("/api/usage", axum::routing::get(routes::usage_stats))
         .route(

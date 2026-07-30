@@ -128,6 +128,9 @@ pub struct KernelConfig {
     /// require a `Authorization: Bearer <key>` header.
     /// If empty, the API is unauthenticated (local development only).
     pub api_key: String,
+    /// HTTP API browser access policy.
+    #[serde(default)]
+    pub api: ApiConfig,
     /// Kernel operating mode (stable, default, dev).
     #[serde(default)]
     pub mode: KernelMode,
@@ -158,7 +161,7 @@ pub struct KernelConfig {
     /// Deployment metadata captured during setup/install.
     #[serde(default)]
     pub deployment: DeploymentConfig,
-    /// Product surface gates for the Hermes-level core refactor.
+    /// Product surface gates for the production-grade core refactor.
     #[serde(default)]
     pub surfaces: ProductSurfacesConfig,
     /// Fallback providers tried in order if the primary fails.
@@ -372,6 +375,7 @@ impl Default for KernelConfig {
             network: NetworkConfig::default(),
             channels: ChannelsConfig::default(),
             api_key: String::new(),
+            api: ApiConfig::default(),
             mode: KernelMode::default(),
             language: "en".to_string(),
             assistant: AssistantConfig::default(),
@@ -479,6 +483,7 @@ impl std::fmt::Debug for KernelConfig {
                     "<redacted>"
                 },
             )
+            .field("api", &self.api)
             .field("mode", &self.mode)
             .field("language", &self.language)
             .field("assistant", &self.assistant)
@@ -580,7 +585,24 @@ mod tests {
         let config = KernelConfig::default();
         assert_eq!(config.log_level, "info");
         assert_eq!(config.api_listen, "127.0.0.1:50051");
+        assert!(config.api.allowed_origins.is_empty());
         assert!(!config.network_enabled);
+    }
+
+    #[test]
+    fn api_allowed_origins_deserialize_from_typed_section() {
+        let config: KernelConfig = toml::from_str(
+            r#"
+            [api]
+            allowed_origins = ["https://console.example.com"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.api.allowed_origins,
+            vec!["https://console.example.com"]
+        );
     }
 
     #[test]

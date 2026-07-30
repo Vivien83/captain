@@ -2,14 +2,29 @@ use crate::agent_loop_codex_request::{
     apply_provider_request_context_economy, request_tools_for_provider, CODEX_REQUEST_TARGET_TOKENS,
 };
 use crate::agent_loop_control::cache_hints_for_session;
+use crate::agent_loop_policy::manifest_subagent_depth;
 use crate::context_budget::{apply_context_guard_preserving_recent, ContextBudget};
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::llm_driver::CompletionRequest;
 use captain_memory::session::Session;
 use captain_types::agent::AgentManifest;
 use captain_types::message::Message;
+use captain_types::reasoning::ReasoningEffort;
 use captain_types::tool::ToolDefinition;
 use tracing::info;
+
+const CODEX_ULTRA_ROOT_INSTRUCTIONS: &str = "\
+## Captain Ultra orchestration
+
+This is a root-agent Ultra turn. Proactively delegate only when doing so \
+materially improves execution or verification:
+- delegate independent, long-running, or genuinely parallelizable subtasks;
+- preserve dependencies and execute sequential work in order;
+- give every delegation a bounded objective, budget, and success criteria;
+- monitor detached work and verify its result before synthesis;
+- handle simple or tightly coupled work directly.
+
+Never delegate merely because a task uses several tools.";
 
 pub(crate) struct PreparedRequestContext {
     pub(crate) request_tools: Vec<ToolDefinition>,
@@ -107,16 +122,80 @@ pub(crate) fn build_completion_request(
     request_tools: Vec<ToolDefinition>,
     system_prompt: &str,
 ) -> CompletionRequest {
+    let reasoning_effort = validated_reasoning_effort(manifest);
+    let system_prompt = system_prompt_for_request(
+        manifest,
+        system_prompt,
+        reasoning_effort.as_ref(),
+        &request_tools,
+    );
     CompletionRequest {
         model: api_model,
         messages: messages.to_vec(),
         tools: request_tools,
         max_tokens: manifest.model.max_tokens,
         temperature: manifest.model.temperature,
-        system: Some(system_prompt.to_string()),
+        system: Some(system_prompt),
         thinking: None,
+        reasoning_effort,
         tool_choice: None,
         cache_hints: cache_hints_for_session(manifest, session),
+    }
+}
+
+fn system_prompt_for_request(
+    manifest: &AgentManifest,
+    system_prompt: &str,
+    reasoning_effort: Option<&ReasoningEffort>,
+    request_tools: &[ToolDefinition],
+) -> String {
+    let ultra_root = matches!(
+        manifest.model.provider.to_ascii_lowercase().as_str(),
+        "codex" | "openai-codex"
+    ) && reasoning_effort
+        .is_some_and(|effort| effort.as_str() == ReasoningEffort::ULTRA)
+        && manifest_subagent_depth(manifest) == 0
+        && request_tools.iter().any(|tool| {
+            matches!(
+                tool.name.as_str(),
+                "agent_delegate" | "agent_spawn" | "tool_search" | "capability_search"
+            )
+        });
+
+    if ultra_root {
+        format!("{system_prompt}\n\n{CODEX_ULTRA_ROOT_INSTRUCTIONS}")
+    } else {
+        system_prompt.to_string()
+    }
+}
+
+fn validated_reasoning_effort(manifest: &AgentManifest) -> Option<ReasoningEffort> {
+    let configured = manifest.model.reasoning_effort.clone()?;
+    if !matches!(
+        manifest.model.provider.to_ascii_lowercase().as_str(),
+        "codex" | "openai-codex"
+    ) {
+        return Some(configured);
+    }
+    let Some(capabilities) =
+        crate::model_catalog_codex::codex_reasoning_capabilities(&manifest.model.model)
+    else {
+        tracing::warn!(
+            model = %manifest.model.model,
+            effort = %configured,
+            "Ignoring reasoning override because Codex does not advertise reasoning for this model"
+        );
+        return None;
+    };
+    if capabilities.supports(&configured) {
+        Some(configured)
+    } else {
+        tracing::warn!(
+            model = %manifest.model.model,
+            effort = %configured,
+            "Ignoring reasoning override no longer supported by the Codex model catalog"
+        );
+        None
     }
 }
 
@@ -245,5 +324,49 @@ mod tests {
         assert_eq!(request.temperature, 0.2);
         assert_eq!(request.system.as_deref(), Some("system prompt"));
         assert!(request.cache_hints.prompt_cache_key.is_some());
+    }
+
+    #[test]
+    fn ultra_adds_proactive_orchestration_only_to_a_codex_root() {
+        let ultra = ReasoningEffort::ULTRA.parse::<ReasoningEffort>().unwrap();
+        let mut root = test_manifest("codex");
+        let coordination_tools = vec![test_tool("agent_delegate")];
+        let root_prompt =
+            system_prompt_for_request(&root, "base", Some(&ultra), &coordination_tools);
+        assert!(root_prompt.contains("Captain Ultra orchestration"));
+        assert!(root_prompt.contains("genuinely parallelizable"));
+
+        root.metadata
+            .insert("subagent_depth".to_string(), serde_json::json!(1));
+        assert_eq!(
+            system_prompt_for_request(&root, "base", Some(&ultra), &coordination_tools),
+            "base"
+        );
+    }
+
+    #[test]
+    fn auto_explicit_none_and_other_providers_do_not_add_ultra_orchestration() {
+        let codex = test_manifest("codex");
+        let coordination_tools = vec![test_tool("tool_search")];
+        assert_eq!(
+            system_prompt_for_request(&codex, "base", None, &coordination_tools),
+            "base"
+        );
+        let none = "none".parse::<ReasoningEffort>().unwrap();
+        assert_eq!(
+            system_prompt_for_request(&codex, "base", Some(&none), &coordination_tools),
+            "base"
+        );
+
+        let ultra = ReasoningEffort::ULTRA.parse::<ReasoningEffort>().unwrap();
+        let anthropic = test_manifest("anthropic");
+        assert_eq!(
+            system_prompt_for_request(&anthropic, "base", Some(&ultra), &coordination_tools),
+            "base"
+        );
+        assert_eq!(
+            system_prompt_for_request(&codex, "base", Some(&ultra), &[]),
+            "base"
+        );
     }
 }

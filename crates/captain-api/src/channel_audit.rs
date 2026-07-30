@@ -9,7 +9,7 @@ pub(crate) fn record_inbound_dead_letters_cleared(
     cleared_messages: u64,
     remaining_messages: u64,
 ) {
-    audit_log.record(
+    audit_log.record_or_alert(
         "system",
         AuditAction::ConfigChange,
         inbound_dead_letter_clear_detail(channel),

@@ -18,11 +18,13 @@ pub(super) fn replay_session_from(state: &mut ChatState, key: &str, path: &Path)
 }
 
 fn apply_loaded_session(state: &mut ChatState, key: &str, path: &Path, loaded: PersistedSession) {
-    state.messages = loaded
-        .messages
-        .into_iter()
-        .map(chat_message_from_persisted)
-        .collect();
+    state.replace_messages(
+        loaded
+            .messages
+            .into_iter()
+            .map(chat_message_from_persisted)
+            .collect(),
+    );
     state.streaming_text.clear();
     state.is_streaming = false;
     state.thinking = false;

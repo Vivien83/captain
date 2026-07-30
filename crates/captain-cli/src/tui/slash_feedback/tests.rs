@@ -36,7 +36,7 @@ fn payload_keeps_feedback_contract() {
 }
 
 #[test]
-fn status_messages_keep_hermes_full_tui_text() {
+fn status_messages_keep_expected_full_tui_text() {
     assert_eq!(
         feedback_requires_daemon_message(),
         "Le feedback nécessite le mode daemon avec un agent actif."

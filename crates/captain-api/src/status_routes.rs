@@ -1,7 +1,7 @@
 //! Runtime status route handlers.
 
 use crate::agent_api_egress_queue::agent_api_egress_queue_entries;
-use crate::channel_readiness::channel_readiness;
+use crate::channel_readiness::channel_readiness_with;
 use crate::channel_registry::{
     active_channel_names, channel_config_values, is_channel_configured, CHANNEL_REGISTRY,
 };
@@ -20,7 +20,10 @@ use axum::Json;
 use captain_types::version::captain_version;
 use std::sync::Arc;
 
-fn build_channel_status(config: &captain_types::config::ChannelsConfig) -> serde_json::Value {
+fn build_channel_status_with(
+    config: &captain_types::config::ChannelsConfig,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> serde_json::Value {
     let mut configured = Vec::new();
     let mut ready = Vec::new();
     let mut locked = Vec::new();
@@ -28,7 +31,7 @@ fn build_channel_status(config: &captain_types::config::ChannelsConfig) -> serde
     for meta in CHANNEL_REGISTRY {
         let is_configured = is_channel_configured(config, meta.name);
         let values = channel_config_values(config, meta.name);
-        let readiness = channel_readiness(meta, values.as_ref());
+        let readiness = channel_readiness_with(meta, values.as_ref(), resolve);
         let name = meta.name.to_string();
         if is_configured {
             configured.push(name.clone());
@@ -123,6 +126,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             serde_json::json!({"status": "unavailable", "error": error.to_string()})
         }
     };
+    let outbound_delivery_status = match state.kernel.outbound_delivery_snapshot() {
+        Ok(snapshot) => serde_json::to_value(snapshot).unwrap_or_else(
+            |error| serde_json::json!({"status": "unavailable", "error": error.to_string()}),
+        ),
+        Err(error) => {
+            serde_json::json!({"status": "unavailable", "error": error})
+        }
+    };
     let runtime_health_status = build_runtime_health_status(
         llm_driver_ready,
         &channel_status,
@@ -132,6 +143,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         &disk_status,
         &shutdown_status,
         &budget_status,
+        &outbound_delivery_status,
     );
 
     let mut status_payload = serde_json::json!({
@@ -177,12 +189,15 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "consciousness": consciousness_status,
         "agents": agents,
     });
+    status_payload["execution"] =
+        serde_json::to_value(config.exec_policy.host_execution_posture()).unwrap_or_default();
     status_payload["shutdown"] = shutdown_status;
     status_payload["disk"] = disk_status;
     status_payload["budget"] = budget_status;
     status_payload["streaming"] = crate::stream_metrics::status_json();
     status_payload["tool_runs"] = captain_runtime::tool_runs::global_registry().status_summary();
     status_payload["runtime_update"] = runtime_update_status;
+    status_payload["outbound_delivery"] = outbound_delivery_status;
     status_payload["runtime_health"] = runtime_health_status;
     Json(status_payload)
 }
@@ -190,7 +205,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn build_channel_status_with_queue(state: &AppState) -> serde_json::Value {
     let mut channel_status = {
         let live_channels = state.channels_config.read().await;
-        build_channel_status(&live_channels)
+        build_channel_status_with(&live_channels, &|key| state.kernel.resolve_credential(key))
     };
     let inbound_queue_status = {
         let bridge = state.bridge_manager.lock().await;
@@ -209,6 +224,10 @@ async fn build_channel_status_with_queue(state: &AppState) -> serde_json::Value 
 mod tests {
     use super::*;
     use captain_types::config::{ChannelsConfig, EmailConfig, TelegramConfig};
+
+    fn build_channel_status(config: &ChannelsConfig) -> serde_json::Value {
+        build_channel_status_with(config, &|key| std::env::var(key).ok())
+    }
 
     #[test]
     fn channel_status_marks_configured_but_locked_channels() {
@@ -245,6 +264,24 @@ mod tests {
         unsafe {
             std::env::remove_var("EMAIL_PASSWORD");
         }
+    }
+
+    #[test]
+    fn channel_status_uses_the_injected_credential_resolver() {
+        let status = build_channel_status_with(
+            &ChannelsConfig {
+                telegram: Some(TelegramConfig {
+                    bot_token_env: "MOUNTED_TELEGRAM_TOKEN".to_string(),
+                    allowed_users: vec!["12345".to_string()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            &|key| (key == "MOUNTED_TELEGRAM_TOKEN").then(|| "123:mounted".to_string()),
+        );
+
+        assert_eq!(status["ready"], serde_json::json!(["telegram"]));
+        assert_eq!(status["locked"], serde_json::json!([]));
     }
 
     #[test]

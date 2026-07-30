@@ -35,20 +35,20 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.9` explicitly.
+below pins `v0.1.0-alpha.10` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=captain.example.com \
     bash
@@ -61,8 +61,8 @@ domain/HTTPS wiring where the host supports it.
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.9"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.10"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -89,8 +89,8 @@ For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \
@@ -220,11 +220,19 @@ explicitly enabled, not exposed by accident.
 `~/.captain/initial-credentials.txt`. Opening either surface shows the login
 prompt first. To rotate the login from a conversation, ask Captain to change or generate web terminal
 credentials; it uses the native `web_credentials_update` tool and updates
-`config.toml` as the source of truth.
+`config.toml` as the source of truth. Password rotation also advances
+Captain's private browser-session epoch, so every previously issued web
+session is rejected immediately.
 
 New installs keep web sessions for 72 hours by default. Use
 `web_credentials_update` or edit `[auth].session_ttl_hours` to choose a shorter
 window such as 24 hours on exposed VPS hosts.
+
+Setup stores new passwords as salted Argon2id hashes. The first successful
+login with an older SHA-256 installation migrates its hash atomically.
+Browser cookies use `Secure` automatically behind declared HTTPS, and realtime
+browser connections exchange the cookie for a 30-second single-use ticket.
+Captain never authenticates protected routes from `?token=`.
 
 Configuration can be edited from the browser at:
 

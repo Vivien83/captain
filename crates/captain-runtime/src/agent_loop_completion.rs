@@ -40,6 +40,7 @@ pub(crate) fn decide_end_turn_response(input: EndTurnDecisionInput<'_>) -> EndTu
                 reply_to: parsed_directives.reply_to,
                 current_thread: parsed_directives.current_thread,
                 silent: true,
+                suggested_replies: None,
             },
         };
     }

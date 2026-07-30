@@ -1,4 +1,4 @@
-use crate::{cli_captain_home, test_api_key, ui};
+use crate::{cli_captain_home, production_credential_resolver_at, test_api_key_value, ui};
 
 use super::DoctorReport;
 
@@ -19,10 +19,13 @@ pub(super) fn check_providers(report: &mut DoctorReport) {
         ("FIREWORKS_API_KEY", "Fireworks", "fireworks"),
     ];
 
+    let Some(resolver) = credential_resolver(report) else {
+        return;
+    };
     let mut any_key_set = false;
     for (env_var, name, provider_id) in &provider_keys {
-        if std::env::var(env_var).is_ok() {
-            let valid = test_api_key(provider_id, env_var);
+        if let Some(key) = resolver.resolve(env_var) {
+            let valid = test_api_key_value(provider_id, &key);
             if valid {
                 if !report.json {
                     ui::provider_status(name, env_var, true);
@@ -31,7 +34,7 @@ pub(super) fn check_providers(report: &mut DoctorReport) {
                 ui::check_warn(&format!("{name} ({env_var}) - key rejected (401/403)"));
             }
             any_key_set = true;
-            report.push(serde_json::json!({"check": "provider", "name": name, "env_var": env_var, "status": if valid { "ok" } else { "warn" }, "live_test": !valid}));
+            report.push(serde_json::json!({"check": "provider", "name": name, "env_var": env_var, "status": if valid { "ok" } else { "warn" }, "live_test": true, "externally_managed": resolver.is_externally_managed(env_var)}));
         } else {
             if !report.json {
                 ui::provider_status(name, env_var, false);
@@ -65,10 +68,11 @@ pub(super) fn check_channels(report: &mut DoctorReport) {
         ("DISCORD_BOT_TOKEN", "Discord"),
         ("EMAIL_PASSWORD", "Email"),
     ];
+    let Some(resolver) = credential_resolver(report) else {
+        return;
+    };
     for (env_var, name) in &channel_keys {
-        let set = std::env::var(env_var).is_ok();
-        if set {
-            let val = std::env::var(env_var).unwrap_or_default();
+        if let Some(val) = resolver.resolve(env_var) {
             let format_ok = match *env_var {
                 "TELEGRAM_BOT_TOKEN" => val.contains(':'),
                 "DISCORD_BOT_TOKEN" => val.len() > 50,
@@ -81,7 +85,7 @@ pub(super) fn check_channels(report: &mut DoctorReport) {
             } else if !report.json {
                 ui::check_warn(&format!("{name} ({env_var}) - unexpected token format"));
             }
-            report.push(serde_json::json!({"check": "channel", "name": name, "env_var": env_var, "status": if format_ok { "ok" } else { "warn" }}));
+            report.push(serde_json::json!({"check": "channel", "name": name, "env_var": env_var, "status": if format_ok { "ok" } else { "warn" }, "externally_managed": resolver.is_externally_managed(env_var)}));
         } else {
             if !report.json {
                 ui::provider_status(name, env_var, false);
@@ -96,6 +100,9 @@ pub(super) fn check_env_consistency(report: &mut DoctorReport) {
     if !config_path.exists() {
         return;
     }
+    let Some(resolver) = credential_resolver(report) else {
+        return;
+    };
     let config_str = std::fs::read_to_string(&config_path).unwrap_or_default();
     for line in config_str.lines() {
         let trimmed = line.trim();
@@ -106,13 +113,94 @@ pub(super) fn check_env_consistency(report: &mut DoctorReport) {
             continue;
         };
         let val = val_part.trim().trim_matches('"');
-        if !val.is_empty() && std::env::var(val).is_err() {
+        if !val.is_empty() && !resolver.has_credential(val) {
             if !report.json {
                 ui::check_warn(&format!(
-                    "Config references {val} but it is not set in env or .env"
+                    "Config references {val} but no credential source can resolve it"
                 ));
             }
             report.push(serde_json::json!({"check": "env_consistency", "status": "warn", "missing_var": val}));
+        }
+    }
+}
+
+pub(super) fn check_external_secret_sources(report: &mut DoctorReport) {
+    let path = cli_captain_home()
+        .join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME);
+    let sources =
+        match captain_extensions::external_secret_sources::ExternalSecretSources::load(&path) {
+            Ok(sources) => sources,
+            Err(error) => {
+                if !report.json {
+                    ui::check_fail(&format!("External secret registry is invalid: {error}"));
+                }
+                report.push(serde_json::json!({
+                    "check": "external_secret_sources",
+                    "status": "fail",
+                    "error": error.to_string(),
+                }));
+                report.fail();
+                return;
+            }
+        };
+    let statuses = sources.statuses();
+    if statuses.is_empty() {
+        report.push(serde_json::json!({
+            "check": "external_secret_sources",
+            "status": "ok",
+            "count": 0,
+        }));
+        return;
+    }
+
+    if !report.json {
+        println!("\n  External Secret Sources:");
+    }
+    let mut all_ready = true;
+    for status in &statuses {
+        if status.ready {
+            if !report.json {
+                ui::check_ok(&format!("{} ({}) ready", status.key, status.source_type));
+            }
+        } else {
+            all_ready = false;
+            if !report.json {
+                ui::check_fail(&format!(
+                    "{} ({}) unavailable: {}",
+                    status.key,
+                    status.source_type,
+                    status.error_code.as_deref().unwrap_or("source_unavailable")
+                ));
+            }
+        }
+    }
+    report.push(serde_json::json!({
+        "check": "external_secret_sources",
+        "status": if all_ready { "ok" } else { "fail" },
+        "count": statuses.len(),
+        "sources": statuses,
+    }));
+    if !all_ready {
+        report.fail();
+    }
+}
+
+fn credential_resolver(
+    report: &mut DoctorReport,
+) -> Option<captain_extensions::credentials::CredentialResolver> {
+    match production_credential_resolver_at(&cli_captain_home()) {
+        Ok(resolver) => Some(resolver),
+        Err(error) => {
+            if !report.json {
+                ui::check_fail(&format!("Secret sources unavailable: {error}"));
+            }
+            report.push(serde_json::json!({
+                "check": "credential_resolution",
+                "status": "fail",
+                "error": error.to_string(),
+            }));
+            report.fail();
+            None
         }
     }
 }
@@ -144,14 +232,32 @@ fn check_kernel_config(report: &mut DoctorReport, cfg: captain_types::config::Ke
     }
     report.push(serde_json::json!({"check": "config_deser", "status": "ok"}));
 
-    let mode = format!("{:?}", cfg.exec_policy.mode);
+    let posture = cfg.exec_policy.host_execution_posture();
+    let mode = posture.policy_mode.as_str();
+    let critical_mode = posture.critical_mode.as_str();
     let safe_bins_count = cfg.exec_policy.safe_bins.len();
     if !report.json {
         ui::check_ok(&format!(
-            "Exec policy: mode={mode}, safe_bins={safe_bins_count}"
+            "Exec policy: {mode}/{critical_mode}, backend={}, isolation={}, os_isolation={}",
+            posture.backend, posture.isolation_level, posture.os_isolation
         ));
+        if posture.critical_mode == captain_types::config::CriticalMode::Open {
+            ui::check_warn(
+                "Critical mode is open: detected catastrophic commands may run after approval",
+            );
+        }
     }
-    report.push(serde_json::json!({"check": "exec_policy", "status": "ok", "mode": mode, "safe_bins": safe_bins_count}));
+    report.push(serde_json::json!({
+        "check": "exec_policy",
+        "status": "ok",
+        "mode": mode,
+        "critical_mode": critical_mode,
+        "safe_bins": safe_bins_count,
+        "backend": posture.backend,
+        "isolation_level": posture.isolation_level,
+        "os_isolation": posture.os_isolation,
+        "dangerous_command_guard": posture.dangerous_command_guard,
+    }));
     check_includes(report, &cfg);
     check_mcp_servers(report, &cfg);
 }
@@ -260,7 +366,8 @@ pub(super) fn check_skills(report: &mut DoctorReport) {
                 .prompt_context
                 .as_ref()
                 .map(|prompt| {
-                    captain_skills::verify::SkillVerifier::scan_prompt_content(prompt)
+                    captain_skills::verify::SkillVerifier::scan_prompt_content_advisory(prompt)
+                        .findings
                         .iter()
                         .any(|w| {
                             matches!(
@@ -275,15 +382,26 @@ pub(super) fn check_skills(report: &mut DoctorReport) {
     if injection_warnings > 0 {
         if !report.json {
             ui::check_warn(&format!(
-                "Prompt injection warnings in {injection_warnings} skill(s)"
+                "High-risk advisory phrase matches in {injection_warnings} skill(s); review required"
             ));
         }
-        report.push(serde_json::json!({"check": "skill_injection_scan", "status": "warn", "warnings": injection_warnings}));
+        report.push(serde_json::json!({
+            "check": "skill_prompt_advisory_scan",
+            "status": "warn",
+            "assurance": "advisory_heuristic",
+            "warnings": injection_warnings
+        }));
     } else {
         if !report.json {
-            ui::check_ok("All skills pass prompt injection scan");
+            ui::check_ok(
+                "Advisory skill phrase scan found no configured matches (not a security proof)",
+            );
         }
-        report.push(serde_json::json!({"check": "skill_injection_scan", "status": "ok"}));
+        report.push(serde_json::json!({
+            "check": "skill_prompt_advisory_scan",
+            "status": "ok",
+            "assurance": "advisory_heuristic"
+        }));
     }
 }
 

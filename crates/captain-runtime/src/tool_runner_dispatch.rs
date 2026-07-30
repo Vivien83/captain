@@ -111,7 +111,9 @@ async fn dispatch_io_execution_tool(
             .await
         }
         "screenshot" => tool_screenshot(request.input, request.workspace_root).await,
-        "execute_code" => tool_execute_code(request.input, request.workspace_root).await,
+        "execute_code" => {
+            tool_execute_code(request.input, request.workspace_root, request.exec_policy).await
+        }
         "document_pipeline" | "document_create" | "document_extract" => {
             dispatch_document_tool(
                 request.tool_name,
@@ -198,6 +200,11 @@ async fn dispatch_agent_memory_config_tool(
         | "agent_caps"
         | "agent_watch"
         | "agent_delegate"
+        | "agent_job_status"
+        | "agent_job_result"
+        | "agent_job_list"
+        | "agent_job_cancel"
+        | "agent_job_resume"
         | "agent_correct"
         | "fleet_create_manager"
         | "fleet_list_managers"
@@ -211,6 +218,7 @@ async fn dispatch_agent_memory_config_tool(
                 request.kernel,
                 request.caller_agent_id,
                 request.allowed_tools,
+                request.tool_use_id,
             )
             .await
         }
@@ -532,6 +540,7 @@ async fn dispatch_process_extension_tool(
                 request.input,
                 request.kernel,
                 request.workspace_root,
+                request.exec_policy,
             )
             .await
         }

@@ -376,8 +376,8 @@ mod tests {
                 agent_id,
                 "telegram".to_string(),
                 "1001".to_string(),
-                false,
-                Some("Service temporarily unavailable.".to_string()),
+                true,
+                None,
                 Some("topic-7".to_string())
             )]
         );

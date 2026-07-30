@@ -600,3 +600,16 @@ fn future_persisted_state_schema_is_rejected_without_downgrade() {
 
     assert!(error.contains("unsupported schema version"));
 }
+
+#[test]
+fn release_monitor_reports_unavailable_authoritative_token() {
+    assert!(
+        authoritative_optional_credential("CAPTAIN_GITHUB_TOKEN", None, true,)
+            .unwrap_err()
+            .contains("authoritative external source")
+    );
+    assert_eq!(
+        authoritative_optional_credential("CAPTAIN_GITHUB_TOKEN", None, false).unwrap(),
+        None
+    );
+}

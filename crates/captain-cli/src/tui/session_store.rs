@@ -126,15 +126,15 @@ pub fn save_session(
     session_path: Option<&Path>,
     session: &PersistedSession,
 ) -> Option<PathBuf> {
-    let dir = agent_dir(agent_key)?;
-    if captain_types::durable_fs::create_dir_all(&dir).is_err() {
-        return None;
-    }
-
     let path = match session_path {
         Some(p) => p.to_path_buf(),
-        None => dir.join(format!("{}.json", session.created_at.max(now_secs()))),
+        None => agent_dir(agent_key)?.join(format!("{}.json", session.created_at.max(now_secs()))),
     };
+    let parent = path.parent()?;
+    if !parent.as_os_str().is_empty() && captain_types::durable_fs::create_dir_all(parent).is_err()
+    {
+        return None;
+    }
 
     let mut to_write = session.clone();
     to_write.updated_at = now_secs();
@@ -316,17 +316,6 @@ fn embedded_uuid(value: &str) -> Option<uuid::Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn unique_key(prefix: &str) -> String {
-        format!(
-            "test_{}_{}",
-            prefix,
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        )
-    }
 
     #[test]
     fn sanitize_strips_unsafe_chars() {
@@ -337,10 +326,11 @@ mod tests {
 
     #[test]
     fn save_and_load_roundtrip() {
-        let key = unique_key("roundtrip");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("nested/session.json");
         let session = PersistedSession {
-            session_id: None,
-            agent_id: None,
+            session_id: Some("session-roundtrip".into()),
+            agent_id: Some("agent-roundtrip".into()),
             agent_name: "captain".into(),
             model_label: "anthropic/claude-sonnet-4".into(),
             mode_label: "in-process".into(),
@@ -359,23 +349,24 @@ mod tests {
             created_at: now_secs(),
             updated_at: 0,
         };
-        let path = save_session(&key, None, &session).expect("save ok");
-        assert!(path.exists());
-        let (loaded_path, loaded) = load_latest_session(&key).expect("load ok");
-        assert_eq!(loaded_path, path);
+        let written = save_session("captain", Some(&path), &session).expect("save ok");
+        assert_eq!(written, path);
+        let loaded = load_session_at(&path).expect("load ok");
         assert_eq!(loaded.messages.len(), 1);
         assert_eq!(loaded.messages[0].text, "salut");
         assert_eq!(loaded.current_context_tokens, 10);
         assert_eq!(loaded.context_window_tokens, 200_000);
         assert_eq!(loaded.session_input_tokens, 12);
         assert_eq!(loaded.session_cached_input_tokens, 8);
-        let _ = std::fs::remove_dir_all(agent_dir(&key).unwrap());
     }
 
     #[test]
     fn save_truncates_long_history() {
-        let key = unique_key("truncate");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("session.json");
         let mut session = PersistedSession {
+            session_id: Some("session-truncate".into()),
+            agent_id: Some("agent-truncate".into()),
             agent_name: "captain".into(),
             ..Default::default()
         };
@@ -387,11 +378,10 @@ mod tests {
                 tool: None,
             });
         }
-        save_session(&key, None, &session).expect("save ok");
-        let (_, loaded) = load_latest_session(&key).expect("load ok");
+        save_session("captain", Some(&path), &session).expect("save ok");
+        let loaded = load_session_at(&path).expect("load ok");
         assert_eq!(loaded.messages.len(), MAX_PERSISTED_MESSAGES);
         assert_eq!(loaded.messages[0].text, "msg 50");
-        let _ = std::fs::remove_dir_all(agent_dir(&key).unwrap());
     }
 
     #[test]

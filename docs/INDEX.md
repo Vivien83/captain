@@ -22,6 +22,9 @@ Use this index to find the right document quickly.
 | [Deployment](DEPLOY.md) | Deployment guidance for local machines and VPS hosts |
 | [GitHub + VPS Install](deployment/github-vps-install.md) | Pinned public prerelease install and service setup |
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS considerations |
+| [Release Provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
+| [Repository Governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.10 Release Notes](releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |
 | [0.1.0-alpha.9 Release Notes](releases/v0.1.0-alpha.9.md) | Durable workflow learning and native release updates |
 | [0.1.0-alpha.8 Release Notes](releases/v0.1.0-alpha.8.md) | Captain Forge native capabilities and truthful live subscription quotas |
 | [0.1.0-alpha.7 Release Notes](releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
@@ -67,6 +70,7 @@ Use this index to find the right document quickly.
 | Document | Purpose |
 |---|---|
 | [Architecture](architecture.md) | Runtime structure, boot, sessions, tools, and operational boundaries |
+| [Performance Budgets](performance-budgets.md) | Exact batching, long-transcript, frame, and viewport regression contracts |
 | [Channel Adapters](channel-adapters.md) | Setup and operation of Telegram, Discord, Signal, and Email |
 | [API Reference](api-reference.md) | HTTP/WebSocket API reference |
 | [Agents](agent-templates.md) | Manifests, lifecycle, capabilities, and external in/out API |

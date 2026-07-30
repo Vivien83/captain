@@ -29,10 +29,14 @@ export function statusSnapshot(payload = {}) {
       const entry = objectAt(value);
       return Object.keys(entry).length === 0 ? null : {
         usedPercent: numberAt(entry.used_percent),
+        remainingPercent: optionalNumber(entry.remaining_percent)
+          ?? Math.max(0, Math.min(100, 100 - numberAt(entry.used_percent))),
+        remainingSource: stringAt(entry.remaining_source, 'derived_from_provider_used_percent'),
         windowSeconds: optionalNumber(entry.window_seconds),
         resetsAt: stringAt(entry.resets_at),
       };
     };
+    const spend = objectAt(objectAt(quota.spend_control).individual_limit);
     return {
       provider: stringAt(quota.provider, 'provider'),
       id: stringAt(quota.limit_id, 'quota'),
@@ -43,6 +47,17 @@ export function statusSnapshot(payload = {}) {
       source: stringAt(quota.source, 'unknown'),
       primary: window(quota.primary),
       secondary: window(quota.secondary),
+      spendControl: Object.keys(spend).length === 0 ? null : {
+        reached: objectAt(quota.spend_control).reached === true,
+        source: stringAt(spend.source),
+        limit: stringAt(spend.limit),
+        used: stringAt(spend.used),
+        remaining: stringAt(spend.remaining),
+        usedPercent: numberAt(spend.used_percent),
+        remainingPercent: numberAt(spend.remaining_percent),
+        remainingSource: stringAt(spend.remaining_source, 'provider_reported'),
+        resetsAt: stringAt(spend.resets_at),
+      },
     };
   });
   const workload = objectAt(body.workload);

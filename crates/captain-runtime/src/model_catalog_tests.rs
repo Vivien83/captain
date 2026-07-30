@@ -106,6 +106,22 @@ fn test_detect_auth_local_providers() {
 }
 
 #[test]
+fn detect_auth_with_uses_the_caller_credential_chain() {
+    let mut catalog = ModelCatalog::new();
+
+    catalog.detect_auth_with(&|key| key == "OPENAI_API_KEY");
+
+    assert_eq!(
+        catalog.get_provider("openai").unwrap().auth_status,
+        AuthStatus::Configured
+    );
+    assert_eq!(
+        catalog.get_provider("anthropic").unwrap().auth_status,
+        AuthStatus::Missing
+    );
+}
+
+#[test]
 fn test_available_models_includes_local() {
     let mut catalog = ModelCatalog::new();
     catalog.detect_auth();

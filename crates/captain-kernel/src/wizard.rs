@@ -171,6 +171,7 @@ impl SetupWizard {
                 model: model.to_string(),
                 max_tokens: 4096,
                 temperature: 0.7,
+                reasoning_effort: None,
                 system_prompt,
                 api_key_env: None,
                 base_url: None,

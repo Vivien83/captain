@@ -1,4 +1,5 @@
 use crate::project_runtime_checkpoints::{append_runtime_phase_checkpoint, trim_runtime_text};
+use crate::project_runtime_completion::collect_project_goal_check_receipts;
 use crate::project_runtime_defaults::project_session_id;
 use crate::project_runtime_mutation::{project_runtime_json, update_project_runtime_state};
 use crate::project_runtime_worker_cleanup::{
@@ -43,7 +44,13 @@ pub(crate) async fn finish_successful_project_worker_phase(
 
     if outcome.blocked {
         append_worker_phase_checkpoint(state, &updated, run_id, phase, "blocked");
-        return Err(worker_blocker_error(phase, &outcome.summary));
+        return Err(worker_blocker_error(
+            phase,
+            outcome
+                .blocking_reason
+                .as_deref()
+                .unwrap_or(&outcome.summary),
+        ));
     }
 
     let cleanup = stop_completed_project_worker(state, project, phase, agent_id);
@@ -63,7 +70,8 @@ async fn record_successful_worker_turn(
     result: AgentLoopResult,
     runtime_snapshot: &serde_json::Value,
 ) -> Result<(project::Project, RuntimeWorkerTurnOutcome), String> {
-    let outcome = runtime_worker_turn_outcome(spec, &result, runtime_snapshot);
+    let goal_checks = collect_project_goal_check_receipts(state, project, phase).await;
+    let outcome = runtime_worker_turn_outcome(spec, &result, runtime_snapshot, &goal_checks);
     update_project_task_for_phase(
         state,
         &project.id,

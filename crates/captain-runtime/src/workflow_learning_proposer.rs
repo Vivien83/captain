@@ -416,14 +416,17 @@ fn validate_skill_source(name: &str, source: &str) -> Result<(), WorkflowPropose
     if body.trim().is_empty() {
         return invalid("SKILL.md body is empty");
     }
-    let warnings = captain_skills::verify::SkillVerifier::scan_prompt_content(&body);
-    if warnings.iter().any(|warning| {
+    let report = captain_skills::verify::SkillVerifier::scan_prompt_content_advisory(&body);
+    if report.findings.iter().any(|warning| {
         matches!(
             warning.severity,
             captain_skills::verify::WarningSeverity::Critical
         )
     }) {
-        return invalid("SKILL.md failed the critical prompt-injection scan");
+        return invalid(format!(
+            "SKILL.md contains a high-risk {} phrase match disallowed for generated drafts",
+            report.assurance.as_str()
+        ));
     }
     Ok(())
 }
@@ -645,7 +648,7 @@ fn artifact_shape(expected_kind: WorkflowDraftKind) -> &'static str {
 
 fn validate_refinement_instruction(instruction: &str) -> Result<(), WorkflowProposerError> {
     let len = instruction.trim().chars().count();
-    if len < 4 || len > MAX_REFINEMENT_INSTRUCTION_CHARS || instruction.contains('\0') {
+    if !(4..=MAX_REFINEMENT_INSTRUCTION_CHARS).contains(&len) || instruction.contains('\0') {
         return Err(WorkflowProposerError::UnsafeRefinementInstruction(
             "length or content is invalid".to_string(),
         ));

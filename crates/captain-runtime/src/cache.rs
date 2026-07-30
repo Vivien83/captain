@@ -224,7 +224,8 @@ impl Cache for MokaCache {
 // Redb impl (persistent embedded layer — v3.10b)
 // ---------------------------------------------------------------------------
 
-const REDB_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("captain_cache");
+const LEGACY_REDB_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("captain_cache");
+const REDB_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("captain_cache_v2_json");
 
 /// Serializable envelope written to redb.
 ///
@@ -267,13 +268,16 @@ impl RedbCache {
             .map_err(|e| anyhow::anyhow!("redb open join error: {e}"))?
             .map_err(|e| anyhow::anyhow!("redb open failed ({}): {e}", path.display()))?;
 
-        // Touch the table once so future reads never race with creation.
+        // The legacy table held bincode payloads. It is only a recomputable
+        // cache, so discard it atomically instead of keeping an unmaintained
+        // decoder or guessing at bytes with a different format.
         let db = Arc::new(db);
         {
             let db = Arc::clone(&db);
             task::spawn_blocking(move || -> anyhow::Result<()> {
                 let txn = db.begin_write()?;
                 {
+                    let _ = txn.delete_table(LEGACY_REDB_TABLE)?;
                     let _table = txn.open_table(REDB_TABLE)?;
                 }
                 txn.commit()?;
@@ -302,8 +306,8 @@ impl RedbCache {
     }
 
     /// Run a one-shot garbage collection pass, removing every entry whose
-    /// `expires_at_unix_ms` has elapsed. Returns the number of entries
-    /// removed.
+    /// `expires_at_unix_ms` has elapsed or whose envelope is malformed.
+    /// Returns the number of entries removed.
     ///
     /// Intended to be called from [`RedbCache::spawn_gc_task`] or ad-hoc
     /// from tests.
@@ -321,10 +325,15 @@ impl RedbCache {
                 for row in table.iter()? {
                     let (key, value) = row?;
                     let raw = value.value();
-                    if let Ok(entry) = bincode::deserialize::<RedbEntry>(raw) {
-                        if entry.expires_at_unix_ms != 0 && entry.expires_at_unix_ms <= now_ms {
+                    match serde_json::from_slice::<RedbEntry>(raw) {
+                        Ok(entry)
+                            if entry.expires_at_unix_ms != 0
+                                && entry.expires_at_unix_ms <= now_ms =>
+                        {
                             to_delete.push(key.value().to_string());
                         }
+                        Err(_) => to_delete.push(key.value().to_string()),
+                        _ => {}
                     }
                 }
             }
@@ -364,7 +373,7 @@ impl RedbCache {
                 ticker.tick().await;
                 match this.run_gc().await {
                     Ok(n) if n > 0 => {
-                        tracing::debug!("RedbCache GC removed {n} expired entries");
+                        tracing::debug!("RedbCache GC removed {n} stale entries");
                     }
                     Ok(_) => {}
                     Err(err) => tracing::warn!("RedbCache GC failed: {err}"),
@@ -393,22 +402,37 @@ impl Cache for RedbCache {
         let key_owned = key.to_string();
         let outcome: Option<String> =
             task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+                let mut malformed = false;
                 let read_txn = db.begin_read()?;
                 let table = read_txn.open_table(REDB_TABLE)?;
-                match table.get(key_owned.as_str())? {
-                    Some(raw) => {
-                        let entry: RedbEntry = bincode::deserialize(raw.value())
-                            .map_err(|e| anyhow::anyhow!("redb deserialize: {e}"))?;
-                        if entry.expires_at_unix_ms != 0
-                            && entry.expires_at_unix_ms <= now_unix_ms()
+                let outcome = match table.get(key_owned.as_str())? {
+                    Some(raw) => match serde_json::from_slice::<RedbEntry>(raw.value()) {
+                        Ok(entry)
+                            if entry.expires_at_unix_ms != 0
+                                && entry.expires_at_unix_ms <= now_unix_ms() =>
                         {
-                            Ok(None)
-                        } else {
-                            Ok(Some(entry.value))
+                            None
                         }
+                        Ok(entry) => Some(entry.value),
+                        Err(_) => {
+                            malformed = true;
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                drop(table);
+                drop(read_txn);
+
+                if malformed {
+                    let write_txn = db.begin_write()?;
+                    {
+                        let mut table = write_txn.open_table(REDB_TABLE)?;
+                        table.remove(key_owned.as_str())?;
                     }
-                    None => Ok(None),
+                    write_txn.commit()?;
                 }
+                Ok(outcome)
             })
             .await
             .map_err(|e| anyhow::anyhow!("redb get join error: {e}"))??;
@@ -433,8 +457,8 @@ impl Cache for RedbCache {
                 value,
                 expires_at_unix_ms,
             };
-            let bytes =
-                bincode::serialize(&entry).map_err(|e| anyhow::anyhow!("redb serialize: {e}"))?;
+            let bytes = serde_json::to_vec(&entry)
+                .map_err(|e| anyhow::anyhow!("redb JSON serialize: {e}"))?;
 
             let write_txn = db.begin_write()?;
             {
@@ -893,6 +917,61 @@ mod tests {
             .expect("open redb #2");
         let got = cache2.get("persistent").await.unwrap();
         assert_eq!(got.as_deref(), Some("42"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn redb_discards_legacy_bincode_table_on_open() {
+        let path = unique_redb_path();
+        {
+            let db = Database::create(&path).expect("create legacy redb");
+            let txn = db.begin_write().expect("begin legacy write");
+            {
+                let mut table = txn
+                    .open_table(LEGACY_REDB_TABLE)
+                    .expect("open legacy table");
+                table
+                    .insert("legacy", &[0xde, 0xad, 0xbe, 0xef][..])
+                    .expect("insert legacy bytes");
+            }
+            txn.commit().expect("commit legacy cache");
+        }
+
+        let cache = RedbCache::open(&path, Duration::from_secs(600))
+            .await
+            .expect("open migrated redb");
+        assert_eq!(cache.entry_count().await.unwrap(), 0);
+        cache.insert("current".into(), "42".into()).await.unwrap();
+        assert_eq!(cache.get("current").await.unwrap().as_deref(), Some("42"));
+        drop(cache);
+
+        let db = Database::create(&path).expect("reopen migrated redb");
+        let read_txn = db.begin_read().expect("begin migrated read");
+        assert!(read_txn.open_table(LEGACY_REDB_TABLE).is_err());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn redb_malformed_json_is_a_purged_cache_miss() {
+        let path = unique_redb_path();
+        let cache = RedbCache::open(&path, Duration::from_secs(600))
+            .await
+            .expect("open redb");
+        {
+            let txn = cache.db.begin_write().expect("begin malformed write");
+            {
+                let mut table = txn.open_table(REDB_TABLE).expect("open current table");
+                table
+                    .insert("malformed", b"{not-json".as_slice())
+                    .expect("insert malformed bytes");
+            }
+            txn.commit().expect("commit malformed bytes");
+        }
+
+        assert!(cache.get("malformed").await.unwrap().is_none());
+        assert_eq!(cache.entry_count().await.unwrap(), 0);
 
         let _ = std::fs::remove_file(&path);
     }

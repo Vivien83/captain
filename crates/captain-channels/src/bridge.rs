@@ -14,6 +14,7 @@ mod command_dispatch;
 mod command_format;
 mod command_home;
 mod command_model;
+mod command_reasoning;
 mod command_response;
 mod command_review;
 mod inbound_ack;
@@ -62,12 +63,16 @@ use crate::inbound_queue::InboundSessionQueue;
 use crate::inbound_queue_types::{
     InboundStart, INBOUND_DEAD_LETTER_RETENTION_SECS, MAX_RECOVERED_INBOUND_ATTEMPTS,
 };
+use crate::outbound_delivery::{
+    OutboundDeliveryClaim, OutboundDeliveryIntent, OutboundDeliveryPreparation,
+};
 use crate::router::AgentRouter;
 use crate::types::{ChannelAdapter, ChannelContent, ChannelMessage};
 use async_trait::async_trait;
 use captain_types::agent::AgentId;
 use captain_types::config::ChannelOverrides;
 use captain_types::message::ContentBlock;
+use captain_types::reasoning::AgentReasoningStatus;
 use captain_types::release_update::{
     RuntimeUpdateOperatorContext, RuntimeUpdateOperatorResolution,
 };
@@ -79,7 +84,7 @@ use channel_mapping::channel_type_str;
 use channel_policy::channel_policy_ignore_reason;
 #[cfg(test)]
 use command_dispatch::{handle_command, CommandContext};
-use command_response::send_response;
+use command_response::{execute_outbound_claim, outbound_delivery_owner, send_response};
 use dashmap::DashMap;
 use futures::StreamExt;
 use inbound_ack::{send_inbound_interjection_ack, send_inbound_queued_ack};
@@ -350,6 +355,15 @@ pub trait ChannelBridgeHandle: Send + Sync {
         Err("Not implemented".to_string())
     }
 
+    /// Trigger compaction while projecting truthful progress to the caller.
+    async fn compact_session_with_progress(
+        &self,
+        agent_id: AgentId,
+        _progress: tokio::sync::mpsc::Sender<captain_types::compaction::CompactionProgress>,
+    ) -> Result<String, String> {
+        self.compact_session(agent_id).await
+    }
+
     /// Set an agent's model.
     async fn set_model(&self, _agent_id: AgentId, _model: &str) -> Result<String, String> {
         Err("Not implemented".to_string())
@@ -385,9 +399,18 @@ pub trait ChannelBridgeHandle: Send + Sync {
         Err("Not implemented".to_string())
     }
 
-    /// Toggle extended thinking mode for an agent.
-    async fn set_thinking(&self, _agent_id: AgentId, _on: bool) -> Result<String, String> {
-        Ok("Extended thinking preference saved.".to_string())
+    /// Read the exact configured/effective reasoning effort for an agent.
+    async fn reasoning_status(&self, _agent_id: AgentId) -> Result<AgentReasoningStatus, String> {
+        Err("Reasoning control is not available for this runtime.".to_string())
+    }
+
+    /// Set one explicit effort, or clear the override with `None` (`auto`).
+    async fn set_reasoning_effort(
+        &self,
+        _agent_id: AgentId,
+        _effort: Option<&str>,
+    ) -> Result<AgentReasoningStatus, String> {
+        Err("Reasoning control is not available for this runtime.".to_string())
     }
 
     /// List installed skills as formatted text for channel display.
@@ -467,6 +490,47 @@ pub trait ChannelBridgeHandle: Send + Sync {
         // Default: no tracking
     }
 
+    /// Persist an outbound payload and atomically lease its first attempt.
+    ///
+    /// Production handles must fail closed when durable state cannot be written:
+    /// sending without the record would make crash recovery impossible.
+    async fn prepare_outbound_delivery(
+        &self,
+        _intent: OutboundDeliveryIntent,
+        _lease_owner: &str,
+    ) -> Result<OutboundDeliveryPreparation, String> {
+        Ok(OutboundDeliveryPreparation::Bypass)
+    }
+
+    /// Claim one due or interrupted outbound delivery for a running adapter.
+    async fn claim_outbound_delivery(
+        &self,
+        _channel: &str,
+        _lease_owner: &str,
+    ) -> Result<Option<OutboundDeliveryClaim>, String> {
+        Ok(None)
+    }
+
+    /// Commit the exact transport success for a leased delivery.
+    async fn complete_outbound_delivery(
+        &self,
+        _delivery_id: &str,
+        _lease_token: &str,
+        _external_message_id: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Release or dead-letter a failed transport attempt with bounded retry.
+    async fn retry_outbound_delivery(
+        &self,
+        _delivery_id: &str,
+        _lease_token: &str,
+        _error: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Check if auto-reply is enabled and the message should trigger one.
     /// Returns Some(reply_text) if auto-reply fires, None otherwise.
     async fn check_auto_reply(&self, _agent_id: AgentId, _message: &str) -> Option<String> {
@@ -539,7 +603,8 @@ pub trait ChannelBridgeHandle: Send + Sync {
         } else {
             captain_types::approval::ApprovalDecision::Denied
         };
-        self.resolve_approval_text_with(id_prefix, decision).await
+        self.resolve_approval_text_with_reason(id_prefix, decision, None)
+            .await
     }
 
     /// Q.11.b.2 — Resolve a pending approval with one of the 4
@@ -547,15 +612,48 @@ pub trait ChannelBridgeHandle: Send + Sync {
     /// Override this in your bridge impl; the default returns a stub.
     async fn resolve_approval_text_with(
         &self,
+        id_prefix: &str,
+        decision: captain_types::approval::ApprovalDecision,
+    ) -> String {
+        self.resolve_approval_text_with_reason(id_prefix, decision, None)
+            .await
+    }
+
+    /// Resolve an approval while preserving a bounded operator reason.
+    async fn resolve_approval_text_with_reason(
+        &self,
+        id_prefix: &str,
+        decision: captain_types::approval::ApprovalDecision,
+        reason: Option<&str>,
+    ) -> String {
+        self.resolve_approval_text_with_context(id_prefix, decision, reason, "channel")
+            .await
+    }
+
+    /// Resolve with the authenticated channel operator identity for audit.
+    async fn resolve_approval_text_with_context(
+        &self,
         _id_prefix: &str,
         _decision: captain_types::approval::ApprovalDecision,
+        _reason: Option<&str>,
+        _decided_by: &str,
     ) -> String {
         "Approvals not available.".to_string()
+    }
+
+    /// Revoke one durable exact-action approval rule by UUID prefix.
+    async fn revoke_approval_rule_text(&self, _id_prefix: &str, _decided_by: &str) -> String {
+        "Approval rules not available.".to_string()
     }
 
     /// List pending learning review items.
     async fn list_learning_review_text(&self) -> String {
         "Learning review not available.".to_string()
+    }
+
+    /// Render the exact operational state of Skill Learning V2.
+    async fn learning_status_text(&self) -> String {
+        "Learning status not available.".to_string()
     }
 
     /// Approve or reject a pending learning candidate by id prefix.
@@ -894,6 +992,9 @@ impl AdapterDispatchLoop {
 
     async fn run(mut self) {
         self.dispatch_recovered_pending();
+        let mut outbound_tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        outbound_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut outbound_state_error_logged = false;
         loop {
             tokio::select! {
                 msg = self.stream.next() => {
@@ -907,8 +1008,36 @@ impl AdapterDispatchLoop {
                         break;
                     }
                 }
+                _ = outbound_tick.tick() => {
+                    match self.drain_recoverable_outbound().await {
+                        Ok(()) => outbound_state_error_logged = false,
+                        Err(error) if !outbound_state_error_logged => {
+                            outbound_state_error_logged = true;
+                            warn!(%error, channel = %self.adapter.name(), "durable outbound recovery paused");
+                        }
+                        Err(_) => {}
+                    }
+                }
             }
         }
+    }
+
+    async fn drain_recoverable_outbound(&mut self) -> Result<(), String> {
+        for _ in 0..8 {
+            let Some(claim) = self
+                .handle
+                .claim_outbound_delivery(self.adapter.name(), outbound_delivery_owner())
+                .await?
+            else {
+                break;
+            };
+            if let Err(error) =
+                execute_outbound_claim(&self.handle, self.adapter.as_ref(), claim).await
+            {
+                debug!(%error, channel = %self.adapter.name(), "durable outbound retry deferred");
+            }
+        }
+        Ok(())
     }
 
     fn dispatch_recovered_pending(&self) {
@@ -1633,7 +1762,7 @@ impl<'a> InboundMessageDispatchContext<'a> {
         InboundCommandExecutionContext {
             handle: self.handle,
             router: self.router,
-            adapter: self.adapter,
+            adapter: self.adapter_arc,
             sender: &self.message.sender,
             sender_user_id: sender_user_id(self.message),
             channel: self.channel_type,
@@ -1813,7 +1942,7 @@ async fn inbound_rate_limit_allows(ctx: &InboundMessageDispatchContext<'_>) -> b
     ) {
         Ok(()) => true,
         Err(message) => {
-            send_response(
+            let _ = send_response(
                 ctx.adapter,
                 &ctx.message.sender,
                 message,
@@ -1857,6 +1986,8 @@ mod tests {
         agents: Mutex<Vec<(AgentId, String)>>,
     }
 
+    struct LearningStatusCommandHandle;
+
     #[async_trait]
     impl ChannelBridgeHandle for MockHandle {
         async fn send_message(
@@ -1876,6 +2007,38 @@ mod tests {
         }
         async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
             Err("spawn not implemented in mock".to_string())
+        }
+    }
+
+    #[async_trait]
+    impl ChannelBridgeHandle for LearningStatusCommandHandle {
+        async fn send_message(
+            &self,
+            _agent_id: AgentId,
+            _message: &str,
+            _channel_type: Option<&str>,
+        ) -> Result<String, String> {
+            Err("model path must not be reached".to_string())
+        }
+
+        async fn find_agent_by_name(&self, _name: &str) -> Result<Option<AgentId>, String> {
+            Ok(None)
+        }
+
+        async fn list_agents(&self) -> Result<Vec<(AgentId, String)>, String> {
+            Ok(Vec::new())
+        }
+
+        async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
+            Err("spawn not implemented in mock".to_string())
+        }
+
+        async fn learning_status_text(&self) -> String {
+            "LEARNING_STATUS_RICH_CARD".to_string()
+        }
+
+        async fn list_learning_review_text(&self) -> String {
+            "LEARNING_REVIEW_QUEUE".to_string()
         }
     }
 
@@ -2700,6 +2863,35 @@ mod tests {
         )
         .await;
         assert!(result.contains("/agents"));
+    }
+
+    #[tokio::test]
+    async fn learning_command_routes_to_operational_status_not_review_queue() {
+        let handle: Arc<dyn ChannelBridgeHandle> = Arc::new(LearningStatusCommandHandle);
+        let router = Arc::new(AgentRouter::new());
+        let sender = ChannelUser {
+            platform_id: "user1".to_string(),
+            display_name: "Test".to_string(),
+            captain_user: None,
+        };
+        let pending_model_switches = test_pending_model_switches();
+        let context = || CommandContext {
+            handle: &handle,
+            router: &router,
+            sender: &sender,
+            sender_user_id: &sender.platform_id,
+            channel: "telegram",
+            thread_id: None,
+            source_message_id: None,
+            pending_model_switches: &pending_model_switches,
+        };
+
+        let status = handle_command("learning", &[], context()).await;
+        let review = handle_command("learnings", &[], context()).await;
+
+        assert!(status.contains("LEARNING_STATUS_RICH_CARD"));
+        assert!(!status.contains("LEARNING_REVIEW_QUEUE"));
+        assert!(review.contains("LEARNING_REVIEW_QUEUE"));
     }
 
     #[tokio::test]

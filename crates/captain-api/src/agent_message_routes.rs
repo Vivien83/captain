@@ -567,6 +567,13 @@ fn stream_event_to_sse(
             .event("phase")
             .json_data(serde_json::json!({"phase": phase, "detail": detail}))
             .unwrap_or_else(|_| Event::default().data("error")),
+        StreamEvent::SuggestedReplies { options } => Event::default()
+            .event("suggested_replies")
+            .json_data(serde_json::json!({
+                "type": "suggested_replies",
+                "options": options,
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
         // Same shape as ws.rs's web relay ("type":"ask_user") — without this
         // arm, the wildcard below silently swallows the question as an SSE
         // comment and the daemon/TUI surface hangs until the 300s timeout,
@@ -593,6 +600,27 @@ mod tests {
     use chrono::{Duration as ChronoDuration, Utc};
     use std::time::Instant;
 
+    #[tokio::test]
+    async fn suggested_replies_use_the_typed_daemon_sse_shape() {
+        let event =
+            stream_event_to_sse(captain_runtime::llm_driver::StreamEvent::SuggestedReplies {
+                options: vec!["Court".to_string(), "Détaillé".to_string()],
+            });
+        let response = axum::response::sse::Sse::new(futures::stream::iter([Ok::<
+            _,
+            std::convert::Infallible,
+        >(event)]))
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("SSE body");
+        let body = String::from_utf8(body.to_vec()).expect("UTF-8 SSE");
+
+        assert!(body.contains("event: suggested_replies"), "{body}");
+        assert!(body.contains(r#""type":"suggested_replies""#), "{body}");
+        assert!(body.contains(r#""options":["Court","Détaillé"]"#), "{body}");
+    }
+
     fn test_state() -> (tempfile::TempDir, Arc<AppState>) {
         let tmp = tempfile::tempdir().unwrap();
         let config = KernelConfig {
@@ -615,7 +643,6 @@ mod tests {
             bridge_manager: tokio::sync::Mutex::new(None),
             channels_config: tokio::sync::RwLock::new(Default::default()),
             shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-            clawhub_cache: dashmap::DashMap::new(),
             ask_user_channels: dashmap::DashMap::new(),
             provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
         });

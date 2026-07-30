@@ -2,7 +2,10 @@ use crate::model_catalog_codex_auth::{
     codex_chatgpt_account_id, codex_home, read_codex_credential, refresh_or_rotate_codex_credential,
 };
 use captain_types::model_catalog::{ModelCatalogEntry, ModelTier, CODEX_BASE_URL};
-use std::collections::HashMap;
+use captain_types::reasoning::{
+    ModelReasoningCapabilities, ReasoningEffort, ReasoningEffortOption,
+};
+use std::collections::{HashMap, HashSet};
 
 const CODEX_UA: &str = "codex_cli_rs/0.0.0 (Captain Agent)";
 const CODEX_ORIGINATOR: &str = "codex_cli_rs";
@@ -35,6 +38,40 @@ struct CodexCachedModel {
     max_context_window: Option<u64>,
     #[serde(default)]
     input_modalities: Vec<String>,
+    #[serde(default)]
+    default_reasoning_level: Option<String>,
+    #[serde(default)]
+    supported_reasoning_levels: Vec<CodexCachedReasoningLevel>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+enum CodexCachedReasoningLevel {
+    Detailed {
+        effort: String,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    Name(String),
+}
+
+impl CodexCachedReasoningLevel {
+    fn into_option(self) -> Option<ReasoningEffortOption> {
+        let (effort, description) = match self {
+            Self::Detailed {
+                effort,
+                description,
+            } => (effort, description),
+            Self::Name(effort) => (effort, None),
+        };
+        effort
+            .parse::<ReasoningEffort>()
+            .ok()
+            .map(|effort| ReasoningEffortOption {
+                effort,
+                description: description.filter(|value| !value.trim().is_empty()),
+            })
+    }
 }
 
 pub(crate) fn apply_codex_models_cache(
@@ -104,6 +141,48 @@ pub fn codex_cached_model_ids() -> Vec<String> {
         .collect()
 }
 
+/// Read the reasoning efforts advertised by Codex for a model.
+///
+/// The live Codex cache is authoritative. A conservative fallback keeps
+/// offline installs usable for known reasoning-model families, but it is
+/// explicitly marked as not provider-reported on user surfaces.
+pub fn codex_reasoning_capabilities(model_id: &str) -> Option<ModelReasoningCapabilities> {
+    let slug = strip_codex_model_prefix(model_id);
+    if let Some(capabilities) =
+        read_codex_models_cache().and_then(|cache| reasoning_capabilities_from_cache(cache, slug))
+    {
+        return Some(capabilities);
+    }
+
+    codex_reasoning_fallback(slug)
+}
+
+fn reasoning_capabilities_from_cache(
+    cache: CodexModelsCache,
+    slug: &str,
+) -> Option<ModelReasoningCapabilities> {
+    if let Some(model) = cache.models.into_iter().find(|model| model.slug == slug) {
+        let mut seen = HashSet::new();
+        let supported_efforts = model
+            .supported_reasoning_levels
+            .into_iter()
+            .filter_map(CodexCachedReasoningLevel::into_option)
+            .filter(|option| seen.insert(option.effort.clone()))
+            .collect::<Vec<_>>();
+        let default_effort = model
+            .default_reasoning_level
+            .and_then(|value| value.parse::<ReasoningEffort>().ok());
+        if !supported_efforts.is_empty() || default_effort.is_some() {
+            return Some(ModelReasoningCapabilities {
+                default_effort,
+                supported_efforts,
+                reported_by_provider: true,
+            });
+        }
+    }
+    None
+}
+
 pub fn codex_model_choices() -> Vec<(String, String)> {
     let cached = codex_cached_model_entries()
         .into_iter()
@@ -117,6 +196,45 @@ pub fn codex_model_choices() -> Vec<(String, String)> {
     } else {
         cached
     }
+}
+
+fn read_codex_models_cache() -> Option<CodexModelsCache> {
+    let path = codex_home()?.join("models_cache.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<CodexModelsCache>(&raw).ok()
+}
+
+fn strip_codex_model_prefix(model_id: &str) -> &str {
+    model_id
+        .strip_prefix("codex/")
+        .or_else(|| model_id.strip_prefix("codex:"))
+        .or_else(|| model_id.strip_prefix("openai-codex/"))
+        .unwrap_or(model_id)
+}
+
+fn codex_reasoning_fallback(slug: &str) -> Option<ModelReasoningCapabilities> {
+    let normalized = slug.to_ascii_lowercase();
+    if !(normalized.contains("gpt-5") || normalized.starts_with('o')) {
+        return None;
+    }
+    let supported_efforts = [
+        ReasoningEffort::LOW,
+        ReasoningEffort::MEDIUM,
+        ReasoningEffort::HIGH,
+        ReasoningEffort::XHIGH,
+    ]
+    .into_iter()
+    .filter_map(|effort| effort.parse::<ReasoningEffort>().ok())
+    .map(|effort| ReasoningEffortOption {
+        effort,
+        description: None,
+    })
+    .collect();
+    Some(ModelReasoningCapabilities {
+        default_effort: None,
+        supported_efforts,
+        reported_by_provider: false,
+    })
 }
 
 fn codex_static_model_choices() -> Vec<(String, String)> {
@@ -317,6 +435,38 @@ mod tests {
     }
 
     #[test]
+    fn codex_reasoning_capabilities_preserve_provider_default_and_open_levels() {
+        let payload = serde_json::json!({
+            "models": [{
+                "slug": "gpt-5.6-sol",
+                "default_reasoning_level": "low",
+                "supported_reasoning_levels": [
+                    {"effort": "low", "description": "Fast"},
+                    {"effort": "ultra", "description": "Deepest"},
+                    {"effort": "ultra", "description": "Duplicate"}
+                ]
+            }]
+        });
+        let cache = parse_codex_models_cache_value(&payload).unwrap();
+        let capabilities = reasoning_capabilities_from_cache(cache, "gpt-5.6-sol").unwrap();
+
+        assert!(capabilities.reported_by_provider);
+        assert_eq!(
+            capabilities
+                .default_effort
+                .as_ref()
+                .map(ReasoningEffort::as_str),
+            Some("low")
+        );
+        assert_eq!(capabilities.supported_efforts.len(), 2);
+        assert_eq!(capabilities.supported_efforts[1].effort.as_str(), "ultra");
+        assert_eq!(
+            capabilities.supported_efforts[1].description.as_deref(),
+            Some("Deepest")
+        );
+    }
+
+    #[test]
     fn codex_catalog_uses_active_window_instead_of_override_ceiling() {
         let model = CodexCachedModel {
             slug: "gpt-test".to_string(),
@@ -327,6 +477,8 @@ mod tests {
             context_window: Some(272_000),
             max_context_window: Some(1_000_000),
             input_modalities: vec!["text".to_string()],
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
         };
 
         assert_eq!(codex_active_context_window(&model), 272_000);
@@ -343,6 +495,8 @@ mod tests {
             context_window: None,
             max_context_window: Some(128_000),
             input_modalities: vec!["text".to_string()],
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
         };
 
         assert_eq!(codex_active_context_window(&model), 128_000);
@@ -359,6 +513,8 @@ mod tests {
             context_window: None,
             max_context_window: Some(1_000_000),
             input_modalities: vec!["text".to_string()],
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
         };
 
         assert_eq!(

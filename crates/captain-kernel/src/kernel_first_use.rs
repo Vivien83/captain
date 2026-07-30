@@ -34,6 +34,7 @@ struct FirstUseConfigDraft {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FirstUseVoicePreference {
+    LocalNative(Option<&'static str>),
     ElevenLabs,
     OpenAi(&'static str),
     Disabled,
@@ -58,6 +59,23 @@ fn first_use_initial_pending_request(user_message: &str) -> Option<String> {
 
 fn classify_first_use_voice_preference(voice: &str) -> FirstUseVoicePreference {
     let lower = voice.to_ascii_lowercase();
+    if lower.contains("local")
+        || lower.contains("native")
+        || lower.contains("kokoro")
+        || lower.contains("piper")
+        || lower.contains("sans clé")
+        || lower.contains("sans cle")
+        || lower.contains("no api key")
+    {
+        let engine = if lower.contains("piper") {
+            Some("piper")
+        } else if lower.contains("kokoro") {
+            Some("kokoro")
+        } else {
+            None
+        };
+        return FirstUseVoicePreference::LocalNative(engine);
+    }
     if lower.contains("eleven") {
         return FirstUseVoicePreference::ElevenLabs;
     }
@@ -85,6 +103,116 @@ fn classify_first_use_voice_preference(voice: &str) -> FirstUseVoicePreference {
         return FirstUseVoicePreference::Disabled;
     }
     FirstUseVoicePreference::Unchanged
+}
+
+fn first_use_notification_silent_mode(preference: &str) -> Option<bool> {
+    let lower = preference.trim().to_ascii_lowercase();
+    if lower == "non"
+        || lower == "no"
+        || lower.contains("aucune notification")
+        || lower.contains("pas de notification")
+        || lower.contains("ne me notifie pas")
+        || lower.contains("no proactive notification")
+        || lower.contains("no notification")
+        || lower.contains("never notify")
+        || lower.contains("silent")
+        || lower.contains("silence")
+    {
+        return Some(true);
+    }
+    if lower.contains("alerte")
+        || lower.contains("alert")
+        || lower.contains("avancée")
+        || lower.contains("avancee")
+        || lower.contains("progress")
+        || lower.contains("notification utile")
+        || lower.contains("useful notification")
+    {
+        return Some(false);
+    }
+    None
+}
+
+fn first_use_suggested_replies_for(
+    key: &str,
+    locale: &str,
+    timezone: &str,
+    native_voice_ready: bool,
+    elevenlabs_ready: bool,
+    openai_tts_ready: bool,
+) -> Vec<String> {
+    let french = locale == "fr";
+    let choices: Vec<&str> = match key {
+        "preferred_name" => Vec::new(),
+        "language" if french => vec!["Français", "English", "Español"],
+        "language" => vec!["English", "Français", "Español"],
+        "answer_style" if french => vec!["Court et direct", "Équilibré", "Détaillé"],
+        "answer_style" => vec!["Short and direct", "Balanced", "Detailed"],
+        "notifications" if french => vec![
+            "Seulement les alertes importantes",
+            "Alertes et avancées utiles",
+            "Aucune notification proactive",
+        ],
+        "notifications" => vec![
+            "Important alerts only",
+            "Alerts and useful progress",
+            "No proactive notifications",
+        ],
+        "privacy" if french => vec![
+            "Toujours demander avant de mémoriser",
+            "Ne jamais mémoriser les données sensibles",
+            "Pas de limite particulière",
+        ],
+        "privacy" => vec![
+            "Always ask before remembering",
+            "Never remember sensitive data",
+            "No special restriction",
+        ],
+        _ => Vec::new(),
+    };
+    if !choices.is_empty() {
+        return choices.into_iter().map(str::to_string).collect();
+    }
+
+    if key == "timezone" {
+        let mut choices = Vec::new();
+        let configured = timezone.trim();
+        if !configured.is_empty() {
+            choices.push(configured.to_string());
+        }
+        if configured != "UTC" {
+            choices.push("UTC".to_string());
+        }
+        return choices;
+    }
+
+    if key == "voice_preference" {
+        let mut choices = vec![if french {
+            if native_voice_ready {
+                "Voix locale sans clé (recommandé)".to_string()
+            } else {
+                "Voix locale sans clé (à installer)".to_string()
+            }
+        } else if native_voice_ready {
+            "Local voice, no API key (recommended)".to_string()
+        } else {
+            "Local voice, no API key (install needed)".to_string()
+        }];
+        if elevenlabs_ready {
+            choices.push("ElevenLabs".to_string());
+        }
+        if openai_tts_ready {
+            choices.push("OpenAI Nova".to_string());
+        }
+        choices.push(if french {
+            "Aucune voix".to_string()
+        } else {
+            "No voice".to_string()
+        });
+        return choices;
+    }
+
+    Vec::new()
 }
 
 fn set_onboarding_toml_value(
@@ -364,6 +492,16 @@ impl CaptainKernel {
         if let Some(style) = first_use_answer(state, "answer_style") {
             set_onboarding_toml_value(doc, &["assistant"], "style", toml_edit::value(style))?;
         }
+        if let Some(silent_mode) =
+            first_use_answer(state, "notifications").and_then(first_use_notification_silent_mode)
+        {
+            set_onboarding_toml_value(
+                doc,
+                &["channels"],
+                "silent_mode",
+                toml_edit::value(silent_mode),
+            )?;
+        }
         Ok(())
     }
 
@@ -376,6 +514,9 @@ impl CaptainKernel {
             return Ok(());
         };
         match classify_first_use_voice_preference(voice) {
+            FirstUseVoicePreference::LocalNative(engine) => {
+                self.apply_first_use_local_native_voice(doc, engine)
+            }
             FirstUseVoicePreference::ElevenLabs => self.apply_first_use_elevenlabs_voice(doc),
             FirstUseVoicePreference::OpenAi(openai_voice) => {
                 self.apply_first_use_openai_voice(doc, openai_voice)
@@ -385,6 +526,30 @@ impl CaptainKernel {
             }
             FirstUseVoicePreference::Unchanged => Ok(()),
         }
+    }
+
+    fn apply_first_use_local_native_voice(
+        &self,
+        doc: &mut toml_edit::DocumentMut,
+        requested_engine: Option<&'static str>,
+    ) -> KernelResult<()> {
+        let status = captain_runtime::native_voice::status();
+        set_onboarding_toml_value(
+            doc,
+            &["tts"],
+            "provider",
+            toml_edit::value(captain_runtime::native_voice::NATIVE_TTS_PROVIDER),
+        )?;
+        set_onboarding_toml_value(doc, &["tts"], "enabled", toml_edit::value(status.tts_ready))?;
+        if let Some(engine) = requested_engine.or(status.tts_engine) {
+            set_onboarding_toml_value(
+                doc,
+                &["tts", "local_native"],
+                "preferred_engine",
+                toml_edit::value(engine),
+            )?;
+        }
+        Ok(())
     }
 
     fn apply_first_use_elevenlabs_voice(
@@ -421,8 +586,7 @@ impl CaptainKernel {
     }
 
     fn first_use_elevenlabs_ready(&self) -> bool {
-        std::env::var("ELEVENLABS_API_KEY")
-            .ok()
+        self.resolve_credential("ELEVENLABS_API_KEY")
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
             || (self.config.tts.enabled
@@ -430,8 +594,7 @@ impl CaptainKernel {
     }
 
     fn first_use_openai_tts_ready(&self) -> bool {
-        std::env::var("OPENAI_API_KEY")
-            .ok()
+        self.resolve_credential("OPENAI_API_KEY")
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
             || (self.config.tts.enabled && self.config.tts.provider.as_deref() == Some("openai"))
@@ -480,11 +643,13 @@ impl CaptainKernel {
         self.write_global_user_profile_block(state, skipped)?;
         self.patch_first_use_onboarding_config(state)?;
         self.clear_first_use_onboarding_state();
-        Ok(Self::empty_agent_loop_result(first_use_completed_response(
+        let mut result = Self::empty_agent_loop_result(first_use_completed_response(
             &state.locale,
             skipped,
             state.pending_request.as_deref(),
-        )))
+        ));
+        result.directives.suggested_replies = Some(Vec::new());
+        Ok(result)
     }
 
     pub(super) fn maybe_handle_first_use_onboarding(
@@ -539,10 +704,10 @@ impl CaptainKernel {
             return Ok(Some(self.complete_first_use_onboarding(&state, true)?));
         }
         self.save_first_use_onboarding_state(&state)?;
-        Ok(Some(Self::empty_agent_loop_result(first_use_intro(
-            &state.locale,
-            pending_request.as_deref(),
-        ))))
+        Ok(Some(self.first_use_response(
+            first_use_intro(&state.locale, pending_request.as_deref()),
+            &state,
+        )))
     }
 
     fn continue_first_use_onboarding(
@@ -572,19 +737,46 @@ impl CaptainKernel {
         }
 
         self.save_first_use_onboarding_state(&state)?;
-        Ok(Some(Self::empty_agent_loop_result(first_use_next_prompt(
-            &state.locale,
-            state.step,
-        ))))
+        Ok(Some(self.first_use_response(
+            first_use_next_prompt(&state.locale, state.step),
+            &state,
+        )))
     }
 
     fn first_use_next_question_result(&self, state: &FirstUseOnboardingState) -> AgentLoopResult {
-        Self::empty_agent_loop_result(first_use_next_prompt(
+        self.first_use_response(
+            first_use_next_prompt(
+                &state.locale,
+                state
+                    .step
+                    .min(FIRST_USE_ONBOARDING_QUESTIONS.len().saturating_sub(1)),
+            ),
+            state,
+        )
+    }
+
+    fn first_use_response(
+        &self,
+        response: String,
+        state: &FirstUseOnboardingState,
+    ) -> AgentLoopResult {
+        let mut result = Self::empty_agent_loop_result(response);
+        result.directives.suggested_replies = Some(self.first_use_suggested_replies(state));
+        result
+    }
+
+    fn first_use_suggested_replies(&self, state: &FirstUseOnboardingState) -> Vec<String> {
+        let Some((key, _, _)) = FIRST_USE_ONBOARDING_QUESTIONS.get(state.step) else {
+            return Vec::new();
+        };
+        first_use_suggested_replies_for(
+            key,
             &state.locale,
-            state
-                .step
-                .min(FIRST_USE_ONBOARDING_QUESTIONS.len().saturating_sub(1)),
-        ))
+            &self.config.timezone,
+            captain_runtime::native_voice::status().tts_ready,
+            self.first_use_elevenlabs_ready(),
+            self.first_use_openai_tts_ready(),
+        )
     }
 }
 
@@ -620,6 +812,14 @@ mod tests {
     #[test]
     fn first_use_voice_preference_classifies_supported_choices() {
         assert_eq!(
+            classify_first_use_voice_preference("Voix locale sans clé (recommandé)"),
+            FirstUseVoicePreference::LocalNative(None)
+        );
+        assert_eq!(
+            classify_first_use_voice_preference("Piper local"),
+            FirstUseVoicePreference::LocalNative(Some("piper"))
+        );
+        assert_eq!(
             classify_first_use_voice_preference("OpenAI fable"),
             FirstUseVoicePreference::OpenAi("fable")
         );
@@ -634,6 +834,60 @@ mod tests {
         assert_eq!(
             classify_first_use_voice_preference("surprise me"),
             FirstUseVoicePreference::Unchanged
+        );
+    }
+
+    #[test]
+    fn first_use_suggestions_are_non_blocking_and_truthful() {
+        assert!(first_use_suggested_replies_for(
+            "preferred_name",
+            "fr",
+            "Europe/Paris",
+            true,
+            false,
+            false,
+        )
+        .is_empty());
+
+        assert_eq!(
+            first_use_suggested_replies_for(
+                "notifications",
+                "fr",
+                "Europe/Paris",
+                true,
+                false,
+                false,
+            ),
+            vec![
+                "Seulement les alertes importantes",
+                "Alertes et avancées utiles",
+                "Aucune notification proactive",
+            ]
+        );
+
+        assert_eq!(
+            first_use_suggested_replies_for("voice_preference", "en", "UTC", false, true, false,),
+            vec![
+                "Local voice, no API key (install needed)",
+                "ElevenLabs",
+                "No voice",
+            ]
+        );
+    }
+
+    #[test]
+    fn first_use_notifications_control_only_explicit_silent_mode_answers() {
+        assert_eq!(
+            first_use_notification_silent_mode("Aucune notification proactive"),
+            Some(true)
+        );
+        assert_eq!(
+            first_use_notification_silent_mode("Important alerts only"),
+            Some(false)
+        );
+        assert_eq!(
+            first_use_notification_silent_mode("Je verrai plus tard"),
+            None
         );
     }
 

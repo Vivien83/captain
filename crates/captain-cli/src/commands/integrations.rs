@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use colored::Colorize;
 
-use crate::{captain_home, daemon_client, find_daemon, ui};
+use crate::{captain_home, daemon_client, find_daemon, production_credential_resolver_at, ui};
 
 pub(crate) fn cmd_integration_add(name: &str, key: Option<&str>) {
     let home = captain_home();
@@ -22,25 +22,12 @@ pub(crate) fn cmd_integration_add(name: &str, key: Option<&str>) {
         }
     };
 
-    let secrets_path = home.join("secrets.env");
-    let dotenv_path = home.join(".env");
-    let vault_path = home.join("vault.enc");
-    let vault = if vault_path.exists() {
-        let mut v = captain_extensions::vault::CredentialVault::new(vault_path);
-        if v.unlock().is_ok() {
-            Some(v)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    let mut resolver = captain_extensions::credentials::CredentialResolver::new_with_secrets(
-        vault,
-        Some(&secrets_path),
-        Some(&dotenv_path),
-    )
-    .with_interactive(true);
+    let mut resolver = production_credential_resolver_at(&home)
+        .unwrap_or_else(|error| {
+            ui::error(&format!("Secret sources unavailable: {error}"));
+            std::process::exit(1);
+        })
+        .with_interactive(true);
 
     let mut provided_keys = std::collections::HashMap::new();
     if let Some(key_value) = key {
@@ -213,13 +200,10 @@ fn list_registry_entries(
     registry.load_bundled();
     let _ = registry.load_installed();
 
-    let secrets_path = home.join("secrets.env");
-    let dotenv_path = home.join(".env");
-    let resolver = captain_extensions::credentials::CredentialResolver::new_with_secrets(
-        None,
-        Some(&secrets_path),
-        Some(&dotenv_path),
-    );
+    let resolver = production_credential_resolver_at(&home).unwrap_or_else(|error| {
+        ui::error(&format!("Secret sources unavailable: {error}"));
+        std::process::exit(1);
+    });
 
     if let Some(q) = query {
         captain_extensions::installer::search_integrations(&registry, q)

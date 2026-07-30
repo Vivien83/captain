@@ -132,7 +132,7 @@ impl CaptainKernel {
             .reflection_api_key_env
             .clone()
             .unwrap_or_else(|| self.config.resolve_api_key_env(&provider));
-        let api_key = std::env::var(&env_var).ok();
+        let api_key = self.resolve_credential(&env_var);
         let resolved_model = self.resolve_learning_reflection_model();
         let driver_config = captain_runtime::llm_driver::DriverConfig {
             provider: provider.clone(),
@@ -170,7 +170,7 @@ impl CaptainKernel {
             .api_key_env
             .clone()
             .unwrap_or_else(|| self.config.resolve_api_key_env(&provider));
-        let api_key = std::env::var(&env_var).ok();
+        let api_key = self.resolve_credential(&env_var);
         let resolved_model = self.resolve_checkpoint_model();
         let driver_config = captain_runtime::llm_driver::DriverConfig {
             provider: provider.clone(),

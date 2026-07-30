@@ -1,16 +1,27 @@
 //! Operator-safe agent error responses for inbound channel turns.
 
 use super::agent_error::sanitize_agent_error;
-use super::send_response;
+use super::command_response::{
+    send_durable_response, send_durable_rich_response, DurableResponseContext,
+};
+use super::ChannelBridgeHandle;
 use crate::render_telegram_channel_error;
-use crate::types::{ChannelAdapter, ChannelContent, ChannelUser};
+use crate::types::{ChannelAdapter, ChannelUser};
+use captain_types::agent::AgentId;
 use captain_types::config::OutputFormat;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::error;
 
+// This channel boundary keeps delivery, thread, agent, and rendering context explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn send_inbound_agent_error_response(
+    handle: &Arc<dyn ChannelBridgeHandle>,
     adapter: &dyn ChannelAdapter,
     sender: &ChannelUser,
+    agent_id: AgentId,
+    channel_type: &str,
+    source_message_id: &str,
     raw_error: &str,
     thread_id: Option<&str>,
     output_format: OutputFormat,
@@ -22,18 +33,42 @@ pub(super) async fn send_inbound_agent_error_response(
             if let Some(thread_id) = thread_id {
                 metadata.insert("thread_id".to_string(), serde_json::json!(thread_id));
             }
-            if let Err(delivery_error) = adapter
-                .send_rich(
-                    sender,
-                    ChannelContent::Text(render_telegram_channel_error(&err_msg)),
-                    &metadata,
-                )
-                .await
+            if let Err(delivery_error) = send_durable_rich_response(
+                adapter,
+                sender,
+                render_telegram_channel_error(&err_msg),
+                metadata,
+                DurableResponseContext {
+                    handle,
+                    agent_id: Some(agent_id),
+                    channel: channel_type,
+                    source_message_id,
+                    purpose: "agent_error",
+                },
+            )
+            .await
             {
                 error!(%delivery_error, "failed to send Telegram Rich error response");
             }
         } else {
-            send_response(adapter, sender, err_msg.clone(), thread_id, output_format).await;
+            if let Err(delivery_error) = send_durable_response(
+                adapter,
+                sender,
+                err_msg.clone(),
+                thread_id,
+                output_format,
+                DurableResponseContext {
+                    handle,
+                    agent_id: Some(agent_id),
+                    channel: channel_type,
+                    source_message_id,
+                    purpose: "agent_error",
+                },
+            )
+            .await
+            {
+                error!(%delivery_error, "failed to send durable agent error response");
+            }
         }
     }
     err_msg
@@ -47,6 +82,36 @@ mod tests {
     use futures::{stream, Stream};
     use std::pin::Pin;
     use std::sync::Mutex;
+
+    struct TestHandle;
+
+    #[async_trait]
+    impl ChannelBridgeHandle for TestHandle {
+        async fn send_message(
+            &self,
+            _agent_id: AgentId,
+            _message: &str,
+            _channel_type: Option<&str>,
+        ) -> Result<String, String> {
+            Ok(String::new())
+        }
+
+        async fn find_agent_by_name(&self, _name: &str) -> Result<Option<AgentId>, String> {
+            Ok(None)
+        }
+
+        async fn list_agents(&self) -> Result<Vec<(AgentId, String)>, String> {
+            Ok(Vec::new())
+        }
+
+        async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
+            Err("not available".to_string())
+        }
+    }
+
+    fn handle() -> Arc<dyn ChannelBridgeHandle> {
+        Arc::new(TestHandle)
+    }
 
     struct RecordingAdapter {
         name: &'static str,
@@ -141,8 +206,12 @@ mod tests {
         };
 
         let err_msg = send_inbound_agent_error_response(
+            &handle(),
             &adapter,
             &sender(),
+            AgentId::new(),
+            "recording",
+            "source-1",
             "invalid x-goog-api-key",
             Some("topic-7"),
             OutputFormat::PlainText,
@@ -170,8 +239,12 @@ mod tests {
         };
 
         let err_msg = send_inbound_agent_error_response(
+            &handle(),
             &adapter,
             &sender(),
+            AgentId::new(),
+            "telegram",
+            "source-2",
             "invalid x-goog-api-key </blockquote><script>secret</script>",
             Some("topic-7"),
             OutputFormat::PlainText,
@@ -198,8 +271,12 @@ mod tests {
         };
 
         let err_msg = send_inbound_agent_error_response(
+            &handle(),
             &adapter,
             &sender(),
+            AgentId::new(),
+            "telegram",
+            "source-3",
             "request timed out while waiting",
             None,
             OutputFormat::PlainText,

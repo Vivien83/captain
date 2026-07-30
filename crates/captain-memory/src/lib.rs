@@ -7,6 +7,8 @@
 //!
 //! Agents interact with a single `Memory` trait that abstracts over all three stores.
 
+pub mod agent_delegation_jobs;
+pub mod compaction_progress;
 pub mod consolidation;
 pub mod detached_tool_runs;
 pub mod event_log;
@@ -43,6 +45,7 @@ pub mod workflow_learning_refinement_capture;
 pub mod workflow_learning_refinement_lifecycle;
 mod workflow_learning_refinement_types;
 pub mod workflow_learning_snooze;
+pub mod workflow_learning_status;
 pub mod workflow_learning_test;
 mod workflow_learning_types;
 mod workflow_learning_validation;

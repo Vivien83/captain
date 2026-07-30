@@ -15,6 +15,7 @@ impl CaptainKernel {
     /// Iterates the agent registry and starts background tasks for agents with
     /// `Continuous`, `Periodic`, or `Proactive` schedules.
     pub fn start_background_agents(self: &Arc<Self>) {
+        self.reconcile_compaction_progress_after_restart();
         self.spawn_bootstrap_support_tasks();
         let learning_aggressiveness = self.config.learning.effective_autonomy_aggressiveness();
         self.start_learning_pipeline(learning_aggressiveness);
@@ -55,6 +56,7 @@ impl CaptainKernel {
         crate::provider_quota_monitor::spawn_codex_provider_quota_monitor(Arc::clone(self));
         crate::milestone_alerts::spawn_deadline_alert_task(Arc::clone(self));
         crate::ephemeral_agents::spawn_ephemeral_agent_reaper(Arc::clone(self));
+        self.start_agent_delegation_worker();
         self.spawn_capspec_operator_resume_recovery();
         self.bootstrap_user_facts_if_empty();
         captain_runtime::memory_writer::spawn_resync_worker(

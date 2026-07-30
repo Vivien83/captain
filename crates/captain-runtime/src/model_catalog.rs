@@ -8,7 +8,8 @@ use std::collections::HashMap;
 
 pub use crate::model_catalog_codex::{
     codex_cached_model_entries, codex_cached_model_ids, codex_model_choices,
-    refresh_codex_models_cache, refresh_codex_models_cache_with_token,
+    codex_reasoning_capabilities, refresh_codex_models_cache,
+    refresh_codex_models_cache_with_token,
 };
 pub use crate::model_catalog_codex_auth::{
     codex_oauth_readiness_error, codex_token_scopes, read_codex_credential,
@@ -57,6 +58,16 @@ impl ModelCatalog {
     /// Checks `std::env::var()` for each provider's API key env var.
     /// Only checks presence — never reads or stores the actual secret.
     pub fn detect_auth(&mut self) {
+        self.detect_auth_with(&|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        });
+    }
+
+    /// Detect provider authentication through the caller's credential chain.
+    pub fn detect_auth_with(&mut self, has_credential: &dyn Fn(&str) -> bool) {
         for provider in &mut self.providers {
             // Claude Code is special: no API key needed, but we probe for CLI
             // installation so the dashboard shows "Configured" vs "Not Installed".
@@ -83,12 +94,11 @@ impl ModelCatalog {
             }
 
             // Primary: check the provider's declared env var
-            let has_key =
-                !provider.api_key_env.is_empty() && std::env::var(&provider.api_key_env).is_ok();
+            let has_key = !provider.api_key_env.is_empty() && has_credential(&provider.api_key_env);
 
             // Secondary: provider-specific fallback auth
             let has_fallback = match provider.id.as_str() {
-                "gemini" => std::env::var("GOOGLE_API_KEY").is_ok(),
+                "gemini" => has_credential("GOOGLE_API_KEY"),
                 "codex" => read_codex_credential().is_some(),
                 // claude-code is handled above (before key_required check)
                 _ => false,

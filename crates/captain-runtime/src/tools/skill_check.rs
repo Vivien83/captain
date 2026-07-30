@@ -1,7 +1,6 @@
 //! Static preflight checks for installed skills.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use captain_skills::registry::SkillRegistry;
 use captain_skills::{InstalledSkill, SkillRuntime};
@@ -376,34 +375,32 @@ fn bash_syntax_test(label: &str, script: &str) -> serde_json::Value {
         });
     }
 
-    let output = Command::new("bash")
-        .arg("-n")
-        .arg("-c")
-        .arg(script)
-        .output();
-    let Ok(output) = output else {
+    let result = crate::guarded_exec::check_bash_syntax(
+        crate::guarded_exec::ExecSurface::SkillCheck,
+        script,
+        None,
+    );
+    let Err(error) = result else {
+        return serde_json::json!({
+            "kind": "shell_syntax",
+            "label": label,
+            "status": "pass",
+            "message": "bash -n passed through guarded_exec.",
+        });
+    };
+    if error.contains("bash unavailable") {
         return serde_json::json!({
             "kind": "shell_syntax",
             "label": label,
             "status": "skipped",
             "message": "bash is unavailable on this host.",
         });
-    };
-    if output.status.success() {
-        return serde_json::json!({
-            "kind": "shell_syntax",
-            "label": label,
-            "status": "pass",
-            "message": "bash -n passed.",
-        });
     }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     serde_json::json!({
         "kind": "shell_syntax",
         "label": label,
         "status": "fail",
-        "message": if stderr.is_empty() { "bash -n failed.".to_string() } else { stderr },
+        "message": error,
     })
 }
 
@@ -445,4 +442,35 @@ fn push_check(checks: &mut Vec<serde_json::Value>, id: &str, status: &str, messa
         "status": status,
         "message": message,
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_skill_check_rejects_critical_content() {
+        let result = bash_syntax_test("critical", "rm -rf /");
+
+        assert_eq!(result["status"], "fail");
+        assert!(result["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("critical pattern"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_skill_check_does_not_inherit_bash_env() {
+        let _guard = crate::guarded_exec::TEST_SYNC_ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let poison = dir.path().join("poison.sh");
+        std::fs::write(&poison, "if then invalid startup syntax").unwrap();
+        std::env::set_var("BASH_ENV", &poison);
+
+        let result = bash_syntax_test("isolated", "printf ok\n");
+        std::env::remove_var("BASH_ENV");
+
+        assert_eq!(result["status"], "pass", "{result}");
+    }
 }

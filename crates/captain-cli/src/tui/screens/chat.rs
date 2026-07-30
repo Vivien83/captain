@@ -21,6 +21,8 @@ use super::{
     chat_tool_message::should_render_tool_expanded,
 };
 use crate::tui::{provider_quota::ProviderQuotaStatus, theme};
+use captain_types::compaction::{CompactionProgress, CompactionState};
+use captain_types::reasoning::AgentReasoningStatus;
 use ratatui::crossterm::event::KeyEvent;
 #[cfg(test)]
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -124,6 +126,13 @@ pub struct PendingAskUser {
     pub options: Vec<String>,
 }
 
+/// Non-blocking choices associated with the latest assistant response.
+/// Selecting one sends a normal user message; free-text input stays active.
+#[derive(Clone, Debug)]
+pub struct PendingSuggestedReplies {
+    pub options: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct QuickActionClickZone {
     pub x_start: u16,
@@ -160,6 +169,8 @@ pub enum QuickActionChoiceId {
     ApprovalReject,
     /// Index into `PendingAskUser::options`.
     AskUserOption(usize),
+    /// Index into `PendingSuggestedReplies::options`.
+    SuggestedReply(usize),
 }
 
 impl QuickActionChoiceId {
@@ -194,6 +205,7 @@ pub enum ChatMouseAction {
     ApproveSessionRequest(String),
     ApproveAlwaysRequest(String),
     RejectRequest(String),
+    SendMessage(String),
 }
 
 /// A single message in the chat history.
@@ -217,13 +229,25 @@ pub struct ChatState {
     pub agent_name: String,
     /// Provider/model for the title bar.
     pub model_label: String,
+    /// Exact configured/effective reasoning selection for the active agent.
+    /// This is refreshed from the daemon/kernel and never inferred by the UI.
+    pub reasoning_status: Option<AgentReasoningStatus>,
     /// Connection mode label.
     pub mode_label: String,
     /// Latest provider-owned subscription quota observation. This is global
     /// runtime state and deliberately survives chat/session resets.
     pub provider_quota_status: ProviderQuotaStatus,
+    /// Live truthful session-compaction progress. Exact chunk units are
+    /// rendered as a gauge; opaque model calls remain indeterminate.
+    pub compaction_progress: Option<CompactionProgress>,
+    /// Deduplicates terminal progress received through both direct stream and
+    /// the runtime event bus.
+    pub last_compaction_terminal_id: Option<String>,
     /// Full chat history.
     pub messages: Vec<ChatMessage>,
+    /// Monotonic invalidation key for the completed-history render cache.
+    pub(super) transcript_history_revision: u64,
+    pub(super) transcript_history_cache: super::chat_transcript_render::TranscriptHistoryCache,
     /// Operator-only live notices. These are rendered but never persisted in
     /// chat history, so one-shot tokens can be shown without entering replay.
     pub operator_notices: Vec<String>,
@@ -284,6 +308,9 @@ pub struct ChatState {
     /// when no question is pending, or when the current question has no
     /// options (those stay a plain chat message instead).
     pub pending_ask_user: Option<PendingAskUser>,
+    /// Non-blocking choices for the latest response. The composer remains
+    /// active and any free-text submission starts the same normal next turn.
+    pub pending_suggested_replies: Option<PendingSuggestedReplies>,
     /// Screen-space click targets for the active quick-action prompt.
     pub quick_action_click_zones: Vec<QuickActionClickZone>,
     /// Mirrors the app-level terminal mouse capture state. When false,
@@ -373,9 +400,9 @@ pub enum ChatAction {
     },
     /// Phase-i.6: approve a pending approval request by id (one-shot).
     ApproveRequest(String),
-    /// Q.11.b.b: approve for the rest of the session (cache short-circuit).
+    /// Approve this exact action for the rest of the daemon session.
     ApproveSessionRequest(String),
-    /// Q.11.b.b: approve always (persisted into allow_always policy).
+    /// Persist an exact-action allow rule.
     ApproveAlwaysRequest(String),
     /// Phase-i.6: reject a pending approval request by id.
     RejectRequest(String),
@@ -390,9 +417,14 @@ impl ChatState {
         Self {
             agent_name: String::new(),
             model_label: String::new(),
+            reasoning_status: None,
             mode_label: String::new(),
             provider_quota_status: ProviderQuotaStatus::default(),
+            compaction_progress: None,
+            last_compaction_terminal_id: None,
             messages: Vec::new(),
+            transcript_history_revision: 0,
+            transcript_history_cache: Default::default(),
             operator_notices: Vec::new(),
             streaming_text: String::new(),
             is_streaming: false,
@@ -417,6 +449,7 @@ impl ChatState {
             pending_approval: None,
             pending_model_switch: None,
             pending_ask_user: None,
+            pending_suggested_replies: None,
             quick_action_click_zones: Vec::new(),
             mouse_capture_enabled: false,
             streaming_chars: 0,
@@ -461,8 +494,45 @@ impl ChatState {
         self.background_activity.retain(|e| e.key != key);
     }
 
+    pub fn apply_compaction_progress(&mut self, progress: CompactionProgress) {
+        if self
+            .authoritative_agent_id
+            .as_deref()
+            .is_some_and(|current| current != progress.agent_id.to_string())
+        {
+            return;
+        }
+        if self
+            .authoritative_session_id
+            .as_deref()
+            .is_some_and(|current| current != progress.session_id.to_string())
+        {
+            return;
+        }
+        if progress.state == CompactionState::Running {
+            self.compaction_progress = Some(progress);
+            return;
+        }
+        self.compaction_progress = None;
+        if self.last_compaction_terminal_id.as_deref() == Some(&progress.operation_id) {
+            return;
+        }
+        self.last_compaction_terminal_id = Some(progress.operation_id.clone());
+        let message = match progress.state {
+            CompactionState::Succeeded => format!("Contexte compacté. {}", progress.detail),
+            CompactionState::Failed => format!("Échec du compactage. {}", progress.detail),
+            CompactionState::Interrupted => {
+                format!("Compactage interrompu. {}", progress.detail)
+            }
+            CompactionState::Running => return,
+        };
+        self.push_message(Role::System, message);
+    }
+
     pub fn reset(&mut self) {
         self.messages.clear();
+        self.transcript_history_revision = self.transcript_history_revision.wrapping_add(1);
+        self.transcript_history_cache.clear();
         self.operator_notices.clear();
         self.streaming_text.clear();
         self.is_streaming = false;
@@ -487,11 +557,14 @@ impl ChatState {
         self.pending_approval = None;
         self.pending_model_switch = None;
         self.pending_ask_user = None;
+        self.pending_suggested_replies = None;
         self.quick_action_click_zones.clear();
         self.streaming_chars = 0;
         self.status_msg = None;
         self.staged_messages.clear();
         self.tool_input_buf.clear();
+        self.compaction_progress = None;
+        self.last_compaction_terminal_id = None;
         self.show_model_picker = false;
         self.model_picker_filter.clear();
         self.model_picker_idx = 0;
@@ -527,12 +600,37 @@ impl ChatState {
             text,
             tool: None,
         });
+        self.mark_transcript_history_changed();
         // A local user turn means the operator is taking back the live view.
         // Agent/tool updates keep the viewport stable when the user scrolled
         // up to read history.
         if role == Role::User {
             self.scroll_to_bottom();
         }
+    }
+
+    pub(crate) fn clear_messages(&mut self) {
+        if self.messages.is_empty() {
+            return;
+        }
+        self.messages.clear();
+        self.mark_transcript_history_changed();
+    }
+
+    pub(crate) fn replace_messages(&mut self, messages: Vec<ChatMessage>) {
+        self.messages = messages;
+        self.mark_transcript_history_changed();
+    }
+
+    pub(crate) fn pop_message(&mut self) -> Option<ChatMessage> {
+        let message = self.messages.pop()?;
+        self.mark_transcript_history_changed();
+        Some(message)
+    }
+
+    fn mark_transcript_history_changed(&mut self) {
+        self.transcript_history_revision = self.transcript_history_revision.wrapping_add(1);
+        self.transcript_history_cache.invalidate();
     }
 
     pub fn push_operator_notice(&mut self, lines: Vec<String>) {
@@ -641,6 +739,9 @@ impl ChatState {
         {
             self.set_context_window_tokens(context_window);
         }
+        if let Some(reasoning) = body.get("reasoning") {
+            self.reasoning_status = serde_json::from_value(reasoning.clone()).ok();
+        }
     }
 
     /// Phase-i.7: append a ThinkingDelta token to the dedicated buffer.
@@ -700,6 +801,7 @@ impl ChatState {
         if currently_open {
             info.completed_at = None;
         }
+        self.mark_transcript_history_changed();
         Some(ChatMouseAction::ToolToggled)
     }
 
@@ -727,6 +829,13 @@ impl ChatState {
         self.pending_approval.is_some()
             || self.pending_model_switch.is_some()
             || self.pending_ask_user.is_some()
+            || self.pending_suggested_replies.is_some()
+    }
+
+    fn has_blocking_quick_action_prompt(&self) -> bool {
+        self.pending_approval.is_some()
+            || self.pending_model_switch.is_some()
+            || self.pending_ask_user.is_some()
     }
 
     fn resolve_quick_action_choice(&mut self, choice: QuickActionChoiceId) -> Option<ChatAction> {
@@ -742,6 +851,15 @@ impl ChatState {
                 .get(idx)
                 .cloned()
                 .map(ChatAction::AnswerAskUser);
+        }
+
+        if let QuickActionChoiceId::SuggestedReply(idx) = choice {
+            let pending = self.pending_suggested_replies.take()?;
+            self.quick_action_click_zones.clear();
+            let answer = pending.options.get(idx)?.clone();
+            self.input_clear();
+            self.push_message(Role::User, answer.clone());
+            return Some(ChatAction::SendMessage(answer));
         }
 
         let req = self.pending_approval.take()?;
@@ -782,6 +900,7 @@ impl ChatState {
             } else {
                 format!("Tool `{}` replié.", info.name)
             });
+            self.mark_transcript_history_changed();
             return true;
         }
 
@@ -838,6 +957,7 @@ impl ChatState {
                 expanded: true,
             }),
         });
+        self.mark_transcript_history_changed();
         self.active_tool = None;
     }
 
@@ -862,11 +982,13 @@ impl ChatState {
             info.stdout.push_str(chunk);
         }
         info.expanded = true;
+        self.mark_transcript_history_changed();
     }
 
     /// Fill in the result for the matching tool message.
     pub fn tool_result(&mut self, tool_use_id: &str, name: &str, result: &str, is_error: bool) {
         // Prefer the runtime id. Fallback by name keeps older stream events usable.
+        let mut changed = false;
         for msg in self.messages.iter_mut().rev() {
             if msg.role == Role::Tool {
                 if let Some(ref mut info) = msg.tool {
@@ -883,10 +1005,14 @@ impl ChatState {
                         info.duration_ms = info.started_at.map(|t| t.elapsed().as_millis() as u64);
                         info.completed_at = Some(std::time::Instant::now());
                         info.expanded = is_error || keep_tool_expanded_on_success(&info.name);
+                        changed = true;
                         break;
                     }
                 }
             }
+        }
+        if changed {
+            self.mark_transcript_history_changed();
         }
         self.active_tool = None;
     }
@@ -898,7 +1024,11 @@ impl ChatState {
                 .as_ref()
                 .is_some_and(|info| info.status == ToolStatus::Running)
         });
-        if self.active_tool.is_some() || self.thinking || has_running_tool {
+        if self.active_tool.is_some()
+            || self.thinking
+            || has_running_tool
+            || self.compaction_progress.is_some()
+        {
             self.spinner_frame = (self.spinner_frame + 1) % theme::SPINNER_FRAMES.len();
         }
     }
@@ -913,6 +1043,8 @@ impl ChatState {
     /// `created_at` à chaque démarrage.
     pub fn start_session(&mut self, key: &str) {
         self.session_key = key.to_string();
+        self.compaction_progress = None;
+        self.last_compaction_terminal_id = None;
         self.authoritative_session_id = None;
         self.authoritative_agent_id = None;
         self.session_path = None;
@@ -1548,6 +1680,8 @@ impl ChatState {
         if msg.is_empty() {
             return ChatAction::Continue;
         }
+        self.pending_suggested_replies = None;
+        self.quick_action_click_zones.clear();
         if msg.starts_with('/') {
             return ChatAction::SlashCommand(msg);
         }
@@ -1592,8 +1726,13 @@ impl ChatState {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> ChatAction {
-        if self.has_quick_action_prompt() {
+        if self.has_blocking_quick_action_prompt() {
             return self.handle_quick_action_key(key);
+        }
+        if self.pending_suggested_replies.is_some() {
+            if let Some(action) = self.handle_suggested_reply_key(key) {
+                return action;
+            }
         }
 
         let global_action =
@@ -1628,6 +1767,31 @@ impl ChatState {
         }
 
         self.handle_input_key(key)
+    }
+
+    fn handle_suggested_reply_key(&mut self, key: KeyEvent) -> Option<ChatAction> {
+        if key.code == ratatui::crossterm::event::KeyCode::Esc {
+            self.pending_suggested_replies = None;
+            self.quick_action_click_zones.clear();
+            return Some(ChatAction::Continue);
+        }
+        if !self.input.trim().is_empty() {
+            return None;
+        }
+        let n_options = self
+            .pending_suggested_replies
+            .as_ref()
+            .map(|pending| pending.options.len())
+            .unwrap_or(0);
+        let QuickActionChoiceId::AskUserOption(idx) =
+            ask_user_quick_action_choice_for_key(key, n_options)?
+        else {
+            return None;
+        };
+        Some(
+            self.resolve_quick_action_choice(QuickActionChoiceId::SuggestedReply(idx))
+                .unwrap_or(ChatAction::Continue),
+        )
     }
 
     fn handle_quick_action_key(&mut self, key: KeyEvent) -> ChatAction {
@@ -1707,6 +1871,89 @@ impl ChatState {
             }
             ModelSwitchQuickActionKey::Continue => ChatAction::Continue,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_compaction_progress {
+    use super::*;
+    use captain_types::agent::{AgentId, SessionId};
+    use captain_types::compaction::{
+        CompactionPhase, CompactionProgressUnit, COMPACTION_PROGRESS_SCHEMA_VERSION,
+    };
+
+    fn progress(
+        agent_id: AgentId,
+        session_id: SessionId,
+        state: CompactionState,
+    ) -> CompactionProgress {
+        CompactionProgress {
+            schema_version: COMPACTION_PROGRESS_SCHEMA_VERSION,
+            operation_id: "compact-1".to_string(),
+            runtime_instance_id: "runtime-1".to_string(),
+            agent_id,
+            session_id,
+            phase: if state == CompactionState::Running {
+                CompactionPhase::Chunking
+            } else {
+                CompactionPhase::Completed
+            },
+            state,
+            detail: "verified state".to_string(),
+            message_count: 40,
+            estimated_tokens: 10_000,
+            context_window_tokens: 200_000,
+            completed_units: Some(2),
+            total_units: Some(4),
+            unit: Some(CompactionProgressUnit::Chunks),
+            started_at_ms: 1,
+            updated_at_ms: 2,
+        }
+    }
+
+    #[test]
+    fn progress_is_scoped_to_the_bound_agent_and_session() {
+        let mut state = ChatState::new();
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        state.bind_authoritative_session(&agent_id.to_string(), &session_id.to_string());
+
+        state.apply_compaction_progress(progress(
+            agent_id,
+            SessionId::new(),
+            CompactionState::Running,
+        ));
+        assert!(state.compaction_progress.is_none());
+
+        state.apply_compaction_progress(progress(agent_id, session_id, CompactionState::Running));
+        assert_eq!(
+            state
+                .compaction_progress
+                .as_ref()
+                .and_then(CompactionProgress::determinate_percent),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn terminal_progress_is_deduplicated_and_reset_clears_operation_state() {
+        let mut state = ChatState::new();
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        state.bind_authoritative_session(&agent_id.to_string(), &session_id.to_string());
+        let completed = progress(agent_id, session_id, CompactionState::Succeeded);
+
+        state.apply_compaction_progress(completed.clone());
+        state.apply_compaction_progress(completed);
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(
+            state.last_compaction_terminal_id.as_deref(),
+            Some("compact-1")
+        );
+
+        state.reset();
+        assert!(state.compaction_progress.is_none());
+        assert!(state.last_compaction_terminal_id.is_none());
     }
 }
 
@@ -1791,6 +2038,7 @@ fn chat_action_to_mouse_action(action: ChatAction) -> ChatMouseAction {
         ChatAction::ApproveSessionRequest(id) => ChatMouseAction::ApproveSessionRequest(id),
         ChatAction::ApproveAlwaysRequest(id) => ChatMouseAction::ApproveAlwaysRequest(id),
         ChatAction::RejectRequest(id) => ChatMouseAction::RejectRequest(id),
+        ChatAction::SendMessage(message) => ChatMouseAction::SendMessage(message),
         _ => ChatMouseAction::ModelSwitchCancelled,
     }
 }
@@ -2339,11 +2587,29 @@ mod tests_picker_key_application {
         let mut state = ChatState::new();
         state.apply_agent_runtime_metadata(&serde_json::json!({
             "model": {"provider": "codex", "model": "gpt-live"},
-            "context_window_tokens": 128_000
+            "context_window_tokens": 128_000,
+            "reasoning": {
+                "provider": "codex",
+                "model": "gpt-live",
+                "supported": true,
+                "effective_effort": "low",
+                "source": "model_default",
+                "override_valid": true,
+                "options": [],
+                "reported_by_provider": true
+            }
         }));
 
         assert_eq!(state.model_label, "codex/gpt-live");
         assert_eq!(state.context_window_tokens, 128_000);
+        assert_eq!(
+            state
+                .reasoning_status
+                .as_ref()
+                .and_then(|status| status.effective_effort.as_ref())
+                .map(|effort| effort.as_str()),
+            Some("low")
+        );
 
         state.model_picker_models = vec![model("codex/gpt-next")];
         state.apply_model_context_window("codex/gpt-next");

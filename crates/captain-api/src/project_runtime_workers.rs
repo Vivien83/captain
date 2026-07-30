@@ -174,6 +174,9 @@ pub(crate) fn mark_runtime_worker_started(
     runtime["updated_at"] = serde_json::json!(Utc::now().to_rfc3339());
     upsert_runtime_worker(runtime, project, spec, |worker| {
         worker.insert("status".to_string(), serde_json::json!("running"));
+        worker.remove("completion_contract");
+        worker.remove("completed_at");
+        worker.remove("summary");
         worker.insert(
             "authorized_tools".to_string(),
             serde_json::json!(authorized_tools),

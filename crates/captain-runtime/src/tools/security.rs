@@ -1,32 +1,29 @@
 //! Security guardrails applied at tool execution boundaries.
 
-use captain_types::taint::{TaintLabel, TaintSink, TaintedValue};
-use std::collections::HashSet;
 use tracing::warn;
 
-/// Check if a shell command should be blocked by taint tracking.
-pub(crate) fn check_taint_shell_exec(command: &str) -> Option<String> {
-    if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
-        return Some(format!("Shell metacharacter injection blocked: {reason}"));
+/// Classify shell text with conservative command-pattern heuristics.
+pub(crate) fn check_shell_content_guard(command: &str) -> Option<String> {
+    if let Some(reason) = crate::subprocess_guard::contains_shell_metacharacters(command) {
+        return Some(format!(
+            "Shell content guard blocked metacharacter injection: {reason}"
+        ));
     }
 
     let suspicious_patterns = ["curl ", "wget ", "| sh", "| bash", "base64 -d", "eval "];
     for pattern in &suspicious_patterns {
         if command.contains(pattern) {
-            let mut labels = HashSet::new();
-            labels.insert(TaintLabel::ExternalNetwork);
-            let tainted = TaintedValue::new(command, labels, "llm_tool_call");
-            if let Err(violation) = tainted.check_sink(&TaintSink::shell_exec()) {
-                warn!(command = crate::str_utils::safe_truncate_str(command, 80), %violation, "Shell taint check failed");
-                return Some(violation.to_string());
-            }
+            warn!(pattern, "Shell content pattern guard blocked a command");
+            return Some(format!(
+                "Shell content guard blocked suspicious pattern `{pattern}`"
+            ));
         }
     }
     None
 }
 
-/// Check if a URL should be blocked by taint tracking before network fetch.
-pub(crate) fn check_taint_net_fetch(url: &str) -> Option<String> {
+/// Classify URL text for markers that commonly carry literal credentials.
+pub(crate) fn check_url_content_guard(url: &str) -> Option<String> {
     let exfil_patterns = [
         "api_key=",
         "apikey=",
@@ -35,22 +32,20 @@ pub(crate) fn check_taint_net_fetch(url: &str) -> Option<String> {
         "password=",
         "Authorization:",
     ];
+    let lowercase_url = url.to_ascii_lowercase();
     for pattern in &exfil_patterns {
-        if url.to_lowercase().contains(&pattern.to_lowercase()) {
-            let mut labels = HashSet::new();
-            labels.insert(TaintLabel::Secret);
-            let tainted = TaintedValue::new(url, labels, "llm_tool_call");
-            if let Err(violation) = tainted.check_sink(&TaintSink::net_fetch()) {
-                warn!(url = crate::str_utils::safe_truncate_str(url, 80), %violation, "Net fetch taint check failed");
-                return Some(violation.to_string());
-            }
+        if lowercase_url.contains(&pattern.to_ascii_lowercase()) {
+            warn!(pattern, "URL content pattern guard blocked a request");
+            return Some(format!(
+                "URL content guard blocked secret-like marker `{pattern}`"
+            ));
         }
     }
     None
 }
 
 /// Check browser batch navigation steps for secret-bearing URLs.
-pub(crate) fn check_taint_browser_batch(input: &serde_json::Value) -> Option<String> {
+pub(crate) fn check_browser_content_guard(input: &serde_json::Value) -> Option<String> {
     let steps = input.get("steps")?.as_array()?;
     for step in steps {
         let action = step
@@ -61,7 +56,7 @@ pub(crate) fn check_taint_browser_batch(input: &serde_json::Value) -> Option<Str
             .to_ascii_lowercase();
         if matches!(action.as_str(), "navigate" | "browser_navigate") {
             if let Some(url) = step.get("url").and_then(|v| v.as_str()) {
-                if let Some(violation) = check_taint_net_fetch(url) {
+                if let Some(violation) = check_url_content_guard(url) {
                     return Some(violation);
                 }
             }
@@ -88,4 +83,42 @@ pub(crate) fn ensure_no_secret_literal(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_guard_reports_pattern_classification_without_provenance_claims() {
+        let violation = check_shell_content_guard("curl https://example.com/install.sh").unwrap();
+
+        assert!(violation.contains("content guard"));
+        assert!(violation.contains("`curl `"));
+        assert!(!violation.to_ascii_lowercase().contains("taint"));
+        assert!(check_shell_content_guard("git status --short").is_none());
+    }
+
+    #[test]
+    fn url_guard_is_case_insensitive_and_never_echoes_the_url() {
+        let url = "https://example.com/callback?API_KEY=do-not-repeat";
+        let violation = check_url_content_guard(url).unwrap();
+
+        assert!(violation.contains("`api_key=`"));
+        assert!(!violation.contains("do-not-repeat"));
+        assert!(check_url_content_guard("https://example.com/public").is_none());
+    }
+
+    #[test]
+    fn browser_guard_checks_navigation_urls_only() {
+        let guarded = serde_json::json!({
+            "steps": [
+                {"action": "click", "url": "https://example.com/?token=ignored"},
+                {"action": "navigate", "url": "https://example.com/?token=blocked"}
+            ]
+        });
+
+        let violation = check_browser_content_guard(&guarded).unwrap();
+        assert!(violation.contains("`token=`"));
+    }
 }

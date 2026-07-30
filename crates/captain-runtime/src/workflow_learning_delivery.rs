@@ -44,6 +44,7 @@ pub struct WorkflowProposalDelivery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum WorkflowDeliveryEvent {
     Proposed,
     IsolatedTestCompleted { passed: bool },
@@ -51,6 +52,7 @@ pub enum WorkflowDeliveryEvent {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum WorkflowDeliveryDisposition {
     Idle,
     Ready(WorkflowProposalDelivery),
@@ -495,6 +497,7 @@ struct LifecycleJobResult {
     target_locator: String,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Preparation {
     Ready {
         card: ProposalCard,

@@ -8,6 +8,7 @@ pub(crate) fn write_secret_env(
     value: &str,
 ) -> Result<(), std::io::Error> {
     validate_secret_env_entry(key, value)?;
+    reject_externally_managed_key(path, key)?;
     let mut lines: Vec<String> = if path.exists() {
         std::fs::read_to_string(path)?
             .lines()
@@ -35,6 +36,7 @@ pub(crate) fn write_secret_env(
 /// Remove a key from the secrets.env file.
 pub(crate) fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), std::io::Error> {
     validate_secret_env_key(key)?;
+    reject_externally_managed_key(path, key)?;
     if !path.exists() {
         return Ok(());
     }
@@ -49,6 +51,30 @@ pub(crate) fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(),
     captain_types::durable_fs::atomic_write(path, serialized.as_bytes())?;
 
     Ok(())
+}
+
+fn reject_externally_managed_key(
+    secrets_path: &std::path::Path,
+    key: &str,
+) -> Result<(), std::io::Error> {
+    let Some(home) = secrets_path.parent() else {
+        return Ok(());
+    };
+    let registry_path =
+        home.join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME);
+    let sources =
+        captain_extensions::external_secret_sources::ExternalSecretSources::load(&registry_path)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if sources.is_configured(key) {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "'{key}' is managed by secret-sources.toml; change the external mapping or file instead"
+            ),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_secret_env_entry(key: &str, value: &str) -> Result<(), std::io::Error> {
@@ -99,5 +125,26 @@ mod tests {
         let err = write_secret_env(&path, "EMAIL_PASSWORD=BAD", "secret").unwrap_err();
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn shared_secret_writer_refuses_externally_managed_keys() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("secrets.env");
+        let mounted = home.path().join("mounted-secret");
+        std::fs::write(&mounted, "external-value\n").unwrap();
+        std::fs::write(
+            home.path().join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.TEST_EXTERNAL_API]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+
+        let error = write_secret_env(&path, "TEST_EXTERNAL_API", "local-value").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!path.exists());
     }
 }

@@ -25,6 +25,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Architecture](architecture.md) | Workspace structure, kernel boot, agent lifecycle, memory substrate |
+| [Performance Budgets](performance-budgets.md) | Reproducible TUI, Web terminal, Control, and Desktop rendering contracts |
 | [Agents](agent-templates.md) | Manifests, lifecycle, capabilities, and external in/out API |
 | [Captain Forge / CapSpec](CAPTAIN_FORGE_CAPSPEC.md) | Certified contract for readable, hot-reloaded, durable native capabilities |
 | [Skill Learning V2](SKILL_LEARNING_V2.md) | Production contract for episode-based capability learning and Rich review |
@@ -37,7 +38,7 @@ counts when validating an installed runtime.
 |-------|-------------|
 | [Channel Adapters](channel-adapters.md) | Telegram, Discord, Signal, and Email setup and operation |
 | [LLM Providers](providers.md) | Live catalog, configured-model authority, consent, and explicit fallbacks |
-| [Skills](skill-development.md) | Bundled, installed, and generated skills; frozen marketplace compatibility |
+| [Skills](skill-development.md) | Bundled, generated, and reviewed local skills; remote marketplaces disabled |
 | [MCP](captain-tools/mcp.md) | Active external tool-server and transport contract |
 
 ## Reference
@@ -51,6 +52,9 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
+| [Release provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
+| [Repository governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.10 release notes](releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |
 | [0.1.0-alpha.9 release notes](releases/v0.1.0-alpha.9.md) | Durable workflow learning and native release updates |
 | [0.1.0-alpha.8 release notes](releases/v0.1.0-alpha.8.md) | Captain Forge native capabilities and truthful live subscription quotas |
 | [0.1.0-alpha.7 release notes](releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |

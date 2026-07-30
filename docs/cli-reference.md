@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 bash
 ```
 
 ## Global Options
@@ -69,13 +69,21 @@ Launch the interactive TUI.
 captain [--config <PATH>]
 ```
 
-The TUI provides a full-screen terminal interface focused on six operational hubs: Chat, Projects, Automation, Learning, Capabilities, and Status. Automation contains Workflows, Triggers, Crons, Approbations, and Webhooks; Learning contains review, skill proposals, memory, and graph; Status carries operational visibility such as daemon health, logs, budget, usage, settings, and related overlays. Frozen or advanced surfaces such as Hands, peers, advanced comms, marketplace-style views, and experimental connections are not promoted in the primary navigation. Tracing output is redirected to `~/.captain/tui.log` to avoid corrupting the terminal display.
+The TUI provides a full-screen terminal interface focused on six operational hubs: Chat, Projects, Automation, Learning, Capabilities, and Status. Automation contains Workflows, Triggers, Crons, Approbations, and Webhooks; Learning contains review, skill proposals, memory, and graph, with one compact live band for the exact bound model, worker heartbeat, durable queues, and recovery state; Status carries operational visibility such as daemon health, logs, budget, usage, settings, and related overlays. Frozen or advanced surfaces such as Hands, peers, advanced comms, marketplace-style views, and experimental connections are not promoted in the primary navigation. Tracing output is redirected to `~/.captain/tui.log` to avoid corrupting the terminal display.
 
 Top-level `captain --help` follows the same rule. Frozen compatibility commands
 may remain callable by an exact name for existing operators, but they are not
 listed as primary product paths.
 
 Use `F1`-`F6` or `Tab`/`Shift+Tab` to switch primary hubs. Inside a hub, use `Alt+1`..`Alt+N` or `Alt+Left`/`Alt+Right` to switch subviews. In Chat, `Tab` still completes slash commands when the current draft starts with `/`.
+
+In `Automation > Approbations`, `o`, `s`, and `A` authorize once, for the
+current daemon session, or through a durable rule. `R`, `D`, and `X` open a
+reason editor for the equivalent rejection scopes; a durable denial requires a
+reason. These session and durable decisions apply only to the selected agent,
+tool, and exact action digest. `Tab` switches between pending requests and
+durable rules, and `x` revokes the selected rule. The same rule inventory and
+decisions are available from authenticated Control Web and its Desktop wrapper.
 
 The Chat footer renders `ctx used/window` from the active agent's live model
 catalog entry. `used` follows the latest provider-reported prompt rather than
@@ -205,13 +213,16 @@ captain status [--json]
 
 **Behavior:**
 
-- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, provider-reported subscription windows, and the durable Captain release monitor.
+- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, provider-reported subscription windows, the durable outbound-response ledger, and the Captain release monitor.
 - If no daemon is running: boots an in-process kernel and shows persisted state. Displays a warning that the daemon is not running.
 - The principal `captain` agent is expected to match the global `[default_model]`. On startup, Captain repairs stale persisted principal-agent manifests so `captain status` does not report a global provider/model that differs from the active Captain agent.
 - Provider subscription state is never inferred from local usage. `unavailable`
   means no official observation is available; `stale` means the last one is
   older than fifteen minutes. Window duration and reset are printed from the
-  provider response rather than from a fixed hourly or weekly assumption.
+  provider response rather than from a fixed hourly or weekly assumption. The
+  compact gauges show **remaining** headroom, label rolling-window percentages
+  as derived from official consumed percentages, and preserve an exact Codex
+  monthly spend-control limit/used/remaining/reset when Codex reports one.
 
 **Example:**
 
@@ -219,6 +230,7 @@ captain status [--json]
 captain status
 
 captain status --json | jq '.agent_count'
+captain status --json | jq '.outbound_delivery'
 ```
 
 ---
@@ -236,7 +248,7 @@ captain update [--check] [--yes] [--version <release-tag>]
 |---|---|
 | `--check` | Resolve the compatible release channel without installing. |
 | `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
-| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.9`. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.10`. |
 
 Stable installations do not opt into prereleases. An existing prerelease may
 advance to a newer prerelease or the corresponding stable version. The archive
@@ -445,8 +457,8 @@ captain agent list --json | jq '.[].name'
 
 ### captain agent caps
 
-Show one agent's effective tools, capability scopes, resource limits, and live
-budget.
+Show one agent's effective tools, capability scopes, resource limits, live
+budget, and configured/effective reasoning selection.
 
 ```
 captain agent caps <AGENT_ID|NAME|PREFIX> [--json]
@@ -468,6 +480,31 @@ captain agent caps <AGENT_ID|NAME|PREFIX> [--json]
 
 ```bash
 captain agent caps veille-technologique
+```
+
+---
+
+### captain agent set
+
+Set a runtime property on an existing agent through the daemon.
+
+```
+captain agent set <AGENT_ID> <model|reasoning> <VALUE>
+```
+
+For `reasoning`, use a level exposed by the current model catalogue or `auto`
+to remove the durable override. Auto lets the model/provider choose its real
+default; Captain does not translate it to `none`, `medium`, or another guessed
+value. An explicit `none`, when advertised, is a real effort selection.
+The accepted values are deliberately open-ended. For example, Codex currently
+reports `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` for
+`gpt-5.6-sol`, while another model or account can expose a smaller set. Codex
+`ultra` remains visible as the selected mode but uses `max` on the provider
+request and activates bounded proactive delegation only on the root agent.
+
+```bash
+captain agent set a1b2c3d4-e5f6-7890-abcd-ef1234567890 reasoning ultra
+captain agent set a1b2c3d4-e5f6-7890-abcd-ef1234567890 reasoning auto
 ```
 
 ---
@@ -720,7 +757,7 @@ Loads skills from `~/.captain/skills/` plus bundled skills compiled into the bin
 
 ### captain skill install
 
-Install a skill from a local directory, git URL, or frozen marketplace-compatible source when configured.
+Install a reviewed skill from an existing local directory.
 
 ```
 captain skill install <SOURCE>
@@ -730,21 +767,24 @@ captain skill install <SOURCE>
 
 | Argument | Description |
 |---|---|
-| `<SOURCE>` | Local directory path, git URL, or compatibility source. |
+| `<SOURCE>` | Existing local skill directory. |
 
 **Behavior:**
 
-- **Local directory:** Looks for `skill.toml` in the directory. If not found, checks for OpenClaw-format skills (SKILL.md with YAML frontmatter) and auto-converts them.
-- **Remote compatibility:** Compatibility source paths are frozen outside the active core release. Installed skills still pass through SHA256 verification and prompt injection scanning when verification metadata is available.
+- **Local directory:** Looks for `skill.toml` in the directory. If not found,
+  checks for a compatible SKILL.md format and auto-converts it.
+- **Review boundary:** Captain applies manifest checks and a conservatively
+  enforced `advisory_heuristic` phrase scan. These signals do not replace
+  operator review of the complete directory and executable files.
+- **Remote sources:** URLs, names, marketplace search, and remote installation
+  are rejected. Publisher-backed integrity is required before that path can be
+  reopened.
 
 **Example:**
 
 ```bash
 # Install from local directory
 captain skill install ./my-skill/
-
-# Install from a compatibility source when configured
-captain skill install web-search
 
 # Install an OpenClaw-format skill
 captain skill install ./openclaw-skill/
@@ -776,7 +816,7 @@ captain skill remove web-search
 
 ### captain skill search
 
-Search installed, bundled, generated, and frozen marketplace-compatible skill metadata.
+Search installed, bundled, and generated local skill metadata.
 
 ```
 captain skill search <QUERY>
@@ -838,7 +878,11 @@ captain channel list
 
 **Output columns:** CHANNEL, ENV VAR, STATUS.
 
-Checks `config.toml` for channel configuration sections and environment variables for required tokens. Status is one of: `Ready`, `Missing env`, `Not configured`.
+Checks `config.toml` for channel configuration sections and the centralized
+credential resolver for required tokens. Status is one of: `Ready`,
+`Missing credential`, `Not configured`. External file sources, `secrets.env`,
+the vault, legacy `.env`, and process environment use the same precedence as
+the daemon.
 
 The command reports configured active channels and can also show frozen
 compatibility entries retained by an older configuration. A listed
@@ -865,7 +909,9 @@ captain channel setup [<CHANNEL>]
 Each wizard:
 1. Displays step-by-step instructions for obtaining credentials.
 2. Prompts for tokens/credentials.
-3. Saves tokens to `~/.captain/.env` with owner-only permissions.
+3. Saves local tokens to `~/.captain/secrets.env` with owner-only permissions.
+   An externally managed key is refused and must be rotated at its mounted
+   source.
 4. Appends the channel configuration block to `config.toml` (prompts for confirmation).
 5. Warns to restart the daemon if one is running.
 
@@ -1032,7 +1078,7 @@ unauthenticated daemon directly.
 
 ### captain config set-key
 
-Save an LLM provider API key to `~/.captain/.env`.
+Save an LLM provider API key to the canonical local `secrets.env` store.
 
 ```
 captain config set-key <PROVIDER>
@@ -1047,16 +1093,18 @@ captain config set-key <PROVIDER>
 **Behavior:**
 
 - Prompts interactively for the API key.
-- Saves to `~/.captain/.env` as `<PROVIDER_NAME>_API_KEY=<value>`.
+- Saves to `~/.captain/secrets.env` as `<PROVIDER_NAME>_API_KEY=<value>`.
 - Runs a live validation test against the provider's API.
 - File permissions are restricted to owner-only on Unix.
+- Refuses the operation when that key is authoritative in
+  `secret-sources.toml`; rotate the mounted file instead.
 
 **Example:**
 
 ```bash
 captain config set-key groq
 # Paste your groq API key: gsk_...
-# [ok] Saved GROQ_API_KEY to ~/.captain/.env
+# [ok] Saved GROQ_API_KEY to ~/.captain/secrets.env
 # Testing key... OK
 ```
 
@@ -1064,7 +1112,9 @@ captain config set-key groq
 
 ### captain config delete-key
 
-Remove an API key from `~/.captain/.env`.
+Remove an API key from `~/.captain/secrets.env`, the encrypted vault, and the
+legacy `.env` fallback. Externally managed keys are refused; remove the mapping
+only as an explicit operator configuration change.
 
 ```
 captain config delete-key <PROVIDER>
@@ -1100,7 +1150,7 @@ captain config test-key <PROVIDER>
 
 **Behavior:**
 
-- Reads the API key from the environment (loaded from `~/.captain/.env`).
+- Resolves the API key through the same authoritative chain as the daemon.
 - Hits the provider's models/health endpoint.
 - Reports `OK` (key accepted) or `FAILED (401/403)` (key rejected).
 - Exits with code 1 on failure.
@@ -1111,6 +1161,46 @@ captain config test-key <PROVIDER>
 captain config test-key groq
 # Testing groq (GROQ_API_KEY)... OK
 ```
+
+---
+
+## Vault Commands
+
+### captain vault init
+
+Initialize the encrypted compatibility vault at `~/.captain/vault.enc`.
+
+```bash
+captain vault init
+```
+
+### captain vault set, list, remove
+
+Manage static values in the encrypted vault. List output contains keys only,
+never values. `set` refuses any key owned by `secret-sources.toml`.
+
+```bash
+captain vault set <KEY>
+captain vault list
+captain vault remove <KEY>
+```
+
+### captain vault sources
+
+Inspect the live readiness of external secret-file mappings.
+
+```bash
+captain vault sources [--json]
+```
+
+The projection includes logical key, source type, readiness, authoritative and
+live-rotation flags, plus a stable error or warning code. It never includes a
+secret value or an individual source path. A malformed registry makes the
+command fail instead of presenting stale fallback credentials as ready.
+
+The registry lives at `$CAPTAIN_HOME/secret-sources.toml`; see
+[Configuration](configuration.md#secrets) for its versioned schema, permission
+rules, rotation behavior, and fail-closed precedence.
 
 ---
 
@@ -1145,6 +1235,14 @@ captain chat [<AGENT>] [--plain]
   local snapshot watcher and active-model quota classification as the primary
   TUI. Plain mode stays line-oriented and uses `captain status` for the
   exhaustive provider report.
+- **Reasoning control:** `/reasoning` shows Auto, the effective provider/model
+  value, provenance, and supported levels; `/reasoning auto|<level>` persists
+  the selection for that agent. `/reasoning ultra` therefore works only when
+  `ultra` appears in that exact model/account catalogue. Auto omits the
+  override and is not explicit `none`; Codex Ultra means `max` model effort
+  plus proactive root-agent delegation, without recursive delegation by
+  workers. `/think` only shows or hides reasoning blocks already received in
+  the terminal and never changes model behavior.
 
 This is the simplest way to start chatting -- it works with or without a daemon.
 
@@ -1160,6 +1258,36 @@ captain chat coder
 # Chat with a specific agent by UUID
 captain chat a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
+
+---
+
+## Session Commands
+
+Persisted sessions are global: CLI/TUI, Web Control, Desktop and channels can
+reopen their own durable transcript without changing another client's active
+conversation.
+
+```bash
+captain sessions list [--agent <NAME|UUID>] [--json]
+captain sessions current [<AGENT>] [--json]
+captain sessions resume <SESSION_UUID> [--agent <NAME|UUID>] [--json]
+captain sessions continue [--agent <NAME|UUID>] [--json]
+captain sessions search <QUERY> [--agent <NAME|UUID>] [--limit <N>] [--json]
+captain sessions export <SESSION_UUID> [--format json|jsonl|markdown] [--out <PATH>]
+captain sessions export --all [--agent <NAME|UUID>] [--out <PATH>]
+```
+
+The one-session default remains JSON. `--all` defaults to versioned JSONL and
+accepts only that format; each line is an independent
+`captain.session.export.v1` record containing catalog metadata and the bounded,
+user-visible session projection. Catalog order is newest first. Reading or
+exporting never activates a session.
+
+When `--out` is used, Captain atomically replaces the destination and keeps a
+new file owner-private on Unix. Session text and tool output can still contain
+sensitive user data, so treat the artifact as a secret. This is an inspection
+and external-archive format, not a supported import or backup restoration
+contract.
 
 ---
 

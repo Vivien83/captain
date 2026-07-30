@@ -223,7 +223,7 @@ fn skill_view_tool_definition() -> ToolDefinition {
 fn skill_check_tool_definition() -> ToolDefinition {
     tool_definition(
         "skill_check",
-        "[TEST-SKILL] Préflight statique et sans effet de bord d'un skill installé par nom exact. À utiliser après skill_view avant d'exécuter un skill fragile, scripté ou modifié. Retourne pass/warn/fail, reprend la validation file-backed, vérifie les prérequis bloquants et lance `bash -n` sur les blocs bash/sh ou l'entrée shell sans exécuter les commandes.",
+        "[TEST-SKILL] Préflight statique et sans effet de bord d'un skill installé par nom exact. À utiliser après skill_view avant d'exécuter un skill fragile, scripté ou modifié. Retourne pass/warn/fail, reprend la validation file-backed, vérifie les prérequis bloquants et lance `bash -n` dans la frontière d'exécution gardée, avec environnement effacé puis reconstruit, sans exécuter les commandes.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -473,6 +473,7 @@ mod tests {
             boolean_default(property(skill_check, "run_static_tests")),
             Some(true)
         );
+        assert_contains(&skill_check.description, "frontière d'exécution gardée");
         assert_eq!(required_fields(tool_search), vec!["query"]);
         assert_eq!(
             integer_default(property(tool_search, "max_results")),

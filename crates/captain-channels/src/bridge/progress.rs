@@ -35,7 +35,7 @@ fn spawn_visible_progress_loop(
         let started = Instant::now();
         tokio::time::sleep(Duration::from_secs(VISIBLE_PROGRESS_INITIAL_DELAY_SECS)).await;
         loop {
-            send_response(
+            let _ = send_response(
                 adapter.as_ref(),
                 &sender,
                 visible_progress_text(started.elapsed()),

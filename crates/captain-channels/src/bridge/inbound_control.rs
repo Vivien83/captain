@@ -47,48 +47,7 @@ pub(super) fn slash_command_name(text: &str) -> Option<&str> {
 }
 
 pub(super) fn is_known_channel_command(command: &str) -> bool {
-    let command = command.trim_start_matches('/');
-    let command = command.split('@').next().unwrap_or(command);
-    matches!(
-        command,
-        "start"
-            | "help"
-            | "agents"
-            | "agent"
-            | "status"
-            | "health"
-            | "version"
-            | "reload"
-            | "restart"
-            | "shutdown"
-            | "config"
-            | "models"
-            | "providers"
-            | "new"
-            | "clear"
-            | "compact"
-            | "model"
-            | "stop"
-            | "usage"
-            | "think"
-            | "skills"
-            | "hands"
-            | "workflows"
-            | "workflow"
-            | "triggers"
-            | "trigger"
-            | "schedules"
-            | "schedule"
-            | "approvals"
-            | "approve"
-            | "reject"
-            | "project_answer"
-            | "budget"
-            | "peers"
-            | "a2a"
-            | "sethome"
-            | "gethome"
-    )
+    crate::channel_commands::is_user_channel_command(command)
 }
 
 pub(super) fn parse_known_text_command(text: &str) -> Option<ParsedTextCommand> {
@@ -160,6 +119,8 @@ mod tests {
     fn known_channel_commands_accept_telegram_bot_suffix() {
         assert_eq!(slash_command_name("/status@CaptainBot now"), Some("status"));
         assert!(is_known_channel_command("status@CaptainBot"));
+        assert!(is_known_channel_command("learning"));
+        assert!(is_known_channel_command("skill_refine_approve"));
         assert!(is_active_session_bypass_message(&test_message(
             ChannelContent::Text("/status@CaptainBot".to_string())
         )));

@@ -14,6 +14,7 @@ use crate::usage::UsageStore;
 
 use async_trait::async_trait;
 use captain_types::agent::{AgentEntry, AgentId, SessionId};
+use captain_types::compaction::CompactionProgress;
 use captain_types::error::{CaptainError, CaptainResult};
 use captain_types::memory::{
     ConsolidationReport, Entity, ExportFormat, GraphMatch, GraphPattern, ImportReport, Memory,
@@ -109,6 +110,35 @@ impl MemorySubstrate {
             .map_err(|e| CaptainError::Memory(format!("event log lock: {e}")))?;
         crate::event_log::append(&guard, session_id, event_type, payload)
             .map_err(|e| CaptainError::Memory(format!("event log append: {e}")))
+    }
+
+    /// Persist compaction progress and its active-operation state atomically.
+    pub fn record_compaction_progress(&self, progress: &CompactionProgress) -> CaptainResult<i64> {
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Memory(format!("compaction progress lock: {e}")))?;
+        crate::compaction_progress::record(&mut guard, progress)
+            .map_err(|e| CaptainError::Memory(e.to_string()))
+    }
+
+    /// Persist terminal interruption events for operations left active by a
+    /// previous runtime instance.
+    pub fn reconcile_compaction_progress_after_restart(
+        &self,
+        current_runtime_instance_id: &str,
+        now_unix_ms: i64,
+    ) -> CaptainResult<Vec<CompactionProgress>> {
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Memory(format!("compaction recovery lock: {e}")))?;
+        crate::compaction_progress::reconcile_after_restart(
+            &mut guard,
+            current_runtime_instance_id,
+            now_unix_ms,
+        )
+        .map_err(|e| CaptainError::Memory(e.to_string()))
     }
 
     /// Read a window of session events back. See [`event_log::range`].

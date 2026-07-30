@@ -101,10 +101,8 @@ pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
 /// GET /api/budget - Current budget status.
 pub async fn budget_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let status = state
-        .kernel
-        .metering
-        .budget_status(&state.kernel.config.budget);
+    let budget = state.kernel.budget_config();
+    let status = state.kernel.metering.budget_status(&budget);
     let mut payload = serde_json::to_value(&status).unwrap_or_default();
     if let Some(object) = payload.as_object_mut() {
         object.insert(
@@ -122,88 +120,112 @@ pub async fn update_budget(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let default_hourly_tokens = body["default_max_llm_tokens_per_hour"].as_u64();
-    if default_hourly_tokens.is_some_and(|value| value > i64::MAX as u64) {
-        return bad_request("default_max_llm_tokens_per_hour exceeds TOML integer range")
-            .into_response();
-    }
-    let config_ptr = &state.kernel.config as *const captain_types::config::KernelConfig
-        as *mut captain_types::config::KernelConfig;
-
-    unsafe {
-        if let Some(value) = body["max_hourly_usd"].as_f64() {
-            (*config_ptr).budget.max_hourly_usd = value;
-        }
-        if let Some(value) = body["max_daily_usd"].as_f64() {
-            (*config_ptr).budget.max_daily_usd = value;
-        }
-        if let Some(value) = body["max_monthly_usd"].as_f64() {
-            (*config_ptr).budget.max_monthly_usd = value;
-        }
-        if let Some(value) = body["alert_threshold"].as_f64() {
-            (*config_ptr).budget.alert_threshold = value.clamp(0.0, 1.0);
-        }
-        if let Some(value) = default_hourly_tokens {
-            (*config_ptr).budget.default_max_llm_tokens_per_hour = value;
-        }
-    }
-
-    persist_budget_config(&state);
-    budget_status(State(state)).await.into_response()
-}
-
-fn persist_budget_config(state: &Arc<AppState>) {
-    let config_path = state.kernel.config.home_dir.join("config.toml");
-    let Ok(content) = std::fs::read_to_string(&config_path) else {
-        return;
+    let patch = match BudgetPatch::parse(&body) {
+        Ok(patch) => patch,
+        Err(message) => return bad_request(message).into_response(),
     };
-    let Ok(mut doc) = content.parse::<toml::Value>() else {
-        return;
-    };
-    let Some(root) = doc.as_table_mut() else {
-        return;
-    };
-    let Some(budget_table) = root
-        .entry("budget")
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
-        .as_table_mut()
-    else {
-        return;
-    };
-    update_persisted_budget_table(budget_table, &state.kernel.config.budget);
-    if let Err(err) =
-        captain_types::durable_fs::atomic_write(&config_path, doc.to_string().as_bytes())
+    match state
+        .kernel
+        .update_budget_config(|budget| patch.apply(budget))
     {
-        tracing::warn!("Failed to persist budget to config.toml: {err}");
+        Ok(_) => budget_status(State(state)).await.into_response(),
+        Err(captain_kernel::BudgetConfigUpdateError::Validation(message)) => {
+            bad_request(message).into_response()
+        }
+        Err(captain_kernel::BudgetConfigUpdateError::Persistence(error)) => {
+            tracing::error!(%error, "Failed to persist global budget update");
+            #[cfg(test)]
+            let message = format!("Failed to persist budget configuration: {error}");
+            #[cfg(not(test))]
+            let message = "Failed to persist budget configuration";
+            internal_error(message).into_response()
+        }
     }
 }
 
-fn update_persisted_budget_table(
-    budget_table: &mut toml::map::Map<String, toml::Value>,
-    budget: &captain_types::config::BudgetConfig,
-) {
-    budget_table.insert(
-        "max_hourly_usd".into(),
-        toml::Value::Float(budget.max_hourly_usd),
-    );
-    budget_table.insert(
-        "max_daily_usd".into(),
-        toml::Value::Float(budget.max_daily_usd),
-    );
-    budget_table.insert(
-        "max_monthly_usd".into(),
-        toml::Value::Float(budget.max_monthly_usd),
-    );
-    budget_table.insert(
-        "alert_threshold".into(),
-        toml::Value::Float(budget.alert_threshold),
-    );
-    budget_table.insert(
-        "default_max_llm_tokens_per_hour".into(),
-        toml::Value::Integer(
-            i64::try_from(budget.default_max_llm_tokens_per_hour).unwrap_or(i64::MAX),
-        ),
-    );
+#[derive(Default)]
+struct BudgetPatch {
+    max_hourly_usd: Option<f64>,
+    max_daily_usd: Option<f64>,
+    max_monthly_usd: Option<f64>,
+    alert_threshold: Option<f64>,
+    default_max_llm_tokens_per_hour: Option<u64>,
+}
+
+impl BudgetPatch {
+    fn parse(body: &serde_json::Value) -> Result<Self, String> {
+        let object = body
+            .as_object()
+            .ok_or_else(|| "Budget update must be a JSON object".to_string())?;
+        let patch = Self {
+            max_hourly_usd: optional_f64(object, "max_hourly_usd")?,
+            max_daily_usd: optional_f64(object, "max_daily_usd")?,
+            max_monthly_usd: optional_f64(object, "max_monthly_usd")?,
+            alert_threshold: optional_f64(object, "alert_threshold")?,
+            default_max_llm_tokens_per_hour: optional_u64(
+                object,
+                "default_max_llm_tokens_per_hour",
+            )?,
+        };
+        if patch.is_empty() {
+            return Err("Provide at least one budget field".to_string());
+        }
+        Ok(patch)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.max_hourly_usd.is_none()
+            && self.max_daily_usd.is_none()
+            && self.max_monthly_usd.is_none()
+            && self.alert_threshold.is_none()
+            && self.default_max_llm_tokens_per_hour.is_none()
+    }
+
+    fn apply(&self, budget: &mut captain_types::config::BudgetConfig) {
+        if let Some(value) = self.max_hourly_usd {
+            budget.max_hourly_usd = value;
+        }
+        if let Some(value) = self.max_daily_usd {
+            budget.max_daily_usd = value;
+        }
+        if let Some(value) = self.max_monthly_usd {
+            budget.max_monthly_usd = value;
+        }
+        if let Some(value) = self.alert_threshold {
+            budget.alert_threshold = value;
+        }
+        if let Some(value) = self.default_max_llm_tokens_per_hour {
+            budget.default_max_llm_tokens_per_hour = value;
+        }
+    }
+}
+
+fn optional_f64(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<f64>, String> {
+    object
+        .get(key)
+        .map(|value| {
+            value
+                .as_f64()
+                .ok_or_else(|| format!("{key} must be a JSON number"))
+        })
+        .transpose()
+}
+
+fn optional_u64(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<u64>, String> {
+    object
+        .get(key)
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| format!("{key} must be an unsigned JSON integer"))
+        })
+        .transpose()
 }
 
 /// GET /api/budget/agents/{id} - Per-agent budget/quota status.
@@ -316,10 +338,25 @@ pub async fn update_agent_budget(
         Ok(id) => id,
         Err(response) => return response,
     };
-    let hourly = body["max_cost_per_hour_usd"].as_f64();
-    let daily = body["max_cost_per_day_usd"].as_f64();
-    let monthly = body["max_cost_per_month_usd"].as_f64();
-    let tokens = body["max_llm_tokens_per_hour"].as_u64();
+    let Some(object) = body.as_object() else {
+        return bad_request("Agent budget update must be a JSON object");
+    };
+    let hourly = match optional_f64(object, "max_cost_per_hour_usd") {
+        Ok(value) => value,
+        Err(error) => return bad_request(error),
+    };
+    let daily = match optional_f64(object, "max_cost_per_day_usd") {
+        Ok(value) => value,
+        Err(error) => return bad_request(error),
+    };
+    let monthly = match optional_f64(object, "max_cost_per_month_usd") {
+        Ok(value) => value,
+        Err(error) => return bad_request(error),
+    };
+    let tokens = match optional_u64(object, "max_llm_tokens_per_hour") {
+        Ok(value) => value,
+        Err(error) => return bad_request(error),
+    };
 
     if hourly.is_none() && daily.is_none() && monthly.is_none() && tokens.is_none() {
         return bad_request(
@@ -333,6 +370,9 @@ pub async fn update_agent_budget(
         .update_resources(agent_id, hourly, daily, monthly, tokens)
     {
         Ok(()) => {
+            if let Some(value) = tokens {
+                state.kernel.scheduler.set_hourly_quota(agent_id, value);
+            }
             if let Some(entry) = state.kernel.registry.get(agent_id) {
                 let _ = state.kernel.memory.save_agent(&entry);
             }
@@ -341,6 +381,7 @@ pub async fn update_agent_budget(
                 Json(serde_json::json!({"status": "ok", "message": "Agent budget updated"})),
             )
         }
+        Err(captain_types::error::CaptainError::InvalidInput(error)) => bad_request(error),
         Err(err) => not_found(format!("{err}")),
     }
 }
@@ -371,29 +412,183 @@ fn not_found(message: impl Into<String>) -> (StatusCode, Json<serde_json::Value>
     )
 }
 
+fn internal_error(message: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": message.into()})),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::update_persisted_budget_table;
-    use captain_types::config::BudgetConfig;
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::put;
+    use axum::Router;
+    use captain_kernel::CaptainKernel;
+    use captain_types::config::{DefaultModelConfig, KernelConfig};
+    use std::time::Instant;
+    use tower::ServiceExt;
 
-    #[test]
-    fn persisted_budget_keeps_default_hourly_token_guard() {
-        let budget = BudgetConfig {
-            max_hourly_usd: 1.0,
-            max_daily_usd: 5.0,
-            max_monthly_usd: 25.0,
-            alert_threshold: 0.75,
-            default_max_llm_tokens_per_hour: 345_678,
+    fn test_state() -> (tempfile::TempDir, Arc<AppState>) {
+        let temporary = tempfile::tempdir().unwrap();
+        let home_dir = temporary.path().join("home");
+        std::fs::create_dir_all(&home_dir).unwrap();
+        let config = KernelConfig {
+            home_dir: home_dir.clone(),
+            data_dir: temporary.path().join("data"),
+            default_model: DefaultModelConfig {
+                provider: "ollama".to_string(),
+                model: "test-model".to_string(),
+                api_key_env: "OLLAMA_API_KEY".to_string(),
+                base_url: None,
+            },
+            ..KernelConfig::default()
         };
-        let mut table = toml::map::Map::new();
+        std::fs::write(
+            home_dir.join("config.toml"),
+            toml::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        let kernel = Arc::new(CaptainKernel::boot_with_config(config).unwrap());
+        kernel.set_self_handle();
+        let state = Arc::new(AppState {
+            kernel,
+            started_at: Instant::now(),
+            peer_registry: None,
+            bridge_manager: tokio::sync::Mutex::new(None),
+            channels_config: tokio::sync::RwLock::new(Default::default()),
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
+            ask_user_channels: dashmap::DashMap::new(),
+            provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
+        });
+        (temporary, state)
+    }
 
-        update_persisted_budget_table(&mut table, &budget);
+    async fn put_budget(state: Arc<AppState>, body: &str) -> (StatusCode, String) {
+        let response = Router::new()
+            .route("/api/budget", put(update_budget))
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/budget")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
 
+    #[tokio::test]
+    async fn budget_put_rejects_negative_non_finite_and_excessive_values() {
+        let (_temporary, state) = test_state();
+        for body in [
+            r#"{"max_hourly_usd":-1}"#,
+            r#"{"max_hourly_usd":NaN}"#,
+            r#"{"max_hourly_usd":1e308}"#,
+            r#"{"alert_threshold":1.1}"#,
+        ] {
+            let (status, response_body) = put_budget(Arc::clone(&state), body).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{body} must be rejected: {response_body}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn budget_reads_remain_coherent_during_concurrent_puts() {
+        let (_temporary, state) = test_state();
+        state
+            .kernel
+            .update_budget_config(|budget| {
+                budget.max_hourly_usd = 1.0;
+                budget.max_daily_usd = 10.0;
+                budget.alert_threshold = 0.75;
+            })
+            .expect("initial durable budget update");
+        let mut tasks = Vec::new();
+        for index in 1..=24 {
+            let writer_state = Arc::clone(&state);
+            tasks.push(tokio::spawn(async move {
+                let body = format!(
+                    "{{\"max_hourly_usd\":{index},\"max_daily_usd\":{},\"alert_threshold\":0.75}}",
+                    index * 10
+                );
+                let (status, response_body) = put_budget(writer_state, &body).await;
+                assert_eq!(status, StatusCode::OK, "{response_body}");
+            }));
+            let reader_state = Arc::clone(&state);
+            tasks.push(tokio::spawn(async move {
+                for _ in 0..100 {
+                    let snapshot = reader_state.kernel.budget_config();
+                    snapshot.validate().unwrap();
+                    if snapshot.max_hourly_usd > 0.0 {
+                        assert_eq!(snapshot.max_daily_usd, snapshot.max_hourly_usd * 10.0);
+                        assert_eq!(snapshot.alert_threshold, 0.75);
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let live = state.kernel.budget_config();
+        let persisted: KernelConfig = toml::from_str(
+            &std::fs::read_to_string(state.kernel.config.home_dir.join("config.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.budget, live);
+    }
+
+    #[tokio::test]
+    async fn agent_budget_update_validates_and_updates_enforced_token_quota() {
+        let (_temporary, state) = test_state();
+        let agent_id = state.kernel.registry.list()[0].id;
+
+        let invalid = update_agent_budget(
+            State(Arc::clone(&state)),
+            Path(agent_id.to_string()),
+            Json(serde_json::json!({"max_cost_per_hour_usd": -1.0})),
+        )
+        .await
+        .into_response();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+        let updated = update_agent_budget(
+            State(Arc::clone(&state)),
+            Path(agent_id.to_string()),
+            Json(serde_json::json!({"max_llm_tokens_per_hour": 1})),
+        )
+        .await
+        .into_response();
+        assert_eq!(updated.status(), StatusCode::OK);
         assert_eq!(
-            table["default_max_llm_tokens_per_hour"].as_integer(),
-            Some(345_678)
+            state
+                .kernel
+                .registry
+                .get(agent_id)
+                .unwrap()
+                .manifest
+                .resources
+                .max_llm_tokens_per_hour,
+            1
         );
-        assert_eq!(table["max_hourly_usd"].as_float(), Some(1.0));
-        assert_eq!(table["alert_threshold"].as_float(), Some(0.75));
+        assert_eq!(
+            state.kernel.scheduler.token_headroom(agent_id),
+            Some(1),
+            "the scheduler must receive the quota published by the API"
+        );
     }
 }

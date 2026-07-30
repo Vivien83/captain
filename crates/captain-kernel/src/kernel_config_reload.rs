@@ -4,7 +4,7 @@ use crate::config_reload::{
     build_reload_plan, should_apply_hot, validate_config_for_reload, HotAction, ReloadPlan,
 };
 use captain_types::config::{AgentBinding, KernelConfig, ReloadMode};
-use tracing::info;
+use tracing::{info, warn};
 
 impl CaptainKernel {
     /// List all agent bindings.
@@ -35,6 +35,13 @@ impl CaptainKernel {
     /// Reload configuration: read the config file, diff against current, and
     /// apply hot-reloadable actions. Returns the reload plan for API response.
     pub fn reload_config(&self) -> Result<ReloadPlan, String> {
+        // Keep the file snapshot and its live budget publication ordered with
+        // API budget writes. Otherwise a reload read before an API update could
+        // publish stale budget values after that update completes.
+        let _budget_update_guard = self
+            .budget_config_update_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let config_path = self.config.home_dir.join("config.toml");
         let new_config = if config_path.exists() {
             load_config(Some(&config_path))
@@ -46,7 +53,9 @@ impl CaptainKernel {
             return Err(format!("Validation failed: {}", errors.join("; ")));
         }
 
-        let mut plan = build_reload_plan(&self.config, &new_config);
+        let mut current_config = self.config.clone();
+        current_config.budget = self.budget_config();
+        let mut plan = build_reload_plan(&current_config, &new_config);
         plan.log_summary();
         let requested_hot_actions = plan.hot_actions.clone();
 
@@ -120,6 +129,15 @@ impl CaptainKernel {
                     );
                     self.tts_engine.update_config(new_config.tts.clone());
                     applied.push(action.clone());
+                }
+                HotAction::UpdateBudgetConfig => {
+                    info!("Hot-reload: publishing validated global budget");
+                    match self.publish_reloaded_budget_config(new_config.budget.clone()) {
+                        Ok(()) => applied.push(action.clone()),
+                        Err(error) => {
+                            warn!(%error, "Hot-reload: global budget update rejected");
+                        }
+                    }
                 }
                 _ => {
                     info!(
@@ -233,5 +251,38 @@ mod tests {
         let reason = hot_reload_skipped_reason(ReloadMode::Restart);
         assert!(reason.contains("Restart"));
         assert!(reason.contains("does not apply hot actions"));
+    }
+
+    #[test]
+    fn reload_config_publishes_the_budget_snapshot_from_disk() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home_dir = temporary.path().join("home");
+        std::fs::create_dir_all(&home_dir).unwrap();
+        let mut config = KernelConfig {
+            home_dir: home_dir.clone(),
+            data_dir: home_dir.join("data"),
+            ..KernelConfig::default()
+        };
+        config.reload.mode = ReloadMode::Hot;
+        std::fs::write(
+            home_dir.join("config.toml"),
+            toml::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        let kernel = CaptainKernel::boot_with_config(config.clone()).expect("kernel boot");
+
+        config.budget.max_hourly_usd = 7.5;
+        config.budget.max_daily_usd = 25.0;
+        std::fs::write(
+            home_dir.join("config.toml"),
+            toml::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+
+        let plan = kernel.reload_config().expect("hot reload");
+
+        assert!(plan.hot_actions.contains(&HotAction::UpdateBudgetConfig));
+        assert_eq!(kernel.budget_config(), config.budget);
+        kernel.shutdown();
     }
 }

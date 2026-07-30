@@ -6,7 +6,7 @@ pub fn skill_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "skill_execute".to_string(),
-            description: "Exécute une capacité définie dans un fichier skill .md (section ### heading). Avant de lancer bash, Captain exécute un préflight syntaxique sans effet de bord (`bash -n`) et bloque la capability si elle est invalide. Les credentials sont automatiquement injectés depuis la config. Les tokens issus d'une capability 'login' sont mis en cache pour les appels suivants. Utiliser pour déclencher des intégrations tierces sans gérer l'authentification manuellement. Ne pas utiliser pour des actions non définies dans un skill — créer d'abord la capability dans le .md. Retourne la sortie de l'exécution ou un blocage JSON actionnable.".to_string(),
+            description: "Exécute une capacité définie dans un fichier skill .md (section ### heading). Le préflight `bash -n` et l'exécution passent par la frontière d'exécution gardée : politique et motifs critiques vérifiés, environnement effacé puis reconstruit, workspace du skill et timeout borné. Seuls les credentials déclarés par le skill sont injectés explicitement après l'effacement de l'environnement. Les tokens issus d'une capability 'login' sont mis en cache pour les appels suivants. Utiliser pour déclencher des intégrations tierces sans gérer l'authentification manuellement. Ne pas utiliser pour des actions non définies dans un skill — créer d'abord la capability dans le .md. Retourne la sortie de l'exécution ou un blocage JSON actionnable.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -31,4 +31,24 @@ pub fn skill_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_execute_definition_pins_guarded_environment_contract() {
+        let definition = skill_tool_definitions()
+            .into_iter()
+            .find(|tool| tool.name == "skill_execute")
+            .expect("skill_execute definition");
+
+        assert!(definition
+            .description
+            .contains("frontière d'exécution gardée"));
+        assert!(definition
+            .description
+            .contains("injectés explicitement après l'effacement"));
+    }
 }

@@ -78,12 +78,15 @@ fn chat_renders_live_provider_quota_in_terminal_and_web_widths() {
                 stale: false,
                 primary: Some(ProviderQuotaWindow {
                     used_percent: 63.0,
+                    remaining_percent: 37.0,
+                    remaining_source: Some("derived_from_provider_used_percent".to_string()),
                     window_seconds: Some(18_000),
                     reset_after_seconds: Some(3_600),
                     resets_at: Some(Utc::now() + Duration::hours(1)),
                 }),
                 secondary: None,
                 credits: None,
+                spend_control: None,
                 rate_limit_reached_type: None,
                 observed_at: Some(Utc::now()),
             }],
@@ -99,7 +102,7 @@ fn chat_renders_live_provider_quota_in_terminal_and_web_widths() {
         let rendered = format!("{:?}", terminal.backend().buffer());
         assert!(rendered.contains("Question courante"), "{rendered}");
         assert!(rendered.contains("Codex [pro]"), "{rendered}");
-        assert!(rendered.contains("63%"), "{rendered}");
+        assert!(rendered.contains("37% reste"), "{rendered}");
         assert!(rendered.contains('█'), "{rendered}");
         assert!(rendered.contains('░'), "{rendered}");
     }

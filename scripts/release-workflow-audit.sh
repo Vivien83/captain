@@ -10,6 +10,9 @@ COMPOSE="$ROOT_DIR/docker-compose.yml"
 RELEASE_ALL="$ROOT_DIR/scripts/release-all.sh"
 PACKAGE_RELEASE="$ROOT_DIR/scripts/package-release.sh"
 LOCAL_PUBLISHER="$ROOT_DIR/scripts/publish-release-local.sh"
+RELEASE_PROVENANCE="$ROOT_DIR/scripts/release-provenance.sh"
+RELEASE_PROVENANCE_TEST="$ROOT_DIR/scripts/release-provenance-test.sh"
+GITHUB_GOVERNANCE="$ROOT_DIR/scripts/github-governance.sh"
 LOCAL_DOCKERFILE="$ROOT_DIR/Dockerfile.release"
 DOCKER_EMBEDDING_CACHE="$ROOT_DIR/scripts/prepare-docker-embedding-cache.sh"
 RELEASE_READINESS="$ROOT_DIR/scripts/release-readiness.sh"
@@ -128,7 +131,17 @@ done
 
 require_file_literal "local publisher validates five platforms" "$LOCAL_PUBLISHER" 'x86_64-pc-windows-msvc'
 require_file_literal "local publisher targets the isolated public image package" "$LOCAL_PUBLISHER" 'IMAGE="${CAPTAIN_IMAGE:-ghcr.io/$OWNER_LOWER/captain-agent-os}"'
-require_file_literal "local publisher pushes multi-architecture image" "$LOCAL_PUBLISHER" '--platform linux/amd64,linux/arm64'
+require_file_literal "local publisher builds one Docker architecture at a time" "$LOCAL_PUBLISHER" '--platform "linux/$architecture"'
+if rg -Fq -- '--platform linux/amd64,linux/arm64' "$LOCAL_PUBLISHER"; then
+    printf '   FAIL local publisher must not build Docker architectures concurrently\n' >&2
+    exit 1
+fi
+pass "local publisher forbids concurrent Docker architecture builds"
+require_file_literal "local publisher builds amd64 before arm64" "$LOCAL_PUBLISHER" 'amd64_digest="$(build_and_push_architecture amd64)"'
+require_file_literal "local publisher builds arm64 after amd64" "$LOCAL_PUBLISHER" 'arm64_digest="$(build_and_push_architecture arm64)"'
+require_file_literal "local publisher assembles the Docker index after both builds" "$LOCAL_PUBLISHER" 'docker buildx imagetools create'
+require_file_literal "local publisher emits maximal BuildKit provenance" "$LOCAL_PUBLISHER" '--provenance=mode=max'
+require_file_literal "local publisher checks host capacity between builds" "$LOCAL_PUBLISHER" 'release_host_checkpoint "after Docker linux/$architecture"'
 require_file_literal "local publisher uses prebuilt release image" "$LOCAL_PUBLISHER" '--file Dockerfile.release'
 require_file_literal "local publisher creates GitHub Release" "$LOCAL_PUBLISHER" 'gh release create'
 require_file_literal "local publisher derives release channel" "$LOCAL_PUBLISHER" 'release_channel_for_version'
@@ -141,6 +154,24 @@ require_file_literal "local publisher supports offline asset validation" "$LOCAL
 require_file_literal "local publisher validates bundle versions" "$LOCAL_PUBLISHER" 'embedded bundle version mismatch'
 require_file_literal "local publisher validates Windows PE" "$LOCAL_PUBLISHER" 'Windows bundle does not contain a PE executable'
 require_file_literal "local publisher stages deterministic embeddings" "$LOCAL_PUBLISHER" 'scripts/prepare-docker-embedding-cache.sh'
+require_file_literal "local publisher generates host artifact provenance" "$LOCAL_PUBLISHER" 'scripts/release-provenance.sh'
+require_file_literal "local publisher uploads the provenance statement" "$LOCAL_PUBLISHER" 'provenance.intoto.jsonl'
+require_file_literal "local packager checks host capacity per target" "$RELEASE_ALL" 'release_host_checkpoint "after $target"'
+require_file_literal "provenance uses in-toto Statement v1" "$RELEASE_PROVENANCE" 'https://in-toto.io/Statement/v1'
+require_file_literal "provenance uses SLSA v1" "$RELEASE_PROVENANCE" 'https://slsa.dev/provenance/v1'
+require_file_literal "provenance binds Cargo.lock" "$RELEASE_PROVENANCE" '"uri": "file:Cargo.lock"'
+require_file_literal "provenance records sequential target builds" "$RELEASE_PROVENANCE" '"parallelTargetBuilds": false'
+require_file_literal "Unix platform manifests bind source revision" "$PACKAGE_RELEASE" '"revision": "$SOURCE_REVISION"'
+require_file_literal "Windows platform manifest binds source revision" "$RELEASE_ALL" '"revision": "$SOURCE_REVISION"'
+require_file_literal "Unix platform manifests record the real build start" "$PACKAGE_RELEASE" '"build_started_at": "$BUILD_STARTED_AT"'
+require_file_literal "Windows platform manifest records the real build start" "$RELEASE_ALL" '"build_started_at": "$build_started_at"'
+require_file_literal "aggregate manifest rejects mixed source provenance" "$PACKAGE_RELEASE" 'platform manifests contain mixed source provenance'
+require_file_literal "provenance test rejects mixed source revisions" "$RELEASE_PROVENANCE_TEST" 'mixed source revisions were accepted'
+require_file_literal "branch protection requires review" "$GITHUB_GOVERNANCE" 'required_approving_review_count: 1'
+require_file_literal "branch protection keeps hosted checks optional" "$GITHUB_GOVERNANCE" 'required_status_checks: null'
+require_file_literal "personal-repository protection omits organization-only bypass allowances" "$GITHUB_GOVERNANCE" 'has("bypass_pull_request_allowances") | not'
+require_file_literal "branch protection rejects force pushes" "$GITHUB_GOVERNANCE" 'allow_force_pushes: false'
+require_file_literal "branch protection rejects branch deletion" "$GITHUB_GOVERNANCE" 'allow_deletions: false'
 require_file_literal "cross propagates compile-time version" "$CROSS_CONFIG" 'passthrough = ["CAPTAIN_BUILD_VERSION"]'
 require_file_literal "ARM Cross bounds the primary Ubuntu Ports probe" "$CROSS_CONFIG" 'curl -fsS --connect-timeout 5 --max-time 15 http://ports.ubuntu.com'
 require_file_literal "ARM Cross has a registered Ubuntu Ports fallback" "$CROSS_CONFIG" 'http://mirrors.ocf.berkeley.edu/ubuntu-ports'
@@ -180,11 +211,16 @@ require_file_literal "release smoke preserves absolute artifact roots" "$EXCELLE
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
 require_shell_syntax "$RELEASE_ALL"
 require_shell_syntax "$LOCAL_PUBLISHER"
+require_shell_syntax "$RELEASE_PROVENANCE"
+require_shell_syntax "$RELEASE_PROVENANCE_TEST"
+require_shell_syntax "$GITHUB_GOVERNANCE"
 require_shell_syntax "$DOCKER_EMBEDDING_CACHE"
 require_shell_syntax "$RELEASE_READINESS"
 require_shell_syntax "$EXCELLENCE_SMOKE"
 require_command_success "release readiness help exits cleanly" "$RELEASE_READINESS" --help
 CAPTAIN_RELEASE_POLICY_TEST=1 "$LOCAL_PUBLISHER" >/dev/null
 pass "local release channel policy"
+require_command_success "release provenance contract" "$RELEASE_PROVENANCE_TEST"
+require_command_success "GitHub governance policy" "$GITHUB_GOVERNANCE" --policy-test
 
 printf '\nRelease workflow audit passed: %s checks.\n' "$PASS"

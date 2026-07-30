@@ -185,7 +185,7 @@ fn record(
     fields: &[(&str, serde_json::Value)],
     outcome: String,
 ) {
-    audit_log.record(
+    audit_log.record_or_alert(
         agent_id.to_string(),
         action,
         detail_json(direction, phase, request_id, fields),
@@ -231,7 +231,7 @@ fn entry_json(entry: AuditEntry) -> serde_json::Value {
         "seq": entry.seq,
         "timestamp": entry.timestamp,
         "agent_id": entry.agent_id,
-        "action": format!("{:?}", entry.action),
+        "action": entry.action.to_string(),
         "detail": detail,
         "outcome": entry.outcome,
         "hash": entry.hash,
@@ -295,7 +295,8 @@ mod tests {
             AuditAction::AgentMessage,
             "plain agent message",
             "ok",
-        );
+        )
+        .unwrap();
         record_ingress_completed(&log, &other_id, Some("other"), 1);
         record_ingress_completed(&log, &agent_id, Some("kept"), 2);
 

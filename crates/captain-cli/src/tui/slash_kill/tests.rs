@@ -8,7 +8,7 @@ fn protected_agent_check_is_trimmed_and_case_insensitive() {
 }
 
 #[test]
-fn kill_messages_preserve_hermes_english_standalone_text() {
+fn kill_messages_preserve_expected_english_standalone_text() {
     assert_eq!(
         kill_success_message(crate::i18n::Lang::En, "worker"),
         "Agent \"worker\" killed."

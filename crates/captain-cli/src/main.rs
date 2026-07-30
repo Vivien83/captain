@@ -53,8 +53,9 @@ pub(crate) use cli_runtime::{
 };
 pub(crate) use cli_support::{
     captain_home, command_version, copy_dir_recursive, find_captain_cli_on_path, open_in_browser,
-    path_eq_best_effort, prompt_input, prompt_secret, restrict_dir_permissions,
-    restrict_file_permissions, test_api_key, truncate_display,
+    path_eq_best_effort, production_credential_resolver_at, prompt_input, prompt_secret,
+    restrict_dir_permissions, restrict_file_permissions, test_api_key, test_api_key_value,
+    truncate_display,
 };
 pub(crate) use commands::daemon::start_daemon_background;
 pub(crate) use commands::init::{

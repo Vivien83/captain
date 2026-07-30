@@ -117,7 +117,8 @@ pub fn map_runtime_event(event: &StreamEvent) -> Option<ChannelStreamEvent> {
             .map(|text| text.trim())
             .filter(|text| !text.is_empty())
             .map(|text| ChannelStreamEvent::Commentary(text.to_string())),
-        //   - PhaseChange / AskUser / UserResponse: orthogonal control
+        //   - PhaseChange / SuggestedReplies / AskUser / UserResponse:
+        //     orthogonal control
         //     events handled outside the streaming surface. model_fallback is
         //     the exception because fallback must never be silent.
         StreamEvent::ContentComplete { .. }
@@ -126,6 +127,8 @@ pub fn map_runtime_event(event: &StreamEvent) -> Option<ChannelStreamEvent> {
         | StreamEvent::ThinkingDelta { .. }
         | StreamEvent::ToolOutputDelta { .. }
         | StreamEvent::PhaseChange { .. }
+        | StreamEvent::CompactionProgress { .. }
+        | StreamEvent::SuggestedReplies { .. }
         | StreamEvent::AskUser { .. }
         | StreamEvent::UserResponse { .. } => None,
     }

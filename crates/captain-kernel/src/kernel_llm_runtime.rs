@@ -52,20 +52,26 @@ impl CaptainKernel {
         self.execute_llm_session_compaction_plan(
             agent_id,
             session,
+            manifest,
             context_window,
             stage,
             decision,
+            None,
         )
         .await;
     }
 
+    // Compaction keeps model, memory, routing, and progress context explicit.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute_llm_session_compaction_plan(
         &self,
         agent_id: AgentId,
         session: &mut Session,
+        manifest: &AgentManifest,
         context_window: usize,
         stage: LlmPreLoopCompactionStage,
         decision: LlmPreLoopCompactionDecision,
+        progress_sink: Option<super::kernel_compaction_runtime::CompactionProgressSink>,
     ) {
         log_llm_compaction_decision(agent_id, session, context_window, stage, &decision);
         // Durable task checkpoint: fires each time context usage crosses
@@ -84,7 +90,10 @@ impl CaptainKernel {
         }
 
         log_llm_compaction_start(agent_id, session, context_window, stage, &decision);
-        match self.compact_agent_session(agent_id).await {
+        match self
+            .compact_agent_session_in_turn(agent_id, session.id, manifest, progress_sink)
+            .await
+        {
             Ok(msg) => {
                 info!(agent_id = %agent_id, "{msg}");
                 if let Ok(Some(reloaded)) = self.memory.get_session(session.id) {

@@ -1,95 +1,17 @@
 //! Web fetch/search batching handlers.
 
 use crate::tools::{
-    check_taint_net_fetch, collect_string_list, ensure_no_secret_literal, truncate_owned,
+    check_url_content_guard, collect_string_list, ensure_no_secret_literal, truncate_owned,
 };
-use crate::web_search::{parse_ddg_results, WebToolsContext};
+use crate::web_search::WebToolsContext;
 use std::collections::HashSet;
-use std::time::Duration;
 
 const MAX_WEB_RESEARCH_QUERIES: usize = 5;
 const MAX_WEB_RESEARCH_FETCHES: usize = 10;
 
-/// Legacy web fetch used when WebToolsContext is unavailable.
-pub(crate) async fn tool_web_fetch_legacy(input: &serde_json::Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-    let status = resp.status();
-    if let Some(len) = resp.content_length() {
-        if len > 10 * 1024 * 1024 {
-            return Err(format!("Response too large: {len} bytes (max 10MB)"));
-        }
-    }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
-    let max_len = 50_000;
-    let truncated = if body.len() > max_len {
-        format!(
-            "{}... [truncated, {} total bytes]",
-            crate::str_utils::safe_truncate_str(&body, max_len),
-            body.len()
-        )
-    } else {
-        body
-    };
-    Ok(format!("HTTP {status}\n\n{truncated}"))
-}
-
-/// Legacy DuckDuckGo HTML search used when WebToolsContext is unavailable.
-pub(crate) async fn tool_web_search_legacy(input: &serde_json::Value) -> Result<String, String> {
-    let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
-    let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
-
-    tracing::debug!(query, "Executing web search via DuckDuckGo HTML");
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    let resp = client
-        .get("https://html.duckduckgo.com/html/")
-        .query(&[("q", query)])
-        .header("User-Agent", "Mozilla/5.0 (compatible; CaptainAgent/0.1)")
-        .send()
-        .await
-        .map_err(|e| format!("Search request failed: {e}"))?;
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read search response: {e}"))?;
-
-    let results = parse_ddg_results(&body, max_results);
-    if results.is_empty() {
-        return Ok(format!("No results found for '{query}'."));
-    }
-
-    let mut output = format!("Search results for '{query}':\n\n");
-    for (idx, (title, url, snippet)) in results.iter().enumerate() {
-        output.push_str(&format!(
-            "{}. {}\n   URL: {}\n   {}\n\n",
-            idx + 1,
-            title,
-            url,
-            snippet
-        ));
-    }
-    Ok(output)
-}
-
 pub(crate) async fn tool_web_research_batch(
     input: &serde_json::Value,
-    web_ctx: Option<&WebToolsContext>,
+    web_ctx: &WebToolsContext,
 ) -> Result<String, String> {
     let request = parse_web_research_batch_input(input)?;
     let mut urls = request.seed_urls.clone();
@@ -142,21 +64,16 @@ fn parse_web_research_batch_input(
 
 async fn run_web_research_searches(
     request: &WebResearchBatchInput,
-    web_ctx: Option<&WebToolsContext>,
+    web_ctx: &WebToolsContext,
     urls: &mut Vec<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let mut searches = Vec::new();
     for query in &request.queries {
         ensure_no_secret_literal("web_research_batch", "query", query)?;
-        let search_input = serde_json::json!({
-            "query": query,
-            "max_results": request.results_per_query,
-        });
-        let result = if let Some(ctx) = web_ctx {
-            ctx.search.search(query, request.results_per_query).await
-        } else {
-            tool_web_search_legacy(&search_input).await
-        };
+        let result = web_ctx
+            .search
+            .search(query, request.results_per_query)
+            .await;
         match result {
             Ok(text) => {
                 let result_urls = extract_urls_from_text(&text);
@@ -192,33 +109,30 @@ fn dedupe_research_urls(urls: Vec<String>, max_fetches: usize) -> Vec<String> {
 
 async fn run_web_research_fetches(
     urls: Vec<String>,
-    web_ctx: Option<&WebToolsContext>,
+    web_ctx: &WebToolsContext,
     preview_chars: usize,
 ) -> Result<Vec<serde_json::Value>, String> {
     let mut fetched = Vec::new();
     for url in urls {
         ensure_no_secret_literal("web_research_batch", "url", &url)?;
-        if let Some(violation) = check_taint_net_fetch(&url) {
+        if let Some(violation) = check_url_content_guard(&url) {
             fetched.push(serde_json::json!({
                 "url": url,
                 "success": false,
-                "error": format!("Taint violation: {violation}"),
+                "error": violation,
             }));
             continue;
         }
         let fetch_input = serde_json::json!({ "url": url });
-        let result = if let Some(ctx) = web_ctx {
-            ctx.fetch
-                .fetch_with_options(
-                    fetch_input["url"].as_str().unwrap_or_default(),
-                    "GET",
-                    None,
-                    None,
-                )
-                .await
-        } else {
-            tool_web_fetch_legacy(&fetch_input).await
-        };
+        let result = web_ctx
+            .fetch
+            .fetch_with_options(
+                fetch_input["url"].as_str().unwrap_or_default(),
+                "GET",
+                None,
+                None,
+            )
+            .await;
         match result {
             Ok(text) => fetched.push(serde_json::json!({
                 "url": fetch_input["url"],

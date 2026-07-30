@@ -26,6 +26,7 @@ where
             4096
         },
         temperature: if phase == "think" { 0.35 } else { 0.2 },
+        reasoning_effort: None,
         system_prompt: runtime_worker_system_prompt_for_tools(phase, authorized_tools),
         api_key_env: if default_model.api_key_env.trim().is_empty() {
             None

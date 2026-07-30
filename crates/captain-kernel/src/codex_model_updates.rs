@@ -212,7 +212,7 @@ impl CaptainKernel {
                 normalized.unwrap_or_else(|| "the request".to_string())
             ))));
         }
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             agent_id
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "captain".to_string()),
@@ -293,7 +293,7 @@ impl CaptainKernel {
         });
         match result {
             Ok(resolved) if !resolved.is_empty() => {
-                self.audit_log.record(
+                self.audit_log.record_or_alert(
                     agent_id.to_string(),
                     AuditAction::ConfigChange,
                     "Codex model update decision",
@@ -360,7 +360,7 @@ impl CaptainKernel {
             .write()
             .unwrap_or_else(|e| e.into_inner());
         let count = catalog.reload_codex_models_cache();
-        catalog.detect_auth();
+        catalog.detect_auth_with(&|key| self.resolve_credential(key).is_some());
         debug!(
             models = count,
             "reloaded live Codex entries in model catalog"

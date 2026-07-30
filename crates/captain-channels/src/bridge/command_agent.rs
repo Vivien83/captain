@@ -26,11 +26,7 @@ where
         .unwrap_or_else(|e| format!("Error: {e}"))
 }
 
-pub(crate) fn parse_thinking_enabled(args: &[String]) -> bool {
-    args.first().map(|a| a == "on").unwrap_or(true)
-}
-
-fn resolve_selected_agent(
+pub(crate) fn resolve_selected_agent(
     router: &AgentRouter,
     channel: &str,
     sender: &ChannelUser,
@@ -96,13 +92,5 @@ mod tests {
         .await;
 
         assert_eq!(text, "Error: boom");
-    }
-
-    #[test]
-    fn thinking_defaults_to_on_and_only_on_enables() {
-        assert!(parse_thinking_enabled(&[]));
-        assert!(parse_thinking_enabled(&["on".to_string()]));
-        assert!(!parse_thinking_enabled(&["off".to_string()]));
-        assert!(!parse_thinking_enabled(&["maybe".to_string()]));
     }
 }

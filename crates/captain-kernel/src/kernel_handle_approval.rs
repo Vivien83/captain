@@ -17,10 +17,16 @@ impl CaptainKernel {
         agent_id: &str,
         tool_name: &str,
         action_summary: &str,
-    ) -> Result<bool, String> {
+        action_digest: &str,
+    ) -> Result<captain_types::approval::ApprovalOutcome, String> {
+        if !captain_types::approval::is_valid_approval_action_digest(action_digest) {
+            return Err(
+                "approval action digest must bind the complete untruncated input".to_string(),
+            );
+        }
         if self.is_hand_agent(agent_id) {
             tracing::info!(agent_id, tool_name, "Auto-approved for hand agent");
-            return Ok(true);
+            return Ok(captain_types::approval::ApprovalDecision::Approved.into());
         }
 
         let policy = self.approval_manager.policy();
@@ -30,15 +36,16 @@ impl CaptainKernel {
             tool_name: tool_name.to_string(),
             description: approval_description(agent_id, tool_name),
             action_summary: bounded_action_summary(action_summary),
+            action_digest: action_digest.to_string(),
             risk_level: crate::approval::ApprovalManager::classify_risk(tool_name),
             requested_at: chrono::Utc::now(),
             timeout_secs: policy.timeout_secs,
         };
+        req.validate()?;
 
         self.publish_approval_requested(agent_id, &req).await;
 
-        let decision = self.approval_manager.request_approval(req).await;
-        Ok(decision.is_approved())
+        Ok(self.approval_manager.request_approval(req).await)
     }
 
     pub(super) async fn handle_spawn_agent_checked(

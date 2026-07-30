@@ -10,7 +10,7 @@ pub(crate) fn ensure_active_channel(name: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "channel '{name}' is not active. Active channels: {ACTIVE_CHANNELS_TEXT}. Non-core channels are frozen until the core is Hermes-level."
+        "channel '{name}' is not active. Active channels: {ACTIVE_CHANNELS_TEXT}. Non-core channels are frozen until the core is production-grade."
     ))
 }
 

@@ -77,12 +77,17 @@ impl crate::kernel_handle::KernelHandle for DenyApprovalKernel {
         _agent_id: &str,
         _tool_name: &str,
         action_summary: &str,
-    ) -> Result<bool, String> {
+        _action_digest: &str,
+    ) -> Result<captain_types::approval::ApprovalOutcome, String> {
         self.summaries
             .lock()
             .unwrap()
             .push(action_summary.to_string());
-        Ok(false)
+        Ok(captain_types::approval::ApprovalOutcome {
+            decision: captain_types::approval::ApprovalDecision::Denied,
+            reason: Some("Use the staging workspace".to_string()),
+            rule_id: None,
+        })
     }
 
     fn find_agents(&self, _query: &str) -> Vec<crate::kernel_handle::AgentInfo> {
@@ -175,6 +180,7 @@ async fn approval_preview_blocks_file_write_before_mutation() {
 
     assert!(result.is_error);
     assert!(result.content.contains("requires human approval"));
+    assert!(result.content.contains("Use the staging workspace"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
 
     let summaries = kernel.summaries();

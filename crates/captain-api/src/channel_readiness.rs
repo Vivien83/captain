@@ -1,6 +1,6 @@
 //! Operator-facing readiness for active channel setup.
 
-use crate::channel_registry::{field_env_name, field_is_ready, ChannelField, ChannelMeta};
+use crate::channel_registry::{field_env_name, field_is_ready_with, ChannelField, ChannelMeta};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelReadiness {
@@ -11,15 +11,24 @@ pub(crate) struct ChannelReadiness {
     pub(crate) security_state: &'static str,
 }
 
+#[cfg(test)]
 pub(crate) fn channel_readiness(
     meta: &ChannelMeta,
     config_values: Option<&serde_json::Value>,
+) -> ChannelReadiness {
+    channel_readiness_with(meta, config_values, &|env| std::env::var(env).ok())
+}
+
+pub(crate) fn channel_readiness_with(
+    meta: &ChannelMeta,
+    config_values: Option<&serde_json::Value>,
+    resolve: &dyn Fn(&str) -> Option<String>,
 ) -> ChannelReadiness {
     let mut missing_required_fields = Vec::new();
     let mut operator_actions = Vec::new();
 
     for field in meta.fields.iter().filter(|field| field.required) {
-        if !field_is_ready(field, config_values) {
+        if !field_is_ready_with(field, config_values, resolve) {
             missing_required_fields.push(field_display_name(field, config_values));
             operator_actions.push(field_action(field, config_values));
         }
@@ -29,14 +38,14 @@ pub(crate) fn channel_readiness(
         .fields
         .iter()
         .filter(|field| field.required && field.env_var.is_some())
-        .all(|field| field_is_ready(field, config_values));
+        .all(|field| field_is_ready_with(field, config_values, resolve));
 
     ChannelReadiness {
         ready: missing_required_fields.is_empty(),
         has_required_secrets,
         missing_required_fields,
         operator_actions,
-        security_state: security_state(meta, config_values),
+        security_state: security_state_with(meta, config_values, resolve),
     }
 }
 
@@ -59,7 +68,11 @@ fn field_action(field: &ChannelField, config_values: Option<&serde_json::Value>)
     format!("Set {} in channels config.", field.key)
 }
 
-fn security_state(meta: &ChannelMeta, config_values: Option<&serde_json::Value>) -> &'static str {
+fn security_state_with(
+    meta: &ChannelMeta,
+    config_values: Option<&serde_json::Value>,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> &'static str {
     let Some(allowlist_field) = meta
         .fields
         .iter()
@@ -67,7 +80,7 @@ fn security_state(meta: &ChannelMeta, config_values: Option<&serde_json::Value>)
     else {
         return "not_applicable";
     };
-    if !field_is_ready(allowlist_field, config_values) {
+    if !field_is_ready_with(allowlist_field, config_values, resolve) {
         return "locked";
     }
     if allowlist_allows_all(allowlist_field.key, config_values) {
@@ -132,6 +145,27 @@ mod tests {
         let readiness = channel_readiness(meta, values.as_ref());
 
         assert_eq!(readiness.security_state, "allow_all_explicit");
+    }
+
+    #[test]
+    fn external_credential_resolver_makes_channel_secret_ready() {
+        let meta = find_channel_meta("telegram").unwrap();
+        let config = captain_types::config::ChannelsConfig {
+            telegram: Some(captain_types::config::TelegramConfig {
+                bot_token_env: "MOUNTED_TELEGRAM_TOKEN".to_string(),
+                allowed_users: vec!["*".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let values = channel_config_values(&config, "telegram");
+
+        let readiness = channel_readiness_with(meta, values.as_ref(), &|key| {
+            (key == "MOUNTED_TELEGRAM_TOKEN").then(|| "123:mounted".to_string())
+        });
+
+        assert!(readiness.ready);
+        assert!(readiness.has_required_secrets);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! and inter-agent communication.
 
 pub mod approval;
+mod approval_rules;
 pub mod auth;
 pub mod auto_reply;
 pub mod background;
@@ -36,6 +37,7 @@ pub mod metering;
 pub mod milestone_alerts;
 pub mod model_switch;
 pub mod operational_awareness;
+pub mod outbound_deliveries;
 pub mod pairing;
 mod provider_quota_monitor;
 pub mod registry;
@@ -50,5 +52,7 @@ pub mod workflow;
 
 pub use kernel::default_blocked_workspace_paths;
 pub use kernel::shared_memory_agent_id;
+pub use kernel::BudgetConfigUpdateError;
 pub use kernel::CaptainKernel;
+pub use kernel::CompactionProgressSink;
 pub use kernel::DeliveryTracker;

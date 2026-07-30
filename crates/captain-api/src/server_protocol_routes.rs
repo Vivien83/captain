@@ -19,4 +19,8 @@ pub(crate) fn mount_protocol_routes(router: Router<Arc<AppState>>) -> Router<Arc
         .route("/api/auth/login", axum::routing::post(routes::auth_login))
         .route("/api/auth/logout", axum::routing::post(routes::auth_logout))
         .route("/api/auth/check", axum::routing::get(routes::auth_check))
+        .route(
+            "/api/auth/realtime-ticket",
+            axum::routing::post(routes::auth_realtime_ticket),
+        )
 }

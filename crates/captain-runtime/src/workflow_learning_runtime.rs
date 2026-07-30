@@ -436,9 +436,9 @@ fn normalize_command_template(command: &str) -> String {
             } else {
                 "<env>=<value>".to_string()
             }
-        } else if token.starts_with('-') && safe_command_word(token) {
-            token.to_ascii_lowercase()
-        } else if reusable_command_word(token) {
+        } else if (token.starts_with('-') && safe_command_word(token))
+            || reusable_command_word(token)
+        {
             token.to_ascii_lowercase()
         } else {
             "<arg>".to_string()
@@ -605,9 +605,8 @@ fn destructive_verification_shape(tool_name: &str, input_shape: &Value) -> bool 
     let final_command = template
         .strip_prefix("command:")
         .unwrap_or(template)
-        .split(|character| matches!(character, '&' | '|' | ';'))
-        .filter(|segment| !segment.trim().is_empty())
-        .next_back()
+        .split(['&', '|', ';'])
+        .rfind(|segment| !segment.trim().is_empty())
         .unwrap_or_default();
     let words = final_command.split_whitespace().collect::<Vec<_>>();
     words.first().is_some_and(|word| read_only_command(word))

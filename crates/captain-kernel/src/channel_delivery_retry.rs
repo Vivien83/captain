@@ -1,7 +1,7 @@
 //! Retry wrapper for direct channel deliveries.
 //!
 //! Cron has its own durable redelivery queue. Direct `channel_send` calls stay
-//! synchronous, but they still need Hermes-style resilience for transient
+//! synchronous, but they still need bounded resilience for transient
 //! channel faults: retry with jitter, avoid ambiguous timeouts, then return a
 //! clear failure to the agent.
 

@@ -1,12 +1,16 @@
 //! Credential resolution chain — resolves secrets from multiple sources.
 //!
 //! Resolution order:
-//! 1. Canonical secrets file (`~/.captain/secrets.env`)
-//! 2. Encrypted vault (`~/.captain/vault.enc`)
-//! 3. Dotenv file (`~/.captain/.env`)
-//! 4. Process environment variable
-//! 5. Interactive prompt (CLI only, when `interactive` is true)
+//! 1. Explicit external source (`~/.captain/secret-sources.toml`, authoritative)
+//! 2. Canonical secrets file (`~/.captain/secrets.env`)
+//! 3. Encrypted vault (`~/.captain/vault.enc`)
+//! 4. Dotenv file (`~/.captain/.env`)
+//! 5. Process environment variable
+//! 6. Interactive prompt (CLI only, when `interactive` is true)
 
+use crate::external_secret_sources::{
+    ExternalSecretSourceStatus, ExternalSecretSources, SECRET_SOURCES_FILENAME,
+};
 use crate::vault::CredentialVault;
 use crate::{ExtensionError, ExtensionResult};
 use std::collections::HashMap;
@@ -16,6 +20,8 @@ use zeroize::Zeroizing;
 
 /// Credential resolver — tries multiple sources in priority order.
 pub struct CredentialResolver {
+    /// Explicit external file references. A configured key never falls back.
+    external_sources: ExternalSecretSources,
     /// Reference to the credential vault.
     vault: Option<CredentialVault>,
     /// Canonical agent-facing secrets file (`~/.captain/secrets.env`).
@@ -47,11 +53,37 @@ impl CredentialResolver {
             HashMap::new()
         };
         Self {
+            external_sources: ExternalSecretSources::default(),
             vault,
             secrets_path: secrets_path.map(Path::to_path_buf),
             dotenv,
             interactive: false,
         }
+    }
+
+    /// Create the production resolver rooted in a Captain home directory.
+    pub fn from_home(vault: Option<CredentialVault>, home: &Path) -> ExtensionResult<Self> {
+        Self::new_with_secret_sources(
+            vault,
+            Some(&home.join("secrets.env")),
+            Some(&home.join(".env")),
+            Some(&home.join(SECRET_SOURCES_FILENAME)),
+        )
+    }
+
+    /// Create a resolver with an explicit external source registry.
+    pub fn new_with_secret_sources(
+        vault: Option<CredentialVault>,
+        secrets_path: Option<&Path>,
+        dotenv_path: Option<&Path>,
+        sources_path: Option<&Path>,
+    ) -> ExtensionResult<Self> {
+        let mut resolver = Self::new_with_secrets(vault, secrets_path, dotenv_path);
+        resolver.external_sources = match sources_path {
+            Some(path) => ExternalSecretSources::load(path)?,
+            None => ExternalSecretSources::default(),
+        };
+        Ok(resolver)
     }
 
     /// Enable interactive prompting as a last-resort source.
@@ -62,13 +94,27 @@ impl CredentialResolver {
 
     /// Resolve a credential by key, trying all sources in order.
     pub fn resolve(&self, key: &str) -> Option<Zeroizing<String>> {
-        // 1. Canonical secrets.env
+        // 1. Explicit external source. Configured means authoritative even
+        // when the mounted file is temporarily unavailable.
+        match self.external_sources.resolve(key) {
+            Ok(Some(value)) => {
+                debug!("Credential '{}' resolved from external file source", key);
+                return Some(value);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                debug!(key = %key, code = error.code(), "External credential source unavailable");
+                return None;
+            }
+        }
+
+        // 2. Canonical secrets.env
         if let Some(val) = self.resolve_from_secrets_file(key) {
             debug!("Credential '{}' resolved from secrets.env", key);
             return Some(val);
         }
 
-        // 2. Vault
+        // 3. Vault
         if let Some(ref vault) = self.vault {
             if vault.is_unlocked() {
                 if let Some(val) = vault.get(key) {
@@ -78,19 +124,19 @@ impl CredentialResolver {
             }
         }
 
-        // 3. Dotenv file
+        // 4. Dotenv file
         if let Some(val) = self.dotenv.get(key) {
             debug!("Credential '{}' resolved from .env", key);
             return Some(Zeroizing::new(val.clone()));
         }
 
-        // 4. Environment variable
+        // 5. Environment variable
         if let Ok(val) = std::env::var(key) {
             debug!("Credential '{}' resolved from env var", key);
             return Some(Zeroizing::new(val));
         }
 
-        // 5. Interactive prompt (CLI only)
+        // 6. Interactive prompt (CLI only)
         if self.interactive {
             if let Some(val) = prompt_secret(key) {
                 debug!("Credential '{}' resolved from interactive prompt", key);
@@ -103,6 +149,9 @@ impl CredentialResolver {
 
     /// Check if a credential is available (without prompting).
     pub fn has_credential(&self, key: &str) -> bool {
+        if self.external_sources.is_configured(key) {
+            return self.external_sources.resolve(key).ok().flatten().is_some();
+        }
         // Check canonical secrets.env first so freshly written secrets win.
         if self.resolve_from_secrets_file(key).is_some() {
             return true;
@@ -143,6 +192,7 @@ impl CredentialResolver {
 
     /// Store a credential in the canonical secrets file, falling back to vault.
     pub fn store_credential(&mut self, key: &str, value: &str) -> ExtensionResult<()> {
+        self.reject_externally_managed_write(key)?;
         let secrets_result = self.store_in_secrets_file(key, value);
         if secrets_result.is_ok() {
             if let Err(e) = self.store_in_vault(key, Zeroizing::new(value.to_string())) {
@@ -164,6 +214,7 @@ impl CredentialResolver {
 
     /// Store a credential in the vault (if available).
     pub fn store_in_vault(&mut self, key: &str, value: Zeroizing<String>) -> ExtensionResult<()> {
+        self.reject_externally_managed_write(key)?;
         if let Some(ref mut vault) = self.vault {
             vault.set(key.to_string(), value)?;
             Ok(())
@@ -176,12 +227,40 @@ impl CredentialResolver {
 
     /// Remove a credential from the vault (if available).
     pub fn remove_from_vault(&mut self, key: &str) -> ExtensionResult<bool> {
+        self.reject_externally_managed_write(key)?;
         if let Some(ref mut vault) = self.vault {
             vault.remove(key)
         } else {
             Err(crate::ExtensionError::Vault(
                 "No vault configured".to_string(),
             ))
+        }
+    }
+
+    pub fn external_source_statuses(&self) -> Vec<ExternalSecretSourceStatus> {
+        self.external_sources.statuses()
+    }
+
+    pub fn is_externally_managed(&self, key: &str) -> bool {
+        self.external_sources.is_configured(key)
+    }
+
+    /// Files backing external sources, for the kernel's generic file-tool
+    /// blocklist. This is never serialized or returned by status endpoints.
+    pub fn external_source_paths(&self) -> Vec<PathBuf> {
+        self.external_sources
+            .protected_paths()
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    fn reject_externally_managed_write(&self, key: &str) -> ExtensionResult<()> {
+        if self.is_externally_managed(key) {
+            Err(ExtensionError::SecretSource(format!(
+                "'{key}' is managed by {SECRET_SOURCES_FILENAME}; rotate its external file or remove that mapping before writing locally"
+            )))
+        } else {
+            Ok(())
         }
     }
 
@@ -403,6 +482,83 @@ SINGLE_QUOTED='single'
 
         let val = resolver.resolve("TEST_CRED_LIVE_789").unwrap();
         assert_eq!(val.as_str(), "now_visible");
+    }
+
+    #[test]
+    fn resolver_external_source_is_authoritative_over_every_local_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources_path = dir.path().join(SECRET_SOURCES_FILENAME);
+        let secret_path = dir.path().join("mounted-secret");
+        let secrets_path = dir.path().join("secrets.env");
+        let dotenv_path = dir.path().join(".env");
+        std::fs::write(&secret_path, "external-value\n").unwrap();
+        std::fs::write(&secrets_path, "TEST_EXTERNAL_AUTH=stale-secrets\n").unwrap();
+        std::fs::write(&dotenv_path, "TEST_EXTERNAL_AUTH=stale-dotenv\n").unwrap();
+        std::fs::write(
+            &sources_path,
+            format!(
+                "version = 1\n[sources.TEST_EXTERNAL_AUTH]\ntype = \"file\"\npath = {:?}\n",
+                secret_path.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::env::set_var("TEST_EXTERNAL_AUTH", "stale-env");
+
+        let resolver = CredentialResolver::new_with_secret_sources(
+            None,
+            Some(&secrets_path),
+            Some(&dotenv_path),
+            Some(&sources_path),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolver.resolve("TEST_EXTERNAL_AUTH").unwrap().as_str(),
+            "external-value"
+        );
+        std::fs::remove_file(&secret_path).unwrap();
+        assert!(resolver.resolve("TEST_EXTERNAL_AUTH").is_none());
+        assert!(!resolver.has_credential("TEST_EXTERNAL_AUTH"));
+        std::env::remove_var("TEST_EXTERNAL_AUTH");
+    }
+
+    #[test]
+    fn resolver_refuses_local_writes_for_externally_managed_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources_path = dir.path().join(SECRET_SOURCES_FILENAME);
+        let secret_path = dir.path().join("mounted-secret");
+        std::fs::write(&secret_path, "external-value").unwrap();
+        std::fs::write(
+            &sources_path,
+            format!(
+                "version = 1\n[sources.TEST_EXTERNAL_WRITE]\ntype = \"file\"\npath = {:?}\n",
+                secret_path.display().to_string()
+            ),
+        )
+        .unwrap();
+        let mut resolver = CredentialResolver::new_with_secret_sources(
+            None,
+            Some(&dir.path().join("secrets.env")),
+            None,
+            Some(&sources_path),
+        )
+        .unwrap();
+
+        let error = resolver
+            .store_credential("TEST_EXTERNAL_WRITE", "local-value")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(SECRET_SOURCES_FILENAME));
+        assert!(!error.contains("external-value"));
+        assert!(!dir.path().join("secrets.env").exists());
+        assert_eq!(resolver.external_source_paths(), vec![secret_path]);
+
+        let remove_error = resolver
+            .remove_from_vault("TEST_EXTERNAL_WRITE")
+            .unwrap_err()
+            .to_string();
+        assert!(remove_error.contains(SECRET_SOURCES_FILENAME));
     }
 
     #[test]

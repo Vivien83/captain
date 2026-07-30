@@ -1,9 +1,12 @@
 //! LLM summarization helpers for session compaction.
 
-use crate::compactor::CompactionConfig;
+use crate::compactor::{
+    emit_compaction_stage, CompactionConfig, CompactionStageObserver, CompactionStageUpdate,
+};
 use crate::llm_driver::{CompletionRequest, LlmDriver};
 use crate::str_utils::safe_truncate_str;
 use crate::{compaction_handoff, compaction_handoff::HandoffLimits};
+use captain_types::compaction::{CompactionPhase, CompactionProgressUnit};
 use captain_types::message::{ContentBlock, Message, MessageContent, Role};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -237,6 +240,7 @@ fn summarization_request(
         temperature: 0.3,
         system: Some(compaction_handoff::handoff_system_prompt(handoff_limits)),
         thinking: None,
+        reasoning_effort: None,
         tool_choice: None,
         cache_hints: crate::llm_driver::CacheHints::default(),
     }
@@ -247,14 +251,37 @@ fn summarization_request(
 /// Splits messages into chunks based on adaptive ratio (accounting for message size),
 /// summarizes each chunk independently, then merges all chunk summaries with a final
 /// LLM call into one cohesive summary.
+#[cfg(test)]
 pub(crate) async fn summarize_in_chunks(
     driver: Arc<dyn LlmDriver>,
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
 ) -> Result<String, String> {
+    summarize_in_chunks_with_progress(driver, model, messages, config, None).await
+}
+
+pub(crate) async fn summarize_in_chunks_with_progress(
+    driver: Arc<dyn LlmDriver>,
+    model: &str,
+    messages: &[Message],
+    config: &CompactionConfig,
+    observer: Option<&CompactionStageObserver>,
+) -> Result<String, String> {
     let handoff_limits = compaction_handoff::handoff_limits(config);
     let chunk_size = adaptive_chunk_size(messages, config);
+    let total_chunks = messages.len().div_ceil(chunk_size) as u32;
+
+    emit_compaction_stage(
+        observer,
+        CompactionStageUpdate {
+            phase: CompactionPhase::Chunking,
+            detail: format!("Summarizing {total_chunks} history chunks"),
+            completed_units: Some(0),
+            total_units: Some(total_chunks),
+            unit: Some(CompactionProgressUnit::Chunks),
+        },
+    );
 
     info!(
         total = messages.len(),
@@ -263,10 +290,30 @@ pub(crate) async fn summarize_in_chunks(
         "Starting chunked summarization"
     );
 
-    let summaries = summarize_chunks(driver.clone(), model, messages, config, chunk_size).await?;
+    let summaries = summarize_chunks(
+        driver.clone(),
+        model,
+        messages,
+        config,
+        chunk_size,
+        total_chunks,
+        observer,
+    )
+    .await?;
     if summaries.len() == 1 {
         return Ok(summaries.into_iter().next().unwrap());
     }
+
+    emit_compaction_stage(
+        observer,
+        CompactionStageUpdate {
+            phase: CompactionPhase::Merging,
+            detail: "Merging chunk summaries in one opaque model call".to_string(),
+            completed_units: None,
+            total_units: None,
+            unit: None,
+        },
+    );
 
     merge_chunk_summaries(driver, model, summaries, config, &handoff_limits).await
 }
@@ -283,6 +330,8 @@ async fn summarize_chunks(
     messages: &[Message],
     config: &CompactionConfig,
     chunk_size: usize,
+    total_chunks: u32,
+    observer: Option<&CompactionStageObserver>,
 ) -> Result<Vec<String>, String> {
     let mut summaries = Vec::new();
     let mut success_count = 0usize;
@@ -305,6 +354,16 @@ async fn summarize_chunks(
                 ));
             }
         }
+        emit_compaction_stage(
+            observer,
+            CompactionStageUpdate {
+                phase: CompactionPhase::Chunking,
+                detail: format!("Processed chunk {} of {total_chunks}", i + 1),
+                completed_units: Some((i + 1) as u32),
+                total_units: Some(total_chunks),
+                unit: Some(CompactionProgressUnit::Chunks),
+            },
+        );
     }
 
     if success_count == 0 {

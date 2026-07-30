@@ -34,7 +34,7 @@ fn full_tui_zero_tokens_keeps_existing_french_message() {
 }
 
 #[test]
-fn standalone_token_usage_supports_english_hermes_format() {
+fn standalone_token_usage_supports_english_expected_format() {
     assert_eq!(
         token_usage_message(snapshot(), UsageSlashSurface::StandaloneChat, Lang::En),
         "Session: 120↑ in / 80↓ out (total 200)\nCache: 30 input cached / 7 creation\nLast turn: 40↑ 20↓ including 10 cached"
@@ -42,7 +42,7 @@ fn standalone_token_usage_supports_english_hermes_format() {
 }
 
 #[test]
-fn standalone_token_usage_supports_french_hermes_format() {
+fn standalone_token_usage_supports_french_expected_format() {
     let mut usage = snapshot();
     usage.session_cached_input_tokens = 0;
     usage.last_cached_input_tokens = 0;
@@ -53,7 +53,7 @@ fn standalone_token_usage_supports_french_hermes_format() {
 }
 
 #[test]
-fn standalone_zero_tokens_supports_english_hermes_message() {
+fn standalone_zero_tokens_supports_english_expected_message() {
     let mut usage = snapshot();
     usage.session_input_tokens = 0;
     usage.session_output_tokens = 0;

@@ -416,6 +416,10 @@ model = "{model}"
 [memory]
 decay_rate = 0.05
 
+[exec_policy]
+mode = "full"
+critical_mode = "safe"
+
 [network]
 listen_addr = "127.0.0.1:4200"
 "#,

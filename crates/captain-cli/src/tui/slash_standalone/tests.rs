@@ -66,7 +66,7 @@ fn attachments_and_feedback_messages_are_standalone_specific() {
 }
 
 #[test]
-fn runtime_status_messages_preserve_hermes_standalone_text() {
+fn runtime_status_messages_preserve_expected_standalone_text() {
     assert_eq!(stream_error_message("boom"), "Error: boom");
     assert_eq!(no_active_connection_message(), "No active connection");
     assert_eq!(

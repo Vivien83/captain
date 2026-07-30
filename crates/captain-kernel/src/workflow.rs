@@ -1480,13 +1480,32 @@ impl WorkflowEngine {
             .get("command")
             .and_then(|value| value.as_str())
             .unwrap_or("");
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output()
-            .await
-            .map_err(|e| format!("Shell error: {e}"))?;
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let outcome = captain_runtime::guarded_exec::run_unattended_shell(
+            captain_runtime::guarded_exec::ShellExecRequest {
+                surface: captain_runtime::guarded_exec::ExecSurface::Workflow,
+                command: cmd,
+                policy: None,
+                workspace: None,
+                allowed_env_vars: &[],
+                explicit_env: &[],
+                timeout_secs: 30,
+                no_output_timeout_secs: Some(30),
+                bash_required: false,
+            },
+        )
+        .await?;
+        if !outcome.success() {
+            return Err(format!(
+                "Workflow shell action failed (exit {}): {}",
+                outcome.exit_code,
+                if outcome.stderr.is_empty() {
+                    outcome.stdout
+                } else {
+                    outcome.stderr
+                }
+            ));
+        }
+        Ok(outcome.stdout)
     }
 
     fn execute_graph_set_variable_action(
@@ -1664,6 +1683,8 @@ impl Default for WorkflowEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn test_workflow() -> Workflow {
         Workflow {
@@ -2344,6 +2365,33 @@ mod tests {
             &vars,
         );
         assert_eq!(result, "Hello Alice, please do code review on main.rs");
+    }
+
+    #[tokio::test]
+    async fn workflow_shell_action_blocks_critical_content() {
+        let error =
+            WorkflowEngine::execute_graph_shell_action(&serde_json::json!({"command": "rm -rf /"}))
+                .await
+                .unwrap_err();
+
+        assert!(error.contains("critical pattern"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workflow_shell_action_never_inherits_daemon_secrets() {
+        let _guard = ENV_LOCK.lock().await;
+        let key = "CAPTAIN_WORKFLOW_INHERITED_SECRET";
+        std::env::set_var(key, "must-not-leak");
+
+        let output = WorkflowEngine::execute_graph_shell_action(&serde_json::json!({
+            "command": "printf '%s' \"${CAPTAIN_WORKFLOW_INHERITED_SECRET-unset}\""
+        }))
+        .await
+        .unwrap();
+        std::env::remove_var(key);
+
+        assert_eq!(output, "unset");
     }
 
     #[tokio::test]

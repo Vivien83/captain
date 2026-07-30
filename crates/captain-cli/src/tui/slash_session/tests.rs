@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn chat_session_help_message_matches_hermes_startup_text() {
+fn chat_session_help_message_matches_expected_startup_text() {
     assert_eq!(
         chat_session_help_message(),
         "/help for commands \u{2022} /exit to quit"
@@ -33,7 +33,7 @@ fn reset_failure_message_formats_lang_specific_error() {
 }
 
 #[test]
-fn reset_backend_error_messages_preserve_hermes_text() {
+fn reset_backend_error_messages_preserve_expected_text() {
     assert_eq!(
         reset_daemon_agent_missing_message(),
         "No daemon agent bound to this chat."

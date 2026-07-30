@@ -39,7 +39,7 @@ fn tool_definition(name: &str, description: &str, input_schema: Value) -> ToolDe
 fn execute_code_tool_definition() -> ToolDefinition {
     tool_definition(
         "execute_code",
-        "Execute un extrait de code (Python par defaut, Node.js, Bash) directement — sans creer de fichier ni skill. Utiliser pour manipuler des donnees structurees ou prototyper un script a la volee. Ne pas utiliser pour des actions systeme simples (prefer shell_exec), du code persistent (prefer file_write puis shell_exec), ni pour coller une clé API en clair. Pour une API avec credential: vault + integration native ou skill env_inject. Timeout 60s par defaut. Si timeout_secs est explicitement defini, c'est une fenetre de reevaluation renouvelable: un processus encore vivant n'est pas tue a l'echeance. Retourne un JSON avec stdout, stderr, exit_code.",
+        "Execute un extrait de code (Python par defaut, Node.js, Bash) directement — sans creer de fichier ni skill. Avant tout spawn, la frontiere d'execution gardee applique la politique active, les blocages critiques et secrets, un environnement efface puis reconstruit, le workspace et le timeout. Utiliser pour manipuler des donnees structurees ou prototyper un script a la volee. Ne pas utiliser pour des actions systeme simples (prefer shell_exec), du code persistent (prefer file_write puis shell_exec), ni pour coller une clé API en clair. Pour une API avec credential: vault + integration native ou skill env_inject. Timeout 60s par defaut. Si timeout_secs est explicitement defini, c'est une fenetre de reevaluation renouvelable: un processus encore vivant n'est pas tue a l'echeance. Retourne un JSON avec stdout, stderr, exit_code.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -60,7 +60,7 @@ fn execute_code_tool_definition() -> ToolDefinition {
 fn shell_exec_tool_definition() -> ToolDefinition {
     tool_definition(
         "shell_exec",
-        "Exécute une commande shell dans l'environnement du serveur et retourne stdout+stderr. Utiliser pour des opérations système, scripts, compilations, ou toute tâche nécessitant le shell. Pour une question de version binaire/runtime Captain ou de statut live, utiliser `captain --version`, `captain status` ou l'API locale `/api/status` plutôt qu'un changelog historique. Ne pas utiliser comme premier réflexe sur une demande actionnable fraîche : commence par capability_search pour choisir le bon rail. Ne pas utiliser pour diagnostiquer le vault/SSH Captain (préférer ssh_exec + captain_docs), lire/écrire des fichiers simples (file_read/file_write), des commandes destructives irréversibles sans validation, ni passer une clé API brute en argument/env inline. Ne jamais sourcer `~/.captain/secrets.env` dans un shell : certaines clés sont des identifiants logiques non compatibles shell. Les secrets doivent venir du vault via secret_read, intégration native ou skill env_inject. Pour une compilation/test longue, définir timeout_seconds comme fenêtre de réévaluation bornée: Captain émet du progrès, renouvelle quelques fenêtres puis applique un plafond dur. Éviter les commandes de monitoring sans fin (`log stream`, `tail -f`, `pmset -g thermlog`) dans shell_exec; utiliser process_start pour serveurs/watchers. Retourne la sortie combinée (stdout et stderr) avec le code de retour.",
+        "Exécute une commande shell dans l'environnement du serveur et retourne stdout+stderr. Avant tout spawn, la frontière d'exécution gardée applique la politique active, les blocages critiques et secrets, un environnement effacé puis reconstruit, le workspace et le timeout. Utiliser pour des opérations système, scripts, compilations, ou toute tâche nécessitant le shell. Pour une question de version binaire/runtime Captain ou de statut live, utiliser `captain --version`, `captain status` ou l'API locale `/api/status` plutôt qu'un changelog historique. Ne pas utiliser comme premier réflexe sur une demande actionnable fraîche : commence par capability_search pour choisir le bon rail. Ne pas utiliser pour diagnostiquer le vault/SSH Captain (préférer ssh_exec + captain_docs), lire/écrire des fichiers simples (file_read/file_write), des commandes destructives irréversibles sans validation, ni passer une clé API brute en argument/env inline. Ne jamais sourcer `~/.captain/secrets.env` dans un shell : certaines clés sont des identifiants logiques non compatibles shell. Les secrets doivent venir du vault via secret_read, intégration native ou skill env_inject. Pour une compilation/test longue, définir timeout_seconds comme fenêtre de réévaluation bornée: Captain émet du progrès, renouvelle quelques fenêtres puis applique un plafond dur. Éviter les commandes de monitoring sans fin (`log stream`, `tail -f`, `pmset -g thermlog`) dans shell_exec; utiliser process_start pour serveurs/watchers. Retourne la sortie combinée (stdout et stderr) avec le code de retour.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -198,6 +198,7 @@ mod tests {
             vec!["python", "node", "bash"]
         );
         assert_contains(&execute_code.description, "fenetre de reevaluation");
+        assert_contains(&execute_code.description, "frontiere d'execution gardee");
         assert_contains(
             property(execute_code, "pip_install")
                 .get("description")
@@ -214,6 +215,7 @@ mod tests {
         assert_contains(&shell_exec.description, "pmset -g thermlog");
         assert_contains(&shell_exec.description, "process_start");
         assert_contains(&shell_exec.description, "secrets.env");
+        assert_contains(&shell_exec.description, "frontière d'exécution gardée");
         assert_contains(
             property(shell_exec, "timeout_seconds")
                 .get("description")

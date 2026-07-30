@@ -1,3 +1,4 @@
+use crate::project_runtime_completion::runtime_phase_has_satisfied_contract;
 use crate::project_runtime_mutation::{project_runtime_json, update_project_runtime_state};
 use crate::project_runtime_orchestrator::{
     mark_runtime_waiting, runtime_orchestrator_allows_continue,
@@ -51,7 +52,11 @@ pub(crate) async fn prepare_project_worker_phase_start(
     let spec = runtime_worker_spec_for_phase(phase)?;
     let project = load_project_for_phase(state, project_id)?;
     let existing_runtime = project_runtime_json(state, &project, None);
-    let existing_status = runtime_existing_worker_status(&existing_runtime, phase);
+    let existing_status = resume_worker_status_with_contract(
+        &existing_runtime,
+        phase,
+        runtime_existing_worker_status(&existing_runtime, phase),
+    );
     let disposition = reconcile_existing_worker(
         state,
         &project,
@@ -72,6 +77,19 @@ pub(crate) async fn prepare_project_worker_phase_start(
         spec,
         runtime_snapshot,
     }))
+}
+
+fn resume_worker_status_with_contract(
+    runtime: &serde_json::Value,
+    phase: &str,
+    status: Option<String>,
+) -> Option<String> {
+    match status.as_deref() {
+        Some("done") if !runtime_phase_has_satisfied_contract(runtime, phase) => {
+            Some("ready".to_string())
+        }
+        _ => status,
+    }
 }
 
 async fn runtime_allows_continue(state: &Arc<AppState>, project_id: &str) -> Result<bool, String> {
@@ -161,7 +179,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_worker_spec_for_phase_keeps_hermes_worker_order() {
+    fn runtime_worker_spec_for_phase_keeps_defined_worker_order() {
         let observe = runtime_worker_spec_for_phase("observe").unwrap();
         let build = runtime_worker_spec_for_phase("build").unwrap();
         let learn = runtime_worker_spec_for_phase("learn").unwrap();
@@ -192,6 +210,36 @@ mod tests {
         assert_eq!(
             project_not_found_error("project-1"),
             "project 'project-1' not found"
+        );
+    }
+
+    #[test]
+    fn resume_replays_legacy_done_worker_without_completion_proof() {
+        let runtime = serde_json::json!({
+            "workers": [{ "phase": "build", "status": "done" }]
+        });
+
+        assert_eq!(
+            resume_worker_status_with_contract(&runtime, "build", Some("done".to_string()))
+                .as_deref(),
+            Some("ready")
+        );
+    }
+
+    #[test]
+    fn resume_skips_done_worker_with_satisfied_completion_proof() {
+        let runtime = serde_json::json!({
+            "workers": [{
+                "phase": "build",
+                "status": "done",
+                "completion_contract": { "decision": "satisfied" }
+            }]
+        });
+
+        assert_eq!(
+            resume_worker_status_with_contract(&runtime, "build", Some("done".to_string()))
+                .as_deref(),
+            Some("done")
         );
     }
 }

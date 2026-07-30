@@ -37,6 +37,14 @@ pub async fn set_provider_key(
     };
 
     let env_var = provider_env_var(&state, &name);
+    if state.kernel.credential_is_externally_managed(&env_var) {
+        return json_error(
+            StatusCode::CONFLICT,
+            format!(
+                "{env_var} is managed by secret-sources.toml; rotate the external file instead"
+            ),
+        );
+    }
     if let Err(error) = persist_provider_key(&state, &env_var, &key) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
     }
@@ -66,6 +74,11 @@ fn json_error(status: StatusCode, error: String) -> ApiJsonResponse {
 }
 
 fn persist_provider_key(state: &AppState, env_var: &str, key: &str) -> Result<(), String> {
+    if state.kernel.credential_is_externally_managed(env_var) {
+        return Err(format!(
+            "{env_var} is managed by secret-sources.toml; rotate the external file instead"
+        ));
+    }
     state.kernel.store_credential(env_var, key);
 
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
@@ -83,7 +96,7 @@ fn refresh_provider_auth(state: &AppState) {
         .model_catalog
         .write()
         .unwrap_or_else(|error| error.into_inner())
-        .detect_auth();
+        .detect_auth_with(&|key| state.kernel.resolve_credential(key).is_some());
 }
 
 fn current_provider_key_env(state: &AppState) -> (String, String) {
@@ -104,11 +117,12 @@ fn current_provider_key_env(state: &AppState) -> (String, String) {
     }
 }
 
-fn env_has_key(env_var: &str) -> bool {
+fn env_has_key(state: &AppState, env_var: &str) -> bool {
     !env_var.is_empty()
-        && std::env::var(env_var)
-            .ok()
-            .filter(|value| !value.is_empty())
+        && state
+            .kernel
+            .resolve_credential(env_var)
+            .filter(|value| !value.trim().is_empty())
             .is_some()
 }
 
@@ -118,7 +132,7 @@ fn suggested_default_model_for_saved_key(
     current_key_env: &str,
     saved_provider: &str,
 ) -> Option<String> {
-    if env_has_key(current_key_env) || current_provider == saved_provider {
+    if env_has_key(state, current_key_env) || current_provider == saved_provider {
         return None;
     }
 
@@ -204,6 +218,17 @@ pub async fn delete_provider_key(
         );
     }
 
+    if state.kernel.credential_is_externally_managed(&env_var) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!(
+                    "{env_var} is managed by secret-sources.toml; remove that mapping to manage it here"
+                )
+            })),
+        );
+    }
+
     state.kernel.remove_credential(&env_var);
 
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
@@ -220,7 +245,7 @@ pub async fn delete_provider_key(
         .model_catalog
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .detect_auth();
+        .detect_auth_with(&|key| state.kernel.resolve_credential(key).is_some());
 
     (
         StatusCode::OK,
@@ -271,7 +296,7 @@ pub async fn test_provider(
         }
     };
 
-    let api_key = std::env::var(&env_var).ok();
+    let api_key = state.kernel.resolve_credential(&env_var);
     if key_required && api_key.is_none() && !env_var.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -301,6 +326,7 @@ pub async fn test_provider(
                 temperature: 0.0,
                 system: None,
                 thinking: None,
+                reasoning_effort: None,
                 tool_choice: None,
                 cache_hints: captain_runtime::llm_driver::CacheHints::default(),
             };
@@ -364,6 +390,7 @@ pub async fn set_provider_url(
             .write()
             .unwrap_or_else(|e| e.into_inner());
         catalog.set_provider_url(&name, &base_url);
+        catalog.detect_auth_with(&|key| state.kernel.resolve_credential(key).is_some());
     }
 
     let config_path = state.kernel.config.home_dir.join("config.toml");

@@ -27,10 +27,19 @@ async fn memory_health_ok(state: &AppState) -> bool {
     .unwrap_or(false)
 }
 
+fn overall_health_status(database_ok: bool, audit_ok: bool) -> &'static str {
+    if database_ok && audit_ok {
+        "ok"
+    } else {
+        "degraded"
+    }
+}
+
 /// GET /api/health - Minimal liveness probe (public, no auth required).
 pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db_ok = memory_health_ok(&state).await;
-    let status = if db_ok { "ok" } else { "degraded" };
+    let audit = state.kernel.audit_log.integrity_status();
+    let status = overall_health_status(db_ok, audit.valid);
 
     Json(serde_json::json!({
         "status": status,
@@ -42,8 +51,9 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let health = state.kernel.supervisor.health();
     let db_ok = memory_health_ok(&state).await;
+    let audit = state.kernel.audit_log.integrity_status();
     let config_warnings = state.kernel.config.validate();
-    let status = if db_ok { "ok" } else { "degraded" };
+    let status = overall_health_status(db_ok, audit.valid);
 
     Json(serde_json::json!({
         "status": status,
@@ -54,6 +64,8 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
         "restart_count": health.restart_count,
         "agent_count": state.kernel.registry.count(),
         "database": if db_ok { "connected" } else { "error" },
+        "audit": audit,
+        "execution": state.kernel.config.exec_policy.host_execution_posture(),
         "config_warnings": config_warnings,
     }))
 }
@@ -100,6 +112,7 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
 
     let health = state.kernel.supervisor.health();
     append_supervisor_metrics(&mut out, &health);
+    append_audit_metrics(&mut out, &state.kernel.audit_log.integrity_status());
 
     out.push_str("# HELP captain_info Captain version and build info.\n");
     out.push_str("# TYPE captain_info gauge\n");
@@ -116,6 +129,30 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
         )],
         out,
     )
+}
+
+fn append_audit_metrics(
+    out: &mut String,
+    integrity: &captain_runtime::audit::AuditIntegrityStatus,
+) {
+    out.push_str("# HELP captain_audit_integrity Audit history integrity state (1 healthy).\n");
+    out.push_str("# TYPE captain_audit_integrity gauge\n");
+    out.push_str(&format!(
+        "captain_audit_integrity {}\n",
+        u8::from(integrity.valid)
+    ));
+    out.push_str("# HELP captain_audit_invalid_epochs Number of sealed invalid audit epochs.\n");
+    out.push_str("# TYPE captain_audit_invalid_epochs gauge\n");
+    out.push_str(&format!(
+        "captain_audit_invalid_epochs {}\n",
+        integrity.invalid_epochs.len()
+    ));
+    out.push_str("# HELP captain_audit_active_epoch Current writable audit epoch.\n");
+    out.push_str("# TYPE captain_audit_active_epoch gauge\n");
+    out.push_str(&format!(
+        "captain_audit_active_epoch {}\n\n",
+        integrity.active_epoch
+    ));
 }
 
 fn append_supervisor_metrics(
@@ -144,6 +181,14 @@ fn append_supervisor_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::Router;
+    use captain_kernel::CaptainKernel;
+    use captain_types::config::{DefaultModelConfig, KernelConfig};
+    use std::time::Instant;
+    use tower::ServiceExt;
 
     #[test]
     fn supervisor_metrics_keep_recoverable_failures_separate_from_panics() {
@@ -161,5 +206,108 @@ mod tests {
         assert!(output.contains("captain_agent_failures_total 7"));
         assert!(output.contains("captain_panics_total 2"));
         assert!(output.contains("captain_restarts_total 1"));
+    }
+
+    #[test]
+    fn audit_degradation_changes_overall_health_and_metrics() {
+        assert_eq!(overall_health_status(true, true), "ok");
+        assert_eq!(overall_health_status(true, false), "degraded");
+        assert_eq!(overall_health_status(false, true), "degraded");
+
+        let mut output = String::new();
+        append_audit_metrics(
+            &mut output,
+            &captain_runtime::audit::AuditIntegrityStatus {
+                valid: false,
+                status: "degraded".to_string(),
+                active_epoch: 2,
+                active_epoch_valid: true,
+                invalid_epochs: vec![0, 1],
+                entry_count: 12,
+                tip_hash: "a".repeat(64),
+                last_error: Some("sealed history".to_string()),
+            },
+        );
+        assert!(output.contains("captain_audit_integrity 0"));
+        assert!(output.contains("captain_audit_invalid_epochs 2"));
+        assert!(output.contains("captain_audit_active_epoch 2"));
+    }
+
+    #[tokio::test]
+    async fn tampering_is_exposed_by_health_detail_after_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = KernelConfig {
+            home_dir: temp.path().to_path_buf(),
+            data_dir: temp.path().join("data"),
+            default_model: DefaultModelConfig {
+                provider: "ollama".to_string(),
+                model: "test-model".to_string(),
+                api_key_env: "OLLAMA_API_KEY".to_string(),
+                base_url: None,
+            },
+            ..KernelConfig::default()
+        };
+        let first = CaptainKernel::boot_with_config(config.clone()).unwrap();
+        first
+            .audit_log
+            .record(
+                "captain",
+                captain_runtime::audit::AuditAction::ConfigChange,
+                "original detail",
+                "ok",
+            )
+            .unwrap();
+        first
+            .memory
+            .usage_conn()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audit_entries SET detail = 'tampered' WHERE seq = (
+                     SELECT MIN(seq) FROM audit_entries
+                 )",
+                [],
+            )
+            .unwrap();
+        first.shutdown();
+        drop(first);
+
+        let kernel = Arc::new(CaptainKernel::boot_with_config(config).unwrap());
+        let state = Arc::new(AppState {
+            kernel: Arc::clone(&kernel),
+            started_at: Instant::now(),
+            peer_registry: None,
+            bridge_manager: tokio::sync::Mutex::new(None),
+            channels_config: tokio::sync::RwLock::new(Default::default()),
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
+            ask_user_channels: dashmap::DashMap::new(),
+            provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
+        });
+        let app = Router::new()
+            .route("/api/health/detail", get(health_detail))
+            .with_state(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/health/detail")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+
+        assert_eq!(payload["status"], "degraded");
+        assert_eq!(payload["audit"]["valid"], false);
+        assert_eq!(payload["audit"]["active_epoch_valid"], true);
+        assert_eq!(payload["audit"]["active_epoch"], 1);
+        assert_eq!(payload["audit"]["invalid_epochs"], serde_json::json!([0]));
+        assert_eq!(payload["execution"]["backend"], "host_process");
+        assert_eq!(payload["execution"]["isolation_level"], "environment_scrub");
+        assert_eq!(payload["execution"]["os_isolation"], false);
+        assert_eq!(payload["execution"]["policy_mode"], "full");
+        assert_eq!(payload["execution"]["critical_mode"], "safe");
+        kernel.shutdown();
     }
 }

@@ -79,44 +79,43 @@ write_manifests() {
   "platform": "$PLATFORM",
   "archive": "$(basename "$ARCHIVE")",
   "sha256": "$HASH",
-  "generated_at": "$generated_at"
+  "build_started_at": "$BUILD_STARTED_AT",
+  "generated_at": "$generated_at",
+  "source": {
+    "repository": "$SOURCE_REPOSITORY",
+    "revision": "$SOURCE_REVISION",
+    "tree": "$SOURCE_TREE",
+    "cargo_lock_sha256": "$CARGO_LOCK_SHA256",
+    "dirty": $SOURCE_DIRTY
+  }
 }
 EOF
 
     aggregate_manifest="$VERSION_DIR/manifest.json"
-    cat > "$aggregate_manifest" <<EOF
-{
-  "version": "$VERSION",
-  "generated_at": "$generated_at",
-  "artifacts": [
-EOF
-
-    first=1
-    for artifact in "$VERSION_DIR"/captain-*.tar.gz "$VERSION_DIR"/captain-*.zip; do
-        [ -f "$artifact" ] || continue
-        artifact_name=$(basename "$artifact")
-        artifact_platform="${artifact_name#captain-}"
-        case "$artifact_name" in
-            *.tar.gz) artifact_platform="${artifact_platform%.tar.gz}" ;;
-            *.zip) artifact_platform="${artifact_platform%.zip}" ;;
-        esac
-        artifact_hash=$(cut -d ' ' -f 1 < "$artifact.sha256" 2>/dev/null || sha256_file "$artifact")
-        if [ "$first" = "1" ]; then
-            first=0
-        else
-            printf ',\n' >> "$aggregate_manifest"
-        fi
-        printf '    {\n      "platform": "%s",\n      "archive": "%s",\n      "sha256": "%s"\n    }' \
-            "$artifact_platform" \
-            "$artifact_name" \
-            "$artifact_hash" >> "$aggregate_manifest"
-    done
-
-    cat >> "$aggregate_manifest" <<EOF
-
-  ]
-}
-EOF
+    set -- "$VERSION_DIR"/manifest-*.json
+    [ -f "$1" ] || fail "No platform manifests found in $VERSION_DIR"
+    jq -s \
+        --arg version "$VERSION" \
+        --arg generated_at "$generated_at" \
+        '
+          . as $manifests
+          | ($manifests | map(.source) | unique) as $sources
+          | if ($sources | length) != 1 then
+              error("platform manifests contain mixed source provenance")
+            else
+              {
+                version: $version,
+                generated_at: $generated_at,
+                source: $sources[0],
+                artifacts: (
+                  $manifests
+                  | map({platform, archive, sha256})
+                  | sort_by(.platform)
+                )
+              }
+            end
+        ' \
+        "$@" >"$aggregate_manifest"
 }
 
 create_archive() {
@@ -132,6 +131,16 @@ create_archive() {
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
 VERSION="${CAPTAIN_VERSION:-0.1.0-dev.$(date -u +%Y%m%d%H%M%S)}"
 DIST_ROOT="${CAPTAIN_DIST_DIR:-$ROOT_DIR/dist/releases}"
+BUILD_STARTED_AT="${CAPTAIN_BUILD_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+SOURCE_REPOSITORY="${CAPTAIN_PROVENANCE_REPOSITORY:-https://github.com/Vivien83/captain}"
+SOURCE_REVISION="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+SOURCE_TREE="$(git -C "$ROOT_DIR" rev-parse 'HEAD^{tree}')"
+CARGO_LOCK_SHA256="$(sha256_file "$ROOT_DIR/Cargo.lock")"
+SOURCE_DIRTY=false
+if [ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]; then
+    SOURCE_DIRTY=true
+fi
 
 detect_platform
 

@@ -26,18 +26,19 @@ pub use crate::agent_message_routes::{
     answer_message, inject_attachments_into_session, send_message, send_message_stream,
 };
 pub use crate::agent_runtime_config_routes::{
-    get_agent_mcp_servers, get_agent_skills, get_agent_tools, model_switch_apply,
-    model_switch_plan, set_agent_mcp_servers, set_agent_skills, set_agent_tools, set_model,
-    ModelSwitchApplyRequest, ModelSwitchPlanRequest,
+    get_agent_mcp_servers, get_agent_reasoning, get_agent_skills, get_agent_tools,
+    model_switch_apply, model_switch_plan, set_agent_mcp_servers, set_agent_reasoning,
+    set_agent_skills, set_agent_tools, set_model, ModelSwitchApplyRequest, ModelSwitchPlanRequest,
 };
 pub use crate::agent_session_view_routes::get_agent_session;
 pub use crate::agent_spawn_routes::spawn_agent;
 pub use crate::agent_update_routes::{patch_agent, update_agent};
 pub use crate::approval_routes::{
     approve_always_request, approve_request, approve_session_request, clear_session_approvals,
-    create_approval, list_approvals, reject_request, CreateApprovalRequest,
+    create_approval, list_approvals, reject_always_request, reject_request, reject_session_request,
+    revoke_approval_rule, CreateApprovalRequest,
 };
-pub use crate::audit_routes::{audit_recent, audit_repair, audit_verify, logs_stream};
+pub use crate::audit_routes::{audit_recent, audit_verify, logs_stream};
 pub use crate::binding_routes::{add_binding, list_bindings, remove_binding};
 pub use crate::capspec_routes::{
     decide_native_capability, disable_native_capability, inspect_native_capability,
@@ -48,9 +49,6 @@ pub use crate::capspec_routes::{
 pub use crate::channel_routes::{
     clear_inbound_dead_letters, configure_channel, list_channels, reload_channels, remove_channel,
     test_channel,
-};
-pub use crate::clawhub_routes::{
-    clawhub_browse, clawhub_install, clawhub_search, clawhub_skill_code, clawhub_skill_detail,
 };
 pub use crate::command_routes::list_commands;
 pub use crate::comms_routes::{
@@ -110,9 +108,7 @@ pub use crate::session_routes::{
     find_session_by_label, get_session, list_agent_sessions, list_session_events, list_sessions,
     reset_session, restore_session, set_session_label, switch_agent_session,
 };
-pub use crate::skill_routes::{
-    create_skill, install_skill, list_skills, marketplace_search, uninstall_skill,
-};
+pub use crate::skill_routes::{create_skill, list_skills, uninstall_skill};
 pub use crate::state::AppState;
 pub use crate::status_routes::status;
 pub use crate::system_routes::{add_workspace_path, shutdown, version};
@@ -131,7 +127,7 @@ pub use crate::usage_budget_routes::{
     usage_by_model, usage_daily, usage_stats, usage_summary,
 };
 pub use crate::voice_routes::{get_stt, update_stt};
-pub use crate::web_auth_routes::{auth_check, auth_login, auth_logout};
+pub use crate::web_auth_routes::{auth_check, auth_login, auth_logout, auth_realtime_ticket};
 pub use crate::webhook_routes::{webhook_agent, webhook_wake};
 pub use crate::whatsapp_routes::{whatsapp_qr_start, whatsapp_qr_status};
 pub use crate::workflow_routes::{

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn memory_stored_line_preserves_hermes_shape() {
+fn memory_stored_line_preserves_expected_shape() {
     let line = memory_stored_line("project", "status", "ready", "agent");
 
     assert_eq!(line, "🧠 mémorisé · project/status = \"ready\"   (agent)");

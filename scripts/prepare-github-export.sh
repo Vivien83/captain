@@ -147,7 +147,7 @@ private_paths=(
   docs/ssh-setup.md
   scripts/build-launch-site.sh
   scripts/deploy-launch-site.sh
-  scripts/hermes-vs-captain-benchmark.sh
+  scripts/runtime-capability-benchmark.sh
   scripts/launch-site-audit.sh
   scripts/launch-site-browser-smoke.mjs
   skills/resawod.md

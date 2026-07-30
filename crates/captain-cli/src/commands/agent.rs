@@ -200,8 +200,36 @@ pub(crate) fn cmd_agent_set(agent_id_str: &str, field: &str, value: &str) {
                 std::process::exit(1);
             }
         }
+        "reasoning" => {
+            if let Some(base) = find_daemon() {
+                let client = daemon_client();
+                let effort = (!value.eq_ignore_ascii_case("auto")).then_some(value);
+                let body = daemon_json(
+                    client
+                        .put(format!("{base}/api/agents/{agent_id_str}/reasoning"))
+                        .json(&serde_json::json!({"effort": effort}))
+                        .send(),
+                );
+                if body.get("error").is_none() {
+                    let configured = body["configured_effort"].as_str().unwrap_or("auto");
+                    let effective = body["effective_effort"].as_str().unwrap_or("provider");
+                    println!(
+                        "Agent {agent_id_str} reasoning set to {configured} (effective: {effective})."
+                    );
+                } else {
+                    eprintln!(
+                        "Failed to set reasoning: {}",
+                        body["error"].as_str().unwrap_or("Unknown error")
+                    );
+                    std::process::exit(1);
+                }
+            } else {
+                eprintln!("No running daemon found. Start one with: captain start");
+                std::process::exit(1);
+            }
+        }
         _ => {
-            eprintln!("Unknown field: {field}. Supported fields: model");
+            eprintln!("Unknown field: {field}. Supported fields: model, reasoning");
             std::process::exit(1);
         }
     }

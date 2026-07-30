@@ -8,12 +8,14 @@ use axum::{
         IntoResponse,
     },
 };
-use captain_types::event::{ChatStreamEvent, EventPayload, LifecycleEvent, ToolRunEvent};
+use captain_types::event::{
+    AgentDelegationEvent, ChatStreamEvent, EventPayload, LifecycleEvent, ToolRunEvent,
+};
 use futures::stream;
 use std::{convert::Infallible, sync::Arc};
 
 /// GET /api/memory/events - SSE stream for live memory, skill proposal,
-/// agent lifecycle, and background tool_run events.
+/// agent lifecycle, background work, and session compaction events.
 pub async fn memory_events_stream(State(state): State<Arc<AppState>>) -> axum::response::Response {
     let rx = state.kernel.event_bus.subscribe_all();
     let sse_stream = stream::unfold(rx, |mut rx| async move {
@@ -41,6 +43,7 @@ fn event_payload_to_sse(payload: EventPayload) -> Option<Event> {
         EventPayload::ChatStream(stream_event) => memory_event_to_sse(stream_event),
         EventPayload::Lifecycle(lifecycle_event) => lifecycle_event_to_sse(lifecycle_event),
         EventPayload::ToolRun(tool_run_event) => Some(tool_run_event_to_sse(tool_run_event)),
+        EventPayload::AgentDelegation(event) => Some(agent_delegation_event_to_sse(event)),
         _ => None,
     }
 }
@@ -98,8 +101,34 @@ fn tool_run_event_to_sse(event: ToolRunEvent) -> Event {
         .unwrap_or_else(|_| Event::default().data("error"))
 }
 
+fn agent_delegation_event_fields(event: AgentDelegationEvent) -> serde_json::Value {
+    serde_json::json!({
+        "job_id": event.job_id,
+        "title": event.title,
+        "target_agent_id": event.target_agent_id,
+        "status": event.status,
+        "caller_agent_id": event.caller_agent_id,
+        "attempt_count": event.attempt_count,
+        "used_tokens": event.used_tokens,
+        "error_code": event.error_code,
+    })
+}
+
+fn agent_delegation_event_to_sse(event: AgentDelegationEvent) -> Event {
+    Event::default()
+        .event("agent_delegation_status")
+        .json_data(agent_delegation_event_fields(event))
+        .unwrap_or_else(|_| Event::default().data("error"))
+}
+
 fn memory_event_to_sse(event: ChatStreamEvent) -> Option<Event> {
     match event {
+        ChatStreamEvent::CompactionProgress { progress } => Some(
+            Event::default()
+                .event("compaction_progress")
+                .json_data(progress)
+                .unwrap_or_else(|_| Event::default().data("error")),
+        ),
         ChatStreamEvent::MemoryStored {
             subject,
             predicate,
@@ -179,7 +208,38 @@ fn memory_event_to_sse(event: ChatStreamEvent) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use captain_types::agent::AgentId;
+    use captain_types::agent::{AgentId, SessionId};
+    use captain_types::compaction::{
+        CompactionPhase, CompactionProgress, CompactionState, COMPACTION_PROGRESS_SCHEMA_VERSION,
+    };
+
+    #[test]
+    fn compaction_progress_is_exposed_on_the_daemon_wide_sse_contract() {
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        let event = memory_event_to_sse(ChatStreamEvent::CompactionProgress {
+            progress: CompactionProgress {
+                schema_version: COMPACTION_PROGRESS_SCHEMA_VERSION,
+                operation_id: "compact-sse".to_string(),
+                runtime_instance_id: "runtime-sse".to_string(),
+                agent_id,
+                session_id,
+                phase: CompactionPhase::Summarizing,
+                state: CompactionState::Running,
+                detail: "opaque model call".to_string(),
+                message_count: 40,
+                estimated_tokens: 10_000,
+                context_window_tokens: 200_000,
+                completed_units: None,
+                total_units: None,
+                unit: None,
+                started_at_ms: 1,
+                updated_at_ms: 2,
+            },
+        });
+
+        assert!(event.is_some());
+    }
 
     #[test]
     fn lifecycle_spawned_maps_to_agent_lifecycle_kind() {
@@ -237,6 +297,26 @@ mod tests {
         assert_eq!(data["tool_name"], "shell_exec");
         assert_eq!(data["status"], "completed");
         assert_eq!(data["caller_agent_id"], "agent-123");
+    }
+
+    #[test]
+    fn delegation_event_fields_are_bounded_operator_metadata() {
+        let data = agent_delegation_event_fields(AgentDelegationEvent {
+            job_id: "job-123".to_string(),
+            title: "Review release".to_string(),
+            target_agent_id: "agent-reviewer".to_string(),
+            status: "running".to_string(),
+            caller_agent_id: "captain".to_string(),
+            attempt_count: 2,
+            used_tokens: Some(800),
+            error_code: None,
+        });
+        assert_eq!(data["job_id"], "job-123");
+        assert_eq!(data["status"], "running");
+        assert_eq!(data["attempt_count"], 2);
+        assert_eq!(data["used_tokens"], 800);
+        assert!(data.get("task").is_none());
+        assert!(data.get("result").is_none());
     }
 
     #[test]

@@ -42,6 +42,19 @@ fn test_api_key_requires_restart() {
 }
 
 #[test]
+fn test_api_allowed_origins_require_restart() {
+    let a = default_cfg();
+    let mut b = default_cfg();
+    b.api.allowed_origins = vec!["https://console.example.com".to_string()];
+    let plan = build_reload_plan(&a, &b);
+    assert!(plan.restart_required);
+    assert!(plan
+        .restart_reasons
+        .iter()
+        .any(|reason| reason.contains("allowed origins")));
+}
+
+#[test]
 fn test_network_requires_restart() {
     let a = default_cfg();
     let mut b = default_cfg();
@@ -158,6 +171,16 @@ fn test_tts_config_hot_reload() {
     let plan = build_reload_plan(&a, &b);
     assert!(!plan.restart_required);
     assert!(plan.hot_actions.contains(&HotAction::UpdateTtsConfig));
+}
+
+#[test]
+fn test_budget_config_hot_reload() {
+    let a = default_cfg();
+    let mut b = default_cfg();
+    b.budget.max_hourly_usd = 7.5;
+    let plan = build_reload_plan(&a, &b);
+    assert!(!plan.restart_required);
+    assert!(plan.hot_actions.contains(&HotAction::UpdateBudgetConfig));
 }
 
 #[test]
@@ -284,6 +307,11 @@ fn test_validate_config_for_reload_invalid() {
     config.max_cron_jobs = 100_000;
     let err = validate_config_for_reload(&config).unwrap_err();
     assert!(err.iter().any(|e| e.contains("max_cron_jobs")));
+
+    let mut config = default_cfg();
+    config.budget.max_hourly_usd = -1.0;
+    let err = validate_config_for_reload(&config).unwrap_err();
+    assert!(err.iter().any(|e| e.contains("budget")));
 }
 
 #[test]

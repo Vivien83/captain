@@ -218,18 +218,97 @@ async fn tick_once_recovery_succeeds_records_one_ok() {
 
 #[tokio::test]
 async fn run_shell_with_timeout_captures_exit_code() {
-    let (ok, _out, _lat) = run_shell_with_timeout("true", None).await;
+    let (ok, _out, _lat) =
+        run_shell_with_timeout("true", None, crate::guarded_exec::ExecSurface::GoalCheck).await;
     assert!(ok);
-    let (ok, _, _) = run_shell_with_timeout("false", None).await;
+    let (ok, _, _) =
+        run_shell_with_timeout("false", None, crate::guarded_exec::ExecSurface::GoalCheck).await;
     assert!(!ok);
 }
 
 #[tokio::test]
 async fn run_shell_with_timeout_captures_stderr() {
-    let (ok, out, _) = run_shell_with_timeout("echo hello && echo bad >&2 && exit 2", None).await;
+    let (ok, out, _) = run_shell_with_timeout(
+        "echo hello && echo bad >&2 && exit 2",
+        None,
+        crate::guarded_exec::ExecSurface::GoalCheck,
+    )
+    .await;
     assert!(!ok);
     assert!(out.contains("hello"));
     assert!(out.contains("bad"));
+}
+
+#[tokio::test]
+async fn goal_check_blocks_critical_command_at_execution_time() {
+    let result = execute_goal_check("rm -rf /", None, None, None).await;
+
+    assert!(!result.ok);
+    assert!(result.output.contains("critical pattern"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn goal_check_never_inherits_daemon_secrets() {
+    let _guard = crate::guarded_exec::TEST_ASYNC_ENV_LOCK.lock().await;
+    let key = "CAPTAIN_GOAL_LOOP_INHERITED_SECRET";
+    std::env::set_var(key, "must-not-leak");
+
+    let result = execute_goal_check(
+        "test -z \"${CAPTAIN_GOAL_LOOP_INHERITED_SECRET-}\"",
+        None,
+        None,
+        None,
+    )
+    .await;
+    std::env::remove_var(key);
+
+    assert!(
+        result.ok,
+        "goal process inherited daemon secret: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn execute_goal_check_exposes_recovery_receipt_for_project_verification() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let marker = dir.path().join("ready");
+    let check = format!("test -f '{}'", marker.display());
+    let recover = format!("touch '{}'", marker.display());
+
+    let result = execute_goal_check(
+        &check,
+        Some(&recover),
+        Some(dir.path().to_str().unwrap()),
+        None,
+    )
+    .await;
+
+    assert!(result.ok);
+    assert!(result.recovery_attempted);
+    assert!(result.output.contains("[recovery ok]"));
+    assert!(result.output.contains("[recheck ok]"));
+    assert!(result.escalation_reason.is_none());
+}
+
+#[tokio::test]
+async fn execute_goal_check_preserves_non_progress_failure() {
+    let result = execute_goal_check(
+        "printf 'CAPTAIN_PROGRESS=same\\n'",
+        None,
+        None,
+        Some("same"),
+    )
+    .await;
+
+    assert!(!result.ok);
+    assert!(!result.recovery_attempted);
+    assert!(result.output.contains("[Captain non-progress]"));
+    assert!(result
+        .escalation_reason
+        .as_deref()
+        .unwrap_or_default()
+        .contains("no progress detected"));
 }
 
 #[tokio::test]
@@ -275,15 +354,15 @@ fn project_workspace_path_reads_launch_workspace_path() {
 #[test]
 fn progress_signature_reads_line_and_json_markers() {
     assert_eq!(
-        progress_signature("noise\nCAPTAIN_PROGRESS=phase-2\n"),
+        goal_progress_signature("noise\nCAPTAIN_PROGRESS=phase-2\n"),
         Some("phase-2".to_string())
     );
     assert_eq!(
-        progress_signature(r#"{"captain_progress":"phase-3"}"#),
+        goal_progress_signature(r#"{"captain_progress":"phase-3"}"#),
         Some("phase-3".to_string())
     );
     assert_eq!(
-        progress_signature(r#"{"progress":"generic-health-ok"}"#),
+        goal_progress_signature(r#"{"progress":"generic-health-ok"}"#),
         None
     );
 }

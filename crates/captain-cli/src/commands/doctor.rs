@@ -95,6 +95,7 @@ pub(crate) fn cmd_doctor(json: bool, repair: bool, full: bool, brand_audit: bool
         report.fail();
     }
 
+    environment::check_external_secret_sources(&mut report);
     environment::check_providers(&mut report);
     environment::check_channels(&mut report);
     environment::check_env_consistency(&mut report);

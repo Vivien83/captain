@@ -46,6 +46,7 @@ fn looks_like_tool_transcript(text: &str) -> bool {
 fn runtime_tool_call_summary(role: &str, phase: &str, tool_calls: &[ToolCallRecord]) -> String {
     let total = tool_calls.len();
     let failures = tool_calls.iter().filter(|call| call.is_error).count();
+    let successes = total.saturating_sub(failures);
     let mut seen = HashSet::new();
     let tools = tool_calls
         .iter()
@@ -66,10 +67,12 @@ fn runtime_tool_call_summary(role: &str, phase: &str, tool_calls: &[ToolCallReco
     } else {
         format!("{total} tool calls ({tools})")
     };
-    let verify = if failures == 0 {
-        "No tool errors were reported by the worker loop."
+    let verify = if total == 0 {
+        "no execution evidence was recorded".to_string()
     } else {
-        "One or more tool calls reported errors; inspect the worker session for details."
+        format!(
+            "Captain recorded {successes} passed and {failures} failed tool receipt(s) for this phase."
+        )
     };
     format!(
         "STATUS: complete\n\
@@ -112,6 +115,15 @@ mod tests {
         assert!(summary.starts_with("STATUS: complete"));
         assert!(summary.contains("builder phase completed"));
         assert!(summary.contains("shell_exec"));
+        assert!(summary.contains("1 passed and 0 failed tool receipt"));
         assert!(!summary.contains("{\"command\""));
+    }
+
+    #[test]
+    fn runtime_worker_summary_does_not_invent_evidence_without_tool_receipts() {
+        let summary = runtime_worker_summary("verifier", "verify", "{}to=shell_exec", &[]);
+
+        assert!(summary.contains("VERIFY: no execution evidence was recorded"));
+        assert!(!summary.contains("No tool errors"));
     }
 }

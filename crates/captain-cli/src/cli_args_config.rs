@@ -4,9 +4,9 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub(crate) enum SkillCommands {
-    /// Install a skill from Captain Marketplace or a local directory.
+    /// Install a reviewed skill from an existing local directory.
     Install {
-        /// Skill name, local path, or git URL.
+        /// Existing local skill directory.
         source: String,
     },
     /// List installed skills.

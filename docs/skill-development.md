@@ -78,7 +78,12 @@ description: Expert Rust programming knowledge
 ...
 ```
 
-SKILL.md files are automatically parsed and converted to `prompt_only` skills. All SKILL.md files pass through an automated **prompt injection scanner** that detects override attempts, data exfiltration patterns, and shell references before inclusion.
+SKILL.md files are automatically parsed and converted to `prompt_only` skills.
+Captain runs a bounded phrase heuristic and labels its result
+`advisory_heuristic`. High-risk matches are conservatively refused by the
+loader, but a match is not proof of malicious intent and no match is not proof
+of safety. Review the complete local skill, including scripts and linked files,
+before installation.
 
 ---
 
@@ -376,12 +381,15 @@ capabilities = ["NetConnect(*)", "ShellExec(python3)"]
 captain skill install /path/to/my-skill
 ```
 
-This reads the `skill.toml`, validates the manifest, and copies the skill to `~/.captain/skills/my-skill/`.
+This reads the `skill.toml`, validates the manifest, and copies the skill to
+`~/.captain/skills/my-skill/`.
 
-### From a Git Repository
+Remote marketplace and URL installation are frozen because Captain does not yet
+have publisher-backed integrity for those sources. Clone or download a source
+yourself, review it locally, then pass its directory:
 
-```bash
-captain skill install https://github.com/user/captain-skill-example.git
+```text
+source repository -> reviewed local directory -> captain skill install ./skill
 ```
 
 ### Listing Installed Skills
@@ -415,8 +423,8 @@ captain skill remove web-summarizer
 ### Full Skill Command Reference
 
 ```bash
-# Install a skill (local directory, reviewed git URL, or compatibility source)
-captain skill install <source>
+# Install a reviewed local skill directory
+captain skill install <directory>
 
 # List all installed skills
 captain skill list
@@ -424,7 +432,7 @@ captain skill list
 # Remove an installed skill
 captain skill remove <name>
 
-# Search skills and compatibility metadata
+# Search installed, bundled, and generated local skills
 captain skill search <query>
 
 # Create a new skill scaffold (interactive)
@@ -524,6 +532,17 @@ captain skill install /path/to/skill-directory
 
 Migration from another agent runtime is not an active Captain release path.
 Install and review each compatible skill explicitly.
+
+## Capability Token Cache
+
+Markdown capabilities may return JSON string fields ending in `_token`, `_jwt`,
+or `_key` for reuse by another capability from the same skill. Captain scopes
+each cached value to the skill's canonical path, exact source SHA-256, and
+token name. Values expire after 30 minutes and are zeroized when evicted.
+
+A different skill never receives those values, even when it uses the same
+environment-variable name. Editing the source file also changes its scope and
+immediately prevents the previous source version's tokens from being injected.
 
 ---
 

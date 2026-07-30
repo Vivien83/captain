@@ -354,6 +354,13 @@ tools = ["my_tool"]
 
 7. **Verification must pass**: Run the documented local checks. Any maintainer-dispatched GitHub Actions checks must also be green before merge.
 
+The public branch policy is versioned in
+[`scripts/github-governance.sh`](scripts/github-governance.sh). It requires
+reviewed pull requests for non-admin contributors, resolved conversations, and
+linear history while rejecting force-pushes and branch deletion. Required
+hosted status checks remain empty because the full gate is local and GitHub
+Actions are manual-only.
+
 ### Commit Messages
 
 Use clear, imperative-mood messages:

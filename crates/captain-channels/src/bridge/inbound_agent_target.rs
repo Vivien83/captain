@@ -1,7 +1,7 @@
 //! Agent target resolution for inbound channel dispatch.
 
 use super::agent_resolution::{resolve_inbound_agent_target, NO_AGENTS_AVAILABLE_MESSAGE};
-use super::command_response::send_response;
+use super::command_response::{send_durable_response, DurableResponseContext};
 use super::inbound_mention::resolve_inbound_mention_override;
 use super::ChannelBridgeHandle;
 use crate::router::AgentRouter;
@@ -41,12 +41,19 @@ pub(super) async fn resolve_inbound_agent_dispatch_target(
     )
     .await
     else {
-        send_response(
+        let _ = send_durable_response(
             ctx.adapter,
             &ctx.message.sender,
             NO_AGENTS_AVAILABLE_MESSAGE.to_string(),
             ctx.thread_id,
             ctx.output_format,
+            DurableResponseContext {
+                handle: ctx.handle,
+                agent_id: None,
+                channel: ctx.adapter.name(),
+                source_message_id: &ctx.message.platform_message_id,
+                purpose: "routing_error",
+            },
         )
         .await;
         return None;

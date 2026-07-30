@@ -46,6 +46,7 @@ const SUGGESTED_SLASH_COMMANDS: &[&str] = &[
     "/capabilities",
     "/budget",
     "/model",
+    "/reasoning",
     "/new",
     "/resume",
     "/history",
@@ -313,7 +314,8 @@ fn slash_command_hint(cmd: &str) -> &'static str {
         "/reload" => "recharger session sauvée",
         "/tokens" => "détail tokens session",
         "/cost" => "coût session USD",
-        "/think" => "toggle reasoning blocks",
+        "/reasoning" => "niveau de réflexion",
+        "/think" => "afficher/masquer les blocs reçus",
         _ => "",
     }
 }

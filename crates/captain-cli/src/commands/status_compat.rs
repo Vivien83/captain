@@ -46,6 +46,10 @@ pub(super) fn ensure_status_observability(body: &mut serde_json::Value) {
             })
         });
         let llm_ready = body["llm_driver_ready"].as_bool().unwrap_or(true);
+        let outbound_delivery = body
+            .get("outbound_delivery")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
         body["runtime_health"] = captain_api::status_runtime_health::build_runtime_health_status(
             llm_ready,
             &channels,
@@ -55,6 +59,7 @@ pub(super) fn ensure_status_observability(body: &mut serde_json::Value) {
             &body["disk"],
             &body["shutdown"],
             &budget,
+            &outbound_delivery,
         );
     }
 }

@@ -82,11 +82,10 @@ async fn install_requirement(
         None => return no_command_result(req, platform),
     };
 
-    let (shell, flag) = install_shell();
     let final_cmd = command_for_shell(cmd, cfg!(windows));
-    tracing::info!(hand = %hand_id, dep = %req.key, cmd = %final_cmd, "Auto-installing dependency");
+    tracing::info!(hand = %hand_id, dep = %req.key, "Auto-installing dependency");
 
-    let output = match run_install_command(shell, flag, &final_cmd).await {
+    let output = match run_install_command(&final_cmd).await {
         Ok(out) => out,
         Err(InstallCommandError::Launch(error)) => {
             return command_launch_error_result(req, &final_cmd, &error);
@@ -94,37 +93,42 @@ async fn install_requirement(
         Err(InstallCommandError::Timeout) => return command_timeout_result(req, &final_cmd),
     };
 
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    command_exit_result(req, &final_cmd, exit_code, &stdout, &stderr)
+    command_exit_result(
+        req,
+        &final_cmd,
+        output.exit_code,
+        &output.stdout,
+        &output.stderr,
+    )
 }
 
+#[derive(Debug)]
 enum InstallCommandError {
-    Launch(std::io::Error),
+    Launch(String),
     Timeout,
 }
 
 async fn run_install_command(
-    shell: &str,
-    flag: &str,
     command: &str,
-) -> Result<std::process::Output, InstallCommandError> {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        tokio::process::Command::new(shell)
-            .arg(flag)
-            .arg(command)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null())
-            .output(),
+) -> Result<captain_runtime::guarded_exec::ExecOutcome, InstallCommandError> {
+    match captain_runtime::guarded_exec::run_unattended_shell(
+        captain_runtime::guarded_exec::ShellExecRequest {
+            surface: captain_runtime::guarded_exec::ExecSurface::HandInstall,
+            command,
+            policy: None,
+            workspace: None,
+            allowed_env_vars: &[],
+            explicit_env: &[],
+            timeout_secs: 300,
+            no_output_timeout_secs: Some(0),
+            bash_required: false,
+        },
     )
     .await
     {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(InstallCommandError::Launch(error)),
-        Err(_) => Err(InstallCommandError::Timeout),
+        Ok(output) => Ok(output),
+        Err(error) if error.contains("timed out") => Err(InstallCommandError::Timeout),
+        Err(error) => Err(InstallCommandError::Launch(error)),
     }
 }
 
@@ -141,14 +145,6 @@ fn install_command_for_platform<'a>(
             .or(install.linux_dnf.as_deref())
             .or(install.linux_pacman.as_deref())
             .or(install.pip.as_deref()),
-    }
-}
-
-fn install_shell() -> (&'static str, &'static str) {
-    if cfg!(windows) {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
     }
 }
 
@@ -187,7 +183,7 @@ fn no_command_result(req: &HandRequirement, platform: &str) -> serde_json::Value
 fn command_launch_error_result(
     req: &HandRequirement,
     command: &str,
-    error: &std::io::Error,
+    error: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "key": req.key,
@@ -415,6 +411,8 @@ mod tests {
     use super::*;
     use captain_hands::RequirementType;
 
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn test_requirement() -> HandRequirement {
         HandRequirement {
             key: "ffmpeg".to_string(),
@@ -577,5 +575,33 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["key"], "first");
         assert_eq!(results[1]["key"], "second");
+    }
+
+    #[tokio::test]
+    async fn hand_install_blocks_critical_manifest_command() {
+        let result = run_install_command("rm -rf /").await;
+
+        match result {
+            Err(InstallCommandError::Launch(error)) => {
+                assert!(error.contains("critical pattern"), "{error}");
+            }
+            _ => panic!("critical hand install command was not blocked"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hand_install_never_inherits_daemon_secrets() {
+        let _guard = ENV_LOCK.lock().await;
+        let key = "CAPTAIN_HAND_INSTALL_INHERITED_SECRET";
+        std::env::set_var(key, "must-not-leak");
+
+        let outcome =
+            run_install_command("printf '%s' \"${CAPTAIN_HAND_INSTALL_INHERITED_SECRET-unset}\"")
+                .await
+                .expect("guarded install command");
+        std::env::remove_var(key);
+
+        assert_eq!(outcome.stdout, "unset");
     }
 }

@@ -1,6 +1,6 @@
 //! Broadcast fan-out for inbound channel messages.
 
-use super::command_response::send_response;
+use super::command_response::{send_durable_response, DurableResponseContext};
 use super::inbound_authorization::authorize_inbound_chat;
 use super::progress::spawn_typing_loop;
 use super::ChannelBridgeHandle;
@@ -64,14 +64,24 @@ pub(super) async fn try_handle_inbound_broadcast(ctx: InboundBroadcastContext<'_
 
     typing_task.abort();
 
-    send_response(
+    if let Err(error) = send_durable_response(
         ctx.adapter,
         &ctx.message.sender,
         responses.join("\n\n"),
         ctx.thread_id,
         ctx.output_format,
+        DurableResponseContext {
+            handle: ctx.handle,
+            agent_id: None,
+            channel: ctx.channel_type,
+            source_message_id: &ctx.message.platform_message_id,
+            purpose: "broadcast_final",
+        },
     )
-    .await;
+    .await
+    {
+        tracing::error!(%error, channel = %ctx.channel_type, "durable broadcast delivery failed");
+    }
     true
 }
 

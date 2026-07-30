@@ -1,5 +1,7 @@
 use super::*;
 
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn test_state(capabilities: Vec<Capability>) -> GuestState {
     GuestState {
         capabilities,
@@ -52,6 +54,38 @@ async fn test_shell_exec_denied() {
     let result = host_shell_exec(&state, &json!({"command": "ls"}));
     let err = result["error"].as_str().unwrap();
     assert!(err.contains("denied"));
+}
+
+#[tokio::test]
+async fn test_shell_exec_blocks_critical_content_after_capability_check() {
+    let state = test_state(vec![Capability::ShellExec("*".to_string())]);
+    let result = host_shell_exec(
+        &state,
+        &json!({"command": "sh", "args": ["-c", "rm -rf /"]}),
+    );
+    let error = result["error"].as_str().unwrap_or_default();
+
+    assert!(error.contains("critical pattern"), "{result}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_shell_exec_never_inherits_daemon_secrets() {
+    let _guard = ENV_LOCK.lock().await;
+    let key = "CAPTAIN_WASM_HOST_INHERITED_SECRET";
+    std::env::set_var(key, "must-not-leak");
+    let state = test_state(vec![Capability::ShellExec("sh".to_string())]);
+
+    let result = host_shell_exec(
+        &state,
+        &json!({
+            "command": "sh",
+            "args": ["-c", "printf '%s' \"${CAPTAIN_WASM_HOST_INHERITED_SECRET-unset}\""]
+        }),
+    );
+    std::env::remove_var(key);
+
+    assert_eq!(result["ok"]["stdout"], "unset", "{result}");
 }
 
 #[tokio::test]

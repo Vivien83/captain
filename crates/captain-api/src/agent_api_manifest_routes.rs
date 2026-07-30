@@ -2,7 +2,7 @@
 
 use crate::{
     agent_api_config_status::{agent_api_config_status, AgentApiConfigStatus},
-    agent_api_routes::{agent_api_descriptor, AgentApiDescriptor},
+    agent_api_routes::{agent_api_descriptor_with, AgentApiDescriptor},
     state::AppState,
 };
 use axum::{
@@ -29,7 +29,11 @@ pub async fn agent_api_manifest(
         None => return error(StatusCode::NOT_FOUND, "Agent not found"),
     };
 
-    let api = agent_api_descriptor(&agent_id);
+    let api = agent_api_descriptor_with(
+        &agent_id,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
+    );
     let config_status =
         agent_api_config_status(&state.kernel.config.home_dir, &agent_id, &api).await;
     (

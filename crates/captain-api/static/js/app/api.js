@@ -7,6 +7,9 @@ async function request(path, options = {}) {
     ...options,
   });
   if (res.status === 401) {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new Event('captain:unauthorized'));
+    }
     const err = new Error('unauthorized');
     err.unauthorized = true;
     throw err;
@@ -36,8 +39,16 @@ export const api = {
 
   authCheck: () => request('/api/auth/check'),
   login: (username, password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  realtimeTicket: (path) => request('/api/auth/realtime-ticket', {
+    method: 'POST', body: JSON.stringify({ path }),
+  }),
 
   agents: () => request('/api/agents'),
+  agentReasoning: (agentId) => request(`/api/agents/${encodeURIComponent(agentId)}/reasoning`),
+  setAgentReasoning: (agentId, effort) => request(
+    `/api/agents/${encodeURIComponent(agentId)}/reasoning`,
+    { method: 'PUT', body: JSON.stringify({ effort }) },
+  ),
   status: () => request('/api/status'),
   usage: () => request('/api/usage/summary'),
   budget: () => request('/api/budget'),
@@ -54,8 +65,18 @@ export const api = {
 
   approvals: () => request('/api/approvals'),
   approve: (id) => request(`/api/approvals/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
-  reject: (id) => request(`/api/approvals/${encodeURIComponent(id)}/reject`, { method: 'POST' }),
+  reject: (id, reason) => request(`/api/approvals/${encodeURIComponent(id)}/reject`, {
+    method: 'POST', body: JSON.stringify({ reason: reason || null }),
+  }),
   approveSession: (id) => request(`/api/approvals/${encodeURIComponent(id)}/approve_session`, { method: 'POST' }),
+  approveAlways: (id) => request(`/api/approvals/${encodeURIComponent(id)}/approve_always`, { method: 'POST' }),
+  rejectSession: (id, reason) => request(`/api/approvals/${encodeURIComponent(id)}/reject_session`, {
+    method: 'POST', body: JSON.stringify({ reason: reason || null }),
+  }),
+  rejectAlways: (id, reason) => request(`/api/approvals/${encodeURIComponent(id)}/reject_always`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  }),
+  revokeApprovalRule: (id) => request(`/api/approvals/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   projects: () => request('/api/projects'),
   createProject: (body) => request('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
@@ -77,6 +98,7 @@ export const api = {
   learningMetrics: () => request('/api/learning/metrics'),
   learningDecide: (id, approve) => request(`/api/learning/review/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ approve }) }),
   workflowLearning: () => request('/api/learning/workflows?limit=100'),
+  learningStatus: () => request('/api/learning/status'),
   workflowLearningDecide: (token, decisionVersion, action) => request(`/api/learning/workflows/${encodeURIComponent(token)}/decide`, {
     method: 'POST',
     body: JSON.stringify({ decision_version: decisionVersion, action, surface: 'web' }),
@@ -150,9 +172,13 @@ export const api = {
 };
 
 // Agent chat WebSocket. Handlers: onmessage(obj), onopen(), onclose().
-export function openAgentWs(agentId, handlers) {
+export async function openAgentWs(agentId, handlers) {
+  const path = `/api/agents/${encodeURIComponent(agentId)}/ws`;
+  const grant = await api.realtimeTicket(path);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/api/agents/${encodeURIComponent(agentId)}/ws`);
+  const ws = new WebSocket(
+    `${proto}://${location.host}${path}?ticket=${encodeURIComponent(grant.ticket)}`,
+  );
   ws.onopen = () => handlers.onopen && handlers.onopen();
   ws.onclose = () => handlers.onclose && handlers.onclose();
   ws.onerror = () => { /* onclose follows and drives the reconnect */ };
@@ -168,9 +194,18 @@ export function openAgentWs(agentId, handlers) {
 export function openEventStream(onEvent) {
   let es = null;
   let closed = false;
-  const connect = () => {
+  const connect = async () => {
     if (closed) return;
-    es = new EventSource('/api/memory/events');
+    const path = '/api/memory/events';
+    let grant;
+    try {
+      grant = await api.realtimeTicket(path);
+    } catch {
+      if (!closed) setTimeout(connect, 4000);
+      return;
+    }
+    if (closed) return;
+    es = new EventSource(`${path}?ticket=${encodeURIComponent(grant.ticket)}`);
     es.onmessage = (ev) => {
       try { onEvent(JSON.parse(ev.data)); } catch { /* keep-alives etc. */ }
     };

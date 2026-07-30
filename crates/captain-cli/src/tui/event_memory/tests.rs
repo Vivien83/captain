@@ -149,3 +149,66 @@ fn parses_tool_run_status_event() {
         _ => panic!("unexpected event"),
     }
 }
+
+#[test]
+fn parses_durable_delegation_as_background_activity() {
+    let event = memory_event_from_json(
+        "agent_delegation_status",
+        &json!({
+            "job_id": "job-42",
+            "title": "Audit sécurité",
+            "status": "queued",
+            "caller_agent_id": "captain"
+        }),
+    )
+    .expect("delegation status event");
+
+    match event {
+        AppEvent::ToolRunStatus {
+            run_id,
+            tool_name,
+            status,
+            caller_agent_id,
+        } => {
+            assert_eq!(run_id, "delegation:job-42");
+            assert_eq!(tool_name, "délégation Audit sécurité");
+            assert_eq!(status, "queued");
+            assert_eq!(caller_agent_id.as_deref(), Some("captain"));
+        }
+        _ => panic!("unexpected event"),
+    }
+}
+
+#[test]
+fn parses_compaction_progress_without_inventing_a_percentage() {
+    let agent_id = captain_types::agent::AgentId::new();
+    let session_id = captain_types::agent::SessionId::new();
+    let event = memory_event_from_json(
+        "compaction_progress",
+        &json!({
+            "schema_version": 1,
+            "operation_id": "compact-1",
+            "runtime_instance_id": "runtime-1",
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "phase": "summarizing",
+            "state": "running",
+            "detail": "opaque model call",
+            "message_count": 40,
+            "estimated_tokens": 10000,
+            "context_window_tokens": 200000,
+            "completed_units": null,
+            "total_units": null,
+            "unit": null,
+            "started_at_ms": 1,
+            "updated_at_ms": 2
+        }),
+    )
+    .expect("compaction progress event");
+
+    let AppEvent::CompactionProgress(progress) = event else {
+        panic!("unexpected event");
+    };
+    assert_eq!(progress.session_id, session_id);
+    assert_eq!(progress.determinate_percent(), None);
+}

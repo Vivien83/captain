@@ -42,8 +42,8 @@ app, Telegram, or Discord.
 <tr><td><b>Real execution, guarded</b></td><td>Shell, files, SSH, browser automation, web research, code execution, documents, and media. Sensitive calls use approvals; critical shell patterns are blocked; budgets limit tokens, cost, and tool-call rate. Captain shows its durable rolling guard separately from provider-owned subscription windows; Codex percentages and reset times come from official live account and response signals, never a copied quota table. Compact Chat status gives each provider-wide window and each limit matching the active model its own gauge; other model-specific families are summarized as outside the active model, while Status and Budget remain exhaustive. Ratatui, Web Control, and the retained desktop compatibility wrapper share that contract. Independent read-only tools may run concurrently, while dependent or side-effecting work remains ordered.</td></tr>
 <tr><td><b>Readable native capabilities</b></td><td>Drop a reviewed <code>*.captain</code> file into a global or project <code>.captain/</code> directory and Captain hot-loads it as a typed <code>cap_*</code> tool. Captain Forge keeps dependencies, permissions, approvals, durable DAG execution, crash recovery, revision history, rollback, and exact operator decisions under kernel control.</td></tr>
 <tr><td><b>Memory that follows the conversation</b></td><td>Session recall, durable user facts, project state, a knowledge graph, and optional local ONNX embeddings provide bounded context without dumping raw history into every turn. Accepted facts enter a local continuity journal first, remain available during a MemPalace outage, and resynchronize automatically with bounded backoff.</td></tr>
-<tr><td><b>Any model, no lock-in</b></td><td>Codex through your ChatGPT subscription, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter, and local models through Ollama. Captain discovers the live catalog and configured credentials instead of relying on fixed provider or model counts; context budgeting follows the selected model's live window. For Codex, an hourly refresh surfaces newly listed models in Control and, when configured, Telegram; Captain never switches without your explicit decision and session strategy.</td></tr>
-<tr><td><b>Six operational hubs</b></td><td>Chat, Projects, Automation, Learning, Capabilities, and Status are the shared primary surface in the TUI and Control web app. Automation groups Workflows, Triggers, Crons, Approvals, and Webhooks.</td></tr>
+<tr><td><b>Any model, no lock-in</b></td><td>Codex through your ChatGPT subscription, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter, and local models through Ollama. Captain discovers the live catalog and configured credentials instead of relying on fixed provider or model counts; context budgeting follows the selected model's live window. Per-agent reasoning controls preserve the model default in Auto; when Codex advertises Ultra, Captain applies maximum model effort plus bounded proactive root-agent delegation. For Codex, an hourly refresh surfaces newly listed models in Control and, when configured, Telegram; Captain never switches without your explicit decision and session strategy.</td></tr>
+<tr><td><b>Six operational hubs</b></td><td>Chat, Projects, Automation, Learning, Capabilities, and Status are the shared primary surface in the TUI and Control web app. Automation groups Workflows, Triggers, Crons, Approvals, and Webhooks. Learning shows the exact model actually bound to its worker, heartbeat, durable queues, retries, and recovery instead of a decorative activity state.</td></tr>
 <tr><td><b>Agents as services</b></td><td>Each agent can receive authenticated external ingress and emit signed HTTP callbacks. Captain provisions ingress automatically and reports the exact external callback URL still required before egress can be ready.</td></tr>
 <tr><td><b>Operable like real software</b></td><td><code>captain doctor</code> explains what's broken and how to fix it. Snapshots and factory reset (backup first, always). Hash-chained audit trail. Health endpoints. A setup wizard that ends with a running, verified daemon — not a wall of next steps.</td></tr>
 </table>
@@ -52,16 +52,16 @@ app, Telegram, or Discord.
 
 ## Quick Install
 
-Current public early-access prerelease:
-[v0.1.0-alpha.9](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9).
-Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9`;
+Current early-access release candidate:
+[v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10).
+Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 bash
 ```
 
 The official repository, release assets, checksums, and container image are
@@ -95,8 +95,8 @@ Unix installers.
 ```bash
 export ANTHROPIC_API_KEY=...       # or any supported provider key
 export TELEGRAM_BOT_TOKEN=...      # optional — see below
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 The `vps` profile installs a systemd service, starts it, and validates
@@ -113,8 +113,8 @@ installs everything (binary, systemd service) without starting the daemon
 yet, so the readiness check below doesn't run before you've logged in:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.9/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.9 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # prints a URL + code — open it on your phone, no local browser needed
 systemctl start captain    # non-root install: systemctl --user start captain
@@ -130,7 +130,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
 ```
 
 First boot generates the daemon API key and persists it — along with all
@@ -146,8 +146,8 @@ or privileged mode. Pull and run the immutable image with:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.9 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.9 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose up -d
 ```
 
 Configure the chosen model provider after first boot. Add host access only as
@@ -173,8 +173,11 @@ Recommended providers to start:
   API key to manage.
 - **Claude** — export `ANTHROPIC_API_KEY` before setup.
 
-First conversation triggers a short onboarding interview (name, language,
-style, boundaries) — once, across every interface, stored durably.
+First conversation triggers a seven-question onboarding interview (name,
+language, timezone, style, voice, proactive notifications, and privacy) —
+once, across every interface, stored durably. TUI, Control Web/Desktop, and
+Telegram present clickable choices where a bounded answer is possible while
+keeping free-text replies available.
 
 The authenticated Control web app is available at
 `http://127.0.0.1:50051/` by default. Its six hubs mirror the TUI, so projects,
@@ -241,6 +244,7 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Headless installs, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | External tool servers and transport contract |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and their fixes |
+| [0.1.0-alpha.10 Release Notes](docs/releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |
 | [0.1.0-alpha.9 Release Notes](docs/releases/v0.1.0-alpha.9.md) | Durable workflow learning and native release updates |
 | [0.1.0-alpha.7 Release Notes](docs/releases/v0.1.0-alpha.7.md) | Durable committed state, supervised restart, truthful context, and direct TUI memory writes |
 | [0.1.0-alpha.6 Release Notes](docs/releases/v0.1.0-alpha.6.md) | Telegram Rich Messages, live tool boards, ephemeral progress, and reliable controls |
@@ -262,7 +266,8 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 - Loop guard: repetition, ping-pong, and consecutive-failure circuit
   breakers.
 - Channel allowlists deny by default; hash-chained audit trail; secrets live
-  in `secrets.env` or the encrypted vault, never in config files.
+  in `secrets.env`, the encrypted vault, or authoritative read-only files
+  declared in `secret-sources.toml`, never in config files.
 
 State lives under `~/.captain/` — `config.toml` is the single source of
 truth, hot-reloaded on change.
@@ -280,16 +285,19 @@ CAPTAIN_VERSION=vX.Y.Z scripts/publish-release-local.sh
 docker build --build-arg CAPTAIN_BUILD_VERSION=vX.Y.Z -t captain:vX.Y.Z .
 ```
 
-`release-all.sh` builds the two macOS, two Linux, and Windows CLI bundles; the
-Windows cross-build uses `cargo-xwin`, LLVM, and NASM. After a clean release gate,
-`publish-release-local.sh` validates all 20 assets, pushes the current branch,
-builds and pushes the `linux/amd64` + `linux/arm64` GHCR image, then publishes
-the tag and GitHub Release. The image reuses the two verified Linux release
-binaries instead of recompiling Captain under emulation. Before image assembly,
-the publisher stages a checksum-pinned FastEmbed snapshot from the maintainer's
-local Captain cache into Git-ignored `dist/docker/`; it is neither committed nor
-added to the 20 release assets, and the Docker build verifies it again instead
-of depending on a live model CDN. Authenticate once with
+`release-all.sh` builds the two macOS, two Linux, and Windows CLI bundles one
+target at a time; the Windows cross-build uses `cargo-xwin`, LLVM, and NASM.
+After a clean release gate, `publish-release-local.sh` validates 20 host assets,
+adds a SLSA v1 provenance statement and checksum (22 uploaded assets), pushes
+the current branch, builds and pushes `linux/amd64` and `linux/arm64`
+sequentially, then assembles the GHCR index and publishes the tag and GitHub
+Release. The image reuses the two verified Linux release binaries instead of
+recompiling Captain under emulation. Before image assembly, the publisher
+stages a checksum-pinned FastEmbed snapshot from the maintainer's local Captain
+cache into Git-ignored `dist/docker/`; it is neither committed nor added to the
+22 release assets, and the Docker build verifies it again instead of depending
+on a live model CDN. The provenance contract and its current signing limits are
+documented in [Release Provenance](docs/release-provenance.md). Authenticate once with
 `gh auth refresh -h github.com -s read:packages,write:packages`; do not pass a
 token on the command line. The GitHub release workflow is an explicit manual
 fallback and tag pushes do not start it. CI remains available for formatting,

@@ -2,7 +2,7 @@
 
 use crate::browser::{BrowserManager, BrowserToolResult};
 
-use super::{check_taint_browser_batch, check_taint_net_fetch};
+use super::{check_browser_content_guard, check_url_content_guard};
 
 const BROWSER_UNAVAILABLE: &str =
     "Browser tools not available. Ensure Chrome/Chromium is installed.";
@@ -14,14 +14,14 @@ pub(crate) async fn dispatch_browser_tool(
     caller_agent_id: Option<&str>,
 ) -> Result<BrowserToolResult, String> {
     if tool_name == "browser_batch" {
-        if let Some(violation) = check_taint_browser_batch(input) {
-            return Err(format!("Taint violation: {violation}"));
+        if let Some(violation) = check_browser_content_guard(input) {
+            return Err(violation);
         }
     }
     if tool_name == "browser_navigate" {
         let url = input["url"].as_str().unwrap_or("");
-        if let Some(violation) = check_taint_net_fetch(url) {
-            return Err(format!("Taint violation: {violation}"));
+        if let Some(violation) = check_url_content_guard(url) {
+            return Err(violation);
         }
     }
 

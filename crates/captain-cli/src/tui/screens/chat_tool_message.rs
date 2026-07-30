@@ -138,8 +138,12 @@ fn collapsed_tool_output_line(
 pub(super) fn should_render_tool_expanded(info: &ToolInfo) -> bool {
     info.expanded
         || info.status == ToolStatus::Running
-        || (info.status == ToolStatus::Success
-            && info
-                .completed_at
-                .is_some_and(|t| t.elapsed() < TOOL_SUCCESS_EXPAND_GRACE))
+        || tool_message_render_is_time_sensitive(info)
+}
+
+pub(super) fn tool_message_render_is_time_sensitive(info: &ToolInfo) -> bool {
+    info.status == ToolStatus::Success
+        && info
+            .completed_at
+            .is_some_and(|t| t.elapsed() < TOOL_SUCCESS_EXPAND_GRACE)
 }

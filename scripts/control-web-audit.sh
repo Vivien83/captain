@@ -9,13 +9,17 @@ files=(
   crates/captain-api/static/js/app/control_contract.mjs
   crates/captain-api/static/js/app/status_model.mjs
   crates/captain-api/static/js/app/provider_quota_model.mjs
+  crates/captain-api/static/js/app/chat_stream_batcher.mjs
   crates/captain-api/static/js/app/components/Shell.js
+  crates/captain-api/static/js/app/components/SuggestedReplies.js
   crates/captain-api/static/js/app/views/Chat.js
   crates/captain-api/static/js/app/views/Automation.js
   crates/captain-api/static/js/app/views/Workflows.js
   crates/captain-api/static/js/app/views/Triggers.js
   crates/captain-api/static/js/app/views/Capabilities.js
   crates/captain-api/static/js/app/views/NativeCapabilities.js
+  crates/captain-api/static/js/app/views/Projects.js
+  crates/captain-api/static/js/app/views/ProjectRuntime.js
   crates/captain-api/static/js/app/views/Status.js
   crates/captain-api/static/js/pages/terminal.js
 )
@@ -27,3 +31,4 @@ for file in "${files[@]}"; do
 done
 
 node "$ROOT_DIR/scripts/control-web-contract-test.mjs"
+node "$ROOT_DIR/scripts/control-chat-performance-test.mjs"

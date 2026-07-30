@@ -82,6 +82,8 @@ impl CapabilityRegistry {
     }
 }
 
+// This persistence boundary mirrors the full slot identity and recovery state.
+#[allow(clippy::too_many_arguments)]
 fn retain_invalid(
     state: &mut super::RegistryState,
     store: &mut CapabilityStore,

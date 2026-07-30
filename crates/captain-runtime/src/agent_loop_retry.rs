@@ -304,13 +304,14 @@ mod tests {
             temperature: 0.0,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         }
     }
 
     #[test]
-    fn retry_constants_match_hermes_contract() {
+    fn retry_constants_stay_stable() {
         assert_eq!(MAX_RETRIES, 3);
         assert_eq!(BASE_RETRY_DELAY_MS, 1000);
     }

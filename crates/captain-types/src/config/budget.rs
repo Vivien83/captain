@@ -1,9 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+/// Maximum accepted value for one configured cost window.
+///
+/// This is deliberately far above practical subscription or API spending while
+/// still rejecting accidental exponent-sized values at configuration boundaries.
+pub const MAX_BUDGET_LIMIT_USD: f64 = 1_000_000_000.0;
+
 /// Global spending budget configuration.
 ///
 /// Set limits to 0.0 for unlimited. All limits apply across all agents.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BudgetConfig {
     /// Maximum total cost in USD per hour (0.0 = unlimited).
@@ -18,6 +24,41 @@ pub struct BudgetConfig {
     /// will be overridden to this value. Set to 0 to keep each agent's own limit.
     /// Use this to globally raise or lower the token budget for all agents.
     pub default_max_llm_tokens_per_hour: u64,
+}
+
+impl BudgetConfig {
+    /// Validate values before publishing them into a live runtime.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_cost_limit("max_hourly_usd", self.max_hourly_usd)?;
+        validate_cost_limit("max_daily_usd", self.max_daily_usd)?;
+        validate_cost_limit("max_monthly_usd", self.max_monthly_usd)?;
+
+        if !self.alert_threshold.is_finite() {
+            return Err("alert_threshold must be finite".to_string());
+        }
+        if !(0.0..=1.0).contains(&self.alert_threshold) {
+            return Err("alert_threshold must be between 0 and 1".to_string());
+        }
+        if self.default_max_llm_tokens_per_hour > i64::MAX as u64 {
+            return Err("default_max_llm_tokens_per_hour exceeds TOML integer range".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn validate_cost_limit(name: &str, value: f64) -> Result<(), String> {
+    if !value.is_finite() {
+        return Err(format!("{name} must be finite"));
+    }
+    if value < 0.0 {
+        return Err(format!("{name} must be non-negative"));
+    }
+    if value > MAX_BUDGET_LIMIT_USD {
+        return Err(format!(
+            "{name} exceeds the maximum supported value of {MAX_BUDGET_LIMIT_USD}"
+        ));
+    }
+    Ok(())
 }
 
 impl Default for BudgetConfig {
@@ -82,5 +123,28 @@ mod tests {
         assert_eq!(decoded.max_monthly_usd, 200.0);
         assert_eq!(decoded.alert_threshold, 0.65);
         assert_eq!(decoded.default_max_llm_tokens_per_hour, 42_000);
+    }
+
+    #[test]
+    fn budget_validation_rejects_unsafe_numeric_values() {
+        for value in [-1.0, f64::NAN, f64::INFINITY, 1.0e308] {
+            let budget = BudgetConfig {
+                max_hourly_usd: value,
+                ..BudgetConfig::default()
+            };
+            assert!(budget.validate().is_err(), "{value:?} must be rejected");
+        }
+
+        let invalid_alert = BudgetConfig {
+            alert_threshold: 1.01,
+            ..BudgetConfig::default()
+        };
+        assert!(invalid_alert.validate().is_err());
+
+        let invalid_tokens = BudgetConfig {
+            default_max_llm_tokens_per_hour: i64::MAX as u64 + 1,
+            ..BudgetConfig::default()
+        };
+        assert!(invalid_tokens.validate().is_err());
     }
 }

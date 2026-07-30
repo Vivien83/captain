@@ -206,7 +206,7 @@ chat agent ids, workspace paths, tokens, and secrets are omitted. `captain
 project list --attention` prints only the projects likely to need operator
 review, using a sanitized projection rather than raw metadata or workspace
 paths.
-`captain project context <project>` prints the durable Hermes-style reprise
+`captain project context <project>` prints the durable structured resume
 context without starting the runtime: project id/slug/status, latest checkpoint,
 bounded tasks, bounded goals, milestone progress, and next CLI actions. It reads
 `/api/projects/{id}/resume`, accepts id or slug, and sanitizes the output so raw
@@ -243,7 +243,7 @@ status, delivery/timing fields, and the exact `captain project answer` next
 command for pending questions. It never prints stored answers, agent ids, run
 ids, worker ids, raw timeline payloads, runtime metadata, workspace paths,
 tokens, or secrets.
-`captain project replay <project>` prints a bounded Hermes-style reprise
+`captain project replay <project>` prints a bounded structured resume
 capsule from `/api/projects/{id}/runtime`. It combines runtime state,
 transcript/session counters, recent transcript events, worker summaries, pending
 questions with answer commands, and next operator actions. It accepts
@@ -256,7 +256,7 @@ transcript, deduplicates by event id or stable event fields, and keeps the same
 sanitization as the bounded timeline view. Live follow is text-only; omit
 `--follow` when a one-shot `--json` timeline is needed.
 `captain project task list|create|update|delete` wraps the durable project task
-API for Hermes-style execution state. `list` resolves a project id or slug,
+API for structured execution state. `list` resolves a project id or slug,
 supports status filtering, and prints bounded task identity/status/title only.
 `create` and `update` send the requested description, parent, priority or
 status to the daemon but echo only sanitized task fields; `delete` requires
@@ -269,7 +269,7 @@ only milestone identity, bounded name, status, due/completion times,
 deliverable count, and aggregate progress, never raw deliverable text,
 metadata, workspace paths, tokens, or secrets.
 `captain project goal list|create|update|pause|resume|delete` wraps the
-project-scoped continuous goal API for Hermes-style project monitoring. It sends
+project-scoped continuous goal API for structured project monitoring. It sends
 check and recovery commands to the daemon when creating or updating goals, but
 text and JSON output only echo safe operator fields: id, bounded name, status,
 interval, failure counters, LLM budget, and timestamps. The CLI never prints raw
@@ -277,7 +277,7 @@ goal descriptions, check commands, recovery commands, escalation targets, recent
 checks, suggestions, logs, metadata, paths, tokens, or secrets. `delete`
 requires `--yes`.
 `captain project checkpoints <project>` prints the recent durable checkpoint
-history that Hermes-style reprise depends on. The command accepts an id or slug,
+history that structured resume depends on. The command accepts an id or slug,
 resolves it through the runtime project endpoint, then reads the checkpoint
 history and returns only id, created time, session id, and bounded summary. It
 never prints raw checkpoint `state`, workspace paths, tokens, or metadata.
@@ -306,6 +306,28 @@ short handoff blocks (`STATUS`, `SUMMARY`, `CHANGED_FILES`, `VERIFY`, `NEXT`);
 if a provider returns raw tool transcripts, Captain stores a readable fallback
 summary generated from execution metadata instead of leaking the transcript into
 the project surfaces.
+
+Phase completion is fail-closed under the durable
+`captain.completion.v1` contract. Captain parses the bounded handoff, binds it
+to actual runtime tool receipts, persists only their hashes in the completion
+contract, and requires execution evidence for OBSERVE, BUILD, EXECUTE, and
+VERIFY. VERIFY also runs each active project goal check in the project workspace
+with the same 60-second timeout, one-shot recovery, and progress-convergence
+contract as the goal monitor. More than twelve active checks refuse the phase
+explicitly instead of creating an unbounded verification run. A failed check,
+an unrecorded receipt, a failed VERIFY receipt, a missing handoff field, or a
+completion claim without an independent VERIFY receipt leaves the phase blocked
+as `insufficient_evidence`. Detailed goal-check output remains in the local
+GoalStore for forensics and is never projected into project surfaces.
+
+The project reaches `done` and 100% only after all seven worker contracts are
+`satisfied`. A persisted worker from an older runtime whose status is `done`
+but whose completion contract is absent is replayed once on resume; it is not
+silently grandfathered as verified. Project runtime API views, Control Web and
+its Desktop wrapper, and the Ratatui project screen expose only proof decision,
+bounded requirement status, hashed receipt identity, source tool/goal name,
+duration, and counts. Raw commands, inputs, outputs, prompts, paths, and secrets
+remain outside those views.
 
 Runtime workers execute in the real project workspace so shell and file tools
 operate against the repo/folder the user selected. Captain does not scaffold

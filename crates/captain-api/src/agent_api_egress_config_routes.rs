@@ -69,11 +69,25 @@ pub async fn configure_agent_api_egress(
         return error(StatusCode::NOT_FOUND, "Agent not found");
     }
 
+    for key in [
+        agent_api_callback_url_env(&agent_id),
+        agent_api_callback_secret_env(&agent_id),
+    ] {
+        if state.kernel.credential_is_externally_managed(&key) {
+            return error(
+                StatusCode::CONFLICT,
+                &format!(
+                    "{key} is managed by secret-sources.toml; change the external mapping or file instead"
+                ),
+            );
+        }
+    }
+
     let result = match configure_callback(&state.kernel.config.home_dir, &agent_id, req) {
         Ok(result) => result,
         Err((status, message)) => return error(status, &message),
     };
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         agent_id.to_string(),
         AuditAction::ConfigChange,
         "agent_api callback configured",
@@ -83,7 +97,11 @@ pub async fn configure_agent_api_egress(
         ),
     );
 
-    let api = crate::agent_api_routes::agent_api_descriptor(&agent_id);
+    let api = crate::agent_api_routes::agent_api_descriptor_with(
+        &agent_id,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
+    );
     let config_status =
         agent_api_config_status(&state.kernel.config.home_dir, &agent_id, &api).await;
 
@@ -114,10 +132,16 @@ pub async fn test_agent_api_egress(
     }
 
     let payload = callback_test_payload(&agent_id, req);
-    let delivery = deliver_agent_api_callback(&agent_id, &payload).await;
+    let delivery = deliver_agent_api_callback(
+        &agent_id,
+        &payload,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
+    )
+    .await;
     let outcome = delivery.audit_outcome();
     let status = callback_test_status(delivery.delivered(), &outcome);
-    state.kernel.audit_log.record(
+    state.kernel.audit_log.record_or_alert(
         agent_id.to_string(),
         AuditAction::ConfigChange,
         "agent_api callback test",

@@ -82,7 +82,7 @@ admin" or "génère-moi un nouveau mot de passe terminal".
 | Field | Required | Notes |
 |---|---|---|
 | `username` | no | New web username. ASCII letters/digits/`._-`, 2-64 chars. |
-| `password` | no | New web password. It is hashed before writing; never repeat it back if the user supplied it. |
+| `password` | no | New web password. It is salted and hashed with Argon2id before writing; never repeat it back if the user supplied it. |
 | `generate_password` | no | `true` generates a strong password and returns it once in the tool result. |
 | `session_ttl_hours` | no | Web session lifetime, 1-8760 hours. New installs default to 72 hours. |
 
@@ -90,7 +90,16 @@ The tool writes `[auth]` in `config.toml`, forces `auth.enabled = true`, creates
 a config backup, validates the roundtrip parse, and emits the config hot-reload
 event. The web auth layer reads `config.toml` live, so new credentials work
 without restarting Captain. Password rotation invalidates old browser sessions
-because the session signature is bound to both `api_key` and `password_hash`.
+by incrementing Captain's managed `session_epoch`. Session signatures use only
+the independent 32-byte `session_secret` generated at first boot; neither the
+daemon `api_key` nor `password_hash` is signing material. Config display
+surfaces redact both managed secret fields, and direct config writes cannot
+replace the signing key or roll the epoch back.
+
+Legacy SHA-256 hashes remain readable only for compatibility: the first
+successful login atomically migrates them to Argon2id. Login backoff is
+dedicated per IP and username. Browser realtime transports use 30-second
+single-use tickets and never put API keys or session tokens in query strings.
 
 #### `self_configure`
 
@@ -149,7 +158,11 @@ Poll the Codex OAuth flow started by `codex_login_start` until the user approves
 
 #### `secret_read`
 
-Read a secret by key from `~/.captain/secrets.env`. Use **spontaneously** when the user mentions an alias / service that needs an API key (`chargement clé Stripe`, `je veux utiliser le token GitHub que j'ai déjà mis`).
+Read a secret by key through Captain's centralized credential resolver. Use
+**spontaneously** when the user mentions an alias or service that needs an API
+key (`chargement clé Stripe`, `je veux utiliser le token GitHub que j'ai déjà
+mis`). An external file mapping is authoritative: an unavailable mapped file
+returns "not found" and never falls back to a stale local value.
 
 | Field | Required | Notes |
 |---|---|---|
@@ -159,7 +172,11 @@ Returns a masked confirmation string, or "not found" if missing. The LLM should 
 
 #### `secret_write`
 
-Set a secret in `~/.captain/secrets.env`. The key/value must be single-line. The kernel now backs up existing `secrets.env`, writes through a temp file, enforces `0600` permissions on Unix, and roundtrip-checks that the key can be read back.
+Set a local secret in `~/.captain/secrets.env`. The key/value must be
+single-line. The kernel backs up existing `secrets.env`, writes through a temp
+file, enforces `0600` permissions on Unix, and roundtrip-checks that the key can
+be read back. If the key is declared in `secret-sources.toml`, the write is
+refused; rotate its external file instead.
 
 | Field | Required | Notes |
 |---|---|---|
@@ -178,10 +195,20 @@ tools, or a skill with `[requirements.env_inject]` instead.
 
 Runtime credential lookup is intentionally one rail:
 
-1. `~/.captain/secrets.env` (canonical, updated by `secret_write` / typed installers).
-2. `~/.captain/vault.enc` (legacy compatibility).
-3. `~/.captain/.env` (legacy/bootstrap compatibility).
-4. Process environment.
+1. `~/.captain/secret-sources.toml` file mapping, when present. It is
+   authoritative and fail-closed; source contents rotate live.
+2. `~/.captain/secrets.env` (canonical local store, updated by `secret_write`
+   and typed installers).
+3. `~/.captain/vault.enc` (legacy compatibility).
+4. `~/.captain/.env` (legacy/bootstrap compatibility).
+5. Process environment.
+
+Resolver-backed consumers read source file content live. A running adapter
+that caches its token must be reloaded, and boot credentials such as
+`CAPTAIN_DAEMON_API_KEY` require a daemon restart. Registry edits also require
+a restart. Operators can inspect redacted readiness with
+`captain vault sources [--json]` or `captain doctor --full`; neither surface
+returns source values or individual source paths.
 
 Do not reason about MCP/API credentials as a separate vault. If an integration install reports `setup`, first check whether the required key is present through `secret_read`, then persist missing values with `secret_write` or the typed installer credentials object.
 
@@ -202,12 +229,13 @@ Correct pattern:
 
 ## Sandbox
 
-- **File access** — `~/.captain/` is an authorised root for the principal Captain agent so it can maintain its own sessions, config, docs and state. Raw credential stores are the exception: `.env`, `secrets.env`, `secrets-backups/` and `vault.enc` are blocked from generic file tools and must go through `secret_read`, `secret_write`, `config_setup`, `ssh_*` or integration-specific tools.
+- **File access** — `~/.captain/` is an authorised root for the principal Captain agent so it can maintain its own sessions, config, docs and state. Raw credential stores are the exception: `.env`, `secrets.env`, `secrets-backups/`, `vault.enc`, `secret-sources.toml`, and every configured external source target are blocked from generic file tools. They must go through `secret_read`, `secret_write`, `config_setup`, `ssh_*`, integration-specific tools, or an operator-managed mount.
+- **External source safety** — the registry accepts only bounded env-style keys and absolute `type = "file"` entries and never executes commands. It is schema- and size-bounded, must not be group/world-writable, and is loaded fail-closed at production boot. Each read uses one open file descriptor, validates regular-file type, UTF-8, single-line content, size, and Unix write permissions, then zeroizes the resolved value after use.
 - **0600 perms** — `secrets.env` is created with mode `0600` on Unix; the file system owner-only check is part of the sanity test the kernel runs at boot.
 - **Backup snapshots** — `config_write` writes to `~/.captain/config-backups/config.toml.<timestamp>` and keeps the newest 20. `web_credentials_update` writes to `~/.captain/config-backups/config.toml.web-auth.<timestamp>`. `secret_write` writes to `~/.captain/secrets-backups/secrets.env.<timestamp>` and keeps the newest 20.
 - **Roundtrip verification** — after every mutation the file is re-parsed (`captain_kernel::config::load_config` or the secrets-env mini parser). A parse error triggers an immediate rollback to the snapshot **before** the call returns to the LLM.
 - **No secret-in-config rule** — `config_write` now refuses obvious raw credential literals, but this is only a guardrail. Real credentials live in `secrets.env` via `secret_write` or `config_setup`, never in `config.toml`.
-- **Hot-reload** — `config_setup` publishes the integration-configured event for supported integrations. A manual `secret_write` alone only updates `secrets.env`; call the relevant reload tool (`channel_reconfigure` for channels) when the running adapter already holds the old value.
+- **Hot-reload** — `config_setup` publishes the integration-configured event for supported integrations. A manual `secret_write` or external file rotation changes durable input only; call the relevant reload tool (`channel_reconfigure` for channels) when the running adapter already holds the old value.
 
 ## Autonomous config playbook
 

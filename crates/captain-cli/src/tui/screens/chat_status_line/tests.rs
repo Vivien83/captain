@@ -1,6 +1,11 @@
 use super::*;
 use crate::tui::provider_quota::{
-    ProviderCredits, ProviderQuota, ProviderQuotaStatus, ProviderQuotaWindow,
+    ProviderCredits, ProviderQuota, ProviderQuotaStatus, ProviderQuotaWindow, ProviderSpendControl,
+    ProviderSpendControlLimit,
+};
+use captain_types::agent::{AgentId, SessionId};
+use captain_types::compaction::{
+    CompactionProgress, CompactionProgressUnit, CompactionState, COMPACTION_PROGRESS_SCHEMA_VERSION,
 };
 use chrono::{FixedOffset, TimeZone, Utc};
 use std::time::Duration;
@@ -35,6 +40,8 @@ fn codex_quota(name: &str, percent: f64, window_seconds: u64, reset: &str) -> Pr
         stale: false,
         primary: Some(ProviderQuotaWindow {
             used_percent: percent,
+            remaining_percent: (100.0 - percent).clamp(0.0, 100.0),
+            remaining_source: Some("derived_from_provider_used_percent".to_string()),
             window_seconds: Some(window_seconds),
             reset_after_seconds: None,
             resets_at: Some(
@@ -49,6 +56,7 @@ fn codex_quota(name: &str, percent: f64, window_seconds: u64, reset: &str) -> Pr
             unlimited: false,
             balance: Some("17.50".to_string()),
         }),
+        spend_control: None,
         rate_limit_reached_type: None,
         observed_at: Some(Utc::now()),
     }
@@ -102,6 +110,27 @@ fn status_line_includes_model_mode_tokens_and_cost() {
     assert!(text.contains("$0.0123"));
     assert!(text.contains("\u{03A3} 3000 tok"));
     assert!(text.contains("/ $0.0456"));
+}
+
+#[test]
+fn status_line_distinguishes_auto_reasoning_from_its_effective_default() {
+    let mut state = ChatState::new();
+    state.model_label = "codex/gpt-5.6-sol".to_string();
+    state.mode_label = "daemon".to_string();
+    state.reasoning_status = Some(captain_types::reasoning::AgentReasoningStatus {
+        provider: "codex".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        supported: true,
+        configured_effort: None,
+        effective_effort: Some("low".parse().unwrap()),
+        source: captain_types::reasoning::ReasoningSelectionSource::ModelDefault,
+        override_valid: true,
+        options: Vec::new(),
+        reported_by_provider: true,
+    });
+
+    let text = line_text(build_status_line(&state));
+    assert!(text.contains("r:auto→low"), "{text}");
 }
 
 #[test]
@@ -166,7 +195,7 @@ fn provider_status_band_prioritizes_the_active_model_over_alternative_limits() {
     assert!(!text.contains("GPT-5.3-Codex-Spark"), "{text}");
     assert!(text.contains("+1 quota annexe"), "{text}");
     assert!(text.contains("hors modèle actif"), "{text}");
-    assert!(text.contains("63%"), "{text}");
+    assert!(text.contains("37% reste"), "{text}");
     assert!(!text.contains("5%"), "{text}");
     assert_eq!(text.matches('[').count(), 2, "plan plus one gauge: {text}");
     assert_eq!(text.matches('↻').count(), 1, "{text}");
@@ -192,6 +221,40 @@ fn provider_status_band_promotes_a_quota_matching_the_active_model() {
     assert!(text.contains("Actif gpt-5.3-codex-spark"), "{text}");
     assert!(text.contains("GPT-5.3-Codex-Spark 1sem"), "{text}");
     assert!(!text.contains("quota annexe"), "{text}");
+}
+
+#[test]
+fn provider_status_band_keeps_exact_monthly_spend_headroom() {
+    let mut state = ChatState::new();
+    state.model_label = "codex/gpt-5.6-sol".to_string();
+    let mut quota = codex_quota("Codex", 63.0, 18_000, "2026-07-25T20:00:00Z");
+    quota.spend_control = Some(ProviderSpendControl {
+        reached: false,
+        individual_limit: Some(ProviderSpendControlLimit {
+            source: Some("monthly".to_string()),
+            limit: "200.00".to_string(),
+            used: "56.00".to_string(),
+            remaining: "144.00".to_string(),
+            used_percent: 28,
+            remaining_percent: 72,
+            reset_after_seconds: 86_400,
+            resets_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        }),
+    });
+    state.provider_quota_status = ProviderQuotaStatus {
+        state: "warning".to_string(),
+        reported_by_provider: true,
+        quotas: vec![quota],
+    };
+
+    let text = quota_lines_text(&build_provider_quota_lines(&state, 220));
+    assert!(text.contains("Budget mensuel"), "{text}");
+    assert!(text.contains("72% reste"), "{text}");
+    assert!(text.contains("144.00 / 200.00"), "{text}");
 }
 
 #[test]
@@ -283,6 +346,8 @@ fn provider_resume_uses_the_local_recovery_time() {
     let now = offset.with_ymd_and_hms(2026, 7, 18, 21, 0, 0).unwrap();
     let window = ProviderQuotaWindow {
         used_percent: 100.0,
+        remaining_percent: 0.0,
+        remaining_source: Some("derived_from_provider_used_percent".to_string()),
         window_seconds: Some(18_000),
         reset_after_seconds: None,
         resets_at: Some(Utc.with_ymd_and_hms(2026, 7, 18, 22, 30, 0).unwrap()),
@@ -306,4 +371,38 @@ fn unavailable_quota_is_visible_only_for_an_active_codex_model() {
         UnicodeWidthStr::width(compact.as_str()) <= 20,
         "{compact:?}"
     );
+}
+
+#[test]
+fn compaction_line_never_invents_progress_for_an_opaque_model_call() {
+    let mut state = ChatState::new();
+    state.compaction_progress = Some(CompactionProgress {
+        schema_version: COMPACTION_PROGRESS_SCHEMA_VERSION,
+        operation_id: "op-1".to_string(),
+        runtime_instance_id: "runtime-1".to_string(),
+        agent_id: AgentId::new(),
+        session_id: SessionId::new(),
+        phase: CompactionPhase::Summarizing,
+        state: CompactionState::Running,
+        detail: "opaque".to_string(),
+        message_count: 40,
+        estimated_tokens: 10_000,
+        context_window_tokens: 200_000,
+        completed_units: None,
+        total_units: None,
+        unit: None,
+        started_at_ms: 1,
+        updated_at_ms: 2,
+    });
+    let opaque = quota_lines_text(&build_compaction_progress_lines(&state, 80));
+    assert!(opaque.contains("indéterminé"), "{opaque}");
+    assert!(!opaque.contains('%'), "{opaque}");
+
+    let progress = state.compaction_progress.as_mut().unwrap();
+    progress.phase = CompactionPhase::Chunking;
+    progress.completed_units = Some(2);
+    progress.total_units = Some(5);
+    progress.unit = Some(CompactionProgressUnit::Chunks);
+    let exact = quota_lines_text(&build_compaction_progress_lines(&state, 80));
+    assert!(exact.contains("2/5 lots · 40%"), "{exact}");
 }

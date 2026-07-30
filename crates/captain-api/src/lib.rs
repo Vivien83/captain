@@ -1,3 +1,5 @@
+#![deny(invalid_reference_casting)]
+
 //! HTTP/WebSocket API server for the Captain Agent OS daemon.
 //!
 //! Exposes agent management, status, and chat via JSON REST endpoints.
@@ -38,7 +40,6 @@ mod channel_registry_email;
 pub mod channel_routes;
 mod channel_runtime_policy;
 mod channel_test_delivery;
-pub mod clawhub_routes;
 pub mod command_routes;
 pub mod comms_routes;
 pub mod config_routes;
@@ -107,6 +108,7 @@ pub mod project_routes;
 mod project_runtime_ask_resume;
 mod project_runtime_asks;
 mod project_runtime_checkpoints;
+mod project_runtime_completion;
 mod project_runtime_defaults;
 mod project_runtime_events;
 mod project_runtime_mutation;
@@ -161,6 +163,7 @@ pub mod provider_quota_status;
 pub mod provider_routes;
 pub mod rate_limiter;
 pub mod realtime_call;
+mod request_origin_security;
 mod restart_dedupe;
 pub mod routes;
 pub mod schedule_routes;
@@ -219,6 +222,7 @@ pub mod upload_routes;
 pub mod usage_budget_routes;
 pub mod voice_routes;
 pub mod web_auth_routes;
+pub mod web_auth_security;
 pub mod webchat;
 pub mod webhook_routes;
 pub mod whatsapp_routes;

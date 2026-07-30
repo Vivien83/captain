@@ -149,6 +149,10 @@ fn mount_agent_model_capability_routes(router: ApiRouter) -> ApiRouter {
             axum::routing::put(routes::set_model),
         )
         .route(
+            "/api/agents/{id}/reasoning",
+            axum::routing::get(routes::get_agent_reasoning).put(routes::set_agent_reasoning),
+        )
+        .route(
             "/api/agents/{id}/tools",
             axum::routing::get(routes::get_agent_tools).put(routes::set_agent_tools),
         )

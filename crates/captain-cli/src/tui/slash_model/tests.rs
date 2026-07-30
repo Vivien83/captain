@@ -31,7 +31,7 @@ fn non_model_commands_stay_in_slash_handler() {
 }
 
 #[test]
-fn model_picker_and_preflight_messages_preserve_hermes_text() {
+fn model_picker_and_preflight_messages_preserve_expected_text() {
     assert_eq!(no_models_available_message(), "No models available.");
     assert_eq!(
         daemon_preflight_parse_failed_message("bad json"),
@@ -52,7 +52,7 @@ fn model_picker_and_preflight_messages_preserve_hermes_text() {
 }
 
 #[test]
-fn blocked_issue_messages_preserve_hermes_text_and_fallback() {
+fn blocked_issue_messages_preserve_expected_text_and_fallback() {
     let plan = serde_json::json!({
         "blocking_issues": ["active stream", "pending approval"]
     });
@@ -71,7 +71,7 @@ fn blocked_issue_messages_preserve_hermes_text_and_fallback() {
 }
 
 #[test]
-fn safe_apply_messages_preserve_hermes_text() {
+fn safe_apply_messages_preserve_expected_text() {
     assert_eq!(
         safe_switch_http_failed_message("500 Internal Server Error"),
         "Safe model switch failed (500 Internal Server Error)"

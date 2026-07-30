@@ -25,7 +25,7 @@ Surfaces:
 This is a thin, versioned map over scripts/gate.sh. It keeps repeated release
 checks reproducible without replacing the live smoke gates:
   scripts/user-flow-smoke.sh --channel telegram
-  scripts/hermes-vs-captain-benchmark.sh
+  scripts/runtime-capability-benchmark.sh
   scripts/release-readiness.sh
 USAGE
 }
@@ -60,8 +60,11 @@ gate_chat() {
   run_gate chat \
     --check captain-cli \
     --check captain-api \
+    --check captain-kernel \
+    --check captain-memory \
     --check captain-runtime \
     --check captain-channels \
+    --check captain-types \
     --test captain-cli chat_runner \
     --test captain-cli slash_standalone \
     --test captain-cli stream_lifecycle \
@@ -72,6 +75,18 @@ gate_chat() {
     --test captain-runtime agent_loop_tool_flow \
     --test captain-channels command_format \
     --test captain-channels inbound_queue \
+    --test captain-types compaction \
+    --test captain-memory compaction_progress \
+    --test captain-memory v35_adds \
+    --test captain-runtime compaction_progress \
+    --test captain-kernel kernel_compaction_runtime \
+    --test captain-channels compaction_card \
+    --test captain-channels telegram_compact_synthesizes \
+    --test captain-api compaction_progress \
+    --test captain-cli compaction_progress \
+    --run-script scripts/control-web-audit.sh \
+    --run-script scripts/control-chat-performance-smoke.mjs \
+    --run-script scripts/compaction-progress-terminal-smoke.mjs \
     --script-check scripts/tui-smoke.sh \
     --script-check scripts/user-flow-smoke.sh
 }

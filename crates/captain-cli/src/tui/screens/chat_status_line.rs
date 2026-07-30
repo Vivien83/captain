@@ -5,6 +5,8 @@ use crate::tui::{
     provider_quota::{ProviderQuota, ProviderQuotaStatus, ProviderQuotaWindow},
     theme,
 };
+use captain_types::compaction::CompactionPhase;
+use captain_types::reasoning::{AgentReasoningStatus, ReasoningSelectionSource};
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc, Weekday};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -32,6 +34,57 @@ pub(super) fn build_status_line(state: &ChatState) -> Line<'static> {
 
     spans.push(Span::raw(" "));
     Line::from(spans)
+}
+
+pub(super) fn build_compaction_progress_lines(
+    state: &ChatState,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let Some(progress) = state.compaction_progress.as_ref() else {
+        return Vec::new();
+    };
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let phase = match progress.phase {
+        CompactionPhase::Preparing => "préparation",
+        CompactionPhase::Pruning => "élagage",
+        CompactionPhase::Summarizing => "synthèse",
+        CompactionPhase::Chunking => "lots",
+        CompactionPhase::Merging => "fusion",
+        CompactionPhase::Persisting => "enregistrement",
+        CompactionPhase::Completed => "terminé",
+        CompactionPhase::Failed => "échec",
+        CompactionPhase::Interrupted => "interrompu",
+    };
+    let bar_width = width.saturating_sub(34).clamp(8, 18);
+    let (bar, progress_label) = if let Some(percent) = progress.determinate_percent() {
+        let filled = (usize::from(percent) * bar_width) / 100;
+        let bar = format!(
+            "[{}{}]",
+            "█".repeat(filled),
+            "░".repeat(bar_width.saturating_sub(filled))
+        );
+        let label = match (progress.completed_units, progress.total_units) {
+            (Some(done), Some(total)) => format!(" {done}/{total} lots · {percent}%"),
+            _ => format!(" {percent}%"),
+        };
+        (bar, label)
+    } else {
+        let cursor = state.spinner_frame % bar_width;
+        let mut cells = vec!["·"; bar_width];
+        cells[cursor] = "█";
+        (format!("[{}]", cells.join("")), " indéterminé".to_string())
+    };
+    let text = truncate_display_width(
+        &format!(" Compactage · {phase} {bar}{progress_label}"),
+        width,
+    );
+    vec![Line::from(Span::styled(
+        text,
+        Style::default().fg(theme::YELLOW),
+    ))]
 }
 
 const MAX_PROVIDER_WINDOWS: usize = 8;
@@ -111,7 +164,17 @@ pub(super) fn build_provider_quota_lines(state: &ChatState, width: usize) -> Vec
     )];
     let total_windows = applicable_quotas
         .iter()
-        .map(|quota| usize::from(quota.primary.is_some()) + usize::from(quota.secondary.is_some()))
+        .map(|quota| {
+            usize::from(quota.primary.is_some())
+                + usize::from(quota.secondary.is_some())
+                + usize::from(
+                    quota
+                        .spend_control
+                        .as_ref()
+                        .and_then(|control| control.individual_limit.as_ref())
+                        .is_some(),
+                )
+        })
         .sum::<usize>();
     let mut rendered_windows = 0usize;
 
@@ -137,7 +200,24 @@ pub(super) fn build_provider_quota_lines(state: &ChatState, width: usize) -> Vec
             ));
             rendered_windows += 1;
         }
-        if quota.primary.is_none() && quota.secondary.is_none() {
+        if rendered_windows < MAX_PROVIDER_WINDOWS {
+            if let Some(limit) = quota
+                .spend_control
+                .as_ref()
+                .and_then(|control| control.individual_limit.as_ref())
+            {
+                items.push(provider_spend_control_item(quota, limit, stale, now, width));
+                rendered_windows += 1;
+            }
+        }
+        if quota.primary.is_none()
+            && quota.secondary.is_none()
+            && quota
+                .spend_control
+                .as_ref()
+                .and_then(|control| control.individual_limit.as_ref())
+                .is_none()
+        {
             items.push(provider_empty_limit_item(quota, stale));
         }
     }
@@ -311,18 +391,19 @@ fn provider_window_item(
         .window_seconds
         .map(provider_duration_label)
         .unwrap_or_else(|| fallback_name.to_string());
-    let percent = window.used_percent.clamp(0.0, 100.0);
-    let filled = if percent <= 0.0 {
+    let used_percent = window.used_percent.clamp(0.0, 100.0);
+    let remaining_percent = window.remaining_percent.clamp(0.0, 100.0);
+    let filled = if remaining_percent <= 0.0 {
         0
     } else {
-        ((percent / 100.0) * gauge_cells as f64).ceil() as usize
+        ((remaining_percent / 100.0) * gauge_cells as f64).ceil() as usize
     }
     .min(gauge_cells);
-    let style = provider_pressure_style(percent, stale);
-    let percent_label = if (window.used_percent.fract()).abs() < 0.05 {
-        format!("{:.0}%", window.used_percent)
+    let style = provider_pressure_style(used_percent, stale);
+    let percent_label = if (remaining_percent.fract()).abs() < 0.05 {
+        format!("{remaining_percent:.0}% reste")
     } else {
-        format!("{:.1}%", window.used_percent)
+        format!("{remaining_percent:.1}% reste")
     };
     let resume = provider_resume_label(window, now, compact);
 
@@ -342,6 +423,72 @@ fn provider_window_item(
         spans.push(Span::styled(" stale", Style::default().fg(theme::YELLOW)));
     }
     if quota.rate_limit_reached_type.is_some() || quota.alert_level == "exhausted" {
+        spans.push(Span::styled(" bloqué", Style::default().fg(theme::RED)));
+    }
+    ProviderStatusItem::new(spans)
+}
+
+fn provider_spend_control_item(
+    quota: &ProviderQuota,
+    limit: &crate::tui::provider_quota::ProviderSpendControlLimit,
+    stale: bool,
+    now: DateTime<FixedOffset>,
+    width: usize,
+) -> ProviderStatusItem {
+    let gauge_cells = if width >= 120 {
+        8
+    } else if width >= 72 {
+        6
+    } else {
+        4
+    };
+    let remaining_percent = f64::from(limit.remaining_percent).clamp(0.0, 100.0);
+    let used_percent = f64::from(limit.used_percent).clamp(0.0, 100.0);
+    let filled = if remaining_percent <= 0.0 {
+        0
+    } else {
+        ((remaining_percent / 100.0) * gauge_cells as f64).ceil() as usize
+    }
+    .min(gauge_cells);
+    let style = provider_pressure_style(used_percent, stale);
+    let reset = if let Some(resets_at) = limit.resets_at {
+        let window = ProviderQuotaWindow {
+            used_percent,
+            remaining_percent,
+            remaining_source: Some("provider_reported".to_string()),
+            window_seconds: None,
+            reset_after_seconds: Some(limit.reset_after_seconds),
+            resets_at: Some(resets_at),
+        };
+        provider_resume_label(&window, now, width < 80)
+    } else if limit.reset_after_seconds == 0 {
+        "inconnue".to_string()
+    } else {
+        format!("~{}", provider_duration_label(limit.reset_after_seconds))
+    };
+    let reached = quota
+        .spend_control
+        .as_ref()
+        .is_some_and(|control| control.reached);
+    let mut spans = vec![
+        Span::styled("Budget mensuel ", theme::dim_style()),
+        Span::styled("[", Style::default().fg(theme::BORDER)),
+        Span::styled("█".repeat(filled), style),
+        Span::styled(
+            "░".repeat(gauge_cells.saturating_sub(filled)),
+            Style::default().fg(theme::BORDER),
+        ),
+        Span::styled("] ", Style::default().fg(theme::BORDER)),
+        Span::styled(format!("{}% reste", limit.remaining_percent), style),
+        Span::styled(
+            format!(" · {} / {} · ↻ {reset}", limit.remaining, limit.limit),
+            theme::dim_style(),
+        ),
+    ];
+    if stale {
+        spans.push(Span::styled(" stale", Style::default().fg(theme::YELLOW)));
+    }
+    if reached {
         spans.push(Span::styled(" bloqué", Style::default().fg(theme::RED)));
     }
     ProviderStatusItem::new(spans)
@@ -459,13 +606,13 @@ fn provider_resume_label(
 }
 
 fn provider_duration_label(seconds: u64) -> String {
-    if seconds != 0 && seconds % 604_800 == 0 {
+    if seconds != 0 && seconds.is_multiple_of(604_800) {
         format!("{}sem", seconds / 604_800)
-    } else if seconds != 0 && seconds % 86_400 == 0 {
+    } else if seconds != 0 && seconds.is_multiple_of(86_400) {
         format!("{}j", seconds / 86_400)
-    } else if seconds != 0 && seconds % 3_600 == 0 {
+    } else if seconds != 0 && seconds.is_multiple_of(3_600) {
         format!("{}h", seconds / 3_600)
-    } else if seconds != 0 && seconds % 60 == 0 {
+    } else if seconds != 0 && seconds.is_multiple_of(60) {
         format!("{}m", seconds / 60)
     } else {
         format!("{seconds}s")
@@ -605,7 +752,7 @@ fn push_separator(spans: &mut Vec<Span<'static>>) {
 }
 
 fn push_activity_spinner(spans: &mut Vec<Span<'static>>, state: &ChatState) {
-    if state.is_streaming || state.thinking {
+    if state.is_streaming || state.thinking || state.compaction_progress.is_some() {
         let frame = theme::SPINNER_FRAMES[state.spinner_frame % theme::SPINNER_FRAMES.len()];
         spans.push(Span::styled(
             format!("{frame} "),
@@ -641,8 +788,30 @@ fn push_model_and_mode(spans: &mut Vec<Span<'static>>, state: &ChatState) {
         state.model_label.clone(),
         Style::default().fg(theme::ACCENT),
     ));
+    if let Some(reasoning) = state.reasoning_status.as_ref() {
+        spans.push(Span::styled(
+            format!(" · {}", reasoning_status_label(reasoning)),
+            theme::dim_style(),
+        ));
+    }
     push_separator(spans);
     spans.push(Span::styled(state.mode_label.clone(), theme::dim_style()));
+}
+
+fn reasoning_status_label(status: &AgentReasoningStatus) -> String {
+    if !status.supported {
+        return "r:n/a".to_string();
+    }
+    if let Some(configured) = status.configured_effort.as_ref() {
+        return format!("r:{configured}");
+    }
+    match (&status.effective_effort, status.source) {
+        (Some(effective), ReasoningSelectionSource::ModelDefault) => {
+            format!("r:auto→{effective}")
+        }
+        (Some(effective), _) => format!("r:auto→{effective}"),
+        (None, _) => "r:auto".to_string(),
+    }
 }
 
 fn push_session_duration(spans: &mut Vec<Span<'static>>, state: &ChatState) {

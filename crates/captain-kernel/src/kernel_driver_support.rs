@@ -126,15 +126,27 @@ impl CaptainKernel {
     ) -> Option<String> {
         let agent_provider = &manifest.model.provider;
         if let Some(env) = manifest.model.api_key_env.as_ref() {
-            return self.resolve_credential(env);
+            return resolved_provider_api_key(
+                env,
+                |key| self.resolve_credential(key),
+                |key| self.credential_is_externally_managed(key),
+            );
         }
         if agent_provider == &effective_default.provider
             && !effective_default.api_key_env.is_empty()
         {
-            return self.resolve_credential(&effective_default.api_key_env);
+            return resolved_provider_api_key(
+                &effective_default.api_key_env,
+                |key| self.resolve_credential(key),
+                |key| self.credential_is_externally_managed(key),
+            );
         }
         let env_var = self.config.resolve_api_key_env(agent_provider);
-        self.resolve_credential(&env_var)
+        resolved_provider_api_key(
+            &env_var,
+            |key| self.resolve_credential(key),
+            |key| self.credential_is_externally_managed(key),
+        )
     }
 
     fn primary_base_url(
@@ -184,7 +196,12 @@ impl CaptainKernel {
     fn fallback_driver_target(&self, fallback_model: &FallbackModel) -> Option<DriverTarget> {
         let config = DriverConfig {
             provider: fallback_model.provider.clone(),
-            api_key: fallback_api_key(&self.config, fallback_model),
+            api_key: fallback_api_key(
+                &self.config,
+                fallback_model,
+                |key| self.resolve_credential(key),
+                |key| self.credential_is_externally_managed(key),
+            ),
             base_url: fallback_model
                 .base_url
                 .clone()
@@ -239,16 +256,26 @@ fn primary_driver_target(primary: Arc<dyn LlmDriver>, manifest: &AgentManifest) 
     )
 }
 
+fn resolved_provider_api_key(
+    key: &str,
+    resolve: impl FnOnce(&str) -> Option<String>,
+    is_externally_managed: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    resolve(key).or_else(|| is_externally_managed(key).then(String::new))
+}
+
 fn fallback_api_key(
     config: &captain_types::config::KernelConfig,
     fallback_model: &FallbackModel,
+    resolve: impl FnOnce(&str) -> Option<String>,
+    is_externally_managed: impl FnOnce(&str) -> bool,
 ) -> Option<String> {
-    if let Some(env) = &fallback_model.api_key_env {
-        std::env::var(env).ok()
+    let env_var = if let Some(env) = &fallback_model.api_key_env {
+        env.clone()
     } else {
-        let env_var = config.resolve_api_key_env(&fallback_model.provider);
-        std::env::var(&env_var).ok()
-    }
+        config.resolve_api_key_env(&fallback_model.provider)
+    };
+    resolved_provider_api_key(&env_var, resolve, is_externally_managed)
 }
 
 fn fallback_runtime_model(fallback_model: &FallbackModel) -> String {
@@ -259,23 +286,43 @@ fn provider_model_label(provider: &str, model: &str) -> String {
     format!("{provider}/{model}")
 }
 
-pub(crate) fn resolve_daemon_api_key(home_dir: &std::path::Path) -> Option<(&'static str, String)> {
-    let secrets_path = home_dir.join("secrets.env");
-    let dotenv_path = home_dir.join(".env");
-    let resolver = captain_extensions::credentials::CredentialResolver::new_with_secrets(
-        None,
-        Some(&secrets_path),
-        Some(&dotenv_path),
-    );
+#[derive(Debug)]
+pub(crate) struct ResolvedDaemonApiKey {
+    pub(crate) key_name: &'static str,
+    pub(crate) value: String,
+    pub(crate) externally_managed: bool,
+}
+
+pub(crate) fn resolve_daemon_api_key(
+    home_dir: &std::path::Path,
+) -> captain_extensions::ExtensionResult<Option<ResolvedDaemonApiKey>> {
+    let vault_path = home_dir.join("vault.enc");
+    let vault = if vault_path.exists() {
+        let mut vault = captain_extensions::vault::CredentialVault::new(vault_path);
+        vault.unlock().ok().map(|()| vault)
+    } else {
+        None
+    };
+    let resolver = captain_extensions::credentials::CredentialResolver::from_home(vault, home_dir)?;
     for key in ["CAPTAIN_DAEMON_API_KEY", "CAPTAIN_API_KEY"] {
+        let externally_managed = resolver.is_externally_managed(key);
         if let Some(value) = resolver.resolve(key) {
             let value = value.trim().to_string();
             if !value.is_empty() {
-                return Some((key, value));
+                return Ok(Some(ResolvedDaemonApiKey {
+                    key_name: key,
+                    value,
+                    externally_managed,
+                }));
             }
         }
+        if externally_managed {
+            return Err(captain_extensions::ExtensionError::SecretSource(format!(
+                "authoritative source for '{key}' is unavailable"
+            )));
+        }
     }
-    None
+    Ok(None)
 }
 
 fn wrap_with_cache(driver: Arc<dyn LlmDriver>) -> Arc<dyn LlmDriver> {
@@ -297,11 +344,63 @@ mod tests {
             "CAPTAIN_DAEMON_API_KEY=captain_api_secret\n",
         )
         .unwrap();
-        let resolved = resolve_daemon_api_key(tmp.path());
-        assert_eq!(
-            resolved,
-            Some(("CAPTAIN_DAEMON_API_KEY", "captain_api_secret".to_string()))
-        );
+        let resolved = resolve_daemon_api_key(tmp.path()).unwrap();
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.key_name, "CAPTAIN_DAEMON_API_KEY");
+        assert_eq!(resolved.value, "captain_api_secret");
+        assert!(!resolved.externally_managed);
+    }
+
+    #[test]
+    fn daemon_api_key_resolves_from_authoritative_external_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mounted = tmp.path().join("daemon-api-key");
+        std::fs::write(&mounted, "external_daemon_api_secret\n").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME),
+            format!(
+                "version = 1\n[sources.CAPTAIN_DAEMON_API_KEY]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("secrets.env"),
+            "CAPTAIN_DAEMON_API_KEY=stale_local_value\n",
+        )
+        .unwrap();
+
+        let resolved = resolve_daemon_api_key(tmp.path()).unwrap();
+
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.key_name, "CAPTAIN_DAEMON_API_KEY");
+        assert_eq!(resolved.value, "external_daemon_api_secret");
+        assert!(resolved.externally_managed);
+    }
+
+    #[test]
+    fn unavailable_external_daemon_key_does_not_fall_back_to_legacy_alias() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing-daemon-key");
+        std::fs::write(
+            tmp.path()
+                .join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME),
+            format!(
+                "version = 1\n[sources.CAPTAIN_DAEMON_API_KEY]\ntype = \"file\"\npath = {:?}\n",
+                missing.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("secrets.env"),
+            "CAPTAIN_API_KEY=stale_legacy_alias\n",
+        )
+        .unwrap();
+
+        let error = resolve_daemon_api_key(tmp.path()).unwrap_err().to_string();
+        assert!(error.contains("authoritative source"));
+        assert!(!error.contains("stale_legacy_alias"));
     }
 
     #[test]
@@ -338,5 +437,12 @@ mod tests {
             provider_model_label(&fallback_model.provider, &fallback_model.model),
             "openai/openai/gpt-5.1"
         );
+    }
+
+    #[test]
+    fn unavailable_external_provider_key_blocks_dynamic_driver_env_fallback() {
+        let key = resolved_provider_api_key("ANTHROPIC_API_KEY", |_| None, |_| true);
+
+        assert_eq!(key.as_deref(), Some(""));
     }
 }

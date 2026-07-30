@@ -27,7 +27,7 @@ pub struct InstallResult {
 ///
 /// Steps:
 /// 1. Look up template in registry.
-/// 2. Check credentials (secrets.env → vault → .env → env → prompt).
+/// 2. Check credentials (external source → secrets.env → vault → .env → env → prompt).
 /// 3. If `--key` provided, persist it through the resolver.
 /// 4. If OAuth required, run PKCE flow.
 /// 5. Write to integrations.toml.

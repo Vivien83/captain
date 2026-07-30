@@ -16,11 +16,17 @@ use uuid::Uuid;
 /// Maximum length of tool names (chars).
 const MAX_TOOL_NAME_LEN: usize = 64;
 
+/// Maximum length of an agent identifier (chars).
+const MAX_AGENT_ID_LEN: usize = 128;
+
 /// Maximum length of a request description (chars).
 const MAX_DESCRIPTION_LEN: usize = 1024;
 
 /// Maximum length of an action summary (chars).
 const MAX_ACTION_SUMMARY_LEN: usize = 512;
+
+/// Maximum length of an operator-provided approval reason (chars).
+pub const MAX_APPROVAL_REASON_LEN: usize = 280;
 
 /// Minimum approval timeout in seconds.
 const MIN_TIMEOUT_SECS: u64 = 10;
@@ -58,7 +64,7 @@ impl RiskLevel {
 // ApprovalDecision
 // ---------------------------------------------------------------------------
 
-/// Decision on an approval request — 4 choices + timeout.
+/// Decision on an approval request: symmetric allow/deny scopes plus timeout.
 ///
 /// Serde accepts both English (`approved` / `approved_session` / etc.) and
 /// French (`approuver` / `session` / etc.) variants — useful for TOML
@@ -74,17 +80,24 @@ pub enum ApprovalDecision {
         alias = "approuver_une_fois"
     )]
     Approved,
-    /// Approve every call to this tool *for this agent* until the daemon
-    /// restarts (or the session cache is cleared).
+    /// Approve this exact agent/tool/action tuple until the daemon restarts
+    /// (or the session cache is cleared).
     #[serde(alias = "session", alias = "approuver_session")]
     ApprovedSession,
-    /// Approve every call to this tool **forever**. Persisted to the
-    /// `approval.allow_always` policy list.
+    /// Persist an allow rule for this exact agent/tool/action tuple. Manual
+    /// `approval.allow_always` config entries remain the separate broad admin
+    /// override for backwards compatibility.
     #[serde(alias = "always", alias = "approuver_toujours", alias = "toujours")]
     ApprovedAlways,
     /// Refuse this call. Next call will re-prompt.
     #[serde(alias = "decline", alias = "refuser", alias = "refuse")]
     Denied,
+    /// Refuse this exact action for this agent until the daemon restarts.
+    #[serde(alias = "reject_session", alias = "refuser_session")]
+    DeniedSession,
+    /// Refuse this exact action for this agent until its durable rule is revoked.
+    #[serde(alias = "reject_always", alias = "refuser_toujours")]
+    DeniedAlways,
     /// User did not respond within `timeout_secs` — treated as denial.
     #[serde(alias = "timed_out", alias = "expire")]
     TimedOut,
@@ -101,6 +114,120 @@ impl ApprovalDecision {
                 | ApprovalDecision::ApprovedAlways
         )
     }
+
+    /// True when the operator explicitly rejected the action.
+    pub fn is_denied(&self) -> bool {
+        matches!(
+            self,
+            ApprovalDecision::Denied
+                | ApprovalDecision::DeniedSession
+                | ApprovalDecision::DeniedAlways
+                | ApprovalDecision::TimedOut
+        )
+    }
+
+    /// True when this decision applies until daemon restart.
+    pub fn is_session_scoped(&self) -> bool {
+        matches!(
+            self,
+            ApprovalDecision::ApprovedSession | ApprovalDecision::DeniedSession
+        )
+    }
+
+    /// True when this decision creates a durable exact-action rule.
+    pub fn is_persistent(&self) -> bool {
+        matches!(
+            self,
+            ApprovalDecision::ApprovedAlways | ApprovalDecision::DeniedAlways
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ApprovalOutcome / ApprovalRule
+// ---------------------------------------------------------------------------
+
+/// Complete result returned to the blocked tool invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalOutcome {
+    pub decision: ApprovalDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<Uuid>,
+}
+
+impl ApprovalOutcome {
+    pub fn from_decision(decision: ApprovalDecision) -> Self {
+        Self {
+            decision,
+            reason: None,
+            rule_id: None,
+        }
+    }
+
+    pub fn is_approved(&self) -> bool {
+        self.decision.is_approved()
+    }
+}
+
+impl From<ApprovalDecision> for ApprovalOutcome {
+    fn from(decision: ApprovalDecision) -> Self {
+        Self::from_decision(decision)
+    }
+}
+
+impl PartialEq<ApprovalDecision> for ApprovalOutcome {
+    fn eq(&self, other: &ApprovalDecision) -> bool {
+        self.decision == *other
+    }
+}
+
+/// Effect of one durable exact-action approval rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalRuleEffect {
+    Allow,
+    Deny,
+}
+
+/// Human-readable metadata for a durable rule. The raw action is deliberately
+/// not persisted: only its digest is stored so commands and secrets cannot leak.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalRule {
+    pub id: Uuid,
+    pub effect: ApprovalRuleEffect,
+    pub agent_id: String,
+    pub tool_name: String,
+    pub action_digest: String,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Normalize an operator reason before display, propagation or persistence.
+pub fn normalize_approval_reason(reason: Option<&str>) -> Result<Option<String>, String> {
+    let Some(reason) = reason else {
+        return Ok(None);
+    };
+    if reason
+        .chars()
+        .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+    {
+        return Err("approval reason contains control characters".to_string());
+    }
+    let normalized = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    let count = normalized.chars().count();
+    if count > MAX_APPROVAL_REASON_LEN {
+        return Err(format!(
+            "approval reason too long ({count} chars, max {MAX_APPROVAL_REASON_LEN})"
+        ));
+    }
+    Ok(Some(normalized))
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +243,10 @@ pub struct ApprovalRequest {
     pub description: String,
     /// The specific action being requested (sanitized for display).
     pub action_summary: String,
+    /// BLAKE3 digest of the complete action input. This is deliberately
+    /// separate from `action_summary`: display previews may be truncated,
+    /// while session and durable decisions must bind to the exact input.
+    pub action_digest: String,
     pub risk_level: RiskLevel,
     pub requested_at: DateTime<Utc>,
     /// Auto-deny timeout in seconds.
@@ -127,6 +258,16 @@ impl ApprovalRequest {
     ///
     /// Returns `Ok(())` or an error message describing the first validation failure.
     pub fn validate(&self) -> Result<(), String> {
+        // -- agent_id --
+        if self.agent_id.trim().is_empty()
+            || self.agent_id.chars().count() > MAX_AGENT_ID_LEN
+            || self.agent_id.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "agent_id must contain 1..={MAX_AGENT_ID_LEN} characters without controls"
+            ));
+        }
+
         // -- tool_name --
         if self.tool_name.is_empty() {
             return Err("tool_name must not be empty".into());
@@ -163,6 +304,10 @@ impl ApprovalRequest {
             ));
         }
 
+        if !is_valid_approval_action_digest(&self.action_digest) {
+            return Err("action_digest must be 64 lowercase hexadecimal characters".to_string());
+        }
+
         // -- timeout_secs --
         if self.timeout_secs < MIN_TIMEOUT_SECS {
             return Err(format!(
@@ -181,6 +326,24 @@ impl ApprovalRequest {
     }
 }
 
+/// Compute the non-reversible binding used by session and durable approval
+/// decisions. Callers must provide the complete, untruncated action input.
+pub fn approval_action_digest(tool_name: &str, action_input: &[u8]) -> String {
+    let mut hasher = blake3::Hasher::new_derive_key("captain approval action digest v1");
+    hasher.update(&(tool_name.len() as u64).to_le_bytes());
+    hasher.update(tool_name.as_bytes());
+    hasher.update(&(action_input.len() as u64).to_le_bytes());
+    hasher.update(action_input);
+    hasher.finalize().to_hex().to_string()
+}
+
+pub fn is_valid_approval_action_digest(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 // ---------------------------------------------------------------------------
 // ApprovalResponse
 // ---------------------------------------------------------------------------
@@ -192,6 +355,10 @@ pub struct ApprovalResponse {
     pub decision: ApprovalDecision,
     pub decided_at: DateTime<Utc>,
     pub decided_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,10 +376,9 @@ pub struct ApprovalPolicy {
     /// - `require_approval = true`  → `["shell_exec"]` (the default set)
     #[serde(deserialize_with = "deserialize_require_approval")]
     pub require_approval: Vec<String>,
-    /// Q.11 — "always allow" list. Tools listed here are
-    /// short-circuited to `Approved` BEFORE any prompt. Populated either
-    /// manually in the config or dynamically when the user picks
-    /// "Approve always" in the modal.
+    /// Broad administrator-owned "always allow" list. Tools listed here are
+    /// short-circuited before any prompt. Interactive persistent decisions use
+    /// exact rules in `approval-rules.json` and never widen this list.
     #[serde(default)]
     pub allow_always: Vec<String>,
     /// Timeout in seconds. Default: 60, range: 10..=300.
@@ -318,6 +484,23 @@ impl ApprovalPolicy {
             }
         }
 
+        for (i, name) in self.allow_always.iter().enumerate() {
+            if name.is_empty() {
+                return Err(format!("allow_always[{i}] must not be empty"));
+            }
+            if name.len() > MAX_TOOL_NAME_LEN {
+                return Err(format!(
+                    "allow_always[{i}] too long ({} chars, max {MAX_TOOL_NAME_LEN})",
+                    name.len()
+                ));
+            }
+            if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return Err(format!(
+                    "allow_always[{i}] may only contain alphanumeric characters and underscores: \"{name}\""
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -339,6 +522,7 @@ mod tests {
             tool_name: "shell_exec".into(),
             description: "Execute rm -rf /tmp/stale_cache".into(),
             action_summary: "rm -rf /tmp/stale_cache".into(),
+            action_digest: approval_action_digest("shell_exec", b"rm -rf /tmp/stale_cache"),
             risk_level: RiskLevel::High,
             requested_at: Utc::now(),
             timeout_secs: 60,
@@ -391,7 +575,11 @@ mod tests {
     fn decision_serde_roundtrip() {
         for decision in [
             ApprovalDecision::Approved,
+            ApprovalDecision::ApprovedSession,
+            ApprovalDecision::ApprovedAlways,
             ApprovalDecision::Denied,
+            ApprovalDecision::DeniedSession,
+            ApprovalDecision::DeniedAlways,
             ApprovalDecision::TimedOut,
         ] {
             let json = serde_json::to_string(&decision).unwrap();
@@ -425,6 +613,16 @@ mod tests {
         req.tool_name = String::new();
         let err = req.validate().unwrap_err();
         assert!(err.contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn request_rejects_empty_or_control_character_agent_id() {
+        let mut req = valid_request();
+        req.agent_id = "  ".to_string();
+        assert!(req.validate().unwrap_err().contains("agent_id"));
+
+        req.agent_id = "agent\nforged".to_string();
+        assert!(req.validate().unwrap_err().contains("agent_id"));
     }
 
     #[test]
@@ -504,6 +702,30 @@ mod tests {
         assert!(req.validate().is_ok());
     }
 
+    #[test]
+    fn request_rejects_malformed_action_digest() {
+        let mut req = valid_request();
+        req.action_digest = "A".repeat(64);
+        let err = req.validate().unwrap_err();
+        assert!(err.contains("action_digest"), "{err}");
+    }
+
+    #[test]
+    fn action_digest_uses_complete_input_and_tool_domain() {
+        let common_prefix = "x".repeat(512);
+        let first = format!("{common_prefix}A");
+        let second = format!("{common_prefix}B");
+
+        assert_ne!(
+            approval_action_digest("shell_exec", first.as_bytes()),
+            approval_action_digest("shell_exec", second.as_bytes())
+        );
+        assert_ne!(
+            approval_action_digest("shell_exec", first.as_bytes()),
+            approval_action_digest("file_write", first.as_bytes())
+        );
+    }
+
     // -----------------------------------------------------------------------
     // ApprovalRequest — timeout_secs
     // -----------------------------------------------------------------------
@@ -549,6 +771,8 @@ mod tests {
             decision: ApprovalDecision::Approved,
             decided_at: Utc::now(),
             decided_by: Some("admin@example.com".into()),
+            reason: Some("Reviewed by operator".into()),
+            rule_id: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ApprovalResponse = serde_json::from_str(&json).unwrap();
@@ -564,11 +788,23 @@ mod tests {
             decision: ApprovalDecision::TimedOut,
             decided_at: Utc::now(),
             decided_by: None,
+            reason: None,
+            rule_id: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ApprovalResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.decided_by, None);
         assert_eq!(back.decision, ApprovalDecision::TimedOut);
+    }
+
+    #[test]
+    fn approval_reason_is_bounded_and_normalized() {
+        assert_eq!(
+            normalize_approval_reason(Some("  pas\nmaintenant  ")).unwrap(),
+            Some("pas maintenant".to_string())
+        );
+        assert!(normalize_approval_reason(Some(&"x".repeat(MAX_APPROVAL_REASON_LEN + 1))).is_err());
+        assert!(normalize_approval_reason(Some("bad\0reason")).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -687,6 +923,13 @@ mod tests {
         policy.require_approval = vec!["shell exec".into()];
         let err = policy.validate().unwrap_err();
         assert!(err.contains("alphanumeric"), "{err}");
+    }
+
+    #[test]
+    fn policy_allow_always_uses_the_same_tool_name_validation() {
+        let mut policy = valid_policy();
+        policy.allow_always = vec!["shell exec".to_string()];
+        assert!(policy.validate().unwrap_err().contains("allow_always[0]"));
     }
 
     #[test]

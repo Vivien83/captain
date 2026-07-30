@@ -123,6 +123,8 @@ pub enum EventPayload {
     /// external observers (TUI, SSE) learn about background work without
     /// polling tool_run_status.
     ToolRun(ToolRunEvent),
+    /// A durable detached sub-agent delegation changed status.
+    AgentDelegation(AgentDelegationEvent),
 }
 
 /// Status change of a detached `tool_run` (see `captain-runtime::tool_runs`).
@@ -132,6 +134,20 @@ pub struct ToolRunEvent {
     pub tool_name: String,
     pub status: String,
     pub caller_agent_id: Option<String>,
+}
+
+/// Status projection for a durable sub-agent delegation. Raw task text and
+/// results are deliberately excluded from the broadcast event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentDelegationEvent {
+    pub job_id: String,
+    pub title: String,
+    pub target_agent_id: String,
+    pub status: String,
+    pub caller_agent_id: String,
+    pub attempt_count: u32,
+    pub used_tokens: Option<u64>,
+    pub error_code: Option<String>,
 }
 
 /// Real-time chat events broadcast to all connected WebSocket clients.
@@ -175,8 +191,18 @@ pub enum ChatStreamEvent {
         phase: String,
         detail: Option<String>,
     },
+    /// Truthful progress for one session compaction. Opaque LLM phases carry
+    /// no units; chunked fallback carries exact completed/total chunks.
+    CompactionProgress {
+        progress: crate::compaction::CompactionProgress,
+    },
     /// Intermediate narration message.
     IntermediateMessage { agent_id: AgentId, content: String },
+    /// Non-blocking choices for the next ordinary user message.
+    SuggestedReplies {
+        agent_id: AgentId,
+        options: Vec<String>,
+    },
     /// Agent asks user for input.
     AskUser {
         agent_id: AgentId,
@@ -720,9 +746,33 @@ mod tests {
                 phase: "thinking".to_string(),
                 detail: None,
             },
+            ChatStreamEvent::CompactionProgress {
+                progress: crate::compaction::CompactionProgress {
+                    schema_version: crate::compaction::COMPACTION_PROGRESS_SCHEMA_VERSION,
+                    operation_id: "compact-1".to_string(),
+                    runtime_instance_id: "runtime-1".to_string(),
+                    agent_id,
+                    session_id: crate::agent::SessionId::new(),
+                    phase: crate::compaction::CompactionPhase::Summarizing,
+                    state: crate::compaction::CompactionState::Running,
+                    detail: "opaque model call".to_string(),
+                    message_count: 40,
+                    estimated_tokens: 20_000,
+                    context_window_tokens: 200_000,
+                    completed_units: None,
+                    total_units: None,
+                    unit: None,
+                    started_at_ms: 1,
+                    updated_at_ms: 2,
+                },
+            },
             ChatStreamEvent::IntermediateMessage {
                 agent_id,
                 content: "narration".to_string(),
+            },
+            ChatStreamEvent::SuggestedReplies {
+                agent_id,
+                options: vec!["short".to_string(), "detailed".to_string()],
             },
             ChatStreamEvent::AskUser {
                 agent_id,

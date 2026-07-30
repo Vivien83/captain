@@ -3,6 +3,7 @@
 use crate::tui::theme;
 use captain_types::workflow_learning::{
     ProposalCardAction, ProposalCardKind, ProposalCardState, ProposalIsolatedTestStatus,
+    WorkflowLearningRecoveryState, WorkflowLearningRuntimeState, WorkflowLearningStatus,
     WorkflowLearningView, WorkflowProjectionStatus,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -57,6 +58,7 @@ impl SkillsMetrics {
 pub struct SkillsProposedState {
     pub workflows: Vec<WorkflowLearningView>,
     pub metrics: Option<SkillsMetrics>,
+    pub status: Option<WorkflowLearningStatus>,
     pub list_state: ListState,
     pub show_all: bool,
     pub loading: bool,
@@ -80,6 +82,7 @@ impl SkillsProposedState {
         Self {
             workflows: Vec::new(),
             metrics: None,
+            status: None,
             list_state: ListState::default(),
             show_all: false,
             loading: false,
@@ -180,14 +183,19 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SkillsProposedState) {
     f.render_widget(block, area);
 
     let chunks = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(1),
     ])
     .split(inner);
 
-    f.render_widget(Paragraph::new(metrics_line(state)), chunks[0]);
+    f.render_widget(
+        Paragraph::new(runtime_lines(state)).wrap(Wrap { trim: true }),
+        chunks[0],
+    );
+    f.render_widget(Paragraph::new(metrics_line(state)), chunks[1]);
     let (decision_style, all_style) = if state.show_all {
         (theme::tab_inactive(), theme::tab_active())
     } else {
@@ -204,19 +212,19 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SkillsProposedState) {
             Span::raw("  "),
             Span::styled(format!(" Tous ({}) ", state.workflows.len()), all_style),
         ])),
-        chunks[1],
+        chunks[2],
     );
 
-    let body = if chunks[2].width >= 96 {
+    let body = if chunks[3].width >= 96 {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
-            .split(chunks[2])
+            .split(chunks[3])
     } else {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(chunks[2])
+            .split(chunks[3])
     };
     let visible = state
         .visible_workflows()
@@ -264,8 +272,133 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SkillsProposedState) {
     };
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(footer, theme::hint_style()))),
-        chunks[3],
+        chunks[4],
     );
+}
+
+fn runtime_lines(state: &SkillsProposedState) -> Vec<Line<'static>> {
+    let Some(status) = state.status.as_ref() else {
+        return vec![
+            Line::from(Span::styled(
+                "État du moteur : chargement…",
+                theme::dim_style(),
+            )),
+            Line::default(),
+            Line::default(),
+        ];
+    };
+    let bound_model = status
+        .worker
+        .as_ref()
+        .and_then(|worker| worker.bound_model.as_ref())
+        .map(|model| format!("{}:{}", model.provider, model.model))
+        .unwrap_or_else(|| "pas encore lié".to_string());
+    let expected_model = format!(
+        "{}:{}",
+        status.expected_model.provider, status.expected_model.model
+    );
+    let model_detail = if bound_model == expected_model {
+        bound_model
+    } else {
+        format!("{bound_model} · attendu:{expected_model}")
+    };
+    let worker_line = status.worker.as_ref().map_or_else(
+        || "worker absent".to_string(),
+        |worker| {
+            let scan = worker
+                .last_scan_at_unix_ms
+                .map(|at| format!("scan {}", relative_age(status.generated_at_unix_ms, at)))
+                .unwrap_or_else(|| "scan en attente".to_string());
+            let error = worker
+                .last_error_scope
+                .as_deref()
+                .map(|scope| format!(" · erreur:{scope}"))
+                .unwrap_or_default();
+            format!(
+                "heartbeat {} · {scan}{error}",
+                relative_age(status.generated_at_unix_ms, worker.heartbeat_at_unix_ms),
+            )
+        },
+    );
+    let mode = format!("{:?}", status.mode).to_lowercase();
+    vec![
+        Line::from(vec![
+            Span::styled(
+                format!("● {}", runtime_state_label(status.state)),
+                runtime_state_style(status.state),
+            ),
+            Span::styled(
+                format!("  mode:{mode}  modèle:{model_detail}"),
+                theme::dim_style(),
+            ),
+        ]),
+        Line::from(Span::styled(worker_line, theme::dim_style())),
+        Line::from(Span::styled(
+            format!(
+                "jobs {}/{}/{} · sorties {}/{}/{} · reprise:{}",
+                status.jobs.pending,
+                status.jobs.running,
+                status.jobs.retry_wait + status.jobs.uncertain + status.jobs.dead,
+                status.notifications.pending,
+                status.notifications.delivering,
+                status.notifications.retry_wait + status.notifications.dead,
+                recovery_label(status.recovery),
+            ),
+            theme::dim_style(),
+        )),
+    ]
+}
+
+fn runtime_state_label(state: WorkflowLearningRuntimeState) -> &'static str {
+    match state {
+        WorkflowLearningRuntimeState::Disabled => "désactivé",
+        WorkflowLearningRuntimeState::Starting => "démarrage",
+        WorkflowLearningRuntimeState::Healthy => "opérationnel",
+        WorkflowLearningRuntimeState::Active => "actif",
+        WorkflowLearningRuntimeState::Recovering => "reprise automatique",
+        WorkflowLearningRuntimeState::Degraded => "dégradé",
+        WorkflowLearningRuntimeState::Stalled => "worker bloqué",
+    }
+}
+
+fn runtime_state_style(state: WorkflowLearningRuntimeState) -> Style {
+    match state {
+        WorkflowLearningRuntimeState::Healthy | WorkflowLearningRuntimeState::Active => {
+            Style::default()
+                .fg(theme::GREEN)
+                .add_modifier(Modifier::BOLD)
+        }
+        WorkflowLearningRuntimeState::Recovering | WorkflowLearningRuntimeState::Starting => {
+            Style::default()
+                .fg(theme::YELLOW)
+                .add_modifier(Modifier::BOLD)
+        }
+        WorkflowLearningRuntimeState::Disabled => theme::dim_style(),
+        WorkflowLearningRuntimeState::Degraded | WorkflowLearningRuntimeState::Stalled => {
+            Style::default().fg(theme::RED).add_modifier(Modifier::BOLD)
+        }
+    }
+}
+
+fn recovery_label(recovery: WorkflowLearningRecoveryState) -> &'static str {
+    match recovery {
+        WorkflowLearningRecoveryState::Disabled => "désactivée",
+        WorkflowLearningRecoveryState::Starting => "démarrage",
+        WorkflowLearningRecoveryState::InSync => "synchronisée",
+        WorkflowLearningRecoveryState::AutomaticRetryActive => "retry automatique",
+        WorkflowLearningRecoveryState::OperatorAttention => "attention requise",
+    }
+}
+
+fn relative_age(now_unix_ms: i64, at_unix_ms: i64) -> String {
+    let seconds = now_unix_ms.saturating_sub(at_unix_ms).max(0) / 1_000;
+    if seconds < 60 {
+        format!("il y a {seconds}s")
+    } else if seconds < 3_600 {
+        format!("il y a {}min", seconds / 60)
+    } else {
+        format!("il y a {}h", seconds / 3_600)
+    }
 }
 
 fn metrics_line(state: &SkillsProposedState) -> Line<'static> {
@@ -461,9 +594,14 @@ fn installation_phase_label(
 
 #[cfg(test)]
 mod tests {
-    use super::SkillsMetrics;
+    use super::{runtime_lines, SkillsMetrics, SkillsProposedState};
+    use captain_types::config::LearningMode;
     use captain_types::workflow_learning::{
-        ProposalCardState, WorkflowLearningView, WorkflowProjectionStatus,
+        ProposalCardState, WorkflowLearningJobQueueView, WorkflowLearningModelIdentity,
+        WorkflowLearningNotificationQueueView, WorkflowLearningRecoveryState,
+        WorkflowLearningRuntimeState, WorkflowLearningStatus, WorkflowLearningView,
+        WorkflowLearningWorkerPhase, WorkflowLearningWorkerView, WorkflowLearningWorkloadView,
+        WorkflowProjectionStatus, WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
         WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
     };
 
@@ -515,5 +653,51 @@ mod tests {
         assert_eq!(metrics.awaiting_decision, 1);
         assert_eq!(metrics.active, 2);
         assert_eq!(metrics.attention, 1);
+    }
+
+    #[test]
+    fn operational_lines_show_bound_model_queues_and_recovery_without_percentage() {
+        let mut state = SkillsProposedState::new();
+        state.status = Some(WorkflowLearningStatus {
+            schema_version: WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
+            enabled: true,
+            mode: LearningMode::Approval,
+            state: WorkflowLearningRuntimeState::Recovering,
+            recovery: WorkflowLearningRecoveryState::AutomaticRetryActive,
+            expected_model: WorkflowLearningModelIdentity {
+                provider: "codex".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+            },
+            worker: Some(WorkflowLearningWorkerView {
+                phase: WorkflowLearningWorkerPhase::Running,
+                bound_model: Some(WorkflowLearningModelIdentity {
+                    provider: "codex".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
+                }),
+                started_at_unix_ms: 1_000,
+                heartbeat_at_unix_ms: 9_000,
+                heartbeat_age_ms: 1_000,
+                last_scan_at_unix_ms: Some(8_000),
+                last_progress_at_unix_ms: None,
+                last_error_scope: None,
+            }),
+            jobs: WorkflowLearningJobQueueView {
+                retry_wait: 2,
+                ..Default::default()
+            },
+            notifications: WorkflowLearningNotificationQueueView::default(),
+            workflows: WorkflowLearningWorkloadView::default(),
+            generated_at_unix_ms: 10_000,
+        });
+        let text = runtime_lines(&state)
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .map(|span| span.content.into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("reprise automatique"));
+        assert!(text.contains("codex:gpt-5.6-sol"));
+        assert!(text.contains("jobs 0/0/2"));
+        assert!(!text.contains('%'));
     }
 }

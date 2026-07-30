@@ -40,6 +40,20 @@ fail() {
     exit 1
 }
 
+release_host_checkpoint() {
+    local label="$1"
+    local available_kib
+    local min_free_gib
+    local min_free_kib
+    available_kib="$(df -Pk "$ROOT_DIR" | awk 'END {print $4}')"
+    min_free_gib="${CAPTAIN_RELEASE_MIN_FREE_GIB:-15}"
+    min_free_kib=$((min_free_gib * 1024 * 1024))
+    printf '  Host checkpoint (%s): %s GiB free; %s\n' \
+        "$label" "$((available_kib / 1024 / 1024))" "$(uptime | sed 's/^[[:space:]]*//')" >&2
+    [ "$available_kib" -gt "$min_free_kib" ] \
+        || fail "release build requires more than ${min_free_gib} GiB free"
+}
+
 needs_docker=0
 needs_xwin=0
 for target in $TARGETS; do
@@ -135,6 +149,15 @@ sha256_file() {
     fi
 }
 
+SOURCE_REPOSITORY="${CAPTAIN_PROVENANCE_REPOSITORY:-https://github.com/Vivien83/captain}"
+SOURCE_REVISION="$(git rev-parse HEAD)"
+SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')"
+CARGO_LOCK_SHA256="$(sha256_file "$ROOT_DIR/Cargo.lock")"
+SOURCE_DIRTY=false
+if [ -n "$(git status --porcelain)" ]; then
+    SOURCE_DIRTY=true
+fi
+
 verify_embedded_binary_version() {
     target="$1"
     bin_path="$2"
@@ -178,12 +201,14 @@ verify_embedded_binary_version() {
 }
 
 package_windows_target() {
-    target="$1"
-    bin_path="$2"
-    dist_dir="${CAPTAIN_DIST_DIR:-dist/releases}"
-    version_dir="$dist_dir/$VERSION"
-    stage="$version_dir/stage-windows-$target"
-    archive="$version_dir/captain-$target.zip"
+    local target="$1"
+    local bin_path="$2"
+    local build_started_at="$3"
+    local dist_dir="${CAPTAIN_DIST_DIR:-dist/releases}"
+    local version_dir="$dist_dir/$VERSION"
+    local stage="$version_dir/stage-windows-$target"
+    local archive="$version_dir/captain-$target.zip"
+    local archive_abs
     case "$archive" in
         /*) archive_abs="$archive" ;;
         *) archive_abs="$ROOT_DIR/$archive" ;;
@@ -217,7 +242,15 @@ EOF
   "platform": "$target",
   "archive": "$(basename "$archive")",
   "sha256": "$hash",
-  "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "build_started_at": "$build_started_at",
+  "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "source": {
+    "repository": "$SOURCE_REPOSITORY",
+    "revision": "$SOURCE_REVISION",
+    "tree": "$SOURCE_TREE",
+    "cargo_lock_sha256": "$CARGO_LOCK_SHA256",
+    "dirty": $SOURCE_DIRTY
+  }
 }
 EOF
     cp scripts/install.ps1 "$version_dir/install.ps1"
@@ -235,7 +268,24 @@ refresh_aggregate_manifest() {
     jq -s \
         --arg version "$VERSION" \
         --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{version: $version, generated_at: $generated_at, artifacts: (map({platform, archive, sha256}) | sort_by(.platform))}' \
+        '
+          . as $manifests
+          | ($manifests | map(.source) | unique) as $sources
+          | if ($sources | length) != 1 then
+              error("platform manifests contain mixed source provenance")
+            else
+              {
+                version: $version,
+                generated_at: $generated_at,
+                source: $sources[0],
+                artifacts: (
+                  $manifests
+                  | map({platform, archive, sha256})
+                  | sort_by(.platform)
+                )
+              }
+            end
+        ' \
         "$@" > "$version_dir/manifest.json"
 }
 
@@ -245,22 +295,26 @@ echo "  Targets: $TARGETS"
 echo "  Target root: $TARGET_ROOT"
 
 for target in $TARGETS; do
+    release_host_checkpoint "before $target"
+    build_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     bin_path="$(build_target "$target" | tail -1)"
     [ -f "$bin_path" ] || fail "Build produced no binary for $target at $bin_path"
     verify_embedded_binary_version "$target" "$bin_path"
     case "$target" in
         *-pc-windows-msvc)
-            package_windows_target "$target" "$bin_path"
+            package_windows_target "$target" "$bin_path" "$build_started_at"
             ;;
         *)
             CAPTAIN_SKIP_BUILD=1 \
             CAPTAIN_BIN_PATH="$bin_path" \
+            CAPTAIN_BUILD_STARTED_AT="$build_started_at" \
             CAPTAIN_DIST_PLATFORM="$target" \
             CAPTAIN_VERSION="$VERSION" \
             CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}" \
                 bash "$ROOT_DIR/scripts/package-release.sh"
             ;;
     esac
+    release_host_checkpoint "after $target"
 done
 
 DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"

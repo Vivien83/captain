@@ -22,7 +22,7 @@ import {
   providerResetLabel,
   providerSubscriptionFromBudget,
 } from '../crates/captain-api/static/js/app/provider_quota_model.mjs';
-import { withQuery } from '../crates/captain-api/static/js/app/api.js';
+import { api, withQuery } from '../crates/captain-api/static/js/app/api.js';
 
 assert.deepEqual(
   PRIMARY_HUBS.map((hub) => hub.route),
@@ -208,6 +208,10 @@ const apiSource = await readFile(
   new URL('../crates/captain-api/static/js/app/api.js', import.meta.url),
   'utf8',
 );
+const mainSource = await readFile(
+  new URL('../crates/captain-api/static/js/app/main.js', import.meta.url),
+  'utf8',
+);
 const shellSource = await readFile(
   new URL('../crates/captain-api/static/js/app/components/Shell.js', import.meta.url),
   'utf8',
@@ -220,6 +224,18 @@ const chatSource = await readFile(
   new URL('../crates/captain-api/static/js/app/views/Chat.js', import.meta.url),
   'utf8',
 );
+const suggestedRepliesSource = await readFile(
+  new URL('../crates/captain-api/static/js/app/components/SuggestedReplies.js', import.meta.url),
+  'utf8',
+);
+const chatBatcherSource = await readFile(
+  new URL('../crates/captain-api/static/js/app/chat_stream_batcher.mjs', import.meta.url),
+  'utf8',
+);
+const projectRuntimeSource = await readFile(
+  new URL('../crates/captain-api/static/js/app/views/ProjectRuntime.js', import.meta.url),
+  'utf8',
+);
 assert.match(apiSource, /budget:\s*\(\)\s*=>\s*request\('\/api\/budget'\)/);
 assert.match(apiSource, /modelUpdates:\s*\(\)\s*=>\s*request\('\/api\/models\/updates'\)/);
 assert.match(apiSource, /decideModelUpdate:.*\/api\/models\/updates\/decision/);
@@ -227,6 +243,9 @@ assert.match(apiSource, /nativeCapabilities:.*\/api\/capabilities\/native/);
 assert.match(apiSource, /decideNativeCapability:/);
 assert.match(apiSource, /rollbackNativeCapability:/);
 assert.match(apiSource, /disableNativeCapability:/);
+assert.match(apiSource, /dispatchEvent\(new Event\('captain:unauthorized'\)\)/);
+assert.match(mainSource, /addEventListener\('captain:unauthorized', onUnauthorized\)/);
+assert.match(mainSource, /authed: false/);
 assert.match(shellSource, /Nouveau modèle Codex/);
 assert.match(shellSource, /decision === 'switch'/);
 assert.match(shellSource, /session_strategy/);
@@ -239,5 +258,34 @@ assert.match(nativeCapabilitiesSource, /if \(!disableArmed\)/);
 assert.match(chatSource, /ProviderQuotaBar/);
 assert.match(chatSource, /PROVIDER_QUOTA_REFRESH_MS/);
 assert.match(chatSource, /role="progressbar"/);
+assert.match(chatSource, /new TextDeltaBatcher/);
+assert.match(chatSource, /textDeltaFromMessage/);
+assert.match(chatSource, /case 'suggested_replies'/);
+assert.match(chatSource, /type: 'message', content: text/);
+assert.match(chatSource, /type === 'suggested_replies'/);
+assert.match(chatSource, /pendingSuggestions/);
+assert.match(chatSource, /payload\('SuggestedReplies'\)/);
+assert.match(chatSource, /payload\('Response'\)/);
+assert.match(suggestedRepliesSource, /suggestionsActive/);
+assert.match(suggestedRepliesSource, /onChoose\(item, option\)/);
+assert.match(chatBatcherSource, /CONTROL_STREAM_FRAME_MS = 34/);
+assert.match(projectRuntimeSource, /runtime\.completion_contract/);
+assert.match(projectRuntimeSource, /w\.completion_contract/);
+assert.match(projectRuntimeSource, /preuves insuffisantes/);
+assert.match(projectRuntimeSource, /evidence_count/);
 
-console.log('Captain Control contract passed: six hubs, native-first capabilities, live Status, and explicit operator decisions.');
+const originalFetch = globalThis.fetch;
+const originalWindow = globalThis.window;
+const unauthorizedTarget = new EventTarget();
+let unauthorizedSignals = 0;
+unauthorizedTarget.addEventListener('captain:unauthorized', () => {
+  unauthorizedSignals += 1;
+});
+globalThis.window = unauthorizedTarget;
+globalThis.fetch = async () => new Response('', { status: 401 });
+await assert.rejects(api.agents(), (error) => error.unauthorized === true);
+assert.equal(unauthorizedSignals, 1);
+globalThis.fetch = originalFetch;
+globalThis.window = originalWindow;
+
+console.log('Captain Control contract passed: six hubs, proof-backed Projects, live Status, and explicit operator decisions.');

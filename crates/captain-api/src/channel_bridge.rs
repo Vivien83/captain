@@ -10,6 +10,9 @@ use captain_channels::google_chat::GoogleChatAdapter;
 use captain_channels::irc::IrcAdapter;
 use captain_channels::matrix::MatrixAdapter;
 use captain_channels::mattermost::MattermostAdapter;
+use captain_channels::outbound_delivery::{
+    OutboundDeliveryClaim, OutboundDeliveryIntent, OutboundDeliveryPreparation,
+};
 use captain_channels::rocketchat::RocketChatAdapter;
 use captain_channels::router::AgentRouter;
 use captain_channels::signal::SignalAdapter;
@@ -23,7 +26,7 @@ use captain_channels::xmpp::XmppAdapter;
 use captain_channels::zulip::ZulipAdapter;
 use captain_channels::{
     render_telegram_ask_user_answer, render_telegram_ask_user_expired,
-    render_telegram_ask_user_prompt, TelegramProgressDraft,
+    render_telegram_ask_user_prompt, render_telegram_compaction_progress, TelegramProgressDraft,
 };
 // Wave 3
 use captain_channels::bluesky::BlueskyAdapter;
@@ -63,6 +66,7 @@ use captain_runtime::agent_loop::AgentLoopResult;
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_types::agent::AgentId;
+use captain_types::reasoning::AgentReasoningStatus;
 use captain_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -124,6 +128,166 @@ type TelegramStreamParts = (
 );
 type TelegramStreamJoin = tokio::task::JoinHandle<KernelResult<AgentLoopResult>>;
 type ChannelAdapterStartup = (Arc<dyn ChannelAdapter>, Option<String>);
+
+fn append_provider_quota_usage(
+    message: &mut String,
+    status: &serde_json::Value,
+    active_provider: &str,
+    active_model: &str,
+) {
+    let Some(items) = status["items"].as_array() else {
+        return;
+    };
+    let provider_items = items
+        .iter()
+        .filter(|item| {
+            provider_id_matches(
+                item["provider"].as_str().unwrap_or_default(),
+                active_provider,
+            )
+        })
+        .collect::<Vec<_>>();
+    if provider_items.is_empty() {
+        if canonical_provider_id(active_provider) == "codex" {
+            message.push_str("\n\n**Abonnement Codex**\n- Quotas officiels non encore observés.");
+        }
+        return;
+    }
+    let (applicable, alternatives): (Vec<_>, Vec<_>) = provider_items
+        .into_iter()
+        .partition(|item| provider_quota_applies(item, active_provider, active_model));
+    message.push_str(&format!(
+        "\n\n**Abonnement {} · modèle actif `{}`**",
+        provider_display_name(active_provider),
+        active_model
+    ));
+    for item in applicable {
+        let name = item["limit_name"]
+            .as_str()
+            .or_else(|| item["limit_id"].as_str())
+            .unwrap_or("quota");
+        for (fallback, window) in [("court", &item["primary"]), ("long", &item["secondary"])] {
+            let Some(used) = window["used_percent"].as_f64() else {
+                continue;
+            };
+            let remaining = window["remaining_percent"]
+                .as_f64()
+                .unwrap_or_else(|| (100.0 - used).clamp(0.0, 100.0));
+            let duration = window["window_seconds"]
+                .as_u64()
+                .map(channel_quota_duration)
+                .unwrap_or_else(|| fallback.to_string());
+            let reset = channel_quota_reset(window);
+            message.push_str(&format!(
+                "\n- `{name} · {duration}` : **{remaining:.1}% restant** · reprise {reset}"
+            ));
+        }
+        if let Some(limit) = item["spend_control"]["individual_limit"].as_object() {
+            let remaining_percent = limit
+                .get("remaining_percent")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default();
+            let remaining = limit
+                .get("remaining")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let total = limit
+                .get("limit")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let reset = channel_quota_reset(&serde_json::Value::Object(limit.clone()));
+            message.push_str(&format!(
+                "\n- `Budget mensuel` : **{remaining_percent}% restant** · {remaining}/{total} · reprise {reset}"
+            ));
+        }
+    }
+    if !alternatives.is_empty() {
+        message.push_str(&format!(
+            "\n- {} quota(s) annexe(s) hors modèle actif restent visibles dans Status.",
+            alternatives.len()
+        ));
+    }
+    message.push_str("\n\n_Source : signaux officiels du provider ; le pourcentage restant des fenêtres est dérivé du pourcentage consommé._");
+}
+
+fn provider_quota_applies(
+    item: &serde_json::Value,
+    active_provider: &str,
+    active_model: &str,
+) -> bool {
+    let limit_id = canonical_provider_id(item["limit_id"].as_str().unwrap_or_default());
+    let provider = canonical_provider_id(active_provider);
+    let limit_name = normalize_quota_identifier(item["limit_name"].as_str().unwrap_or_default());
+    let provider_name = normalize_quota_identifier(&provider_display_name(active_provider));
+    let general = (!limit_id.is_empty() && limit_id == provider)
+        || (!limit_name.is_empty() && limit_name == provider_name);
+    general
+        || [item["limit_id"].as_str(), item["limit_name"].as_str()]
+            .into_iter()
+            .flatten()
+            .any(|candidate| {
+                normalize_quota_identifier(candidate) == normalize_quota_identifier(active_model)
+            })
+}
+
+fn provider_id_matches(left: &str, right: &str) -> bool {
+    canonical_provider_id(left) == canonical_provider_id(right)
+}
+
+fn canonical_provider_id(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai-codex" => "codex".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn provider_display_name(value: &str) -> String {
+    if matches!(canonical_provider_id(value).as_str(), "codex") {
+        "Codex".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn normalize_quota_identifier(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn channel_quota_duration(seconds: u64) -> String {
+    if seconds > 0 && seconds.is_multiple_of(604_800) {
+        format!("{} sem", seconds / 604_800)
+    } else if seconds > 0 && seconds.is_multiple_of(86_400) {
+        format!("{} j", seconds / 86_400)
+    } else if seconds > 0 && seconds.is_multiple_of(3_600) {
+        format!("{} h", seconds / 3_600)
+    } else if seconds > 0 && seconds.is_multiple_of(60) {
+        format!("{} min", seconds / 60)
+    } else {
+        format!("{seconds} s")
+    }
+}
+
+fn channel_quota_reset(value: &serde_json::Value) -> String {
+    if let Some(reset) = value["resets_at"].as_str() {
+        return chrono::DateTime::parse_from_rfc3339(reset)
+            .map(|timestamp| {
+                timestamp
+                    .with_timezone(&chrono::Local)
+                    .format("%d/%m %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_else(|_| reset.to_string());
+    }
+    value["reset_after_seconds"]
+        .as_u64()
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| format!("dans ~{}", channel_quota_duration(seconds)))
+        .unwrap_or_else(|| "inconnue".to_string())
+}
 
 const TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS: u64 = 20;
 const TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS: u64 = 20;
@@ -224,6 +388,7 @@ async fn pump_telegram_live_stream(
         .clone()
         .map(spawn_telegram_stream_progress_loop);
     let reply_handle = target.reply_to_handle();
+    let reply_markup_handle = target.reply_markup_handle();
     if let Some(key) = session_key {
         active_streams.lock().await.insert(
             key.to_string(),
@@ -241,6 +406,7 @@ async fn pump_telegram_live_stream(
         Arc::clone(&telegram),
         Arc::clone(pending_ask_users),
         progress_draft,
+        reply_markup_handle,
         agent_id,
         session_key.map(str::to_string),
         chat_id,
@@ -277,10 +443,10 @@ async fn pump_telegram_live_stream(
     stream_error
 }
 
-/// TG1 — forward every `StreamEvent` unchanged except `AskUser`, which is
-/// intercepted here instead of reaching `map_runtime_event()` (which drops
-/// it — see the plan's "découverte critique"). On `AskUser`, post the
-/// question to Telegram as a Rich card and register inline-keyboard options.
+/// TG1 — forward every `StreamEvent` unchanged except Telegram-specific
+/// control events. `SuggestedReplies` arms a one-turn reply keyboard for the
+/// next persistent response; `AskUser` posts a blocking Rich card and
+/// registers inline-keyboard callbacks.
 /// Returns the receiving half of a fresh channel plus every short-lived id
 /// created during the stream so unanswered controls can be expired visibly.
 #[allow(clippy::too_many_arguments)]
@@ -289,6 +455,7 @@ fn tee_ask_user_events_to_telegram(
     telegram: Arc<TelegramAdapter>,
     pending_ask_users: Arc<std::sync::Mutex<HashMap<String, PendingTelegramAsk>>>,
     progress_draft: Option<TelegramProgressDraft>,
+    reply_markup_handle: Arc<std::sync::Mutex<Option<serde_json::Value>>>,
     agent_id: AgentId,
     session_key: Option<String>,
     chat_id: i64,
@@ -302,7 +469,26 @@ fn tee_ask_user_events_to_telegram(
     let ask_user_ids_task = Arc::clone(&ask_user_ids);
 
     tokio::spawn(async move {
+        let mut compaction_animation_tick = 0usize;
         while let Some(event) = raw_rx.recv().await {
+            if let StreamEvent::CompactionProgress { progress } = &event {
+                if let Some(draft) = progress_draft.as_ref() {
+                    let rendered =
+                        render_telegram_compaction_progress(progress, compaction_animation_tick);
+                    compaction_animation_tick = compaction_animation_tick.wrapping_add(1);
+                    if let Err(error) = draft.refresh(&rendered).await {
+                        warn!(%error, "failed to refresh Telegram compaction progress");
+                    }
+                }
+                continue;
+            }
+            if let StreamEvent::SuggestedReplies { options } = &event {
+                if let Ok(mut guard) = reply_markup_handle.lock() {
+                    *guard =
+                        Some(captain_channels::telegram::build_suggested_replies_keyboard(options));
+                }
+                continue;
+            }
             if let StreamEvent::AskUser { question, options } = &event {
                 let options = options.clone().unwrap_or_default();
                 let user = telegram_channel_user(chat_id);
@@ -1539,7 +1725,8 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .unwrap_or_else(|e| e.into_inner());
         let skills = skills.list();
         if skills.is_empty() {
-            return "No skills installed. Place skills in ~/.captain/skills/ or install from the marketplace.".to_string();
+            return "No skills installed. Place a reviewed local skill in ~/.captain/skills/."
+                .to_string();
         }
         let mut msg = format!("Installed skills ({}):\n", skills.len());
         for skill in &skills {
@@ -1797,10 +1984,12 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
 
     async fn list_approvals_text(&self) -> String {
         let pending = self.kernel.approval_manager.list_pending();
-        if pending.is_empty() {
-            return "Aucune approbation en attente.".to_string();
-        }
-        let mut msg = format!("🛡️ Approbations en attente ({}) :\n\n", pending.len());
+        let rules = self.kernel.approval_manager.list_rules();
+        let mut msg = if pending.is_empty() {
+            "🛡️ Aucune approbation en attente.\n".to_string()
+        } else {
+            format!("🛡️ Approbations en attente ({}) :\n\n", pending.len())
+        };
         for req in &pending {
             let id_str = req.id.to_string();
             let id_short = safe_truncate_str(&id_str, 8);
@@ -1824,9 +2013,38 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                 msg.push_str(&format!("  → {}\n", req.action_summary));
             }
         }
-        msg.push_str(
-            "\n/approve <id> · /approve_session <id> · /approve_always <id> · /reject <id>",
-        );
+        if !pending.is_empty() {
+            msg.push_str(
+                "\n/approve <id> · /approve_session <id> · /approve_always <id>\n/reject <id> [motif] · /reject_session <id> [motif] · /reject_always <id> <motif>\n",
+            );
+        }
+        if rules.is_empty() {
+            msg.push_str("\n🔐 Aucune règle durable créée depuis une approbation.");
+        } else {
+            msg.push_str(&format!(
+                "\n🔐 Règles exactes durables ({}) :\n",
+                rules.len()
+            ));
+            for rule in rules.iter().take(20) {
+                let id = rule.id.to_string();
+                let effect = match rule.effect {
+                    captain_types::approval::ApprovalRuleEffect::Allow => "autoriser",
+                    captain_types::approval::ApprovalRuleEffect::Deny => "bloquer",
+                };
+                msg.push_str(&format!(
+                    "  [{}] {} · {} · agent {} · action {}\n",
+                    safe_truncate_str(&id, 8),
+                    effect,
+                    rule.tool_name,
+                    rule.agent_id,
+                    safe_truncate_str(&rule.action_digest, 10),
+                ));
+                if let Some(reason) = rule.reason.as_deref() {
+                    msg.push_str(&format!("    motif : {reason}\n"));
+                }
+            }
+            msg.push_str("  Révoquer : /approval_rule_revoke <id>\n");
+        }
         msg
     }
 
@@ -1834,6 +2052,27 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         &self,
         id_prefix: &str,
         decision: captain_types::approval::ApprovalDecision,
+    ) -> String {
+        self.resolve_approval_text_with_reason(id_prefix, decision, None)
+            .await
+    }
+
+    async fn resolve_approval_text_with_reason(
+        &self,
+        id_prefix: &str,
+        decision: captain_types::approval::ApprovalDecision,
+        reason: Option<&str>,
+    ) -> String {
+        self.resolve_approval_text_with_context(id_prefix, decision, reason, "channel")
+            .await
+    }
+
+    async fn resolve_approval_text_with_context(
+        &self,
+        id_prefix: &str,
+        decision: captain_types::approval::ApprovalDecision,
+        reason: Option<&str>,
+        decided_by: &str,
     ) -> String {
         use captain_types::approval::ApprovalDecision;
         let pending = self.kernel.approval_manager.list_pending();
@@ -1845,31 +2084,76 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             0 => format!("Aucune approbation en attente correspondant à « {id_prefix} »."),
             1 => {
                 let req = matched[0];
-                match self.kernel.approval_manager.resolve(
+                match self.kernel.approval_manager.resolve_with_reason(
                     req.id,
                     decision,
-                    Some("channel".to_string()),
+                    reason,
+                    Some(decided_by.to_string()),
                 ) {
-                    Ok(_) => {
+                    Ok(response) => {
                         let verb = match decision {
                             ApprovalDecision::Approved => "✅ Approuvé (une fois)",
                             ApprovalDecision::ApprovedSession => "🕒 Approuvé (session)",
-                            ApprovalDecision::ApprovedAlways => "🔒 Approuvé (toujours)",
+                            ApprovalDecision::ApprovedAlways => "🔒 Autorisé (action exacte)",
                             ApprovalDecision::Denied => "❌ Rejeté",
+                            ApprovalDecision::DeniedSession => "⛔ Rejeté (session)",
+                            ApprovalDecision::DeniedAlways => "🔐 Bloqué (action exacte)",
                             ApprovalDecision::TimedOut => "⏱️ Expiré",
                         };
                         let id_str = req.id.to_string();
-                        format!(
+                        let mut text = format!(
                             "{} — [{}] {}",
                             verb,
                             safe_truncate_str(&id_str, 8),
                             req.tool_name,
-                        )
+                        );
+                        if let Some(reason) = response.reason.as_deref() {
+                            text.push_str(&format!("\nMotif transmis à l’agent : {reason}"));
+                        }
+                        if let Some(rule_id) = response.rule_id {
+                            text.push_str(&format!(
+                                "\nRègle durable {} prête et révocable via /approval_rule_revoke {}.",
+                                safe_truncate_str(&rule_id.to_string(), 8),
+                                safe_truncate_str(&rule_id.to_string(), 8)
+                            ));
+                        }
+                        text
                     }
                     Err(e) => format!("Échec de la résolution : {e}"),
                 }
             }
             n => format!("{n} approvals match '{id_prefix}'. Be more specific."),
+        }
+    }
+
+    async fn revoke_approval_rule_text(&self, id_prefix: &str, decided_by: &str) -> String {
+        let rules = self.kernel.approval_manager.list_rules();
+        let matched: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule.id.to_string().starts_with(id_prefix))
+            .collect();
+        match matched.len() {
+            0 => format!("Aucune règle durable correspondant à « {id_prefix} »."),
+            1 => match self
+                .kernel
+                .approval_manager
+                .revoke_rule(matched[0].id, Some(decided_by))
+            {
+                Ok(Some(rule)) => format!(
+                    "🗑️ Règle révoquée — [{}] {} · {}.",
+                    safe_truncate_str(&rule.id.to_string(), 8),
+                    rule.tool_name,
+                    match rule.effect {
+                        captain_types::approval::ApprovalRuleEffect::Allow => "autoriser",
+                        captain_types::approval::ApprovalRuleEffect::Deny => "bloquer",
+                    }
+                ),
+                Ok(None) => "Cette règle venait déjà d’être révoquée.".to_string(),
+                Err(error) => format!("Impossible de révoquer la règle : {error}"),
+            },
+            count => format!(
+                "{count} règles correspondent à « {id_prefix} ». Précise davantage l’identifiant."
+            ),
         }
     }
 
@@ -1902,6 +2186,13 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         }
         msg.push_str("\n/learn_approve <id> · /learn_reject <id>");
         msg
+    }
+
+    async fn learning_status_text(&self) -> String {
+        match self.kernel.workflow_learning_status() {
+            Ok(status) => captain_channels::render_telegram_workflow_learning_status(&status),
+            Err(error) => format!("Impossible de lire l’état Learning : {error}"),
+        }
     }
 
     async fn resolve_learning_review_text(&self, id_prefix: &str, approve: bool) -> String {
@@ -2087,6 +2378,20 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .map_err(|e| format!("{e}"))
     }
 
+    async fn compact_session_with_progress(
+        &self,
+        agent_id: AgentId,
+        progress: tokio::sync::mpsc::Sender<captain_types::compaction::CompactionProgress>,
+    ) -> Result<String, String> {
+        let sink: captain_kernel::CompactionProgressSink = Arc::new(move |update| {
+            let _ = progress.try_send(update);
+        });
+        self.kernel
+            .compact_agent_session_with_progress(agent_id, Some(sink))
+            .await
+            .map_err(|e| format!("{e}"))
+    }
+
     async fn set_model(&self, agent_id: AgentId, model: &str) -> Result<String, String> {
         if model.is_empty() {
             // Show current model
@@ -2186,20 +2491,39 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .map_err(|e| format!("{e}"))?;
         let total = input + output;
         let mut msg = format!(
-            "Session usage:\n  Input: ~{input} tokens\n  Output: ~{output} tokens\n  Total: ~{total} tokens"
+            "## Utilisation\n\n**Session**\n- Entrée : ~{input} tokens\n- Sortie : ~{output} tokens\n- Total : ~{total} tokens"
         );
         if cost > 0.0 {
-            msg.push_str(&format!("\n  Estimated cost: ${cost:.4}"));
+            msg.push_str(&format!("\n- Coût estimé : ${cost:.4}"));
+        }
+        let quotas = crate::provider_quota_status::build_provider_subscription_status(
+            self.kernel.memory.provider_quotas(),
+        );
+        if let Some(entry) = self.kernel.registry.get(agent_id) {
+            append_provider_quota_usage(
+                &mut msg,
+                &quotas,
+                &entry.manifest.model.provider,
+                &entry.manifest.model.model,
+            );
         }
         Ok(msg)
     }
 
-    async fn set_thinking(&self, _agent_id: AgentId, on: bool) -> Result<String, String> {
-        // Future-ready: stores preference but doesn't affect model behavior yet
-        let state = if on { "enabled" } else { "disabled" };
-        Ok(format!(
-            "Extended thinking {state}. (This will take effect when supported by the model.)"
-        ))
+    async fn reasoning_status(&self, agent_id: AgentId) -> Result<AgentReasoningStatus, String> {
+        self.kernel
+            .agent_reasoning_status(agent_id)
+            .map_err(|error| error.to_string())
+    }
+
+    async fn set_reasoning_effort(
+        &self,
+        agent_id: AgentId,
+        effort: Option<&str>,
+    ) -> Result<AgentReasoningStatus, String> {
+        self.kernel
+            .set_agent_reasoning_effort(agent_id, effort)
+            .map_err(|error| error.to_string())
     }
 
     async fn channel_overrides(
@@ -2324,6 +2648,42 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         }
     }
 
+    async fn prepare_outbound_delivery(
+        &self,
+        intent: OutboundDeliveryIntent,
+        lease_owner: &str,
+    ) -> Result<OutboundDeliveryPreparation, String> {
+        self.kernel.prepare_outbound_delivery(intent, lease_owner)
+    }
+
+    async fn claim_outbound_delivery(
+        &self,
+        channel: &str,
+        lease_owner: &str,
+    ) -> Result<Option<OutboundDeliveryClaim>, String> {
+        self.kernel.claim_outbound_delivery(channel, lease_owner)
+    }
+
+    async fn complete_outbound_delivery(
+        &self,
+        delivery_id: &str,
+        lease_token: &str,
+        external_message_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.kernel
+            .complete_outbound_delivery(delivery_id, lease_token, external_message_id)
+    }
+
+    async fn retry_outbound_delivery(
+        &self,
+        delivery_id: &str,
+        lease_token: &str,
+        error: &str,
+    ) -> Result<(), String> {
+        self.kernel
+            .retry_outbound_delivery(delivery_id, lease_token, error)
+    }
+
     async fn get_agent_for_topic(&self, thread_id: &str) -> Option<AgentId> {
         // Look up topic→agent mapping from structured memory
         let key = format!("topic_agent:{}", thread_id);
@@ -2408,8 +2768,8 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
     // ── Budget, Network, A2A ──
 
     async fn budget_text(&self) -> String {
-        let budget = &self.kernel.config.budget;
-        let status = self.kernel.metering.budget_status(budget);
+        let budget = self.kernel.budget_config();
+        let status = self.kernel.metering.budget_status(&budget);
 
         let fmt_limit = |v: f64| -> String {
             if v > 0.0 {
@@ -2581,6 +2941,26 @@ fn parse_trigger_pattern(s: &str) -> Option<captain_kernel::triggers::TriggerPat
 /// starts with `xoxb-`, `xapp-`, `sk-`, etc.), use it directly.
 /// Otherwise treat it as an env var name and look it up.
 fn read_token(env_var_or_token: &str, adapter_name: &str) -> Option<String> {
+    read_token_with(env_var_or_token, adapter_name, |key| {
+        std::env::var(key).ok()
+    })
+}
+
+fn read_kernel_token(
+    kernel: &CaptainKernel,
+    env_var_or_token: &str,
+    adapter_name: &str,
+) -> Option<String> {
+    read_token_with(env_var_or_token, adapter_name, |key| {
+        kernel.resolve_credential(key)
+    })
+}
+
+fn read_token_with(
+    env_var_or_token: &str,
+    adapter_name: &str,
+    resolve: impl FnOnce(&str) -> Option<String>,
+) -> Option<String> {
     // Heuristic: actual tokens contain `:` (Telegram, Discord) or start with
     // known prefixes. Env var names are uppercase ASCII identifiers.
     let looks_like_token = env_var_or_token.contains(':')
@@ -2599,16 +2979,16 @@ fn read_token(env_var_or_token: &str, adapter_name: &str) -> Option<String> {
         return Some(env_var_or_token.to_string());
     }
 
-    match std::env::var(env_var_or_token) {
-        Ok(t) if !t.is_empty() => Some(t),
-        Ok(_) => {
-            warn!("{adapter_name} token env var '{env_var_or_token}' is set but empty, skipping");
+    match resolve(env_var_or_token) {
+        Some(token) if !token.is_empty() => Some(token),
+        Some(_) => {
+            warn!("{adapter_name} credential '{env_var_or_token}' is empty, skipping");
             None
         }
-        Err(_) => {
+        None => {
             warn!(
-                "{adapter_name} token env var '{env_var_or_token}' not set, skipping. \
-                 Set it with: export {env_var_or_token}=<your-token>"
+                "{adapter_name} credential '{env_var_or_token}' is unavailable, skipping. \
+                 Configure secrets.env, secret-sources.toml, the vault, or the process environment."
             );
             None
         }
@@ -2618,10 +2998,9 @@ fn read_token(env_var_or_token: &str, adapter_name: &str) -> Option<String> {
 /// Re-read `secrets.env` and inject every key/value into `std::env`.
 ///
 /// Used by both `reload_channels_from_disk` and the IntegrationConfigured
-/// hot-reload listener so a freshly-edited token (manual edit OR via
-/// `secret_write`) is visible to `read_token`'s `std::env::var` lookup
-/// without a daemon restart. Always overwrites — the file is the source
-/// of truth after a configure step.
+/// hot-reload listener for compatibility with frozen adapters. Core adapters
+/// resolve through the kernel and therefore honor authoritative external
+/// sources without copying their values into the process environment.
 pub fn reload_secrets_into_env(home_dir: &std::path::Path) {
     let secrets_path = home_dir.join("secrets.env");
     let Ok(content) = std::fs::read_to_string(&secrets_path) else {
@@ -2671,9 +3050,9 @@ fn push_active_channel_adapters(
     adapters: &mut Vec<ChannelAdapterStartup>,
 ) {
     push_telegram_adapter(kernel, config, adapters);
-    push_discord_adapter(config, adapters);
+    push_discord_adapter(kernel, config, adapters);
     push_signal_adapter(config, adapters);
-    push_email_adapter(config, adapters);
+    push_email_adapter(kernel, config, adapters);
 }
 
 fn push_telegram_adapter(
@@ -2684,7 +3063,7 @@ fn push_telegram_adapter(
     let Some(tg_config) = config.telegram.as_ref() else {
         return;
     };
-    let Some(token) = read_token(&tg_config.bot_token_env, "Telegram") else {
+    let Some(token) = read_kernel_token(kernel, &tg_config.bot_token_env, "Telegram") else {
         return;
     };
     let poll_interval = Duration::from_secs(tg_config.poll_interval_secs);
@@ -2733,13 +3112,14 @@ fn push_telegram_adapter(
 }
 
 fn push_discord_adapter(
+    kernel: &Arc<CaptainKernel>,
     config: &captain_types::config::ChannelsConfig,
     adapters: &mut Vec<ChannelAdapterStartup>,
 ) {
     let Some(dc_config) = config.discord.as_ref() else {
         return;
     };
-    let Some(token) = read_token(&dc_config.bot_token_env, "Discord") else {
+    let Some(token) = read_kernel_token(kernel, &dc_config.bot_token_env, "Discord") else {
         return;
     };
     let adapter = Arc::new(DiscordAdapter::new(
@@ -2772,13 +3152,14 @@ fn push_signal_adapter(
 }
 
 fn push_email_adapter(
+    kernel: &Arc<CaptainKernel>,
     config: &captain_types::config::ChannelsConfig,
     adapters: &mut Vec<ChannelAdapterStartup>,
 ) {
     let Some(em_config) = config.email.as_ref() else {
         return;
     };
-    let Some(password) = read_token(&em_config.password_env, "Email") else {
+    let Some(password) = read_kernel_token(kernel, &em_config.password_env, "Email") else {
         return;
     };
     if em_config.allowed_senders.is_empty() {
@@ -3816,6 +4197,69 @@ mod tests {
     use captain_types::agent::AgentId;
     use captain_types::message::{ContentBlock, Message, MessageContent, Role};
 
+    #[test]
+    fn core_channel_token_resolution_uses_the_injected_credential_chain() {
+        let token = super::read_token_with("CAPTAIN_TEST_TOKEN", "test", |key| {
+            assert_eq!(key, "CAPTAIN_TEST_TOKEN");
+            Some("resolver-value".to_string())
+        });
+
+        assert_eq!(token.as_deref(), Some("resolver-value"));
+    }
+
+    #[test]
+    fn core_channel_token_resolution_fails_closed_when_source_is_unavailable() {
+        assert!(super::read_token_with("CAPTAIN_TEST_TOKEN", "test", |_| None).is_none());
+    }
+
+    #[test]
+    fn telegram_usage_shows_only_applicable_remaining_quota_and_exact_spend() {
+        let status = serde_json::json!({
+            "items": [
+                {
+                    "provider": "codex",
+                    "limit_id": "codex",
+                    "limit_name": "Codex",
+                    "primary": {
+                        "used_percent": 63.0,
+                        "remaining_percent": 37.0,
+                        "window_seconds": 18000,
+                        "reset_after_seconds": 3600
+                    },
+                    "spend_control": {
+                        "individual_limit": {
+                            "limit": "200.00",
+                            "remaining": "144.00",
+                            "remaining_percent": 72,
+                            "reset_after_seconds": 86400
+                        }
+                    }
+                },
+                {
+                    "provider": "codex",
+                    "limit_id": "gpt-5.3-codex-spark",
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "primary": {"used_percent": 5.0, "remaining_percent": 95.0}
+                }
+            ]
+        });
+        let mut message = "## Utilisation".to_string();
+
+        super::append_provider_quota_usage(&mut message, &status, "codex", "gpt-5.6-sol");
+
+        assert!(message.contains("37.0% restant"), "{message}");
+        assert!(message.contains("72% restant"), "{message}");
+        assert!(message.contains("144.00/200.00"), "{message}");
+        assert!(!message.contains("95.0% restant"), "{message}");
+        assert!(message.contains("1 quota(s) annexe(s)"), "{message}");
+    }
+
+    #[test]
+    fn telegram_usage_never_presents_zero_reset_as_a_real_schedule() {
+        let value = serde_json::json!({"reset_after_seconds": 0});
+        assert_eq!(super::channel_quota_reset(&value), "inconnue");
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<String>,
@@ -3977,6 +4421,7 @@ mod tests {
             telegram,
             Arc::clone(&pending),
             None,
+            Arc::new(Mutex::new(None)),
             AgentId::new(),
             Some("telegram|session:1".to_string()),
             42,
@@ -4025,6 +4470,41 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("### ❓ Question"));
+    }
+
+    #[tokio::test]
+    async fn telegram_suggested_replies_arm_keyboard_without_blocking_the_agent() {
+        let telegram = test_telegram_adapter(Some("http://127.0.0.1:1".to_string()));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let reply_markup = Arc::new(Mutex::new(None));
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::channel(2);
+        let (mut forwarded, ids) = super::tee_ask_user_events_to_telegram(
+            raw_rx,
+            telegram,
+            Arc::clone(&pending),
+            None,
+            Arc::clone(&reply_markup),
+            AgentId::new(),
+            Some("telegram|session:1".to_string()),
+            42,
+            None,
+        );
+
+        raw_tx
+            .send(StreamEvent::SuggestedReplies {
+                options: vec!["Court".to_string(), "Détaillé".to_string()],
+            })
+            .await
+            .unwrap();
+        drop(raw_tx);
+
+        assert!(forwarded.recv().await.is_none());
+        assert!(ids.lock().unwrap().is_empty());
+        assert!(pending.lock().unwrap().is_empty());
+        let markup = reply_markup.lock().unwrap().clone().expect("reply markup");
+        assert_eq!(markup["one_time_keyboard"], true);
+        assert_eq!(markup["keyboard"][0][0]["text"], "Court");
+        assert_eq!(markup["keyboard"][0][1]["text"], "Détaillé");
     }
 
     #[tokio::test]

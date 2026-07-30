@@ -77,6 +77,7 @@
   var lastActivityAt = 0;
   var sessionEventCursor = Date.now() - 60000;
   var sessionEventSeen = {};
+  var sessionEventSessionId = '';
   var sessionEventPollTimer = 0;
   var responsiveMode = null;
   var cachedAgentId = null;
@@ -703,17 +704,17 @@
     return value;
   }
 
-  function terminalUrl() {
+  function terminalUrl(path, ticket) {
     var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     var params = new URLSearchParams();
+    params.set('ticket', ticket);
     params.set('mode', mode);
     params.set('rows', String(term.rows || 30));
     params.set('cols', String(term.cols || 100));
     if (activeResumeSessionId && validUuid(activeResumeSessionId)) {
       params.set('resume_session', activeResumeSessionId);
     }
-    return proto + '//' + window.location.host + '/api/sessions/' +
-      encodeURIComponent(sessionId()) + '/terminal?' + params.toString();
+    return proto + '//' + window.location.host + path + '?' + params.toString();
   }
 
   function switchSession(id, meta) {
@@ -963,7 +964,7 @@
       });
   }
 
-  function connect() {
+  async function connect() {
     var options = arguments[0] || {};
     if (connected) {
       if (options.ensure) return;
@@ -978,7 +979,26 @@
     setPlaceholder(activeResumeSessionId ? 'Restoring Captain session...' : 'Connecting to Captain chat...', true);
     addActivity('session', activeResumeSessionId ? 'Restoring' : 'Connecting', sessionId());
     connecting = true;
-    ws = new WebSocket(terminalUrl());
+    var realtimePath = '/api/sessions/' + encodeURIComponent(sessionId()) + '/terminal';
+    var grant;
+    try {
+      var ticketResponse = await fetch('/api/auth/realtime-ticket', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: realtimePath })
+      });
+      if (!ticketResponse.ok) throw new Error('realtime ticket refused');
+      grant = await ticketResponse.json();
+      if (!grant || !grant.ticket) throw new Error('realtime ticket missing');
+    } catch(e) {
+      connecting = false;
+      setStatus('terminal authorization failed', 'error');
+      setPlaceholder('Cannot authorize the realtime terminal. Sign in again or check the daemon logs.', true);
+      addActivity('error', 'Authorization failed', e && e.message ? e.message : 'ticket unavailable');
+      return;
+    }
+    ws = new WebSocket(terminalUrl(realtimePath, grant.ticket));
 
     ws.onopen = function() {
       connecting = false;
@@ -1101,11 +1121,21 @@
     activityList.innerHTML = activity.map(function(item, index) {
       var expandable = (item.detail || '').length > 130;
       var detail = item.expanded ? item.detail : shortText(item.detail, 130);
+      var progress = '';
+      if (item.progress) {
+        var determinate = Number.isFinite(item.progress.percent);
+        var progressLabel = determinate ? escapeHtml(item.progress.label || (item.progress.percent + '%')) : 'Progression indéterminée';
+        progress = '<div class="terminal-activity-progress-label">' + progressLabel + '</div>' +
+          '<div class="terminal-activity-progress' + (determinate ? '' : ' indeterminate') + '" role="progressbar" aria-label="Progression du compactage"' +
+          (determinate ? ' aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + item.progress.percent + '"' : '') + '>' +
+          '<span' + (determinate ? ' style="width:' + item.progress.percent + '%"' : '') + '></span></div>';
+      }
       return [
         '<button type="button" class="terminal-activity-card kind-' + escapeHtml(item.kind) + (expandable ? ' expandable' : '') + '" data-activity-index="' + index + '" aria-expanded="' + (item.expanded ? 'true' : 'false') + '">',
         '<div class="terminal-activity-meta"><span class="terminal-activity-dot"></span><span>' + item.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '</span><span>' + escapeHtml(item.kind) + '</span></div>',
         '<div class="terminal-activity-title">' + escapeHtml(item.title) + '</div>',
         '<div class="terminal-activity-detail">' + escapeHtml(detail) + '</div>',
+        progress,
         '</button>'
       ].join('');
     }).join('');
@@ -1120,36 +1150,86 @@
     var payload = sessionEventPayload(event);
     var phase = String(payload.phase || '');
     var isCompaction = event.event_type === 'compaction'
+      || event.event_type === 'compaction_progress'
       || (event.event_type === 'phase_change' && /^compact/.test(phase));
     if (!isCompaction) return;
 
     sessionEventSeen[event.id] = true;
+    var state = String(payload.state || 'running');
     var detail = shortText(payload.detail || phase || 'Context compaction', 180);
-    var kind = phase === 'compaction_failed' ? 'error'
-      : phase === 'compacted' ? 'success'
+    var kind = state === 'failed' || state === 'interrupted' || phase === 'compaction_failed' ? 'error'
+      : state === 'succeeded' || phase === 'compacted' || phase === 'completed' ? 'success'
       : 'warning';
-    var title = phase === 'compacted' ? 'Context compacted'
-      : phase === 'compaction_failed' ? 'Compaction failed'
-      : 'Context compaction';
-    addActivity(kind, title, detail);
-    if (phase === 'compacting') {
+    var title = kind === 'success' ? 'Context compacted'
+      : kind === 'error' ? 'Compaction failed'
+      : 'Context compaction · ' + (phase || 'running');
+    var operationId = String(payload.operation_id || event.id || 'compaction');
+    var completed = Number(payload.completed_units);
+    var total = Number(payload.total_units);
+    var determinate = Number.isFinite(completed) && Number.isFinite(total) && total > 0;
+    var percent = determinate ? Math.max(0, Math.min(100, Math.floor((completed * 100) / total))) : NaN;
+    var existing = activity.find(function(item) { return item.operationId === operationId; });
+    if (existing) {
+      existing.kind = kind;
+      existing.title = title;
+      existing.detail = detail;
+      existing.progress = state === 'running'
+        ? { percent: percent, label: determinate ? completed + '/' + total + ' lots · ' + percent + '%' : '' }
+        : null;
+      existing.at = new Date();
+      renderActivity();
+    } else {
+      activity.unshift({
+        kind: kind,
+        title: title,
+        detail: detail,
+        expanded: false,
+        at: new Date(),
+        operationId: operationId,
+        progress: state === 'running'
+          ? { percent: percent, label: determinate ? completed + '/' + total + ' lots · ' + percent + '%' : '' }
+          : null
+      });
+      if (activity.length > maxActivity) activity.length = maxActivity;
+      renderActivity();
+    }
+    if (state === 'running' || phase === 'compacting') {
       setStatus('context compaction running', 'idle');
-    } else if (phase === 'compacted') {
+    } else if (state === 'succeeded' || phase === 'compacted' || phase === 'completed') {
       setStatus('context compacted', connected ? 'connected' : 'idle');
-    } else if (phase === 'compaction_failed') {
+    } else if (state === 'failed' || state === 'interrupted' || phase === 'compaction_failed') {
       setStatus('context compaction failed', 'error');
     }
   }
 
+  function resolveSessionEventId() {
+    if (validUuid(activeResumeSessionId || '')) return Promise.resolve(activeResumeSessionId);
+    return resolveCaptainAgentId().then(function(agentId) {
+      return fetch('/api/agents/' + encodeURIComponent(agentId) + '/sessions', {
+        credentials: 'same-origin'
+      }).then(function(response) { return response.ok ? response.json() : null; });
+    }).then(function(payload) {
+      var sessions = payload && Array.isArray(payload.sessions) ? payload.sessions : [];
+      var active = sessions.find(function(item) { return item && item.active; }) || sessions[0];
+      return active && validUuid(active.session_id || '') ? active.session_id : '';
+    });
+  }
+
   function pollSessionEvents() {
-    resolveCaptainAgentId()
-      .then(function(agentId) {
+    resolveSessionEventId()
+      .then(function(sessionId) {
+        if (!sessionId) return null;
+        if (sessionEventSessionId !== sessionId) {
+          sessionEventSessionId = sessionId;
+          sessionEventCursor = Date.now() - 60000;
+          sessionEventSeen = {};
+        }
         var from = Math.max(0, sessionEventCursor);
-        return fetch('/api/sessions/' + encodeURIComponent(agentId) + '/events?from=' + encodeURIComponent(String(from)) + '&limit=80', {
+        return fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/events?from=' + encodeURIComponent(String(from)) + '&limit=80', {
           credentials: 'same-origin'
         });
       })
-      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(r) { return r && r.ok ? r.json() : null; })
       .then(function(payload) {
         var events = payload && Array.isArray(payload.events) ? payload.events : [];
         var newest = sessionEventCursor;

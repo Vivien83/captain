@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use crate::{captain_home, copy_dir_recursive, prompt_input};
 
 pub(crate) fn cmd_skill_install(source: &str) {
+    let source_path = resolve_local_skill_source(source).unwrap_or_else(|message| {
+        eprintln!("{message}");
+        std::process::exit(2);
+    });
     let home = captain_home();
     let skills_dir = home.join("skills");
     std::fs::create_dir_all(&skills_dir).unwrap_or_else(|e| {
@@ -10,12 +14,17 @@ pub(crate) fn cmd_skill_install(source: &str) {
         std::process::exit(1);
     });
 
+    install_local_skill(source, &source_path, &skills_dir);
+}
+
+fn resolve_local_skill_source(source: &str) -> Result<PathBuf, String> {
     let source_path = PathBuf::from(source);
-    if source_path.exists() && source_path.is_dir() {
-        install_local_skill(source, &source_path, &skills_dir);
-    } else {
-        install_marketplace_skill(source, &skills_dir);
+    if source_path.is_dir() {
+        return Ok(source_path);
     }
+    Err(format!(
+        "'{source}' is not a local skill directory. Remote skill marketplaces are frozen; review the skill locally, then pass its directory."
+    ))
 }
 
 fn install_local_skill(source: &str, source_path: &PathBuf, skills_dir: &Path) {
@@ -63,21 +72,6 @@ fn install_openclaw_skill_or_exit(source: &str, source_path: &PathBuf, skills_di
         }
         Err(e) => {
             eprintln!("Failed to convert OpenClaw skill: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn install_marketplace_skill(source: &str, skills_dir: &Path) {
-    println!("Installing {source} from Captain Marketplace...");
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let client = captain_skills::marketplace::MarketplaceClient::new(
-        captain_skills::marketplace::MarketplaceConfig::default(),
-    );
-    match rt.block_on(client.install(source, skills_dir)) {
-        Ok(version) => println!("Installed {source} {version}"),
-        Err(e) => {
-            eprintln!("Failed to install skill: {e}");
             std::process::exit(1);
         }
     }
@@ -465,5 +459,18 @@ mod tests {
             skill_search_text_score(&tokens, &[("web browser", 4), ("api tests", 2)]),
             6
         );
+    }
+
+    #[test]
+    fn install_source_accepts_only_an_existing_local_directory() {
+        let local = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_local_skill_source(local.path().to_str().unwrap()).unwrap(),
+            local.path()
+        );
+
+        let error = resolve_local_skill_source("https://example.invalid/skill.git").unwrap_err();
+        assert!(error.contains("not a local skill directory"));
+        assert!(error.contains("marketplaces are frozen"));
     }
 }

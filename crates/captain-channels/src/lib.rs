@@ -4,6 +4,7 @@
 //! into unified `ChannelMessage` events for the kernel.
 
 pub mod bridge;
+mod channel_commands;
 pub mod discord;
 mod discord_message;
 pub mod email;
@@ -19,6 +20,7 @@ mod inbound_queue_types;
 pub mod irc;
 pub mod matrix;
 pub mod mattermost;
+pub mod outbound_delivery;
 pub mod rbac;
 pub mod rocketchat;
 pub mod router;
@@ -30,6 +32,7 @@ pub mod telegram;
 mod telegram_api_payload;
 mod telegram_api_response;
 mod telegram_callbacks;
+mod telegram_command_menu;
 mod telegram_html;
 mod telegram_reply_context;
 mod telegram_rich;
@@ -43,6 +46,7 @@ mod telegram_workflow_learning;
 pub use telegram_ui::{
     render_telegram_ask_user_answer, render_telegram_ask_user_expired,
     render_telegram_ask_user_prompt, render_telegram_channel_error,
+    render_telegram_compaction_progress, render_telegram_workflow_learning_status,
 };
 mod tool_activity;
 pub mod twitch;

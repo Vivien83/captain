@@ -46,6 +46,19 @@ fn provider_subscription_status_from_snapshots(
 
         let mut item = serde_json::to_value(snapshot).unwrap_or_default();
         if let Some(object) = item.as_object_mut() {
+            add_remaining_projection(object, "primary");
+            add_remaining_projection(object, "secondary");
+            if let Some(limit) = object
+                .get_mut("spend_control")
+                .and_then(serde_json::Value::as_object_mut)
+                .and_then(|control| control.get_mut("individual_limit"))
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                limit.insert(
+                    "remaining_source".to_string(),
+                    serde_json::json!("provider_reported"),
+                );
+            }
             object.insert("alert_level".to_string(), serde_json::json!(alert));
             object.insert("age_seconds".to_string(), serde_json::json!(age_seconds));
             object.insert("stale".to_string(), serde_json::json!(stale));
@@ -69,6 +82,32 @@ fn provider_subscription_status_from_snapshots(
         "stale_after_seconds": STALE_AFTER_SECONDS,
         "items": items,
     })
+}
+
+fn add_remaining_projection(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    window_name: &str,
+) {
+    let Some(window) = object
+        .get_mut(window_name)
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(used) = window
+        .get("used_percent")
+        .and_then(serde_json::Value::as_f64)
+    else {
+        return;
+    };
+    window.insert(
+        "remaining_percent".to_string(),
+        serde_json::json!((100.0 - used).clamp(0.0, 100.0)),
+    );
+    window.insert(
+        "remaining_source".to_string(),
+        serde_json::json!("derived_from_provider_used_percent"),
+    );
 }
 
 fn unavailable_status(reason: &str) -> serde_json::Value {
@@ -103,6 +142,7 @@ mod tests {
             }),
             secondary: None,
             credits: None,
+            spend_control: None,
             plan_type: Some("plus".to_string()),
             rate_limit_reached_type: None,
             source: ProviderQuotaSource::AccountStatus,
@@ -131,5 +171,18 @@ mod tests {
         assert_eq!(status["state"], "exhausted");
         assert_eq!(status["items"][0]["alert_level"], "exhausted");
         assert_eq!(status["items"][1]["stale"], true);
+    }
+
+    #[test]
+    fn status_exposes_remaining_capacity_without_relabeling_provider_data() {
+        let now = Utc::now();
+        let status = provider_subscription_status_from_snapshots(&[snapshot(19.0, now)], now);
+
+        assert_eq!(status["items"][0]["primary"]["used_percent"], 19.0);
+        assert_eq!(status["items"][0]["primary"]["remaining_percent"], 81.0);
+        assert_eq!(
+            status["items"][0]["primary"]["remaining_source"],
+            "derived_from_provider_used_percent"
+        );
     }
 }

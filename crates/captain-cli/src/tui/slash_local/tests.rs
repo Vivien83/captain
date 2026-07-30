@@ -50,7 +50,7 @@ fn copy_usage_message_keeps_surface_spacing() {
 }
 
 #[test]
-fn copy_status_messages_preserve_hermes_surface_text() {
+fn copy_status_messages_preserve_expected_surface_text() {
     assert_eq!(
         copy_success_message(CopyStatusSurface::FullTui, "Réponse", 12),
         "Réponse copiée dans le clipboard (12 caractères)."
@@ -70,7 +70,7 @@ fn copy_status_messages_preserve_hermes_surface_text() {
 }
 
 #[test]
-fn mouse_capture_target_keeps_hermes_toggle_and_captain_french_aliases() {
+fn mouse_capture_target_keeps_expected_toggle_and_captain_french_aliases() {
     assert_eq!(mouse_capture_target("", false), Some(true));
     assert_eq!(mouse_capture_target("toggle", true), Some(false));
     assert_eq!(mouse_capture_target("on", false), Some(true));
@@ -81,7 +81,7 @@ fn mouse_capture_target_keeps_hermes_toggle_and_captain_french_aliases() {
 }
 
 #[test]
-fn mouse_messages_preserve_full_tui_hermes_text() {
+fn mouse_messages_preserve_full_tui_expected_text() {
     assert_eq!(
         mouse_enabled_message(crate::i18n::Lang::Fr, MouseMessageSurface::FullTui),
         "Mode souris activé: clics tool calls + molette. Pour sélectionner/copier, utilise `/mouse off`."
@@ -137,7 +137,7 @@ fn queue_message_numbers_staged_messages() {
 }
 
 #[test]
-fn queue_message_for_lang_preserves_hermes_i18n_text() {
+fn queue_message_for_lang_preserves_expected_i18n_text() {
     assert_eq!(
         queue_message_for_lang(&[], Lang::Fr),
         "La file d'envoi est vide."
@@ -168,7 +168,7 @@ fn voice_record_secs_defaults_to_five() {
 }
 
 #[test]
-fn voice_recording_message_preserves_hermes_text() {
+fn voice_recording_message_preserves_expected_text() {
     assert_eq!(
         voice_recording_message(7),
         "🎙 Enregistrement 7s en cours..."
@@ -176,7 +176,7 @@ fn voice_recording_message_preserves_hermes_text() {
 }
 
 #[test]
-fn voice_completion_messages_preserve_hermes_text() {
+fn voice_completion_messages_preserve_expected_text() {
     assert_eq!(
         voice_uploading_message("/tmp/captain-voice.wav"),
         "📤 Envoi de l'audio: /tmp/captain-voice.wav"

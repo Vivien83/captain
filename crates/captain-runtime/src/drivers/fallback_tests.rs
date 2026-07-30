@@ -120,6 +120,7 @@ fn test_request() -> CompletionRequest {
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         tool_choice: None,
         cache_hints: crate::llm_driver::CacheHints::default(),
     }

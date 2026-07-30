@@ -13,6 +13,9 @@ use super::CaptainKernel;
 
 impl CaptainKernel {
     pub(super) fn handle_config_read(&self, path: &str) -> Result<Option<String>, String> {
+        if captain_types::config::is_secret_auth_config_path(path) {
+            return Ok(Some("<redacted>".to_string()));
+        }
         // The config file is the source of truth. Prefer reading it live so
         // memories, boot-time snapshots, and hot-reload gaps cannot shadow a
         // user's persisted config change.
@@ -37,6 +40,11 @@ impl CaptainKernel {
     }
 
     pub(super) async fn handle_config_write(&self, path: &str, value: &str) -> Result<(), String> {
+        if captain_types::config::is_managed_auth_config_path(path) {
+            return Err(format!(
+                "{path} is Captain-managed; use web_credentials_update for web login changes"
+            ));
+        }
         let config_path = self.config.home_dir.join("config.toml");
         let (content, mut doc) = read_config_document(&config_path)?;
         let old_size = content.len();
@@ -191,29 +199,22 @@ impl CaptainKernel {
     }
 
     pub(super) fn handle_secret_read(&self, key: &str) -> Result<Option<String>, String> {
-        warn!(key = %key, "Secret accessed via tool (value exposed to agent)");
-        let secrets_path = self.config.home_dir.join("secrets.env");
-        if !secrets_path.exists() {
-            return Ok(None);
-        }
-        let content = std::fs::read_to_string(&secrets_path)
-            .map_err(|e| format!("Failed to read secrets.env: {e}"))?;
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((k, v)) = line.split_once('=') {
-                if k.trim() == key {
-                    return Ok(Some(v.trim().to_string()));
-                }
-            }
-        }
-        Ok(None)
+        warn!(key = %key, "Secret resolved for audited tool access (agent output remains masked)");
+        Ok(self.resolve_credential(key))
     }
 
     pub(super) fn handle_secret_write(&self, key: &str, value: &str) -> Result<(), String> {
         validate_secret_assignment(key, value)?;
+        if self
+            .credential_resolver
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_externally_managed(key)
+        {
+            return Err(format!(
+                "Secret '{key}' is managed by secret-sources.toml; rotate the external file instead"
+            ));
+        }
         let secrets_path = self.config.home_dir.join("secrets.env");
         let original = if secrets_path.exists() {
             Some(
@@ -268,10 +269,9 @@ impl CaptainKernel {
                 ));
             }
         }
-        // Mirror into the live process env so callers that resolve via
-        // std::env::var (e.g. read_token in start_channel_bridge_with_config)
-        // see the new value without a daemon restart. Parity with the CLI
-        // path dotenv::save_secret_key.
+        // Preserve compatibility for frozen adapters and external integrations
+        // that still consult the process environment. Core runtime consumers use
+        // the credential resolver directly.
         std::env::set_var(key, value);
         info!(key = %key, "Secret updated via tool");
         Ok(())
@@ -521,5 +521,75 @@ mod tests {
 
         assert_eq!(lines[1], "OPENAI_API_KEY=new");
         assert_eq!(lines[3], "GROQ_API_KEY=fresh");
+    }
+
+    #[tokio::test]
+    async fn managed_auth_config_is_redacted_and_not_mutable_through_generic_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = captain_types::config::KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            ..Default::default()
+        };
+        let kernel = CaptainKernel::boot_with_config(config).unwrap();
+
+        assert_eq!(
+            kernel.handle_config_read("auth.session_secret").unwrap(),
+            Some("<redacted>".to_string())
+        );
+        assert_eq!(
+            kernel.handle_config_read("auth.password_hash").unwrap(),
+            Some("<redacted>".to_string())
+        );
+        assert_eq!(
+            kernel.handle_config_read("auth.session_epoch").unwrap(),
+            Some("0".to_string())
+        );
+        for path in [
+            "auth.password_hash",
+            "auth.session_secret",
+            "auth.session_epoch",
+        ] {
+            let error = kernel
+                .handle_config_write(path, "replacement")
+                .await
+                .unwrap_err();
+            assert!(error.contains("Captain-managed"), "{path}: {error}");
+        }
+    }
+
+    #[test]
+    fn secret_tools_read_external_source_and_refuse_local_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mounted = tmp.path().join("mounted-secret");
+        std::fs::write(&mounted, "external-value\n").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME),
+            format!(
+                "version = 1\n[sources.TEST_EXTERNAL_SECRET]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+        let config = captain_types::config::KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            ..Default::default()
+        };
+        let kernel = CaptainKernel::boot_with_config(config).unwrap();
+
+        assert_eq!(
+            kernel.handle_secret_read("TEST_EXTERNAL_SECRET").unwrap(),
+            Some("external-value".to_string())
+        );
+        let error = kernel
+            .handle_secret_write("TEST_EXTERNAL_SECRET", "local-value")
+            .unwrap_err();
+        assert!(error.contains("secret-sources.toml"), "{error}");
+        assert!(!tmp.path().join("secrets.env").exists());
+        let blocked =
+            captain_runtime::kernel_handle::KernelHandle::blocked_workspace_paths(&kernel);
+        assert!(blocked.contains(&mounted));
     }
 }

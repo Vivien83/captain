@@ -73,13 +73,9 @@ pub(crate) fn build_status_agents(state: &AppState) -> Vec<serde_json::Value> {
 }
 
 pub(crate) fn build_status_budget(state: &AppState) -> serde_json::Value {
-    let global = serde_json::to_value(
-        state
-            .kernel
-            .metering
-            .budget_status(&state.kernel.config.budget),
-    )
-    .unwrap_or_default();
+    let budget = state.kernel.budget_config();
+    let global =
+        serde_json::to_value(state.kernel.metering.budget_status(&budget)).unwrap_or_default();
     let mut total_tokens_used = 0u64;
     let mut limited_agents = 0usize;
     let mut agents = Vec::new();

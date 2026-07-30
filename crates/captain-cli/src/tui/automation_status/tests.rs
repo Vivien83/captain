@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn automation_status_messages_preserve_hermes_text() {
+fn automation_status_messages_preserve_expected_text() {
     assert_eq!(workflow_created_message(), "Workflow created!");
     assert_eq!(trigger_created_message(), "Trigger created!");
     assert_eq!(

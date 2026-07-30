@@ -8,6 +8,8 @@ const html = htm.bind(h);
 
 export function Approvals() {
   const [items, setItems] = useState(null); // null = loading
+  const [rules, setRules] = useState([]);
+  const [reasons, setReasons] = useState({});
   const [busyId, setBusyId] = useState(null);
 
   const load = async () => {
@@ -15,6 +17,7 @@ export function Approvals() {
       const res = await api.approvals();
       const list = res.approvals || [];
       setItems(list);
+      setRules(res.rules || []);
       setState({ approvalsCount: list.length });
     } catch { /* transient — keep last view */ }
   };
@@ -38,6 +41,9 @@ export function Approvals() {
     }
   };
 
+  const reasonFor = (id) => (reasons[id] || '').trim();
+  const setReason = (id, value) => setReasons((current) => ({ ...current, [id]: value }));
+
   // Rendue dans le hub Automation (onglet « Approbations ») : le hub
   // fournit le wrapper .page et le titre, cette vue ne rend que son contenu.
   return html`
@@ -49,7 +55,7 @@ export function Approvals() {
           <div class="skeleton" style="height:110px"></div>
         `}
 
-        ${items && items.length === 0 && html`
+        ${items && items.length === 0 && rules.length === 0 && html`
           <div class="empty-state">
             <div class="glyph">🛡️</div>
             <div>Aucune approbation en attente.</div>
@@ -67,14 +73,56 @@ export function Approvals() {
             <div class="summary">${a.action_summary || a.description || ''}</div>
             <div class="actions">
               <button class="primary" disabled=${busyId === a.id}
-                onClick=${() => act(a.id, api.approve, 'Approuvé')}>Approuver</button>
+                onClick=${() => act(a.id, api.approve, 'Approuvé une fois')}>Une fois</button>
               <button disabled=${busyId === a.id}
-                onClick=${() => act(a.id, api.approveSession, 'Approuvé pour la session')}>Pour la session</button>
+                onClick=${() => act(a.id, api.approveSession, 'Autorisé pour cette session')}>Session</button>
+              <button disabled=${busyId === a.id}
+                onClick=${() => act(a.id, api.approveAlways, 'Règle exacte créée')}>Toujours cette action</button>
+            </div>
+            <div class="approval-reject">
+              <label for=${`approval-reason-${a.id}`}>Motif transmis à l’agent</label>
+              <input id=${`approval-reason-${a.id}`} type="text" maxlength="280"
+                placeholder="Ex. utilise plutôt le serveur de test"
+                value=${reasons[a.id] || ''}
+                onInput=${(event) => setReason(a.id, event.currentTarget.value)} />
+            </div>
+            <div class="actions approval-deny-actions">
               <button class="danger" disabled=${busyId === a.id}
-                onClick=${() => act(a.id, api.reject, 'Refusé')}>Refuser</button>
+                onClick=${() => act(a.id, (id) => api.reject(id, reasonFor(id)), 'Refusé une fois')}>Refuser</button>
+              <button class="danger" disabled=${busyId === a.id}
+                onClick=${() => act(a.id, (id) => api.rejectSession(id, reasonFor(id)), 'Refusé pour cette session')}>Refuser (session)</button>
+              <button class="danger" disabled=${busyId === a.id || !reasonFor(a.id)}
+                title=${reasonFor(a.id) ? '' : 'Un motif est obligatoire pour une règle durable'}
+                onClick=${() => act(a.id, (id) => api.rejectAlways(id, reasonFor(id)), 'Règle de blocage exacte créée')}>Bloquer cette action</button>
             </div>
           </div>
         `)}
+
+        ${rules.length > 0 && html`
+          <section class="approval-rules" aria-labelledby="approval-rules-title">
+            <div class="approval-rules-heading">
+              <div>
+                <h3 id="approval-rules-title">Règles durables</h3>
+                <p>Liées à un agent, un outil et l’empreinte exacte de l’action.</p>
+              </div>
+              <span>${rules.length}</span>
+            </div>
+            <div class="approval-rule-list">
+              ${rules.map((rule) => html`
+                <div class="approval-rule" key=${rule.id}>
+                  <span class=${`rule-effect ${rule.effect}`}>${rule.effect === 'allow' ? 'Autoriser' : 'Bloquer'}</span>
+                  <div class="rule-main">
+                    <strong>${rule.tool_name}</strong>
+                    <span>agent ${rule.agent_id} · action ${rule.action_digest.slice(0, 10)}</span>
+                    ${rule.reason && html`<small>${rule.reason}</small>`}
+                  </div>
+                  <button class="ghost" disabled=${busyId === rule.id}
+                    onClick=${() => act(rule.id, api.revokeApprovalRule, 'Règle révoquée')}>Révoquer</button>
+                </div>
+              `)}
+            </div>
+          </section>
+        `}
     </div>
   `;
 }

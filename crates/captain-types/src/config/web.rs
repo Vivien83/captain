@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+/// HTTP API browser access policy.
+///
+/// Loopback origins are always derived from `api_listen`. Add an origin here
+/// only when a separate, trusted web application must call Captain directly.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApiConfig {
+    /// Additional exact HTTP(S) origins allowed by CORS.
+    pub allowed_origins: Vec<String>,
+}
+
 /// Web search provider selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

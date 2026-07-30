@@ -20,6 +20,10 @@ pub(crate) fn cmd_config_show() {
         std::process::exit(1);
     });
 
+    let content = captain_types::config::redact_auth_secrets(&content).unwrap_or_else(|_| {
+        eprintln!("Error redacting managed auth state");
+        std::process::exit(1);
+    });
     println!("# {}\n", config_path.display());
     println!("{content}");
 }
@@ -185,6 +189,10 @@ pub(crate) fn cmd_config_edit() {
 }
 
 pub(crate) fn cmd_config_get(key: &str) {
+    if captain_types::config::is_secret_auth_config_path(key) {
+        println!("<redacted>");
+        return;
+    }
     let table = read_config_table();
     let mut current = &table;
     for part in key.split('.') {
@@ -207,6 +215,7 @@ pub(crate) fn cmd_config_get(key: &str) {
 }
 
 pub(crate) fn cmd_config_set(key: &str, value: &str) {
+    reject_managed_auth_config_mutation(key);
     let config_path = require_config_path();
     let mut table = read_config_table();
     set_config_value(&mut table, key, value);
@@ -215,11 +224,22 @@ pub(crate) fn cmd_config_set(key: &str, value: &str) {
 }
 
 pub(crate) fn cmd_config_unset(key: &str) {
+    reject_managed_auth_config_mutation(key);
     let config_path = require_config_path();
     let mut table = read_config_table();
     unset_config_value(&mut table, key);
     write_config_table(&config_path, &table);
     ui::success(&format!("Removed key: {key}"));
+}
+
+fn reject_managed_auth_config_mutation(key: &str) {
+    if captain_types::config::is_managed_auth_config_path(key) {
+        ui::error_with_fix(
+            &format!("{key} is Captain-managed"),
+            "Use `captain setup` or web_credentials_update for web login changes.",
+        );
+        std::process::exit(1);
+    }
 }
 
 fn require_config_path() -> std::path::PathBuf {

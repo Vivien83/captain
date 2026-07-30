@@ -70,6 +70,10 @@ pub fn persist_stream_event(
             "ask_user",
             serde_json::json!({ "question": question, "options": options }),
         ),
+        StreamEvent::SuggestedReplies { options } => (
+            "suggested_replies",
+            serde_json::json!({ "options": options }),
+        ),
         StreamEvent::UserResponse { content } => {
             ("user_response", serde_json::json!({ "content": content }))
         }
@@ -77,6 +81,8 @@ pub fn persist_stream_event(
         | StreamEvent::ToolInputDelta { .. }
         | StreamEvent::ThinkingDelta { .. }
         | StreamEvent::ToolOutputDelta { .. }
+        // Persisted once by the kernel against the canonical SessionId.
+        | StreamEvent::CompactionProgress { .. }
         | StreamEvent::ContentComplete { .. } => return,
     };
 

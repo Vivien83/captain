@@ -141,7 +141,7 @@ fn audit_to_comms_event(
             })
     };
 
-    let action_str = format!("{:?}", entry.action);
+    let action_str = entry.action.to_string();
     let (kind, detail, target_label) = match action_str.as_str() {
         "AgentMessage" => {
             let detail = if entry.detail.starts_with("tokens_in=") {

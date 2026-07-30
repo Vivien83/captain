@@ -2,23 +2,48 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Native shell/program execution runs as a child of the Captain host process.
+pub const HOST_EXECUTION_BACKEND: &str = "host_process";
+/// The host boundary clears and reconstructs the child environment. It does not
+/// create an operating-system isolation boundary.
+pub const HOST_EXECUTION_ISOLATION_LEVEL: &str = "environment_scrub";
+/// Host subprocesses do not use namespaces, seccomp, Landlock, chroot, or a
+/// container. Isolated WASM and Docker execution are separate explicit tools.
+pub const HOST_EXECUTION_OS_ISOLATED: bool = false;
+/// Dangerous-command recognition is a normalized lexical guard, not a shell
+/// proof or an adversarial-code sandbox.
+pub const DANGEROUS_COMMAND_GUARD_LEVEL: &str = "normalized_lexical_heuristic";
+
 /// Q.9 — High-level Captain security profile, chosen at `captain setup`
 /// (or via `/security` later). Independent of `ExecSecurityMode` (which
-/// controls *how* shell commands are sandboxed once allowed).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// controls which shell commands may run once reviewed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CriticalMode {
-    /// **Open** (default) — Captain runs everything. If a hyper-critical
-    /// pattern is detected (rm -rf /, dd of=/dev/, DROP DATABASE, etc.),
-    /// the user gets a one-shot approval modal. Never asked twice for
-    /// the same flow.
-    #[default]
-    #[serde(alias = "default")]
+    /// **Open** — a detected hyper-critical command may proceed after a
+    /// content-bound, one-shot operator approval.
     Open,
-    /// **Safe** — hyper-critical patterns are blocked outright (no modal).
+    /// **Safe** (default) — hyper-critical commands are blocked outright.
+    #[serde(alias = "default")]
     Safe,
     /// **Paranoid** — every shell-affecting tool requires approval.
     Paranoid,
+}
+
+impl Default for CriticalMode {
+    fn default() -> Self {
+        Self::Safe
+    }
+}
+
+impl CriticalMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Safe => "safe",
+            Self::Paranoid => "paranoid",
+        }
+    }
 }
 
 /// Shell/exec security mode.
@@ -35,6 +60,28 @@ pub enum ExecSecurityMode {
     #[default]
     #[serde(alias = "allow", alias = "all", alias = "unrestricted")]
     Full,
+}
+
+impl ExecSecurityMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Allowlist => "allowlist",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// Honest, machine-readable posture for host subprocess execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct HostExecutionPosture {
+    pub backend: &'static str,
+    pub isolation_level: &'static str,
+    pub os_isolation: bool,
+    pub environment_scrub: bool,
+    pub dangerous_command_guard: &'static str,
+    pub policy_mode: ExecSecurityMode,
+    pub critical_mode: CriticalMode,
 }
 
 /// Shell/exec security policy.
@@ -59,9 +106,23 @@ pub struct ExecPolicy {
     /// produce no stdout/stderr output for this duration. Default: 30.
     #[serde(default = "default_no_output_timeout")]
     pub no_output_timeout_secs: u64,
-    /// Q.9 — High-level Captain security profile. Default: Open.
+    /// Q.9 — High-level Captain security profile. Default: Safe.
     #[serde(default)]
     pub critical_mode: CriticalMode,
+}
+
+impl ExecPolicy {
+    pub const fn host_execution_posture(&self) -> HostExecutionPosture {
+        HostExecutionPosture {
+            backend: HOST_EXECUTION_BACKEND,
+            isolation_level: HOST_EXECUTION_ISOLATION_LEVEL,
+            os_isolation: HOST_EXECUTION_OS_ISOLATED,
+            environment_scrub: true,
+            dangerous_command_guard: DANGEROUS_COMMAND_GUARD_LEVEL,
+            policy_mode: self.mode,
+            critical_mode: self.critical_mode,
+        }
+    }
 }
 
 fn default_no_output_timeout() -> u64 {
@@ -219,13 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn exec_policy_default_keeps_safe_runtime_limits() {
+    fn exec_policy_default_keeps_autonomy_with_a_safe_critical_floor() {
         let policy = ExecPolicy::default();
         assert_eq!(policy.mode, ExecSecurityMode::Full);
         assert_eq!(policy.timeout_secs, 30);
         assert_eq!(policy.max_output_bytes, 100 * 1024);
         assert_eq!(policy.no_output_timeout_secs, 30);
-        assert_eq!(policy.critical_mode, CriticalMode::Open);
+        assert_eq!(policy.critical_mode, CriticalMode::Safe);
         assert!(policy.safe_bins.iter().any(|bin| bin == "cat"));
         assert!(policy.blocked_commands.iter().any(|cmd| cmd == "rm -rf /"));
     }
@@ -246,6 +307,21 @@ max_output_bytes = 1024
 
         assert_eq!(policy.mode, ExecSecurityMode::Deny);
         assert_eq!(policy.no_output_timeout_secs, 30);
-        assert_eq!(policy.critical_mode, CriticalMode::Open);
+        assert_eq!(policy.critical_mode, CriticalMode::Safe);
+    }
+
+    #[test]
+    fn host_execution_posture_never_claims_os_isolation() {
+        let posture = ExecPolicy::default().host_execution_posture();
+        assert_eq!(posture.backend, "host_process");
+        assert_eq!(posture.isolation_level, "environment_scrub");
+        assert!(!posture.os_isolation);
+        assert!(posture.environment_scrub);
+        assert_eq!(
+            posture.dangerous_command_guard,
+            "normalized_lexical_heuristic"
+        );
+        assert_eq!(posture.policy_mode, ExecSecurityMode::Full);
+        assert_eq!(posture.critical_mode, CriticalMode::Safe);
     }
 }

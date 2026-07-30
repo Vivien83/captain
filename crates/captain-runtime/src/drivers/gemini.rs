@@ -989,6 +989,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
@@ -1009,6 +1010,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };

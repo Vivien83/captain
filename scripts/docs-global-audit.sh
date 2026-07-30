@@ -41,15 +41,19 @@ CONTRACT_DOCS=(
   docs/channel-adapters.md
   docs/providers.md
   docs/skill-development.md
+  docs/performance-budgets.md
   docs/SKILL_LEARNING_V2.md
   docs/CAPTAIN_FORGE_CAPSPEC.md
   docs/architecture.md
   docs/security.md
+  docs/evidence/DEPENDENCY_SECURITY_BASELINE_2026-07-30.md
+  docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md
   docs/agent-templates.md
   docs/workflows.md
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
   docs/releases/v0.1.0-alpha.4.md
@@ -125,6 +129,15 @@ require_file() {
   fi
 }
 
+require_missing_file() {
+  local file="$1"
+  if [ ! -e "$file" ]; then
+    pass "removed file stays absent: $file"
+  else
+    fail "removed file unexpectedly present: $file"
+  fi
+}
+
 require_contains() {
   local label="$1"
   local file="$2"
@@ -141,6 +154,17 @@ require_not_contains() {
   local file="$2"
   local pattern="$3"
   if grep -Fq "$pattern" "$file"; then
+    fail "$label"
+  else
+    pass "$label"
+  fi
+}
+
+require_pretest_not_contains() {
+  local label="$1"
+  local file="$2"
+  local pattern="$3"
+  if sed '/#\[cfg(test)\]/,$d' "$file" | grep -Fq "$pattern"; then
     fail "$label"
   else
     pass "$label"
@@ -166,7 +190,7 @@ scan_marketplace_active_claims() {
   rg -n \
     'Captain Marketplace|Skill marketplace|ClawHub client|Install from ClawHub|Search ClawHub|Browse ClawHub|marketplace\.captain\.dev' \
     "${CONTRACT_DOCS[@]}" >"$raw" || true
-  rg -v -i 'frozen|compat|historical|outside the active|not active|retained|migration' "$raw" >"$out" || true
+  rg -v -i 'frozen|disabled|absent|unavailable|rejected|fail(s|ed)? before|compat|historical|outside the active|not active|retained|migration' "$raw" >"$out" || true
   if [ -s "$out" ]; then
     fail "no active marketplace/ClawHub claims in current docs"
     show_findings "$out"
@@ -256,6 +280,9 @@ require_contains "DOC2 defines the essential public navigation boundary" docs/DO
 require_contains "DOC2 preserves runtime-bound Markdown for reproducible builds" docs/DOCS_STATUS.md 'can also be executable or build-time source'
 require_contains "DOC2 pins six primary hubs" docs/DOCS_STATUS.md "exactly six primary hubs"
 require_contains "DOC2 pins Control audit" docs/DOCS_STATUS.md "scripts/control-web-audit.sh"
+require_contains "DOC2 classifies performance budgets" docs/DOCS_STATUS.md "docs/performance-budgets.md"
+require_contains "DOC2 pins Control performance smoke" docs/DOCS_STATUS.md "scripts/control-chat-performance-smoke.mjs"
+require_contains "DOC2 pins compaction terminal smoke" docs/DOCS_STATUS.md "scripts/compaction-progress-terminal-smoke.mjs"
 require_contains "DOC2 pins web terminal Unicode smoke" docs/DOCS_STATUS.md "scripts/web-terminal-unicode-smoke.mjs"
 require_contains "DOC2 pins release workflow audit" docs/DOCS_STATUS.md "scripts/release-workflow-audit.sh"
 require_contains "DOC2 covers captain-graph binding READMEs" docs/DOCS_STATUS.md 'crates/captain-graph/bindings/{c,node,python,wasm}/README.md'
@@ -282,6 +309,9 @@ check_historical_banners
 scan_contract_banned \
   "no stale fixed global counts/status in current docs" \
   '76 endpoints|76 API endpoints|All 76|40 messaging channels|40 channel adapters|40 adapters|40 channels|60 bundled skills|60 expert knowledge skills|60 skills|190\+ built-in tools|217 models|65 bundled skills|plus de 190 outils|217 modèles|65 skills packagés|más de 190 herramientas|217 modelos|65 skills incluidas|190 多个内置工具|217 个模型|65 个内置 skill|20 LLM providers|20 providers|51 builtin models|51 models|51\+ models|23 aliases|23 tools|16 security systems|967 tests|1751 tests|120\+ API routes|ALL CODE COMPLETE|Status: COMPLETE|VERIFIED'
+scan_contract_banned \
+  "current contract docs do not mislabel the audit chain as Merkle" \
+  'Merkle'
 
 scan_marketplace_active_claims
 
@@ -299,11 +329,84 @@ require_not_contains "API docs do not advertise removed migration routes" docs/a
 require_not_contains "API docs omit frozen A2A routes" docs/api-reference.md '/a2a/'
 require_not_contains "API docs omit frozen marketplace routes" docs/api-reference.md '/api/clawhub'
 require_not_contains "security docs do not price removed migration routes" docs/security.md '/api/migrate'
+require_contains "security docs classify content guards honestly" docs/security.md 'heuristic pattern classification, not information-flow'
+require_contains "security docs disclose missing provenance propagation" docs/security.md 'do **not**'
+require_not_contains "security docs make no active taint-tracking claim" docs/security.md 'Information Flow Taint Tracking'
+require_not_contains "API docs make no active taint-tracking claim" docs/api-reference.md '"taint_tracking"'
+require_contains "API status exposes heuristic content guards" crates/captain-api/src/security_routes.rs '"content_pattern_guards"'
+require_contains "API status denies provenance tracking" crates/captain-api/src/security_routes.rs '"provenance_tracking": false'
+require_not_contains "runtime security guard has no taint abstraction" crates/captain-runtime/src/tools/security.rs 'Taint'
+require_not_contains "shared types no longer export taint tracking" crates/captain-types/src/lib.rs 'pub mod taint'
+require_contains "DOC2 classifies the versioned audit hash chain" docs/DOCS_STATUS.md 'Alpha 10 Audit Hash Chain Contract'
+require_contains "DOC2 pins injective audit field encoding" docs/DOCS_STATUS.md '`u64` big-endian byte length'
+require_contains "DOC2 pins the active audit epoch partition" docs/DOCS_STATUS.md 'Every sequence at or after the active epoch start must belong'
+require_contains "architecture documents immutable recovery epochs" docs/architecture.md '`ChainRecovery`'
+require_contains "security docs pin audit persistence before memory" docs/security.md 'SQLite insertion completes before'
+require_contains "API reference exposes authenticated audit integrity" docs/api-reference.md '"active_epoch_valid": true'
+require_contains "runtime changelog exposes audit recovery" docs/captain-tools/runtime-changelog.md '`ChainRecovery` epoch'
+require_not_contains "runtime changelog does not claim Merkle audit" docs/captain-tools/runtime-changelog.md 'Merkle'
+require_contains "audit record propagates persistence failures" crates/captain-runtime/src/audit.rs 'pub fn record('
+require_contains "audit record returns a typed result" crates/captain-runtime/src/audit.rs ') -> Result<String, AuditError>'
+require_contains "audit v2 length-prefixes every field" crates/captain-runtime/src/audit_chain.rs 'hash_length_prefixed(&mut hasher, field)'
+require_contains "audit length prefix is u64 big-endian" crates/captain-runtime/src/audit_chain.rs '(field.len() as u64).to_be_bytes()'
+require_contains "audit schema adds recovery epochs" crates/captain-memory/src/migration.rs 'CREATE TABLE IF NOT EXISTS audit_epochs'
+require_contains "health detail exposes audit integrity" crates/captain-api/src/health_routes.rs '"audit": audit'
+require_not_contains "coordination router has no audit repair handler" crates/captain-api/src/server_coordination_routes.rs 'axum::routing::post(routes::audit_repair)'
+require_not_contains "audit routes export no repair handler" crates/captain-api/src/audit_routes.rs 'pub async fn audit_repair'
+require_contains "security reconciliation marks F6 remediated" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md '| F6 | Remediated (T5) |'
+require_contains "DOC2 defines the exact host execution posture" docs/DOCS_STATUS.md "Alpha 10 Host Execution Posture"
+require_contains "DOC2 denies host OS isolation" docs/DOCS_STATUS.md '`os_isolation: false`'
+require_contains "architecture names the host subprocess boundary honestly" docs/architecture.md "### Host Subprocess Boundary"
+require_not_contains "architecture does not label host execution as subprocess isolation" docs/architecture.md "### Subprocess Isolation"
+require_contains "security guide classifies dangerous-command recognition honestly" docs/security.md '`normalized_lexical_heuristic`, not proof'
+require_contains "tool docs deny an OS sandbox for host execution" docs/captain-tools/shell-process.md "do not create a namespace, seccomp, Landlock, chroot, or"
+require_contains "API docs expose the host execution backend" docs/api-reference.md '"backend": "host_process"'
+require_contains "API docs deny host subprocess OS isolation" docs/api-reference.md '"subprocess_os_isolation": false'
+require_not_contains "API docs have no stale subprocess isolation claim" docs/api-reference.md '"subprocess_isolation": true'
+require_contains "security API exposes environment scrubbing" crates/captain-api/src/security_routes.rs '"subprocess_environment_scrub": true'
+require_contains "security API denies host OS isolation" crates/captain-api/src/security_routes.rs '"subprocess_os_isolation": false'
+require_not_contains "security API has no stale subprocess isolation claim" crates/captain-api/src/security_routes.rs '"subprocess_isolation": true'
+require_contains "types expose the exact host execution backend" crates/captain-types/src/config/execution.rs 'HOST_EXECUTION_BACKEND: &str = "host_process"'
+require_contains "types expose the exact host isolation level" crates/captain-types/src/config/execution.rs 'HOST_EXECUTION_ISOLATION_LEVEL: &str = "environment_scrub"'
+require_contains "types deny host operating-system isolation" crates/captain-types/src/config/execution.rs 'HOST_EXECUTION_OS_ISOLATED: bool = false'
+require_contains "types classify the dangerous-command guard honestly" crates/captain-types/src/config/execution.rs 'DANGEROUS_COMMAND_GUARD_LEVEL: &str = "normalized_lexical_heuristic"'
+require_contains "reference config uses safe critical mode" captain.toml.example 'critical_mode = "safe"'
+require_contains "quick init writes safe critical mode" crates/captain-cli/src/commands/init.rs 'critical_mode = "safe"'
+require_contains "setup wizard writes safe critical mode" crates/captain-cli/src/tui/screens/wizard.rs 'critical_mode = "safe"'
+require_contains "first-use wizard writes safe critical mode" crates/captain-cli/src/tui/screens/init_wizard.rs 'critical_mode = "safe"'
+require_contains "security reconciliation marks F7 remediated" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md '| F7 | Remediated (T8) |'
+require_contains "skills expose a typed remote marketplace freeze" crates/captain-skills/src/lib.rs 'RemoteMarketplaceFrozen'
+require_contains "legacy marketplace client fails before I/O" crates/captain-skills/src/marketplace.rs 'require_remote_marketplace_access()?;'
+require_contains "legacy ClawHub client fails before I/O" crates/captain-skills/src/clawhub.rs 'require_remote_marketplace_access()?;'
+require_pretest_not_contains "active skill router omits remote install" crates/captain-api/src/server_skill_routes.rs '"/api/skills/install"'
+require_pretest_not_contains "active skill router omits marketplace search" crates/captain-api/src/server_skill_routes.rs '"/api/marketplace/search"'
+require_pretest_not_contains "active skill router omits ClawHub" crates/captain-api/src/server_skill_routes.rs '"/api/clawhub/'
+require_missing_file "crates/captain-api/src/clawhub_routes.rs"
+require_not_contains "CLI skill install has no remote fallback client" crates/captain-cli/src/commands/skill.rs 'MarketplaceClient::new'
+require_contains "CLI skill install requires a local directory" crates/captain-cli/src/commands/skill.rs 'is not a local skill directory'
+require_not_contains "TUI skills hide ClawHub actions" crates/captain-cli/src/tui/screens/skills.rs 'ClawHub'
+require_contains "prompt scan exposes advisory assurance" crates/captain-skills/src/verify.rs 'AdvisoryHeuristic'
+require_contains "doctor reports the advisory assurance" crates/captain-cli/src/commands/doctor/environment.rs '"assurance": "advisory_heuristic"'
+require_contains "security guide denies phrase-scan proof" docs/security.md 'A finding is not proof of an attack'
+require_contains "skill guide documents the fail-before-I/O boundary" docs/captain-tools/skill.md 'before network or filesystem access'
+require_not_contains "API guide omits removed remote install endpoint" docs/api-reference.md '### POST /api/skills/install'
+require_contains "security reconciliation marks F8 remediated" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md '| F8 | Remediated (T9) |'
+require_contains "security reconciliation marks F9 remediated" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md '| F9 | Remediated (T9) |'
+require_file "docs/evidence/DEPENDENCY_SECURITY_BASELINE_2026-07-30.md"
+require_contains "public security policy exposes the unfiltered dependency audit" SECURITY.md 'a second audit without exceptions'
+require_contains "security guide pins the FastEmbed ORT ABI" docs/security.md '`fastembed 5.13.2` remains pinned to `ort 2.0.0-rc.11`'
+require_contains "dependency evidence distinguishes reviewed from absent advisories" docs/evidence/DEPENDENCY_SECURITY_BASELINE_2026-07-30.md 'no unreviewed vulnerability'
+require_contains "dependency gate runs an unfiltered audit" scripts/dependency-audit.sh 'cargo audit --json --no-fetch --file "$ROOT_DIR/Cargo.lock"'
+require_contains "dependency gate rejects RSA packages" scripts/dependency-audit.sh 'versions("rsa") == []'
+require_contains "dependency gate rejects RSA russh features" scripts/dependency-audit.sh '== ["aws-lc-rs", "flate2"]'
+require_contains "workspace SSH dependency disables default features" Cargo.toml 'russh = { version = "=0.62.4", default-features = false'
+require_not_contains "workspace SSH key features omit RSA" Cargo.toml '"ed25519", "rsa"'
+require_contains "SSH guide exposes the RSA security boundary" docs/ssh-setup.md 'RSA est'
 require_not_contains "public Compose omits frozen Slack credentials" docker-compose.yml 'SLACK_BOT_TOKEN'
 require_not_contains "configuration guide omits frozen Slack setup" docs/configuration.md '[channels.slack]'
 require_not_contains "provider guide has no copied model catalog" docs/providers.md '**Available Models:**'
 require_not_contains "provider guide has no volatile price table" docs/providers.md '$/1M'
-require_not_contains "skill guide omits the frozen marketplace path" docs/skill-development.md 'Frozen Marketplace'
+require_contains "skill guide requires complete local source review" docs/skill-development.md 'Review the complete local skill'
 require_contains "DOC2 classifies the Skill Learning V2 contract" docs/DOCS_STATUS.md 'docs/SKILL_LEARNING_V2.md'
 require_contains "Skill Learning V2 pins the exact active model" docs/SKILL_LEARNING_V2.md 'exact active configured model'
 require_contains "Skill Learning V2 confines draft authority to observed tools" docs/SKILL_LEARNING_V2.md 'canonical observed graph'
@@ -314,13 +417,18 @@ require_not_contains "config docs omit the retired skills threshold" docs/captai
 require_not_contains "config docs omit the retired proposer override" docs/captain-tools/config-secret.md 'skills.proposer_model'
 require_contains "config docs pin authenticated workflow activation" docs/captain-tools/config-secret.md 'activation still requires an authenticated operator card'
 require_contains "README points to DOC2" docs/README.md "Docs Status (DOC2)"
+require_contains "docs README links performance budgets" docs/README.md "performance-budgets.md"
+require_contains "docs index links performance budgets" docs/INDEX.md "performance-budgets.md"
+require_contains "performance contract pins the visual frame" docs/performance-budgets.md "at most 34 ms"
+require_contains "performance contract forbids dropped deltas" docs/performance-budgets.md "No text delta may be dropped"
+require_contains "performance contract pins the real browser smoke" docs/performance-budgets.md "scripts/control-chat-performance-smoke.mjs"
 require_not_contains "docs navigation does not advertise frozen migration" docs/README.md 'MIGRATION.md'
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable current release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.9"
-  require_contains "$readme pins the immutable current image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.9"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.9/install.sh"
+  require_contains "$readme links the immutable candidate release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10"
+  require_contains "$readme pins the immutable candidate image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10"
+  require_contains "$readme pins the candidate installer" "$readme" "releases/download/v0.1.0-alpha.10/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -368,9 +476,10 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.9"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.9] - 2026-07-22"
-require_contains "reviewed current alpha release notes exist" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
+require_contains "candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.10"
+require_contains "candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.10] - 2026-07-30"
+require_contains "reviewed candidate alpha release notes exist" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
+require_contains "historical alpha.9 release notes remain available" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
 require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
 require_contains "historical alpha.7 release notes remain available" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
 require_contains "historical alpha.6 release notes remain available" docs/releases/v0.1.0-alpha.6.md "# Captain 0.1.0-alpha.6"
@@ -386,19 +495,99 @@ require_contains "DOC2 records the published alpha.9 provenance" docs/DOCS_STATU
 require_contains "DOC2 records the published alpha.9 multi-arch digest" docs/DOCS_STATUS.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
 require_contains "agent changelog records the published alpha.9 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
 require_contains "DOC2 identifies the alpha.9 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the current public prerelease'
+require_contains "DOC2 identifies the alpha.10 candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.10` is the current locally certified release candidate'
+require_contains "DOC2 pins the alpha.10 host asset count" docs/DOCS_STATUS.md 'exactly 22 files'
+require_contains "alpha.10 notes leave live provenance unset" docs/releases/v0.1.0-alpha.10.md 'unset until the live release has'
+require_not_contains "alpha.10 notes do not copy alpha.9 source provenance" docs/releases/v0.1.0-alpha.10.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
+require_not_contains "alpha.10 notes do not copy alpha.9 OCI provenance" docs/releases/v0.1.0-alpha.10.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
 require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the previous public prerelease'
 require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
 require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "agent changelog retains the alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "DOC2 retains the alpha.7 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.7` is an earlier public prerelease'
 require_contains "DOC2 discloses the alpha.9 memory opt-out limitation" docs/DOCS_STATUS.md "core agent-loop finalizer to write one local episodic interaction"
+require_contains "DOC2 records the alpha.10 finalizer fix" docs/DOCS_STATUS.md 'The `alpha.10` candidate closes that published limitation'
 require_contains "DOC2 discloses the alpha.8 memory opt-out limitation" docs/DOCS_STATUS.md "the core agent-loop finalizer still writes its local episodic interaction"
-require_contains "memory docs disclose the alpha.8 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic interaction"
+require_contains "memory docs disclose the alpha.8 finalizer limitation" docs/captain-tools/memory.md "agent-loop finalizer still stores one local episodic"
+require_contains "memory docs expose the alpha.10 finalizer boundary" docs/captain-tools/memory.md 'The `alpha.10` candidate closes that finalizer'
+require_contains "runtime finalizer gates episodic capture on opt-out" crates/captain-runtime/src/agent_loop_finish.rs "memory_write_opt_out(user_message)"
+require_contains "DOC2 defines the synchronized live budget contract" docs/DOCS_STATUS.md "Alpha 10 Live Budget Contract"
+require_contains "DOC2 defines the guarded host execution posture" docs/DOCS_STATUS.md "Alpha 10 Host Execution Posture"
+require_contains "API documents persist-before-publish budget updates" docs/api-reference.md "atomically persists that exact snapshot"
+require_contains "architecture uses one live budget authority" docs/architecture.md 'dedicated `RwLock<BudgetConfig>`'
+require_contains "runtime changelog exposes live budget enforcement" docs/captain-tools/runtime-changelog.md "global cost guard"
+require_contains "kernel owns the synchronized budget update boundary" crates/captain-kernel/src/kernel_budget_config.rs "A persistence failure leaves the live state unchanged"
+require_contains "API denies invalid shared-reference casting" crates/captain-api/src/lib.rs "#![deny(invalid_reference_casting)]"
+require_not_contains "budget route has no pointer-derived config mutation" crates/captain-api/src/usage_budget_routes.rs "config_ptr"
+require_not_contains "budget route has no raw mutable cast" crates/captain-api/src/usage_budget_routes.rs "as *mut"
+require_contains "agent budget edits update the live scheduler" crates/captain-api/src/usage_budget_routes.rs "set_hourly_quota(agent_id, value)"
+require_contains "security reconciliation marks F1 remediated" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F1 | Remediated"
+require_contains "DOC2 defines independent browser session signing" docs/DOCS_STATUS.md "Alpha 10 Browser Session Contract"
+require_contains "DOC2 defines deny-by-default API authentication" docs/DOCS_STATUS.md "Alpha 10 API Authentication Contract"
+require_contains "configuration forbids credential-derived session signing" docs/configuration.md "never the daemon API key or"
+require_contains "API documents session epoch invalidation" docs/api-reference.md 'Changing the password through setup or `web_credentials_update` advances that'
+require_contains "architecture documents fail-closed signing reload" docs/architecture.md "Live auth reload fails closed"
+require_contains "runtime changelog exposes independent session signing" docs/captain-tools/runtime-changelog.md "one independent 32-byte random key per"
+require_contains "auth config declares managed signing key" crates/captain-types/src/config/auth.rs "Captain-managed base64 encoding of a 32-byte session signing key"
+require_contains "kernel provisions signing state before runtime boot" crates/captain-kernel/src/kernel_boot_foundations.rs "ensure_session_signing_state"
+require_contains "session auth derives only from managed secret" crates/captain-api/src/session_auth.rs "derive_session_secret(&self.auth.session_secret)"
+require_contains "session tokens enforce credential epoch" crates/captain-api/src/session_auth.rs "session_epoch != expected_session_epoch"
+require_contains "config secret registry covers session signing key" crates/captain-types/src/config/secret_fields.rs '["auth", "session_secret"]'
+require_contains "raw config display redacts managed auth state" crates/captain-api/src/config_routes.rs "redact_auth_secrets"
+require_contains "web credential rotation advances session epoch" crates/captain-runtime/src/tools/web_credentials_ops.rs "increment_session_epoch_for_password_change"
+require_contains "agent config reads redact auth signing material" crates/captain-runtime/src/tools/config_ops.rs "is_secret_auth_config_path"
+require_contains "kernel config writes reject managed auth state" crates/captain-kernel/src/kernel_handle_config.rs "is_managed_auth_config_path"
+require_contains "DOC2 records Argon2id browser passwords" docs/DOCS_STATUS.md "salted Argon2id PHC strings"
+require_contains "configuration documents secure cookie policy" docs/configuration.md 'session_cookie_secure = "auto"'
+require_contains "API documents one-time realtime ticket" docs/api-reference.md "30-second single-use ticket"
+require_contains "security reconciliation closes F3" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F3 | Remediated (T6 + T7)"
+require_contains "web password hashing uses Argon2id" crates/captain-types/src/config/auth.rs "Argon2::default()"
+require_contains "legacy login migrates password hash" crates/captain-api/src/web_auth_routes.rs "migrate_legacy_password_hash"
+require_contains "login limiter tracks IP and username" crates/captain-api/src/web_auth_security.rs "by_user"
+require_contains "realtime tickets are consumed once" crates/captain-api/src/web_auth_security.rs "state.tickets.remove(ticket)"
+require_contains "browser chat requests realtime ticket" crates/captain-api/static/js/app/api.js "api.realtimeTicket(path)"
+require_contains "API auth has one explicit public allowlist" crates/captain-api/src/middleware.rs "const PUBLIC_ALLOWLIST"
+require_contains "API auth matrix is source reviewed" crates/captain-api/src/middleware_auth_matrix_tests.rs "public_allowlist_is_exactly_the_reviewed_matrix"
+require_not_contains "stale public-read policy test is removed" crates/captain-api/src/middleware.rs "public_endpoint_policy_keeps_mutations_private"
+require_contains "API docs enumerate private operational surfaces" docs/api-reference.md "Every other route is private"
+require_contains "security docs explain private OAuth decision" docs/security.md "GitHub Copilot OAuth flow require"
+require_contains "Control emits centralized unauthorized signal" crates/captain-api/static/js/app/api.js "captain:unauthorized"
+require_contains "Control consumes centralized unauthorized signal" crates/captain-api/static/js/app/main.js "captain:unauthorized"
+require_contains "security reconciliation closes F4" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F4 | Remediated (T3)"
+require_contains "DOC2 defines fail-closed browser origins" docs/DOCS_STATUS.md "Alpha 10 Browser Origin Contract"
+require_contains "security policy supports only alpha.10" SECURITY.md '| 0.1.0-alpha.10 | :white_check_mark: |'
+require_contains "security policy retires alpha.9" SECURITY.md '| 0.1.0-alpha.9 | :x: |'
+require_contains "security policy pins the alpha.10 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.10` is an early-access release.'
+require_contains "configuration exposes exact API origins" docs/configuration.md 'allowed_origins = ["https://console.example.com"]'
+require_contains "reference config exposes the API origin section" captain.toml.example "[api]"
+require_not_contains "API CORS policy has no wildcard helper" crates/captain-api/src/request_origin_security.rs "tower_http::cors::Any"
+require_contains "API mounts exact Host validation" crates/captain-api/src/server.rs "request_origin_security::validate_host"
+require_contains "API origin changes require restart" crates/captain-kernel/src/config_reload.rs "API allowed origins changed"
+require_contains "security reconciliation closes F5" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F5 | Remediated (T4)"
+require_not_contains "security policy has no stale key-dependent CORS claim" SECURITY.md "Restricted to localhost when no API key configured"
+require_not_contains "API middleware has no query credential field" crates/captain-api/src/middleware.rs "query_token"
+require_not_contains "agent websocket has no query token fallback" crates/captain-api/src/ws.rs 'strip_prefix("token=")'
+require_not_contains "terminal websocket has no query token fallback" crates/captain-api/src/ws_terminal.rs 'query_param(uri, "token")'
+require_contains "CLI config access classifies managed auth state" crates/captain-cli/src/commands/config.rs "is_secret_auth_config_path"
+require_contains "security reconciliation marks F3 closed" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F3 | Remediated (T6 + T7)"
 require_contains "historical alpha.2 release notes remain available" docs/releases/v0.1.0-alpha.2.md "# Captain 0.1.0-alpha.2"
 require_contains "historical alpha release notes remain available" docs/releases/v0.1.0-alpha.1.md "# Captain 0.1.0-alpha.1"
 require_contains "runtime changelog marks 07-12b as published" docs/captain-tools/runtime-changelog.md "is the published release that includes the aligned"
 require_not_contains "runtime changelog has no stale 07-12b candidate claim" docs/captain-tools/runtime-changelog.md 'aligned candidate is `0.1.0-dev.2026-07-12b`'
 require_contains "runtime changelog supersedes old WEB1 claim" docs/captain-tools/runtime-changelog.md "superseded by this entry"
+require_contains "README documents the seven-question first-use interview" README.md "seven-question onboarding interview"
+require_contains "French README documents the seven-question first-use interview" README.fr.md "sept questions"
+require_contains "Spanish README documents the seven-question first-use interview" README.es.md "siete preguntas"
+require_contains "Chinese README documents the seven-question first-use interview" README.zh.md "七个问题"
+require_contains "DOC2 classifies non-blocking first-use suggestions" docs/DOCS_STATUS.md "Alpha 10 First-Use Interaction Contract"
+require_contains "DOC2 classifies authoritative credentials" docs/DOCS_STATUS.md "Alpha 10 Credential Contract"
+require_contains "DOC2 classifies learning visibility" docs/DOCS_STATUS.md "Alpha 10 Learning Visibility Contract"
+require_contains "API documents non-blocking suggested replies" docs/api-reference.md '"type": "suggested_replies"'
+require_contains "daemon SSE documents suggested replies" docs/api-reference.md '| `suggested_replies` | Non-blocking choices.'
+require_contains "Telegram adapter docs distinguish suggested replies from ask_user" docs/channel-adapters.md "Non-blocking suggested replies"
+require_contains "agent channel docs distinguish suggested replies from ask_user" docs/captain-tools/channel.md "Non-blocking suggested replies"
+require_contains "runtime changelog exposes first-use suggested replies" docs/captain-tools/runtime-changelog.md "seven-question first-use interview"
+require_contains "first-use notification opt-out controls native silent mode" crates/captain-kernel/src/kernel_first_use.rs '"silent_mode"'
 require_contains "CLI documents all Automation tabs" docs/cli-reference.md "Workflows, Triggers, Crons, Approbations, and Webhooks"
 require_contains "CLI quick init is Codex-first" docs/cli-reference.md "Reuses Codex subscription credentials first"
 require_contains "API status documents runtime health" docs/api-reference.md '`runtime_health`'
@@ -498,6 +687,10 @@ else
 fi
 require_contains "DOC2 pins legacy TUI session import" docs/DOCS_STATUS.md '`$CAPTAIN_HOME/sessions/*/*.json` files'
 require_contains "CLI documents cross-surface session resume" docs/cli-reference.md '/resume <UUID|unique-prefix|title>'
+require_contains "CLI documents versioned catalog export" docs/cli-reference.md 'captain.session.export.v1'
+require_contains "DOC2 pins non-activating catalog export" docs/DOCS_STATUS.md 'reads this global catalog'
+require_contains "runtime changelog exposes catalog JSONL" docs/captain-tools/runtime-changelog.md 'exports the complete durable session'
+require_contains "session export writes through durable filesystem" crates/captain-cli/src/commands/session_export.rs 'captain_types::durable_fs::atomic_write'
 require_contains "architecture pins one-shot legacy import markers" docs/architecture.md 'sidecar `.json.imported` marker'
 require_contains "architecture pins bounded HTTP shutdown" docs/architecture.md "long-lived HTTP connections"
 require_contains "architecture pins bounded channel shutdown" docs/architecture.md "gives adapters a separate 15-second"
@@ -560,8 +753,53 @@ require_contains "runtime changelog exposes native CapSpec dispatch" docs/captai
 require_contains "runtime changelog records CapSpec process certification" docs/captain-tools/runtime-changelog.md 'passed 130 checks across 14 durable'
 require_contains "architecture includes the CapSpec crate" docs/architecture.md '**captain-capspec**'
 require_contains "security docs pin CapSpec authority intersection" docs/security.md 'The readable `.captain` file cannot grant a'
+require_contains "API documents exact approval rules" docs/api-reference.md '## Approval Endpoints'
+require_contains "API documents durable approval revocation" docs/api-reference.md 'DELETE /api/approvals/rules/{id}'
+require_contains "security docs pin approval action digests" docs/security.md 'domain-separated BLAKE3 digest'
+require_contains "approval binding uses complete serialized tool input" crates/captain-runtime/src/tools/dispatch_guard.rs 'serde_json::to_vec(input)'
+require_contains "approval request carries digest separately from display preview" crates/captain-kernel/src/kernel_handle_approval.rs 'action_digest: action_digest.to_string()'
+require_contains "security docs separate preview from approval binding" docs/security.md 'human-facing preview is a separate bounded field'
+require_contains "CLI documents scoped approval keys" docs/cli-reference.md '`R`, `D`, and `X` open a'
+require_contains "Telegram docs expose six approval scopes" docs/channel-adapters.md 'six explicit'
+require_contains "DOC2 pins cross-surface approval semantics" docs/DOCS_STATUS.md 'Tool approvals are one shared operator contract'
+require_contains "approval rules use crash-safe writes" crates/captain-kernel/src/approval_rules.rs 'durable_fs::atomic_write'
+require_contains "approval rules persist no raw action field" crates/captain-types/src/approval.rs 'pub action_digest: String'
+require_contains "approval API exposes rule revocation" crates/captain-api/src/server_governance_routes.rs '"/api/approvals/rules/{id}"'
+require_contains "Telegram approval keyboard exposes durable deny" crates/captain-channels/src/telegram_callbacks.rs 'approval:deny_always:'
 require_not_contains "CapSpec contract has no stale open-matrix claim" docs/CAPTAIN_FORGE_CAPSPEC.md 'broad real certification matrix is still open'
 require_not_contains "runtime changelog has no stale open CapSpec gate" docs/captain-tools/runtime-changelog.md 'broad real certification matrix remains required'
+require_contains "configuration documents external secret registry" docs/configuration.md '$CAPTAIN_HOME/secret-sources.toml'
+require_contains "configuration pins authoritative external mappings" docs/configuration.md 'external mapping is **authoritative**'
+require_contains "configuration exposes redacted source status CLI" docs/configuration.md 'captain vault sources --json'
+require_contains "CLI documents external source status" docs/cli-reference.md 'captain vault sources [--json]'
+require_contains "CLI channel setup uses canonical secrets store" docs/cli-reference.md 'Saves local tokens to `~/.captain/secrets.env`'
+require_contains "tool docs put external sources first" docs/captain-tools/config-secret.md '`~/.captain/secret-sources.toml` file mapping'
+require_contains "tool docs pin external fail-closed behavior" docs/captain-tools/config-secret.md 'authoritative and fail-closed'
+require_contains "security docs block mounted source targets" docs/security.md 'all configured source targets join the kernel'
+require_contains "DOC2 pins one credential contract" docs/DOCS_STATUS.md 'one credential resolution contract'
+require_contains "runtime loads versioned external sources" crates/captain-extensions/src/external_secret_sources.rs 'SECRET_SOURCES_SCHEMA_VERSION: u32 = 1'
+require_contains "external secret read buffer is zeroized" crates/captain-extensions/src/external_secret_sources.rs 'let text = Zeroizing::new('
+require_contains "kernel blocks external source registry" crates/captain-kernel/src/kernel_workspace_security.rs 'captain_home.join("secret-sources.toml")'
+require_contains "kernel blocks configured external source targets" crates/captain-kernel/src/kernel.rs '.external_source_paths()'
+require_contains "generic file tools enforce external targets for ordinary agents" crates/captain-runtime/src/tools/file_paths.rs 'blocklist_applies_to_ordinary_agents_without_extra_roots'
+require_contains "CLI central resolver unlocks vault and external sources" crates/captain-cli/src/cli_support.rs 'CredentialResolver::from_home(vault, home)'
+require_contains "all CLI local secret mutations refuse external keys" crates/captain-cli/src/dotenv.rs 'local_secret_mutations_refuse_externally_managed_keys'
+require_contains "CLI channel setup uses production resolver" crates/captain-cli/src/commands/channel.rs 'production_credential_resolver_at(home)'
+require_contains "CLI Signal setup writes runtime phone field" crates/captain-cli/src/commands/channel.rs 'phone_number = {phone}'
+require_not_contains "CLI Signal setup has no stale phone env field" crates/captain-cli/src/commands/channel.rs 'phone_env ='
+require_contains "signed webhooks use kernel credential resolver" crates/captain-api/src/event_webhooks.rs 'state.kernel.resolve_credential(key)'
+require_contains "signed webhooks test missing-secret fail-closed" crates/captain-api/src/event_webhooks.rs 'configured_webhook_signature_fails_closed_when_secret_is_unavailable'
+require_contains "API status uses the credential resolver for channel readiness" crates/captain-api/src/status_routes.rs 'state.kernel.resolve_credential(key)'
+require_contains "shared API secret writes refuse external keys" crates/captain-api/src/secret_env.rs 'shared_secret_writer_refuses_externally_managed_keys'
+require_contains "agent API ingress uses the credential resolver" crates/captain-api/src/agent_api_routes.rs 'validate_agent_api_token_with(headers, agent_id'
+require_contains "agent API egress queue uses the credential resolver" crates/captain-api/src/agent_api_egress_queue.rs 'kernel.resolve_credential(key)'
+require_contains "agent API external credentials are not disclosed" crates/captain-types/src/agent_api.rs 'Captain will not disclose or overwrite it'
+require_contains "agent API external ingress has a non-disclosure proof" crates/captain-types/src/agent_api.rs 'existing_ingress_report_never_discloses_the_external_token'
+require_contains "agent API queues transient external callback-source failures" crates/captain-api/src/agent_api_egress.rs 'unavailable_external_callback_is_visible_and_retryable'
+require_contains "provider drivers cannot reuse stale env after external-source failure" crates/captain-runtime/src/drivers/mod.rs 'explicit_empty_key_blocks_stale_environment_fallback'
+require_contains "dynamic agent drivers preserve authoritative external-source failure" crates/captain-kernel/src/kernel_driver_support.rs 'unavailable_external_provider_key_blocks_dynamic_driver_env_fallback'
+require_contains "release monitor reports unavailable authoritative token" crates/captain-kernel/src/release_updates_tests.rs 'release_monitor_reports_unavailable_authoritative_token'
+require_contains "CLI updater reports unavailable authoritative token" crates/captain-cli/src/commands/update.rs 'updater_reports_unavailable_authoritative_github_token'
 if [ "$SITE_PRESENT" = "1" ]; then
   require_contains "launch site restores the editorial slogan" site/index.html 'aria-label="Unleash the future."'
   require_contains "launch site labels representative terminal data" site/index.html "Interactive demo / representative data"
@@ -614,15 +852,71 @@ require_contains "WASM binding is an isolated Cargo workspace" crates/captain-gr
 require_file scripts/captain-graph-bindings-check.sh
 require_contains "release readiness compiles captain-graph bindings" scripts/release-readiness.sh 'scripts/captain-graph-bindings-check.sh'
 require_file scripts/control-web-audit.sh
+require_file scripts/control-chat-performance-test.mjs
+require_file scripts/control-chat-performance-smoke.mjs
+require_file scripts/compaction-progress-terminal-smoke.mjs
+require_contains "chat surface gate runs the deterministic Control audit" scripts/core-surface-gates.sh 'scripts/control-web-audit.sh'
+require_contains "chat surface gate runs the browser performance smoke" scripts/core-surface-gates.sh 'scripts/control-chat-performance-smoke.mjs'
+require_contains "chat surface gate runs compaction terminal smoke" scripts/core-surface-gates.sh 'scripts/compaction-progress-terminal-smoke.mjs'
+require_contains "DOC2 classifies compaction progress" docs/DOCS_STATUS.md "Alpha 10 Compaction Progress Contract"
+require_contains "API documents typed compaction WebSocket progress" docs/api-reference.md '"type": "compaction_progress"'
+require_contains "API documents daemon compaction SSE" docs/api-reference.md "event: compaction_progress"
+require_contains "architecture pins compaction restart recovery" docs/architecture.md "SQLite schema v35"
+require_contains "runtime changelog exposes truthful compaction progress" docs/captain-tools/runtime-changelog.md "opaque model calls remain visibly indeterminate"
+require_contains "public changelog records compaction restart recovery" CHANGELOG.md "startup closes operations left by an earlier runtime instance"
 require_file scripts/release-workflow-audit.sh
 require_file scripts/publish-release-local.sh
+require_file scripts/release-provenance.sh
+require_file scripts/release-provenance-test.sh
+require_file docs/release-provenance.md
+require_file scripts/github-governance.sh
+require_file docs/repository-governance.md
+require_contains "docs index exposes release provenance" docs/INDEX.md "Release Provenance"
+require_contains "docs README exposes release provenance" docs/README.md "Release provenance"
+require_contains "docs index exposes repository governance" docs/INDEX.md "Repository Governance"
+require_contains "repository governance documents local-only status checks" docs/repository-governance.md 'no GitHub status check is required automatically'
+require_contains "repository governance applies versioned protection" docs/repository-governance.md 'scripts/github-governance.sh --apply'
+require_file "docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md"
+require_contains "release supply-chain evidence keeps remote policy honest" docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md 'No document may claim the remote state is active'
+require_contains "release supply-chain evidence pins sequential bundles" docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md 'invoke each target separately'
 require_file scripts/prepare-docker-embedding-cache.sh
 require_file scripts/prepare-github-export.sh
 require_file scripts/public-release-audit.sh
+require_file scripts/public-boundary-guard.sh
 require_file scripts/check-markdown-links.mjs
 require_file scripts/public-export-smoke.sh
 require_contains "release readiness audits the public source export" scripts/release-readiness.sh 'scripts/prepare-github-export.sh'
+require_contains "DOC2 classifies local release provenance" docs/DOCS_STATUS.md "Alpha 10 Release Provenance Contract"
+require_contains "release provenance binds the public source" docs/release-provenance.md 'public Git source URI, commit, and tree'
+require_contains "release provenance discloses missing independent signature" docs/release-provenance.md 'independently signed transparency-log attestation'
+require_contains "release publisher builds Docker sequentially" scripts/publish-release-local.sh 'amd64_digest="$(build_and_push_architecture amd64)"'
+require_contains "release publisher carries SLSA host provenance" scripts/publish-release-local.sh 'provenance.intoto.jsonl'
 require_contains "DOC2 pins the public source audit" docs/DOCS_STATUS.md 'scripts/public-release-audit.sh'
+require_contains "DOC2 pins the encoded public boundary guard" docs/DOCS_STATUS.md 'scripts/public-boundary-guard.sh'
+require_contains "public boundary guard scans hidden files" scripts/public-boundary-guard.sh 'rg -n --hidden'
+require_contains "public export smoke rejects a content probe" scripts/public-export-smoke.sh 'content guard accepted a blocked probe'
+require_contains "public export smoke rejects a path probe" scripts/public-export-smoke.sh 'path guard accepted a blocked probe'
+require_contains "public export smoke keeps content violations private" scripts/public-export-smoke.sh 'content guard disclosed a blocked probe'
+require_contains "public export smoke keeps path violations private" scripts/public-export-smoke.sh 'path guard disclosed a blocked probe'
 require_contains "DOC2 pins the public export smoke" docs/DOCS_STATUS.md 'scripts/public-export-smoke.sh'
+require_file scripts/guarded-exec-audit.sh
+require_file crates/captain-runtime/src/subprocess_env_scrub.rs
+require_file crates/captain-runtime/src/subprocess_guard.rs
+require_missing_file crates/captain-runtime/src/subprocess_sandbox.rs
+require_missing_file crates/captain-runtime/src/subprocess_sandbox_tests.rs
+require_contains "tranche gate enforces guarded execution audit" scripts/gate.sh 'scripts/guarded-exec-audit.sh'
+require_contains "release readiness enforces guarded execution audit" scripts/release-readiness.sh 'scripts/guarded-exec-audit.sh'
+require_contains "DOC2 classifies guarded execution boundary" docs/DOCS_STATUS.md "Alpha 10 Guarded Execution Contract"
+require_contains "security docs name guarded execution source" docs/security.md 'captain-runtime/src/guarded_exec.rs'
+require_not_contains "security docs have no subprocess sandbox overclaim" docs/security.md 'subprocess_sandbox'
+require_not_contains "architecture has no subprocess sandbox overclaim" docs/architecture.md 'subprocess_sandbox'
+require_contains "architecture documents content-bound approval permits" docs/architecture.md "content-bound permit"
+require_contains "public changelog records unified subprocess sinks" CHANGELOG.md "All agent-controlled subprocess sinks now share one guarded execution"
+require_contains "shell tool docs name the shared guarded boundary" docs/captain-tools/shell-process.md '`guarded_exec` is the mandatory subprocess entry'
+require_contains "shell tool docs pin exact safe environment" docs/captain-tools/shell-process.md '`PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`, `LANG`'
+require_contains "skill tool docs name the shared guarded boundary" docs/captain-tools/skill.md 'Skill checks and executions use `guarded_exec`'
+require_contains "shell agent definition explains guarded execution" crates/captain-runtime/src/tools/shell_definitions.rs "frontière d'exécution gardée"
+require_contains "skill agent definition explains guarded execution" crates/captain-runtime/src/tools/skill_definitions.rs "frontière d'exécution gardée"
+require_contains "skill check definition explains guarded execution" crates/captain-runtime/src/tools/discovery.rs "frontière d'exécution gardée"
 
 finish

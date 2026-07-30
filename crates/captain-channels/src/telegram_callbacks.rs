@@ -1,6 +1,7 @@
 //! Telegram callback payload parsing and inline keyboards.
 
 use crate::types::{ChannelContent, ChannelMessage, ChannelType, ChannelUser};
+use captain_types::reasoning::AgentReasoningStatus;
 use captain_types::release_update::{
     RuntimeUpdateTelegramAction, RUNTIME_UPDATE_CALLBACK_TOKEN_LEN,
 };
@@ -134,11 +135,13 @@ pub fn parse_capspec_callback(data: &str) -> Option<CapSpecTelegramCallback> {
 
 /// Parse an `approval:<action>:<id>` callback payload into a slash command.
 ///
-/// Q.11.b.2 — 4 distinct routes:
+/// Six distinct routes keep allow and deny scopes explicit:
 /// - `approval:once:<id>`    -> `/approve <id>`
 /// - `approval:session:<id>` -> `/approve_session <id>`
 /// - `approval:always:<id>`  -> `/approve_always <id>`
 /// - `approval:deny:<id>`    -> `/reject <id>`
+/// - `approval:deny_session:<id>` -> `/reject_session <id>`
+/// - `approval:deny_always:<id>`  -> `/reject_always <id>`
 ///
 /// Returns `None` for unrelated callback data (agent reads via LLM path).
 pub fn parse_approval_callback(data: &str) -> Option<(String, Vec<String>)> {
@@ -154,6 +157,8 @@ pub fn parse_approval_callback(data: &str) -> Option<(String, Vec<String>)> {
         "session" => "approve_session",
         "always" => "approve_always",
         "deny" => "reject",
+        "deny_session" => "reject_session",
+        "deny_always" => "reject_always",
         _ => return None,
     };
     Some((cmd.to_string(), vec![id.to_string()]))
@@ -239,6 +244,34 @@ pub fn parse_model_switch_callback(data: &str) -> Option<(String, Vec<String>)> 
     }
 }
 
+/// Route one reasoning button to the exact agent represented by the card.
+/// The 12-character UUID prefix keeps Bot API callback data below 64 bytes;
+/// the dispatcher resolves it uniquely against the live registry.
+pub fn parse_reasoning_callback(data: &str) -> Option<(String, Vec<String>)> {
+    let rest = data.strip_prefix("reasoning:")?;
+    let mut parts = rest.splitn(2, ':');
+    let agent_prefix = parts.next()?.trim();
+    let effort = parts.next()?.trim().to_ascii_lowercase();
+    if agent_prefix.len() != 12
+        || !agent_prefix
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        return None;
+    }
+    if effort != "auto"
+        && effort
+            .parse::<captain_types::reasoning::ReasoningEffort>()
+            .is_err()
+    {
+        return None;
+    }
+    Some((
+        "reasoning".to_string(),
+        vec![format!("@agent:{agent_prefix}"), effort],
+    ))
+}
+
 /// Project ask-user callbacks resolve a pending autonomous project question.
 ///
 /// Payload shape: `project_ask:<ask_id>:<zero_based_option_index>`.
@@ -261,9 +294,9 @@ pub fn parse_project_ask_callback(data: &str) -> Option<(String, Vec<String>)> {
 
 /// Build a Telegram `inline_keyboard` markup for an approval request.
 ///
-/// Q.11.b.2 — 4 buttons, laid out on 2 rows for mobile
-/// readability. Click triggers a callback_query that
-/// `parse_approval_callback` routes into one of the 4 slash commands.
+/// Six buttons, laid out on 3 rows for mobile readability. Durable choices
+/// apply only to the exact agent/tool/action fingerprint and stay revocable.
+/// Each click becomes one of the six explicit approval slash commands.
 pub fn build_approval_keyboard(request_id: &str) -> serde_json::Value {
     serde_json::json!({
         "inline_keyboard": [
@@ -272,8 +305,12 @@ pub fn build_approval_keyboard(request_id: &str) -> serde_json::Value {
                 {"text": "🕒 Pour la session",    "callback_data": format!("approval:session:{request_id}")},
             ],
             [
-                {"text": "🔒 Toujours",           "callback_data": format!("approval:always:{request_id}")},
-                {"text": "❌ Rejeter",            "callback_data": format!("approval:deny:{request_id}")},
+                {"text": "🔒 Cette action",       "callback_data": format!("approval:always:{request_id}")},
+                {"text": "❌ Refuser",            "callback_data": format!("approval:deny:{request_id}")},
+            ],
+            [
+                {"text": "⛔ Refuser (session)",  "callback_data": format!("approval:deny_session:{request_id}")},
+                {"text": "🔐 Bloquer cette action", "callback_data": format!("approval:deny_always:{request_id}")},
             ]
         ]
     })
@@ -312,6 +349,56 @@ pub fn build_model_switch_keyboard_with_recommendation(
             ]
         ]
     })
+}
+
+/// Build compact controls for every effort reported by the selected model.
+pub fn build_reasoning_keyboard(
+    agent_prefix: &str,
+    status: &AgentReasoningStatus,
+) -> serde_json::Value {
+    if agent_prefix.len() != 12 || !status.supported {
+        return serde_json::json!({"inline_keyboard": []});
+    }
+    let configured = status
+        .configured_effort
+        .as_ref()
+        .map(|effort| effort.as_str());
+    let effective = status
+        .effective_effort
+        .as_ref()
+        .map(|effort| effort.as_str())
+        .unwrap_or("provider");
+    let auto_label = if configured.is_none() {
+        format!("✓ Auto ({effective})")
+    } else {
+        "Auto".to_string()
+    };
+    let mut buttons = vec![serde_json::json!({
+        "text": auto_label,
+        "callback_data": format!("reasoning:{agent_prefix}:auto"),
+    })];
+    for option in &status.options {
+        let effort = option.effort.as_str();
+        let display = match effort {
+            "ultra" => "Ultra · max + agents",
+            "none" => "None · explicite",
+            _ => effort,
+        };
+        let label = if configured == Some(effort) {
+            format!("✓ {display}")
+        } else {
+            display.to_string()
+        };
+        buttons.push(serde_json::json!({
+            "text": label,
+            "callback_data": format!("reasoning:{agent_prefix}:{effort}"),
+        }));
+    }
+    let rows = buttons
+        .chunks(2)
+        .map(|chunk| chunk.to_vec())
+        .collect::<Vec<_>>();
+    serde_json::json!({"inline_keyboard": rows})
 }
 
 /// Build a Telegram inline keyboard for memory/learning review items.
@@ -400,6 +487,46 @@ pub fn build_ask_user_keyboard(short_id: &str, options: &[String]) -> serde_json
         })
         .collect();
     serde_json::json!({ "inline_keyboard": rows })
+}
+
+/// Build a one-turn reply keyboard for non-blocking suggested replies.
+///
+/// Telegram sends the selected label back as an ordinary user message, so no
+/// callback registry or live agent-loop wait is involved. An empty option set
+/// removes any keyboard left by the previous response.
+pub fn build_suggested_replies_keyboard(options: &[String]) -> serde_json::Value {
+    if options.is_empty() {
+        return serde_json::json!({ "remove_keyboard": true });
+    }
+
+    let buttons = options
+        .iter()
+        .filter_map(|option| {
+            let option = option.trim();
+            if option.is_empty() {
+                return None;
+            }
+            let mut label: String = option.chars().take(63).collect();
+            if option.chars().count() > 63 {
+                label.push('…');
+            }
+            Some(serde_json::json!({ "text": label }))
+        })
+        .take(6)
+        .collect::<Vec<_>>();
+    if buttons.is_empty() {
+        return serde_json::json!({ "remove_keyboard": true });
+    }
+    let rows = buttons
+        .chunks(2)
+        .map(|row| row.to_vec())
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "keyboard": rows,
+        "resize_keyboard": true,
+        "one_time_keyboard": true,
+        "is_persistent": false,
+    })
 }
 
 /// Build Telegram buttons for a project ask-user prompt.
@@ -765,7 +892,65 @@ mod tests {
             parse_approval_callback("approval:deny:req-42"),
             Some(("reject".to_string(), vec!["req-42".to_string()]))
         );
+        assert_eq!(
+            parse_approval_callback("approval:deny_session:req-42"),
+            Some(("reject_session".to_string(), vec!["req-42".to_string()]))
+        );
+        assert_eq!(
+            parse_approval_callback("approval:deny_always:req-42"),
+            Some(("reject_always".to_string(), vec!["req-42".to_string()]))
+        );
         assert!(parse_approval_callback("approval:later:req-42").is_none());
+    }
+
+    #[test]
+    fn reasoning_callbacks_are_exact_compact_and_forward_compatible() {
+        assert_eq!(
+            parse_reasoning_callback("reasoning:01234567-abc:xhigh"),
+            Some((
+                "reasoning".to_string(),
+                vec!["@agent:01234567-abc".to_string(), "xhigh".to_string()]
+            ))
+        );
+        assert!(parse_reasoning_callback("reasoning:short:high").is_none());
+        assert!(parse_reasoning_callback("reasoning:01234567-abc:not valid").is_none());
+
+        let status = AgentReasoningStatus {
+            provider: "codex".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            supported: true,
+            configured_effort: Some("high".parse().unwrap()),
+            effective_effort: Some("high".parse().unwrap()),
+            source: captain_types::reasoning::ReasoningSelectionSource::AgentOverride,
+            override_valid: true,
+            options: ["low", "medium", "high", "xhigh", "max", "ultra"]
+                .into_iter()
+                .map(|effort| captain_types::reasoning::ReasoningEffortOption {
+                    effort: effort.parse().unwrap(),
+                    description: None,
+                })
+                .collect(),
+            reported_by_provider: true,
+        };
+        let keyboard = build_reasoning_keyboard("01234567-abc", &status);
+        let buttons = keyboard["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row.as_array().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(buttons.len(), 7);
+        assert!(buttons
+            .iter()
+            .all(|button| { button["callback_data"].as_str().unwrap().len() <= 64 }));
+        assert!(buttons.iter().any(|button| button["text"] == "✓ high"));
+        assert!(buttons.iter().any(|button| button["text"] == "Auto"));
+        assert!(!buttons.iter().any(|button| button["text"]
+            .as_str()
+            .is_some_and(|text| text == "Auto (high)")));
+        assert!(buttons
+            .iter()
+            .any(|button| button["text"] == "Ultra · max + agents"));
     }
 
     #[test]
@@ -793,6 +978,30 @@ mod tests {
         let label = rows[0][0]["text"].as_str().expect("label");
         assert!(label.ends_with('…'));
         assert!(label.chars().count() <= 45);
+    }
+
+    #[test]
+    fn suggested_replies_use_a_one_turn_reply_keyboard_or_remove_it() {
+        let options = vec![
+            "Court et direct".to_string(),
+            "Équilibré".to_string(),
+            "Détaillé".to_string(),
+        ];
+        let keyboard = build_suggested_replies_keyboard(&options);
+
+        assert_eq!(keyboard["one_time_keyboard"], true);
+        assert_eq!(keyboard["resize_keyboard"], true);
+        let rows = keyboard["keyboard"].as_array().expect("keyboard rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0]["text"], "Court et direct");
+        assert_eq!(rows[0][1]["text"], "Équilibré");
+        assert_eq!(rows[1][0]["text"], "Détaillé");
+        assert!(rows[0][0].get("callback_data").is_none());
+
+        assert_eq!(
+            build_suggested_replies_keyboard(&[])["remove_keyboard"],
+            true
+        );
     }
 
     #[test]

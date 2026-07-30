@@ -215,7 +215,6 @@ pub(crate) fn github_token(state: &AppState) -> Option<String> {
     state
         .kernel
         .resolve_credential("GITHUB_TOKEN")
-        .or_else(|| std::env::var("GITHUB_TOKEN").ok())
         .filter(|s| !s.trim().is_empty())
 }
 
@@ -340,7 +339,6 @@ mod tests {
             bridge_manager: tokio::sync::Mutex::new(None),
             channels_config: tokio::sync::RwLock::new(Default::default()),
             shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-            clawhub_cache: dashmap::DashMap::new(),
             ask_user_channels: dashmap::DashMap::new(),
             provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
         };

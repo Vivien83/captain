@@ -23,11 +23,27 @@ pub(crate) async fn tool_pkg_wrapper(
     exec_policy: Option<&captain_types::config::ExecPolicy>,
 ) -> Result<String, String> {
     let shell_input = package_shell_input(binary, allowed, input)?;
+    let command = shell_input["command"].as_str().unwrap_or_default();
+    let permit = match crate::guarded_exec::review_shell(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        command,
+        exec_policy,
+        false,
+    )? {
+        crate::guarded_exec::ReviewDecision::Proceed(permit) => permit,
+        crate::guarded_exec::ReviewDecision::ApprovalRequired { .. } => {
+            return Err(
+                "Package execution requires approval, but this wrapper has no approval rail."
+                    .to_string(),
+            );
+        }
+    };
     tool_shell_exec(
         &shell_input,
         allowed_env_vars.unwrap_or(&[]),
         workspace_root,
         exec_policy,
+        permit,
     )
     .await
 }

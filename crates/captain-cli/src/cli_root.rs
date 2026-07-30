@@ -392,4 +392,51 @@ mod tests {
             Some(Commands::Hand(HandCommands::List))
         ));
     }
+
+    #[test]
+    fn sessions_export_requires_one_session_or_all() {
+        assert!(Cli::try_parse_from(["captain", "sessions", "export"]).is_err());
+        assert!(
+            Cli::try_parse_from(["captain", "sessions", "export", "session-1", "--all"]).is_err()
+        );
+    }
+
+    #[test]
+    fn sessions_catalog_export_defaults_format_at_execution_time() {
+        let cli = Cli::try_parse_from([
+            "captain",
+            "sessions",
+            "export",
+            "--all",
+            "--agent",
+            "captain",
+            "--out",
+            "sessions.jsonl",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionsCommands::Export {
+                    session_id: None,
+                    all: true,
+                    agent: Some(_),
+                    format: None,
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn vault_sources_json_is_a_stable_operator_command() {
+        let cli = Cli::try_parse_from(["captain", "vault", "sources", "--json"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Vault(VaultCommands::Sources { json: true }))
+        ));
+    }
 }

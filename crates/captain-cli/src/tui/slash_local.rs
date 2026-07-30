@@ -198,9 +198,8 @@ pub(crate) fn voice_error_message(error: impl std::fmt::Display) -> String {
 }
 
 pub(crate) fn undo_last_exchange(chat: &mut ChatState) -> bool {
-    while let Some(message) = chat.messages.last() {
+    while let Some(message) = chat.pop_message() {
         let is_user = message.role == Role::User;
-        chat.messages.pop();
         if is_user {
             return true;
         }

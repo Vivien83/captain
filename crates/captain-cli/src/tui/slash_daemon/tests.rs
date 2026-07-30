@@ -2,7 +2,7 @@ use super::*;
 use crate::i18n::Lang;
 
 #[test]
-fn daemon_forward_commands_match_hermes_set() {
+fn daemon_forward_commands_match_expected_set() {
     for command in ["/health", "/version", "/config", "/restart", "/shutdown"] {
         assert!(is_daemon_forward_command(command), "{command}");
     }
@@ -16,7 +16,7 @@ fn non_daemon_commands_stay_in_slash_handler() {
 }
 
 #[test]
-fn unavailable_message_preserves_hermes_texts() {
+fn unavailable_message_preserves_expected_texts() {
     assert_eq!(
         unavailable_message(Lang::Fr),
         "Commande daemon disponible uniquement en mode daemon."

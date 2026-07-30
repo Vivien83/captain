@@ -5,9 +5,29 @@ use chrono::{DateTime, Utc};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ProviderQuotaWindow {
     pub used_percent: f64,
+    pub remaining_percent: f64,
+    pub remaining_source: Option<String>,
     pub window_seconds: Option<u64>,
     pub reset_after_seconds: Option<u64>,
     pub resets_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProviderSpendControlLimit {
+    pub source: Option<String>,
+    pub limit: String,
+    pub used: String,
+    pub remaining: String,
+    pub used_percent: i32,
+    pub remaining_percent: i32,
+    pub reset_after_seconds: u64,
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProviderSpendControl {
+    pub reached: bool,
+    pub individual_limit: Option<ProviderSpendControlLimit>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -28,6 +48,7 @@ pub(crate) struct ProviderQuota {
     pub primary: Option<ProviderQuotaWindow>,
     pub secondary: Option<ProviderQuotaWindow>,
     pub credits: Option<ProviderCredits>,
+    pub spend_control: Option<ProviderSpendControl>,
     pub rate_limit_reached_type: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
 }
@@ -51,6 +72,7 @@ impl ProviderQuota {
             primary: provider_window_from_json(&value["primary"]),
             secondary: provider_window_from_json(&value["secondary"]),
             credits: provider_credits_from_json(&value["credits"]),
+            spend_control: provider_spend_control_from_json(&value["spend_control"]),
             rate_limit_reached_type: value["rate_limit_reached_type"]
                 .as_str()
                 .map(str::to_string),
@@ -99,11 +121,64 @@ impl ProviderQuotaStatus {
 }
 
 fn provider_window_from_json(value: &serde_json::Value) -> Option<ProviderQuotaWindow> {
+    let used_percent = value["used_percent"].as_f64()?;
     Some(ProviderQuotaWindow {
-        used_percent: value["used_percent"].as_f64()?,
+        used_percent,
+        remaining_percent: value["remaining_percent"]
+            .as_f64()
+            .unwrap_or_else(|| (100.0 - used_percent).clamp(0.0, 100.0)),
+        remaining_source: value["remaining_source"].as_str().map(str::to_string),
         window_seconds: value["window_seconds"].as_u64(),
         reset_after_seconds: value["reset_after_seconds"].as_u64(),
         resets_at: parse_timestamp(&value["resets_at"]),
+    })
+}
+
+fn provider_spend_control_from_json(value: &serde_json::Value) -> Option<ProviderSpendControl> {
+    let object = value.as_object()?;
+    let individual = object
+        .get("individual_limit")
+        .and_then(serde_json::Value::as_object)
+        .map(|limit| ProviderSpendControlLimit {
+            source: limit
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            limit: limit
+                .get("limit")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            used: limit
+                .get("used")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            remaining: limit
+                .get("remaining")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            used_percent: limit
+                .get("used_percent")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default() as i32,
+            remaining_percent: limit
+                .get("remaining_percent")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default() as i32,
+            reset_after_seconds: limit
+                .get("reset_after_seconds")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+            resets_at: limit.get("resets_at").and_then(parse_timestamp),
+        });
+    Some(ProviderSpendControl {
+        reached: object
+            .get("reached")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        individual_limit: individual,
     })
 }
 
@@ -140,6 +215,8 @@ mod tests {
                 "stale": false,
                 "primary": {
                     "used_percent": 72.5,
+                    "remaining_percent": 27.5,
+                    "remaining_source": "derived_from_provider_used_percent",
                     "window_seconds": 604800,
                     "reset_after_seconds": 300,
                     "resets_at": "2026-07-19T18:00:00Z"
@@ -148,6 +225,19 @@ mod tests {
                     "has_credits": true,
                     "unlimited": false,
                     "balance": "17.50"
+                },
+                "spend_control": {
+                    "reached": false,
+                    "individual_limit": {
+                        "source": "monthly",
+                        "limit": "200.00",
+                        "used": "56.00",
+                        "remaining": "144.00",
+                        "used_percent": 28,
+                        "remaining_percent": 72,
+                        "reset_after_seconds": 86400,
+                        "resets_at": "2026-08-01T00:00:00Z"
+                    }
                 },
                 "rate_limit_reached_type": null,
                 "observed_at": "2026-07-18T18:00:00Z"
@@ -168,10 +258,18 @@ mod tests {
             quota.primary.as_ref().unwrap().reset_after_seconds,
             Some(300)
         );
+        assert_eq!(quota.primary.as_ref().unwrap().remaining_percent, 27.5);
         assert_eq!(
             quota.credits.as_ref().unwrap().balance.as_deref(),
             Some("17.50")
         );
+        let spend = quota
+            .spend_control
+            .as_ref()
+            .and_then(|control| control.individual_limit.as_ref())
+            .unwrap();
+        assert_eq!(spend.remaining, "144.00");
+        assert_eq!(spend.remaining_percent, 72);
         assert!(quota.observed_at.is_some());
     }
 

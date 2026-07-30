@@ -4,7 +4,6 @@ use crate::channel_bridge;
 use crate::middleware;
 use crate::rate_limiter;
 use crate::routes::AppState;
-use axum::http::HeaderValue;
 use axum::Router;
 use captain_channels::bridge::BridgeManager;
 use captain_kernel::CaptainKernel;
@@ -14,7 +13,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
@@ -36,13 +34,18 @@ pub async fn build_router(
 ) -> (Router<()>, Arc<AppState>) {
     let state = build_app_state(kernel).await;
     spawn_router_background_tasks(&state, listen_addr);
+    let request_origin_policy = crate::request_origin_security::RequestOriginPolicy::from_config(
+        &state.kernel.config.api,
+        &state.kernel.config.deployment,
+        listen_addr,
+    );
 
     let app = apply_api_layers(
         mount_api_routes(),
         state.clone(),
         build_auth_state(&state),
         rate_limiter::create_rate_limiter(),
-        build_cors_layer(&state.kernel.config.api_key, listen_addr),
+        request_origin_policy,
     );
     (app, state)
 }
@@ -64,7 +67,6 @@ fn app_state_from_bridge(
         bridge_manager: tokio::sync::Mutex::new(bridge),
         channels_config: tokio::sync::RwLock::new(channels_config),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         ask_user_channels: dashmap::DashMap::new(),
         provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
     })
@@ -76,6 +78,7 @@ fn spawn_router_background_tasks(state: &Arc<AppState>, listen_addr: SocketAddr)
     crate::agent_api_egress_queue::spawn_agent_api_egress_queue_drain(
         state.kernel.config.home_dir.clone(),
         state.kernel.audit_log.clone(),
+        Arc::downgrade(&state.kernel),
     );
     spawn_config_watcher(&state.kernel);
     spawn_goal_loops(state);
@@ -116,43 +119,13 @@ fn spawn_goal_reflection(state: &Arc<AppState>) {
     );
 }
 
-fn build_cors_layer(api_key: &str, listen_addr: SocketAddr) -> CorsLayer {
-    if api_key.trim().is_empty() {
-        return CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any);
-    }
-    CorsLayer::new()
-        .allow_origin(restricted_cors_origins(listen_addr))
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any)
-}
-
-fn restricted_cors_origins(listen_addr: SocketAddr) -> Vec<HeaderValue> {
-    let mut origins: Vec<HeaderValue> = vec![
-        format!("http://{listen_addr}").parse().unwrap(),
-        "http://localhost:4200".parse().unwrap(),
-        "http://127.0.0.1:4200".parse().unwrap(),
-        "http://localhost:8080".parse().unwrap(),
-        "http://127.0.0.1:8080".parse().unwrap(),
-    ];
-    if listen_addr.port() != 4200 && listen_addr.port() != 8080 {
-        if let Ok(v) = format!("http://localhost:{}", listen_addr.port()).parse() {
-            origins.push(v);
-        }
-        if let Ok(v) = format!("http://127.0.0.1:{}", listen_addr.port()).parse() {
-            origins.push(v);
-        }
-    }
-    origins
-}
-
 fn build_auth_state(state: &Arc<AppState>) -> middleware::AuthState {
     middleware::AuthState {
         api_key: state.kernel.config.api_key.trim().to_string(),
         home_dir: state.kernel.config.home_dir.clone(),
         fallback_auth: state.kernel.config.auth.clone(),
+        deployment: state.kernel.config.deployment.clone(),
+        security: Arc::new(crate::web_auth_security::WebAuthSecurity::default()),
     }
 }
 
@@ -190,8 +163,9 @@ fn apply_api_layers(
     state: Arc<AppState>,
     auth_state: middleware::AuthState,
     gcra_limiter: Arc<rate_limiter::KeyedRateLimiter>,
-    cors: CorsLayer,
+    request_origin_policy: crate::request_origin_security::RequestOriginPolicy,
 ) -> Router<()> {
+    let security = auth_state.security.clone();
     app.layer(axum::middleware::from_fn_with_state(
         auth_state,
         middleware::auth,
@@ -204,7 +178,12 @@ fn apply_api_layers(
     .layer(axum::middleware::from_fn(middleware::request_logging))
     .layer(CompressionLayer::new())
     .layer(TraceLayer::new_for_http())
-    .layer(cors)
+    .layer(request_origin_policy.cors_layer())
+    .layer(axum::middleware::from_fn_with_state(
+        request_origin_policy.host_policy(),
+        crate::request_origin_security::validate_host,
+    ))
+    .layer(axum::Extension(security))
     .with_state(state)
 }
 
@@ -452,19 +431,12 @@ pub(crate) fn validate_bind_auth_policy(
 #[cfg(test)]
 mod bind_auth_policy_tests {
     use super::{
-        autoscale_tick_secs_from_env, restricted_cors_origins, run_shutdown_phase_with_timeout,
-        validate_bind_auth_policy, wait_for_shutdown_drain_deadline,
+        autoscale_tick_secs_from_env, run_shutdown_phase_with_timeout, validate_bind_auth_policy,
+        wait_for_shutdown_drain_deadline,
     };
 
     fn sock(s: &str) -> std::net::SocketAddr {
         s.parse().unwrap()
-    }
-
-    fn origin_strings(listen: std::net::SocketAddr) -> Vec<String> {
-        restricted_cors_origins(listen)
-            .into_iter()
-            .map(|value| value.to_str().unwrap().to_string())
-            .collect()
     }
 
     #[test]
@@ -502,24 +474,6 @@ mod bind_auth_policy_tests {
     fn public_ip_without_key_is_rejected() {
         let res = validate_bind_auth_policy(sock("203.0.113.7:4200"), "");
         assert!(res.is_err(), "public IP with empty key must fail");
-    }
-
-    #[test]
-    fn restricted_cors_includes_listen_and_dev_origins() {
-        let origins = origin_strings(sock("0.0.0.0:50051"));
-        assert!(origins.contains(&"http://0.0.0.0:50051".to_string()));
-        assert!(origins.contains(&"http://localhost:50051".to_string()));
-        assert!(origins.contains(&"http://127.0.0.1:50051".to_string()));
-        assert!(origins.contains(&"http://localhost:4200".to_string()));
-        assert!(origins.contains(&"http://127.0.0.1:8080".to_string()));
-    }
-
-    #[test]
-    fn restricted_cors_keeps_standard_dev_ports_without_extra_variants() {
-        let origins = origin_strings(sock("0.0.0.0:4200"));
-        assert!(origins.contains(&"http://0.0.0.0:4200".to_string()));
-        assert!(origins.contains(&"http://localhost:4200".to_string()));
-        assert!(!origins.contains(&"http://localhost:50051".to_string()));
     }
 
     #[test]

@@ -149,6 +149,9 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     /// Extended thinking configuration (if supported by the model).
     pub thinking: Option<captain_types::config::ThinkingConfig>,
+    /// Explicit provider reasoning effort. `None` preserves the model's
+    /// provider-owned default instead of inventing a Captain default.
+    pub reasoning_effort: Option<captain_types::reasoning::ReasoningEffort>,
     /// Override tool_choice for this request (e.g., force a specific tool).
     /// None = "auto" (default). Some("any") = force at least one tool call.
     /// Some({"type":"function","function":{"name":"X"}}) = force specific tool.
@@ -227,6 +230,11 @@ pub enum StreamEvent {
         phase: String,
         detail: Option<String>,
     },
+    /// Session compaction progress emitted by the kernel before or after an
+    /// LLM turn. Determinate units exist only for completed history chunks.
+    CompactionProgress {
+        progress: captain_types::compaction::CompactionProgress,
+    },
     /// Tool execution completed with result (emitted by agent loop, not LLM driver).
     ToolExecutionResult {
         tool_use_id: String,
@@ -246,6 +254,10 @@ pub enum StreamEvent {
     /// Agent emits a complete intermediate message before continuing work.
     /// Creates a new visible "bubble" in the conversation — the agent thinks aloud.
     IntermediateMessage { content: String },
+    /// Non-blocking choices associated with the next visible response.
+    /// Unlike `AskUser`, selecting one starts a normal user turn and free-text
+    /// input always remains available.
+    SuggestedReplies { options: Vec<String> },
     /// Agent needs user input to continue. Blocks the loop until answered.
     AskUser {
         question: String,

@@ -362,6 +362,8 @@ fn installation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowIn
     })
 }
 
+// The SQL event row is intentionally explicit so field order stays reviewable.
+#[allow(clippy::too_many_arguments)]
 fn insert_installation_event(
     tx: &Transaction<'_>,
     idempotency_key: &str,

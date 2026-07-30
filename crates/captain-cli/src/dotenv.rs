@@ -4,7 +4,7 @@
 //! Format: `KEY=VALUE` lines, `#` comments, optional quotes.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Get the Captain home directory, respecting CAPTAIN_HOME env var.
 fn dotenv_captain_home() -> Option<PathBuf> {
@@ -69,7 +69,9 @@ fn load_env_file(path: Option<PathBuf>) {
 /// Also sets the key in the current process environment.
 pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     ensure_valid_env_key(key)?;
-    let path = env_file_path().ok_or("Could not determine home directory")?;
+    let home = dotenv_captain_home().ok_or("Could not determine home directory")?;
+    ensure_not_externally_managed(&home, key)?;
+    let path = home.join(".env");
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
@@ -94,7 +96,9 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
 pub fn save_secret_key(key: &str, value: &str) -> Result<(), String> {
     ensure_valid_secret_key(key)?;
     ensure_single_line_value(value)?;
-    let path = secrets_env_path().ok_or("Could not determine home directory")?;
+    let home = dotenv_captain_home().ok_or("Could not determine home directory")?;
+    ensure_not_externally_managed(&home, key)?;
+    let path = home.join("secrets.env");
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {e}"))?;
@@ -115,7 +119,9 @@ pub fn save_secret_key(key: &str, value: &str) -> Result<(), String> {
 ///
 /// Also removes it from the current process environment.
 pub fn remove_env_key(key: &str) -> Result<(), String> {
-    let path = env_file_path().ok_or("Could not determine home directory")?;
+    let home = dotenv_captain_home().ok_or("Could not determine home directory")?;
+    ensure_not_externally_managed(&home, key)?;
+    let path = home.join(".env");
 
     let mut entries = read_env_file(&path);
     entries.remove(key);
@@ -132,7 +138,9 @@ pub fn remove_env_key(key: &str) -> Result<(), String> {
 ///
 /// Also removes it from the current process environment.
 pub fn remove_secret_key(key: &str) -> Result<(), String> {
-    let path = secrets_env_path().ok_or("Could not determine home directory")?;
+    let home = dotenv_captain_home().ok_or("Could not determine home directory")?;
+    ensure_not_externally_managed(&home, key)?;
+    let path = home.join("secrets.env");
 
     let mut entries = read_env_file(&path);
     entries.remove(key);
@@ -143,6 +151,19 @@ pub fn remove_secret_key(key: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn ensure_not_externally_managed(home: &std::path::Path, key: &str) -> Result<(), String> {
+    let path = home.join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME);
+    let sources = captain_extensions::external_secret_sources::ExternalSecretSources::load(&path)
+        .map_err(|error| format!("Secret sources unavailable: {error}"))?;
+    if sources.is_configured(key) {
+        Err(format!(
+            "'{key}' is managed by secret-sources.toml; change the external mapping or file instead"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// List key names (without values) from `~/.captain/.env`.
@@ -254,7 +275,7 @@ fn read_env_file(path: &PathBuf) -> BTreeMap<String, String> {
 }
 
 /// Write key-value pairs back to the .env file with a header comment.
-fn write_env_file(path: &PathBuf, entries: &BTreeMap<String, String>) -> Result<(), String> {
+fn write_env_file(path: &Path, entries: &BTreeMap<String, String>) -> Result<(), String> {
     let mut content = String::from("# Captain environment — managed by Captain CLI\n");
     content.push_str("# Do not edit while the daemon is running.\n\n");
 
@@ -436,5 +457,25 @@ mod tests {
             Some(value) => std::env::set_var("CAPTAIN_HOME", value),
             None => std::env::remove_var("CAPTAIN_HOME"),
         }
+    }
+
+    #[test]
+    fn local_secret_mutations_refuse_externally_managed_keys() {
+        let home = tempfile::tempdir().unwrap();
+        let mounted = home.path().join("mounted-secret");
+        std::fs::write(&mounted, "external-value\n").unwrap();
+        std::fs::write(
+            home.path().join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.TEST_EXTERNAL_DOTENV]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+
+        let error = ensure_not_externally_managed(home.path(), "TEST_EXTERNAL_DOTENV").unwrap_err();
+
+        assert!(error.contains("managed by secret-sources.toml"));
+        assert!(ensure_not_externally_managed(home.path(), "LOCAL_DOTENV_KEY").is_ok());
     }
 }

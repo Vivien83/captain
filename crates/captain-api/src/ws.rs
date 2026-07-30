@@ -134,52 +134,22 @@ fn try_acquire_ws_slot(ip: IpAddr) -> Option<WsConnectionGuard> {
 
 /// GET /api/agents/:id/ws — Upgrade to WebSocket for real-time chat.
 ///
-/// SECURITY: Authenticates via Bearer token in Authorization header
-/// or `?token=` query parameter (for browser WebSocket clients that
-/// cannot set custom headers).
+/// Authentication is enforced by the shared API middleware. Browser clients
+/// use a path/IP/epoch-bound one-time ticket because WebSocket cannot attach a
+/// custom Authorization header.
 pub async fn agent_ws(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
     headers: axum::http::HeaderMap,
-    uri: axum::http::Uri,
 ) -> impl IntoResponse {
-    // SECURITY: Authenticate WebSocket upgrades (bypasses middleware).
-    // Trim whitespace so empty/whitespace-only api_key disables auth.
-    let api_key_raw = &state.kernel.config.api_key;
-    let api_key = api_key_raw.trim();
-    if !api_key.is_empty() {
-        // SECURITY: Use constant-time comparison to prevent timing attacks on API key
-        let ct_eq = |token: &str, key: &str| -> bool {
-            use subtle::ConstantTimeEq;
-            if token.len() != key.len() {
-                return false;
-            }
-            token.as_bytes().ct_eq(key.as_bytes()).into()
-        };
-
-        let header_auth = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|token| ct_eq(token, api_key))
-            .unwrap_or(false);
-
-        let query_auth = uri
-            .query()
-            .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
-            .map(|token| ct_eq(token, api_key))
-            .unwrap_or(false);
-
-        if !header_auth && !query_auth {
-            warn!("WebSocket upgrade rejected: invalid auth");
-            return axum::http::StatusCode::UNAUTHORIZED.into_response();
-        }
-    }
-
     // SECURITY: Enforce per-IP WebSocket connection limit
-    let ip = addr.ip();
+    let ip = crate::web_auth_security::request_client_ip(
+        Some(addr),
+        &headers,
+        &state.kernel.config.deployment,
+    );
 
     let guard = match try_acquire_ws_slot(ip) {
         Some(g) => g,
@@ -268,8 +238,15 @@ async fn handle_agent_ws(
                     if let captain_types::event::EventPayload::ChatStream(ref chat_ev) =
                         event.payload
                     {
-                        // Skip if this connection is the initiator (already gets direct stream)
-                        if is_initiator_events.load(Ordering::Relaxed) {
+                        // The initiator already receives normal stream events directly.
+                        // Compaction may also run just after that direct stream closes,
+                        // so always forward its idempotent operation projection.
+                        if is_initiator_events.load(Ordering::Relaxed)
+                            && !matches!(
+                                chat_ev,
+                                captain_types::event::ChatStreamEvent::CompactionProgress { .. }
+                            )
+                        {
                             continue;
                         }
                         if let Ok(json) = serde_json::to_value(chat_ev) {
@@ -1178,6 +1155,61 @@ async fn handle_command(
                 serde_json::json!({"type": "error", "content": format!("Usage query failed: {e}")})
             }
         },
+        "reasoning" => {
+            let effort = args.trim();
+            if effort.split_whitespace().count() > 1 {
+                return serde_json::json!({
+                    "type": "error",
+                    "content": "Usage: /reasoning [auto|level]",
+                });
+            }
+            let status = if effort.is_empty() {
+                state.kernel.agent_reasoning_status(agent_id)
+            } else {
+                let selected = (!effort.eq_ignore_ascii_case("auto")).then_some(effort);
+                state.kernel.set_agent_reasoning_effort(agent_id, selected)
+            };
+            match status {
+                Ok(status) => {
+                    let configured = status
+                        .configured_effort
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "auto".to_string());
+                    let effective = status
+                        .effective_effort
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "provider".to_string());
+                    let model = format!("{}/{}", status.provider, status.model);
+                    let semantics = match configured.as_str() {
+                        "auto" => " Auto omits the override; it is not `none`.",
+                        "none" => " `none` is an explicit effort; it is not Auto.",
+                        "ultra" => {
+                            " Ultra uses `max` model effort plus proactive root-agent delegation."
+                        }
+                        _ => "",
+                    };
+                    serde_json::json!({
+                        "type": "command_result",
+                        "command": cmd,
+                        "message": format!(
+                            "Reasoning: {configured} (effective: {effective}) on {model}.{semantics}"
+                        ),
+                        "reasoning": status,
+                    })
+                }
+                Err(error) => serde_json::json!({
+                    "type": "error",
+                    "content": format!("Reasoning control failed: {error}"),
+                }),
+            }
+        }
+        "think" => serde_json::json!({
+            "type": "command_result",
+            "command": cmd,
+            "message": "/think only shows or hides received reasoning blocks in the terminal UI. Use /reasoning [auto|level] to control the model.",
+        }),
         "context" => match state.kernel.context_report(agent_id) {
             Ok(report) => {
                 let formatted = captain_runtime::compactor::format_context_report(&report);
@@ -1220,8 +1252,8 @@ async fn handle_command(
             serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
         }
         "budget" => {
-            let budget = &state.kernel.config.budget;
-            let status = state.kernel.metering.budget_status(budget);
+            let budget = state.kernel.budget_config();
+            let status = state.kernel.metering.budget_status(&budget);
             let fmt = |v: f64| -> String {
                 if v > 0.0 {
                     format!("${v:.2}")
@@ -1381,6 +1413,10 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
             "phase": phase,
             "detail": detail,
         })),
+        StreamEvent::CompactionProgress { progress } => Some(serde_json::json!({
+            "type": "compaction_progress",
+            "progress": progress,
+        })),
         StreamEvent::ToolOutputDelta {
             tool_use_id,
             stream,
@@ -1394,6 +1430,10 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
         StreamEvent::IntermediateMessage { content } => Some(serde_json::json!({
             "type": "intermediate_message",
             "content": content,
+        })),
+        StreamEvent::SuggestedReplies { options } => Some(serde_json::json!({
+            "type": "suggested_replies",
+            "options": options,
         })),
         StreamEvent::AskUser { question, options } => Some(serde_json::json!({
             "type": "ask_user",
@@ -1655,12 +1695,19 @@ async fn broadcast_stream_event(
             phase: phase.clone(),
             detail: detail.clone(),
         }),
+        StreamEvent::CompactionProgress { progress } => Some(ChatStreamEvent::CompactionProgress {
+            progress: progress.clone(),
+        }),
         StreamEvent::IntermediateMessage { content } => {
             Some(ChatStreamEvent::IntermediateMessage {
                 agent_id,
                 content: content.clone(),
             })
         }
+        StreamEvent::SuggestedReplies { options } => Some(ChatStreamEvent::SuggestedReplies {
+            agent_id,
+            options: options.clone(),
+        }),
         StreamEvent::AskUser { question, options } => Some(ChatStreamEvent::AskUser {
             agent_id,
             question: question.clone(),
@@ -1678,11 +1725,58 @@ async fn broadcast_stream_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_types::compaction::{
+        CompactionPhase, CompactionProgress, CompactionState, COMPACTION_PROGRESS_SCHEMA_VERSION,
+    };
 
     #[test]
     fn test_ws_module_loads() {
         // Verify module compiles and loads correctly
         let _ = VerboseLevel::Off;
+    }
+
+    #[test]
+    fn compaction_progress_maps_to_the_typed_direct_ws_shape() {
+        let agent_id = AgentId::new();
+        let session_id = captain_types::agent::SessionId::new();
+        let event = StreamEvent::CompactionProgress {
+            progress: CompactionProgress {
+                schema_version: COMPACTION_PROGRESS_SCHEMA_VERSION,
+                operation_id: "compact-1".to_string(),
+                runtime_instance_id: "runtime-1".to_string(),
+                agent_id,
+                session_id,
+                phase: CompactionPhase::Summarizing,
+                state: CompactionState::Running,
+                detail: "opaque model call".to_string(),
+                message_count: 40,
+                estimated_tokens: 10_000,
+                context_window_tokens: 200_000,
+                completed_units: None,
+                total_units: None,
+                unit: None,
+                started_at_ms: 1,
+                updated_at_ms: 2,
+            },
+        };
+
+        let mapped = map_stream_event(&event, VerboseLevel::Off).expect("mapped event");
+        assert_eq!(mapped["type"], "compaction_progress");
+        assert_eq!(mapped["progress"]["session_id"], session_id.to_string());
+        assert!(mapped["progress"]["completed_units"].is_null());
+        assert!(mapped.get("percent").is_none());
+    }
+
+    #[test]
+    fn suggested_replies_map_to_the_typed_web_shape() {
+        let event = StreamEvent::SuggestedReplies {
+            options: vec!["Court".to_string(), "Détaillé".to_string()],
+        };
+
+        let mapped = map_stream_event(&event, VerboseLevel::Off).expect("mapped event");
+        assert_eq!(mapped["type"], "suggested_replies");
+        assert_eq!(mapped["options"][0], "Court");
+        assert_eq!(mapped["options"][1], "Détaillé");
     }
 
     #[test]

@@ -175,7 +175,7 @@ const FRENCH_TRANSLATIONS: &[(&str, &str)] = &[
     ("approvals.title", "Approbation requise"),
     ("approvals.choice.once", "Approuver une fois"),
     ("approvals.choice.session", "Approuver pour la session"),
-    ("approvals.choice.always", "Approuver toujours"),
+    ("approvals.choice.always", "Toujours cette action"),
     ("approvals.choice.decline", "Rejeter"),
     (
         "approvals.choice.once.hint",
@@ -183,11 +183,11 @@ const FRENCH_TRANSLATIONS: &[(&str, &str)] = &[
     ),
     (
         "approvals.choice.session.hint",
-        "approuve tous les appels à cet outil pour cet agent jusqu'au redémarrage",
+        "approuve cette action exacte pour cet agent jusqu'au redémarrage",
     ),
     (
         "approvals.choice.always.hint",
-        "ajoute l'outil à allow_always — persisté en politique",
+        "crée une règle exacte, durable et révocable pour cette action",
     ),
     (
         "approvals.choice.decline.hint",
@@ -211,11 +211,11 @@ const FRENCH_TRANSLATIONS: &[(&str, &str)] = &[
     ),
     (
         "approvals.granted_session",
-        "Approuvé pour la session — l'outil ne re-promptera plus.",
+        "Action exacte approuvée pour cette session.",
     ),
     (
         "approvals.granted_always",
-        "Approuvé toujours — persisté dans la politique.",
+        "Règle exacte, durable et révocable créée.",
     ),
     ("approvals.refused", "Rejeté."),
     ("kill.success", "Agent « {name} » tué."),
@@ -227,6 +227,8 @@ const FRENCH_TRANSLATIONS: &[(&str, &str)] = &[
             "/help         \u{2014} afficher cette aide\n",
             "/model        \u{2014} ouvrir le sélecteur de modèle (Ctrl+M)\n",
             "/model <nom>  \u{2014} changer de modèle directement\n",
+            "/reasoning [auto|niveau] \u{2014} voir ou choisir l'effort de réflexion\n",
+            "/think        \u{2014} afficher/masquer les blocs de raisonnement reçus\n",
             "/status       \u{2014} info connexion & agent\n",
             "/dashboard    \u{2014} ouvrir le cockpit Status\n",
             "/projects     \u{2014} ouvrir Projects\n",
@@ -369,7 +371,7 @@ const ENGLISH_TRANSLATIONS: &[(&str, &str)] = &[
     ("approvals.title", "Approval required"),
     ("approvals.choice.once", "Approve once"),
     ("approvals.choice.session", "Approve for session"),
-    ("approvals.choice.always", "Approve always"),
+    ("approvals.choice.always", "Always this action"),
     ("approvals.choice.decline", "Reject"),
     (
         "approvals.choice.once.hint",
@@ -377,11 +379,11 @@ const ENGLISH_TRANSLATIONS: &[(&str, &str)] = &[
     ),
     (
         "approvals.choice.session.hint",
-        "approve every call to this tool for this agent until daemon restart",
+        "approve this exact action for this agent until daemon restart",
     ),
     (
         "approvals.choice.always.hint",
-        "add the tool to allow_always — persisted into policy",
+        "create a durable, revocable exact-action rule",
     ),
     (
         "approvals.choice.decline.hint",
@@ -402,11 +404,11 @@ const ENGLISH_TRANSLATIONS: &[(&str, &str)] = &[
     ("approvals.granted_once", "Approved for this call only."),
     (
         "approvals.granted_session",
-        "Approved for the session — tool will not re-prompt.",
+        "Exact action approved for this session.",
     ),
     (
         "approvals.granted_always",
-        "Approved always — persisted to policy.",
+        "Durable, revocable exact-action rule created.",
     ),
     ("approvals.refused", "Rejected."),
     ("kill.success", "Agent \"{name}\" killed."),
@@ -418,6 +420,8 @@ const ENGLISH_TRANSLATIONS: &[(&str, &str)] = &[
             "/help         \u{2014} show this help\n",
             "/model        \u{2014} open model picker (Ctrl+M)\n",
             "/model <name> \u{2014} switch to model directly\n",
+            "/reasoning [auto|level] \u{2014} inspect or select reasoning effort\n",
+            "/think        \u{2014} show/hide received reasoning blocks\n",
             "/status       \u{2014} connection & agent info\n",
             "/dashboard    \u{2014} open the Status cockpit\n",
             "/projects     \u{2014} open Projects\n",

@@ -61,12 +61,12 @@ fn validate_image_name(image: &str) -> Result<(), String> {
 }
 
 /// SECURITY: Sanitize command — reject dangerous shell metacharacters.
-/// Delegates to the comprehensive subprocess_sandbox check.
+/// Delegates to the shared subprocess guard.
 pub(crate) fn validate_command(command: &str) -> Result<(), String> {
     if command.is_empty() {
         return Err("Command cannot be empty".into());
     }
-    if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
+    if let Some(reason) = crate::subprocess_guard::contains_shell_metacharacters(command) {
         return Err(format!(
             "Command blocked: contains {reason} — potential injection"
         ));

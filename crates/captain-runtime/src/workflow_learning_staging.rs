@@ -426,9 +426,7 @@ fn write_immutable(path: &Path, bytes: &[u8]) -> Result<(), WorkflowStagingError
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    if captain_types::durable_fs::create_new(path, bytes)? {
-        Ok(())
-    } else if fs::read(path)? == bytes {
+    if captain_types::durable_fs::create_new(path, bytes)? || fs::read(path)? == bytes {
         Ok(())
     } else {
         Err(WorkflowStagingError::ImmutableConflict(

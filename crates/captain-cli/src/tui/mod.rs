@@ -49,6 +49,7 @@ mod slash_kill;
 mod slash_local;
 mod slash_model;
 mod slash_project;
+mod slash_reasoning;
 mod slash_reload;
 mod slash_retry;
 mod slash_scroll;
@@ -477,6 +478,7 @@ impl App {
                 status,
                 caller_agent_id,
             } => self.handle_tool_run_status_event(run_id, tool_name, status, caller_agent_id),
+            AppEvent::CompactionProgress(progress) => self.chat.apply_compaction_progress(progress),
             AppEvent::DaemonDetected { url, agent_count } => {
                 self.handle_daemon_detected(url, agent_count);
             }
@@ -549,9 +551,11 @@ impl App {
             AppEvent::LearningDecided { id, approved } => {
                 self.handle_learning_decided(id, approved);
             }
-            AppEvent::SkillsProposedLoaded { workflows, metrics } => {
-                self.handle_skills_proposed_loaded(workflows, metrics)
-            }
+            AppEvent::SkillsProposedLoaded {
+                workflows,
+                metrics,
+                status,
+            } => self.handle_skills_proposed_loaded(workflows, metrics, status),
             AppEvent::WorkflowProposalDecided {
                 proposal_id,
                 action,
@@ -560,10 +564,13 @@ impl App {
             }
             AppEvent::CronJobsLoaded(jobs) => self.handle_cron_jobs_loaded(jobs),
             AppEvent::CronJobMutated { id, what } => self.handle_cron_job_mutated(id, what),
-            AppEvent::ApprovalsLoaded(items) => self.handle_approvals_loaded(items),
+            AppEvent::ApprovalsLoaded { pending, rules } => {
+                self.handle_approvals_loaded(pending, rules)
+            }
             AppEvent::ApprovalDecided { id, approved } => {
                 self.handle_approval_decided(id, approved);
             }
+            AppEvent::ApprovalRuleRevoked { id } => self.handle_approval_rule_revoked(id),
             AppEvent::ChatApprovalDetected(maybe_req) => {
                 self.handle_chat_approval_detected(maybe_req);
             }
@@ -604,8 +611,6 @@ impl App {
                 self.refresh_native_capabilities();
             }
             AppEvent::SkillsLoaded(list) => self.handle_skills_loaded(list),
-            AppEvent::ClawHubLoaded(results) => self.handle_clawhub_loaded(results),
-            AppEvent::SkillInstalled(name) => self.handle_skill_installed(name),
             AppEvent::SkillUninstalled(name) => self.handle_skill_uninstalled(name),
             AppEvent::McpServersLoaded(servers) => self.handle_mcp_servers_loaded(servers),
             AppEvent::TemplateProvidersLoaded(providers) => {
@@ -616,7 +621,9 @@ impl App {
                 self.handle_security_chain_verified(valid, message);
             }
             AppEvent::AuditEntriesLoaded(entries) => self.handle_audit_entries_loaded(entries),
-            AppEvent::AuditChainVerified(valid) => self.handle_audit_chain_verified(valid),
+            AppEvent::AuditChainVerified { valid, message } => {
+                self.handle_audit_chain_verified(valid, message)
+            }
             AppEvent::UsageSummaryLoaded(summary) => self.handle_usage_summary_loaded(summary),
             AppEvent::UsageByModelLoaded(models) => self.handle_usage_by_model_loaded(models),
             AppEvent::UsageByAgentLoaded(agents) => self.handle_usage_by_agent_loaded(agents),
@@ -813,10 +820,16 @@ impl App {
         _caller_agent_id: Option<String>,
     ) {
         match status.as_str() {
-            "running" => self
-                .chat
-                .track_background_activity(run_id, format!("tool_run {tool_name}")),
-            "completed" | "failed" | "cancelled" => {
+            "blocked" | "queued" | "running" | "cancel_requested" => {
+                let label = if run_id.starts_with("delegation:") {
+                    tool_name
+                } else {
+                    format!("tool_run {tool_name}")
+                };
+                self.chat.track_background_activity(run_id, label);
+            }
+            "completed" | "succeeded" | "failed" | "cancelled" | "uncertain"
+            | "dependency_failed" => {
                 self.chat.clear_background_activity(&run_id);
             }
             _ => {}
@@ -1048,9 +1061,11 @@ impl App {
         &mut self,
         workflows: Vec<captain_types::workflow_learning::WorkflowLearningView>,
         metrics: Option<skills_proposed::SkillsMetrics>,
+        status: captain_types::workflow_learning::WorkflowLearningStatus,
     ) {
         self.skills_proposed.workflows = workflows;
         self.skills_proposed.metrics = metrics;
+        self.skills_proposed.status = Some(status);
         self.skills_proposed.loading = false;
         if self.skills_proposed.list_state.selected().is_none()
             && !self.skills_proposed.workflows.is_empty()
@@ -1069,10 +1084,22 @@ impl App {
         self.refresh_skills_proposed();
     }
 
-    fn handle_approvals_loaded(&mut self, items: Vec<approvals::ApprovalRequest>) {
-        self.approvals.pending = items;
+    fn handle_approvals_loaded(
+        &mut self,
+        pending: Vec<approvals::ApprovalRequest>,
+        rules: Vec<approvals::ApprovalRule>,
+    ) {
+        self.approvals.pending = pending;
+        self.approvals.rules = rules;
         self.approvals.loading = false;
         select_first_if_unselected(&mut self.approvals.list_state, &self.approvals.pending);
+        select_first_if_unselected(&mut self.approvals.rules_state, &self.approvals.rules);
+    }
+
+    fn handle_approval_rule_revoked(&mut self, id: String) {
+        self.approvals.rules.retain(|rule| rule.id != id);
+        self.approvals.status_msg = format!("Règle {} révoquée.", &id[..id.len().min(8)]);
+        self.refresh_approvals();
     }
 
     fn handle_approval_decided(&mut self, id: String, approved: bool) {
@@ -1124,17 +1151,6 @@ impl App {
         self.skills.loading = false;
     }
 
-    fn handle_clawhub_loaded(&mut self, results: Vec<skills::ClawHubResult>) {
-        self.skills.clawhub_results = results;
-        select_first_if_non_empty(&mut self.skills.clawhub_list, &self.skills.clawhub_results);
-        self.skills.loading = false;
-    }
-
-    fn handle_skill_installed(&mut self, name: String) {
-        self.skills.status_msg = resource_status::skill_installed_message(&name);
-        self.refresh_skills();
-    }
-
     fn handle_skill_uninstalled(&mut self, name: String) {
         self.skills.installed.retain(|s| s.name != name);
         self.skills.status_msg = resource_status::skill_uninstalled_message(&name);
@@ -1167,8 +1183,9 @@ impl App {
         self.audit.loading = false;
     }
 
-    fn handle_audit_chain_verified(&mut self, valid: bool) {
+    fn handle_audit_chain_verified(&mut self, valid: bool, message: String) {
         self.audit.chain_verified = Some(valid);
+        self.audit.status_msg = message;
     }
 
     fn handle_usage_summary_loaded(&mut self, summary: usage::UsageSummary) {
@@ -2454,7 +2471,13 @@ impl App {
             approvals::ApprovalsAction::Refresh => self.refresh_approvals(),
             approvals::ApprovalsAction::Approve(id) => {
                 if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_decide_approval(backend, id, "approve", self.event_tx.clone());
+                    event::spawn_decide_approval(
+                        backend,
+                        id,
+                        "approve",
+                        None,
+                        self.event_tx.clone(),
+                    );
                 }
             }
             approvals::ApprovalsAction::ApproveSession(id) => {
@@ -2463,6 +2486,7 @@ impl App {
                         backend,
                         id,
                         "approve_session",
+                        None,
                         self.event_tx.clone(),
                     );
                 }
@@ -2473,13 +2497,30 @@ impl App {
                         backend,
                         id,
                         "approve_always",
+                        None,
                         self.event_tx.clone(),
                     );
                 }
             }
-            approvals::ApprovalsAction::Reject(id) => {
+            approvals::ApprovalsAction::Reject { id, scope, reason } => {
                 if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_decide_approval(backend, id, "reject", self.event_tx.clone());
+                    let path = match scope {
+                        approvals::RejectScope::Once => "reject",
+                        approvals::RejectScope::Session => "reject_session",
+                        approvals::RejectScope::Always => "reject_always",
+                    };
+                    event::spawn_decide_approval(
+                        backend,
+                        id,
+                        path,
+                        (!reason.is_empty()).then_some(reason),
+                        self.event_tx.clone(),
+                    );
+                }
+            }
+            approvals::ApprovalsAction::RevokeRule(id) => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_revoke_approval_rule(backend, id, self.event_tx.clone());
                 }
             }
         }
@@ -2775,6 +2816,7 @@ impl App {
                 if let Some(context_window) = kernel.effective_context_window_for_agent(agent_id) {
                     self.chat.set_context_window_tokens(context_window as u64);
                 }
+                self.chat.reasoning_status = kernel.agent_reasoning_status(agent_id).ok();
             }
             _ => {}
         }
@@ -3072,7 +3114,13 @@ impl App {
             } => self.switch_model(&model_id, Some(&session_strategy)),
             chat::ChatAction::ApproveRequest(id) => {
                 if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_decide_approval(backend, id, "approve", self.event_tx.clone());
+                    event::spawn_decide_approval(
+                        backend,
+                        id,
+                        "approve",
+                        None,
+                        self.event_tx.clone(),
+                    );
                 }
             }
             chat::ChatAction::ApproveSessionRequest(id) => {
@@ -3081,6 +3129,7 @@ impl App {
                         backend,
                         id,
                         "approve_session",
+                        None,
                         self.event_tx.clone(),
                     );
                 }
@@ -3091,13 +3140,20 @@ impl App {
                         backend,
                         id,
                         "approve_always",
+                        None,
                         self.event_tx.clone(),
                     );
                 }
             }
             chat::ChatAction::RejectRequest(id) => {
                 if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_decide_approval(backend, id, "reject", self.event_tx.clone());
+                    event::spawn_decide_approval(
+                        backend,
+                        id,
+                        "reject",
+                        Some("Refusé depuis le chat TUI.".to_string()),
+                        self.event_tx.clone(),
+                    );
                 }
             }
             chat::ChatAction::AnswerAskUser(content) => match &self.backend {
@@ -3625,23 +3681,6 @@ impl App {
         match action {
             skills::SkillsAction::Continue => {}
             skills::SkillsAction::RefreshInstalled => self.refresh_skills(),
-            skills::SkillsAction::SearchClawHub(query) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.skills.loading = true;
-                    event::spawn_search_clawhub(backend, query, self.event_tx.clone());
-                }
-            }
-            skills::SkillsAction::BrowseClawHub(sort) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.skills.loading = true;
-                    event::spawn_browse_clawhub(backend, sort, self.event_tx.clone());
-                }
-            }
-            skills::SkillsAction::InstallSkill(slug) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_install_skill(backend, slug, self.event_tx.clone());
-                }
-            }
             skills::SkillsAction::UninstallSkill(name) => {
                 if let Some(backend) = self.backend.to_ref() {
                     event::spawn_uninstall_skill(backend, name, self.event_tx.clone());
@@ -4814,6 +4853,13 @@ impl App {
             }
             return true;
         }
+        if let Some(reasoning) = slash_reasoning::command_for(
+            command,
+            slash_command::split_slash_command(canonical_command).1,
+        ) {
+            self.handle_reasoning_slash(reasoning);
+            return true;
+        }
         if slash_think::is_think_command(command) {
             self.chat.toggle_thinking();
             return true;
@@ -4823,6 +4869,53 @@ impl App {
             return true;
         }
         false
+    }
+
+    fn handle_reasoning_slash(
+        &mut self,
+        command: Result<slash_reasoning::ReasoningCommand, String>,
+    ) {
+        let command = match command {
+            Ok(command) => command,
+            Err(error) => {
+                self.chat.push_message(chat::Role::System, error);
+                return;
+            }
+        };
+        enum Route {
+            Daemon(String, String),
+            InProcess(Arc<CaptainKernel>, AgentId),
+            Missing,
+        }
+        let route = match (&self.backend, self.chat_target.as_ref()) {
+            (Backend::Daemon { base_url }, Some(target)) => target
+                .agent_id_daemon
+                .clone()
+                .map(|id| Route::Daemon(base_url.clone(), id))
+                .unwrap_or(Route::Missing),
+            (Backend::InProcess { kernel }, Some(target)) => target
+                .agent_id_inprocess
+                .map(|id| Route::InProcess(Arc::clone(kernel), id))
+                .unwrap_or(Route::Missing),
+            _ => Route::Missing,
+        };
+        let result = match route {
+            Route::Daemon(base_url, agent_id) => {
+                slash_reasoning::run_daemon(&base_url, &agent_id, &command)
+            }
+            Route::InProcess(kernel, agent_id) => {
+                slash_reasoning::run_inprocess(&kernel, agent_id, &command)
+            }
+            Route::Missing => Err("Aucun agent actif pour configurer le raisonnement.".to_string()),
+        };
+        match result {
+            Ok(status) => {
+                let message = slash_reasoning::status_message(&status);
+                self.chat.reasoning_status = Some(status);
+                self.chat.push_message(chat::Role::System, message);
+            }
+            Err(error) => self.chat.push_message(chat::Role::System, error),
+        }
     }
 
     fn handle_navigation_slash_route(
@@ -5801,22 +5894,21 @@ pub fn run(config: Option<PathBuf>) {
     app.enter_startup_phase();
 
     // ── Main loop ────────────────────────────────────────────────────────────
-    // Draw first, then block on events. This ensures the first frame appears
-    // immediately, before any event processing.
+    // Draw first, then block on exact event batches. Background streaming is
+    // frame-bounded; direct operator input still wakes the renderer at once.
     while !app.should_quit {
         terminal
             .draw(|frame| app.draw(frame))
             .expect("Failed to draw");
-
-        // Block until at least one event arrives (or 33ms timeout for ~30fps)
-        match rx.recv_timeout(Duration::from_millis(33)) {
-            Ok(ev) => app.handle_event(ev),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        // Drain all queued events immediately (batch processing)
-        while let Ok(ev) = rx.try_recv() {
+        let last_frame_at = std::time::Instant::now();
+        let Some(events) = event::receive_frame_events(&rx, last_frame_at) else {
+            break;
+        };
+        for ev in events {
             app.handle_event(ev);
+            if app.should_quit {
+                break;
+            }
         }
     }
 

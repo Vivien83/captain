@@ -37,6 +37,7 @@ pub(super) fn print_status_workload(body: &serde_json::Value, verbose: bool) {
     print_active_run_rows(body, verbose);
     print_active_process_rows(body, verbose);
     print_channel_queue_rows(body, verbose);
+    print_outbound_delivery_rows(body);
 
     let cron_total = status_json_u64(workload, &["automation", "cron_jobs"]);
     let cron_enabled = status_json_u64(workload, &["automation", "cron_enabled"]);
@@ -80,6 +81,39 @@ pub(super) fn print_status_workload(body: &serde_json::Value, verbose: bool) {
                 }
             }
         }
+    }
+}
+
+fn print_outbound_delivery_rows(body: &serde_json::Value) {
+    let delivery = &body["outbound_delivery"];
+    if delivery.is_null() {
+        return;
+    }
+    let pending = delivery["pending"].as_u64().unwrap_or(0);
+    let attempting = delivery["attempting"].as_u64().unwrap_or(0);
+    let dead = delivery["dead"].as_u64().unwrap_or(0);
+    let ambiguous = delivery["possible_duplicates"].as_u64().unwrap_or(0);
+    if pending == 0 && attempting == 0 && dead == 0 && ambiguous == 0 {
+        return;
+    }
+
+    ui::blank();
+    ui::section("Outbound Delivery");
+    ui::kv_warn(
+        "Responses",
+        &format!("{pending} pending, {attempting} attempting, {dead} dead, {ambiguous} ambiguous"),
+    );
+    if let Some(age) = delivery["oldest_pending_age_secs"].as_u64() {
+        ui::hint(&format!(
+            "Oldest recoverable response age: {}.",
+            format_duration(age)
+        ));
+    }
+    if let Some(error) = delivery["last_error"].as_str() {
+        ui::hint(&format!(
+            "Last delivery error: {}",
+            truncate_display(error, 160)
+        ));
     }
 }
 

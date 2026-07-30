@@ -32,6 +32,8 @@ pub async fn agent_api_egress_retry(
         state.kernel.audit_log.as_ref(),
         &agent_id,
         &queue_id,
+        &|key| state.kernel.resolve_credential(key),
+        &|key| state.kernel.credential_is_externally_managed(key),
     )
     .await
     {

@@ -109,9 +109,8 @@ pub(super) fn write_immutable(path: &Path, bytes: &[u8]) -> Result<(), WorkflowP
         }
         None => {}
     }
-    if captain_types::durable_fs::create_new(path, bytes)? {
-        Ok(())
-    } else if read_required_regular(path)? == bytes {
+    if captain_types::durable_fs::create_new(path, bytes)? || read_required_regular(path)? == bytes
+    {
         Ok(())
     } else {
         Err(WorkflowPromotionError::Conflict(format!(

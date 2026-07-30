@@ -25,6 +25,8 @@ pub fn default_blocked_workspace_paths(captain_home: &std::path::Path) -> Vec<st
     blocked.push(captain_home.join(".env.tmp"));
     blocked.push(captain_home.join("secrets.env"));
     blocked.push(captain_home.join("secrets.env.tmp"));
+    blocked.push(captain_home.join("secret-sources.toml"));
+    blocked.push(captain_home.join("secret-sources.toml.tmp"));
     blocked.push(captain_home.join("secrets-backups"));
     blocked.push(captain_home.join("vault.enc"));
     blocked.push(captain_home.join("vault.enc.bak"));
@@ -125,5 +127,14 @@ model = "gpt-5.5"
             runtime_toml,
             &runtime_manifest
         ));
+    }
+
+    #[test]
+    fn default_blocklist_protects_external_source_registry() {
+        let home = tempfile::tempdir().unwrap();
+        let blocked = default_blocked_workspace_paths(home.path());
+
+        assert!(blocked.contains(&home.path().join("secret-sources.toml")));
+        assert!(blocked.contains(&home.path().join("secret-sources.toml.tmp")));
     }
 }

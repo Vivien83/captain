@@ -3,15 +3,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use captain_types::config::{ExecPolicy, ExecSecurityMode};
+use captain_types::config::ExecPolicy;
 use captain_types::tool::ToolResult;
-use tracing::debug;
 
 use crate::kernel_handle::KernelHandle;
 
-use super::{
-    check_taint_shell_exec, ensure_no_secret_literal, shell_exec_approval_preview, tool_shell_exec,
-};
+use super::{shell_exec_approval_preview, tool_shell_exec};
 
 pub(crate) enum ShellDispatchOutcome {
     Blocked(ToolResult),
@@ -28,52 +25,39 @@ pub(crate) async fn dispatch_shell_exec(
     exec_policy: Option<&ExecPolicy>,
 ) -> ShellDispatchOutcome {
     let command = input["command"].as_str().unwrap_or("");
-    if let Err(reason) = ensure_no_secret_literal("shell_exec", "command", command) {
-        return ShellDispatchOutcome::Blocked(blocked_result(tool_use_id, reason));
-    }
-    if let Some(blocked) =
-        enforce_critical_pattern(tool_use_id, command, kernel, caller_agent_id, exec_policy).await
-    {
-        return ShellDispatchOutcome::Blocked(blocked);
-    }
-    if let Some(blocked) = enforce_shell_policy(tool_use_id, command, exec_policy) {
-        return ShellDispatchOutcome::Blocked(blocked);
-    }
+    let permit = match crate::guarded_exec::review_shell(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        command,
+        exec_policy,
+        true,
+    ) {
+        Ok(crate::guarded_exec::ReviewDecision::Proceed(permit)) => permit,
+        Ok(crate::guarded_exec::ReviewDecision::ApprovalRequired { pattern }) => {
+            if let Some(blocked) =
+                ask_for_critical_pattern(tool_use_id, command, kernel, caller_agent_id, pattern)
+                    .await
+            {
+                return ShellDispatchOutcome::Blocked(blocked);
+            }
+            crate::guarded_exec::permit_after_operator_approval(
+                crate::guarded_exec::ExecSurface::ShellTool,
+                command,
+            )
+        }
+        Err(reason) => {
+            return ShellDispatchOutcome::Blocked(blocked_result(tool_use_id, reason));
+        }
+    };
     ShellDispatchOutcome::Result(
         tool_shell_exec(
             input,
             allowed_env_vars.unwrap_or(&[]),
             workspace_root,
             exec_policy,
+            permit,
         )
         .await,
     )
-}
-
-async fn enforce_critical_pattern(
-    tool_use_id: &str,
-    command: &str,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
-    exec_policy: Option<&ExecPolicy>,
-) -> Option<ToolResult> {
-    let critical_mode = exec_policy.map(|p| p.critical_mode).unwrap_or_default();
-    match crate::critical_patterns::decide(command, critical_mode) {
-        crate::critical_patterns::CriticalDecision::Proceed => None,
-        crate::critical_patterns::CriticalDecision::Block(pat) => Some(blocked_result(
-            tool_use_id,
-            format!(
-                "shell_exec blocked: hyper-critical pattern `{pat}` detected. \
-                 Current security.critical_mode = '{:?}'. \
-                 Switch to 'open' to enable one-shot user approval, \
-                 or remove the pattern from the command.",
-                critical_mode
-            ),
-        )),
-        crate::critical_patterns::CriticalDecision::AskUser(pat) => {
-            ask_for_critical_pattern(tool_use_id, command, kernel, caller_agent_id, pat).await
-        }
-    }
 }
 
 async fn ask_for_critical_pattern(
@@ -88,12 +72,34 @@ async fn ask_for_critical_pattern(
         "shell_exec critical pattern `{pat}` detected.\n{}",
         shell_exec_approval_preview(&serde_json::json!({ "command": command }))
     );
+    let action_digest =
+        captain_types::approval::approval_action_digest("shell_exec_critical", command.as_bytes());
     let approved = match kernel {
         Some(kh) => match kh
-            .request_approval(agent_id_str, "shell_exec_critical", &summary)
+            .request_approval(
+                agent_id_str,
+                "shell_exec_critical",
+                &summary,
+                &action_digest,
+            )
             .await
         {
-            Ok(approved) => approved,
+            Ok(outcome) => {
+                if !outcome.is_approved() {
+                    let reason = outcome
+                        .reason
+                        .as_deref()
+                        .map(|reason| format!(" Operator reason: {reason}"))
+                        .unwrap_or_default();
+                    return Some(blocked_result(
+                        tool_use_id,
+                        format!(
+                            "shell_exec blocked: hyper-critical pattern `{pat}` was refused by the user.{reason} Do not retry the same command unchanged."
+                        ),
+                    ));
+                }
+                true
+            }
             Err(e) => {
                 return Some(blocked_result(
                     tool_use_id,
@@ -114,54 +120,6 @@ async fn ask_for_critical_pattern(
                  was refused by the user (or no UI available)."
             ),
         ));
-    }
-    debug!(pattern = pat, "Q.9 critical command approved by user");
-    None
-}
-
-fn enforce_shell_policy(
-    tool_use_id: &str,
-    command: &str,
-    exec_policy: Option<&ExecPolicy>,
-) -> Option<ToolResult> {
-    let is_full_mode = exec_policy
-        .map(|p| p.mode == ExecSecurityMode::Full)
-        .unwrap_or(true);
-    if !is_full_mode {
-        if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
-            return Some(blocked_result(
-                tool_use_id,
-                format!(
-                    "shell_exec blocked: command contains {reason}. \
-                     Shell metacharacters are not allowed in {:?} mode.",
-                    exec_policy.map(|p| p.mode).unwrap_or_default()
-                ),
-            ));
-        }
-    }
-
-    if let Some(policy) = exec_policy {
-        if let Err(reason) = crate::subprocess_sandbox::validate_command_allowlist(command, policy)
-        {
-            return Some(blocked_result(
-                tool_use_id,
-                format!(
-                    "shell_exec blocked: {reason}. Current exec_policy.mode = '{:?}'. \
-                     To allow shell commands, set exec_policy.mode = 'full' in the agent manifest or config.toml.",
-                    policy.mode
-                ),
-            ));
-        }
-    }
-
-    let is_full_exec = exec_policy.is_some_and(|p| p.mode == ExecSecurityMode::Full);
-    if !is_full_exec {
-        if let Some(violation) = check_taint_shell_exec(command) {
-            return Some(blocked_result(
-                tool_use_id,
-                format!("Taint violation: {violation}"),
-            ));
-        }
     }
     None
 }

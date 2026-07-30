@@ -50,12 +50,21 @@ pub(crate) async fn dispatch_system_update(
         return Err("system_update requires a kernel handle for user approval".to_string());
     };
     let summary = format!("Update Captain and restart the daemon:\n{check_text}");
-    let approved = kernel
-        .request_approval(agent_id, "system_update", &summary)
+    let action_digest =
+        captain_types::approval::approval_action_digest("system_update", summary.as_bytes());
+    let outcome = kernel
+        .request_approval(agent_id, "system_update", &summary, &action_digest)
         .await
         .map_err(|e| format!("approval request failed: {e}"))?;
-    if !approved {
-        return Ok("Mise à jour refusée par l'utilisateur — rien n'a été modifié.".to_string());
+    if !outcome.is_approved() {
+        let reason = outcome
+            .reason
+            .as_deref()
+            .map(|reason| format!(" Motif : {reason}"))
+            .unwrap_or_default();
+        return Ok(format!(
+            "Mise à jour refusée par l'utilisateur — rien n'a été modifié.{reason}"
+        ));
     }
 
     // The updater must outlive this daemon (the restart kills us), so it is

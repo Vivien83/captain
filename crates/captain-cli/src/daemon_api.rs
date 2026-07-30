@@ -1,6 +1,6 @@
 use captain_api::server::read_daemon_info;
 
-use crate::{cli_captain_home, ui};
+use crate::{cli_captain_home, production_credential_resolver_at, ui};
 
 pub(crate) fn find_daemon() -> Option<String> {
     let home_dir = cli_captain_home();
@@ -145,39 +145,99 @@ fn read_local_session_token() -> Option<String> {
     if username.is_empty() || snapshot.auth.password_hash.trim().is_empty() {
         return None;
     }
+    let session_secret = snapshot.session_secret()?;
     Some(captain_api::session_auth::create_session_token(
         username,
-        &snapshot.session_secret(),
-        snapshot.auth.session_ttl_hours.max(1),
+        &session_secret,
+        snapshot.auth.session_ttl_hours.clamp(1, 8760),
+        snapshot.auth.session_epoch,
     ))
 }
 
 fn read_api_key() -> Option<String> {
+    let home = cli_captain_home();
+    let resolver = match production_credential_resolver_at(&home) {
+        Ok(resolver) => resolver,
+        Err(error) => {
+            tracing::warn!(error = %error, "Local secret sources unavailable");
+            return None;
+        }
+    };
     let config_path = cli_captain_home().join("config.toml");
-    if let Ok(text) = std::fs::read_to_string(config_path) {
+    let config_key = if let Ok(text) = std::fs::read_to_string(config_path) {
         if let Ok(table) = text.parse::<toml::Value>() {
             if let Some(key) = table.get("api_key").and_then(|v| v.as_str()) {
                 let key = key.trim();
                 if !key.is_empty() {
-                    return Some(key.to_string());
+                    Some(key.to_string())
+                } else {
+                    None
                 }
+            } else {
+                None
             }
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
-    let home = cli_captain_home();
-    let resolver = captain_extensions::credentials::CredentialResolver::new_with_secrets(
-        None,
-        Some(&home.join("secrets.env")),
-        Some(&home.join(".env")),
-    );
+    select_api_key(config_key, &resolver)
+}
+
+fn select_api_key(
+    config_key: Option<String>,
+    resolver: &captain_extensions::credentials::CredentialResolver,
+) -> Option<String> {
     for name in ["CAPTAIN_DAEMON_API_KEY", "CAPTAIN_API_KEY"] {
+        let externally_managed = resolver.is_externally_managed(name);
         if let Some(value) = resolver.resolve(name) {
             let value = value.trim().to_string();
             if !value.is_empty() {
-                return Some(value);
+                return if externally_managed {
+                    Some(value)
+                } else {
+                    config_key.or(Some(value))
+                };
             }
         }
+        if externally_managed {
+            return None;
+        }
     }
-    None
+    config_key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_api_key;
+
+    #[test]
+    fn external_daemon_key_overrides_config_and_fails_closed_when_missing() {
+        let home = tempfile::tempdir().unwrap();
+        let mounted = home.path().join("daemon-key");
+        std::fs::write(&mounted, "fresh-external-key\n").unwrap();
+        std::fs::write(
+            home.path().join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.CAPTAIN_DAEMON_API_KEY]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+        let resolver =
+            captain_extensions::credentials::CredentialResolver::from_home(None, home.path())
+                .unwrap();
+
+        assert_eq!(
+            select_api_key(Some("stale-config-key".to_string()), &resolver).as_deref(),
+            Some("fresh-external-key")
+        );
+        std::fs::remove_file(mounted).unwrap();
+        assert_eq!(
+            select_api_key(Some("stale-config-key".to_string()), &resolver),
+            None
+        );
+    }
 }

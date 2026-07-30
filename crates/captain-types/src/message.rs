@@ -262,6 +262,7 @@ impl TokenUsage {
 /// - `reply_to`: reply to a specific message ID
 /// - `current_thread`: reply in the current thread
 /// - `silent`: suppress the response entirely
+/// - `suggested_replies`: show non-blocking reply choices when supported
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReplyDirectives {
     /// Reply to a specific message ID.
@@ -270,6 +271,11 @@ pub struct ReplyDirectives {
     pub current_thread: bool,
     /// Suppress the response from being sent.
     pub silent: bool,
+    /// Non-blocking reply choices for the current response. `Some([])` clears
+    /// choices left by the previous response; `None` leaves normal delivery
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_replies: Option<Vec<String>>,
 }
 
 #[cfg(test)]

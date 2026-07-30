@@ -38,7 +38,7 @@ pub fn loaded_session_from_detail(
 }
 
 pub fn restore_public_session_messages(chat: &mut ChatState, detail: &serde_json::Value) -> usize {
-    chat.messages.clear();
+    chat.clear_messages();
     chat.scroll_offset = 0;
     chat.context_stream_checkpoint_chars = None;
     if let Some(context_window) = detail

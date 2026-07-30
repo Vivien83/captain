@@ -82,7 +82,7 @@ fn classify_policy_error(tool_name: &str, lower: &str) -> Option<StructuredToolE
             "security blocked",
             "secret literal",
             "raw secret",
-            "taint violation",
+            "content guard blocked",
         ],
     ) {
         return Some(security_blocked_error());

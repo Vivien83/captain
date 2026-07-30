@@ -491,6 +491,7 @@ fn dispatch_vault_command(sub: VaultCommands) {
         VaultCommands::Init => super::vault::cmd_vault_init(),
         VaultCommands::Set { key } => super::vault::cmd_vault_set(&key),
         VaultCommands::List => super::vault::cmd_vault_list(),
+        VaultCommands::Sources { json } => super::vault::cmd_vault_sources(json),
         VaultCommands::Remove { key } => super::vault::cmd_vault_remove(&key),
     }
 }

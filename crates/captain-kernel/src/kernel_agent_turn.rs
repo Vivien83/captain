@@ -83,10 +83,8 @@ impl CaptainKernel {
             return Ok(result);
         }
 
-        // Enforce quota before running the agent loop.
-        self.scheduler
-            .check_quota(agent_id)
-            .map_err(KernelError::Captain)?;
+        // Enforce the coherent global budget and the agent quota before work.
+        self.check_turn_budget(agent_id)?;
 
         let regex_hint = self.emit_user_message_learning_hint(agent_id, message);
 

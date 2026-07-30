@@ -17,7 +17,7 @@ fn large_timestamp_stays_in_known_key_set() {
 }
 
 #[test]
-fn fortune_message_preserves_hermes_i18n_text() {
+fn fortune_message_preserves_expected_i18n_text() {
     assert_eq!(
         fortune_message_for_timestamp_secs(0, crate::i18n::Lang::Fr),
         "L'ennemi de mon art, c'est l'improvisation sans préparation."

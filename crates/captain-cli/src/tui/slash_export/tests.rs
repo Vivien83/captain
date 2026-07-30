@@ -16,7 +16,7 @@ fn success_message_preserves_full_tui_french_and_standalone_english() {
 }
 
 #[test]
-fn failure_message_preserves_hermes_full_tui_spacing() {
+fn failure_message_preserves_expected_full_tui_spacing() {
     assert_eq!(
         export_failed_message(crate::i18n::Lang::Fr, ExportSurface::FullTui, "disk full"),
         "Échec export: disk full"

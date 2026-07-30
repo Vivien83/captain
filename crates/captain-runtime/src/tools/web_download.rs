@@ -2,7 +2,7 @@
 
 use crate::kernel_handle::KernelHandle;
 use crate::tools::{
-    check_taint_net_fetch, ensure_no_secret_literal, hex_nibble, resolve_file_path_for_caller,
+    check_url_content_guard, ensure_no_secret_literal, hex_nibble, resolve_file_path_for_caller,
 };
 use futures::StreamExt;
 use sha2::Digest;
@@ -71,8 +71,8 @@ pub(crate) async fn tool_web_download(
 fn parse_web_download_request(input: &serde_json::Value) -> Result<WebDownloadRequest, String> {
     let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
     ensure_no_secret_literal("web_download", "url", url)?;
-    if let Some(violation) = check_taint_net_fetch(url) {
-        return Err(format!("Taint violation: {violation}"));
+    if let Some(violation) = check_url_content_guard(url) {
+        return Err(violation);
     }
 
     let max_bytes = input["max_bytes"]

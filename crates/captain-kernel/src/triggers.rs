@@ -1169,6 +1169,12 @@ fn describe_event(event: &Event) -> String {
                 run.run_id, run.tool_name, run.status
             )
         }
+        EventPayload::AgentDelegation(job) => {
+            format!(
+                "Agent delegation '{}' ({}) status={} target={}",
+                job.title, job.job_id, job.status, job.target_agent_id
+            )
+        }
     }
 }
 

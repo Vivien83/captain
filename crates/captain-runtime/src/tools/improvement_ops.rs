@@ -77,9 +77,18 @@ fn workflow_learning_item_output(item: &serde_json::Value) -> serde_json::Value 
 
 fn workflow_learning_snapshot(
     result: Result<serde_json::Value, String>,
+    operational_status: Result<serde_json::Value, String>,
     tool_name: &str,
     limit: usize,
 ) -> serde_json::Value {
+    let engine = match operational_status {
+        Ok(status) => public_safe_json_value(status, tool_name),
+        Err(error) => serde_json::json!({
+            "state": "unavailable",
+            "recovery": "operator_attention",
+            "error": error,
+        }),
+    };
     let snapshot = match result {
         Ok(value) => {
             let items = project_review_items(
@@ -105,6 +114,7 @@ fn workflow_learning_snapshot(
                 "status": "ok",
                 "count": items.as_array().map(Vec::len).unwrap_or(0),
                 "action_required": action_required,
+                "engine": engine,
                 "items": items,
             })
         }
@@ -113,6 +123,7 @@ fn workflow_learning_snapshot(
             "count": 0,
             "action_required": 0,
             "error": error,
+            "engine": engine,
             "items": [],
         }),
     };
@@ -188,6 +199,7 @@ pub(crate) fn tool_self_improvement_review(
     );
     let workflow_learning = workflow_learning_snapshot(
         kh.workflow_learning_list(limit),
+        kh.workflow_learning_status(),
         "self_improvement_review",
         limit,
     );
@@ -315,6 +327,7 @@ pub(crate) fn tool_workflow_learning_list(
     let limit = review_list_limit(input, 50);
     let snapshot = workflow_learning_snapshot(
         kh.workflow_learning_list(limit),
+        kh.workflow_learning_status(),
         "workflow_learning_list",
         limit,
     );

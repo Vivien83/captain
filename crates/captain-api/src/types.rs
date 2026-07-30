@@ -89,12 +89,6 @@ pub struct MessageResponse {
     pub tool_calls: Vec<ToolCallSummary>,
 }
 
-/// Request to install a skill from the marketplace.
-#[derive(Debug, Deserialize)]
-pub struct SkillInstallRequest {
-    pub name: String,
-}
-
 /// Request to uninstall a skill.
 #[derive(Debug, Deserialize)]
 pub struct SkillUninstallRequest {
@@ -111,13 +105,6 @@ pub struct AgentUpdateRequest {
 #[derive(Debug, Deserialize)]
 pub struct SetModeRequest {
     pub mode: captain_types::agent::AgentMode,
-}
-
-/// Request to install a skill from ClawHub.
-#[derive(Debug, Deserialize)]
-pub struct ClawHubInstallRequest {
-    /// ClawHub skill slug (e.g., "github-helper").
-    pub slug: String,
 }
 
 /// Request body for POST /api/agents/{id}/session/restore. Carries the

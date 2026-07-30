@@ -1,6 +1,10 @@
+use captain_memory::agent_delegation_jobs::AgentDelegationJobStore;
 use captain_runtime::agent_loop::with_turn_token_budget;
 use captain_runtime::kernel_handle;
 use captain_types::agent::{AgentEntry, AgentId, AgentManifest, AutoScaleConfig};
+use captain_types::agent_delegation::{
+    AgentDelegationJobRecord, AgentDelegationStatus, NewAgentDelegationJob,
+};
 use serde_json::Value;
 
 use super::kernel_agent_workspace::manager_domain_template;
@@ -470,6 +474,123 @@ impl CaptainKernel {
             "note": "agent_delegate is synchronous today. The run budget is scoped to this delegation and can stop further tool steps after the budget is reached; a single LLM call can still exceed the target before Captain can interrupt it."
         }))
         .unwrap_or_else(|_| format!("Task {task_id} completed.")))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn handle_start_agent_delegation(
+        &self,
+        caller_agent_ref: &str,
+        target_agent_ref: &str,
+        title: &str,
+        task: &str,
+        max_tokens: u64,
+        depends_on: &[String],
+        idempotency_key: &str,
+    ) -> Result<AgentDelegationJobRecord, String> {
+        let caller = self.resolve_agent_id(caller_agent_ref)?;
+        let target = self.resolve_agent_id(target_agent_ref)?;
+        let target_entry = self
+            .registry
+            .get(target)
+            .ok_or_else(|| format!("Agent not found: {target_agent_ref}"))?;
+        if !matches!(
+            target_entry.state,
+            captain_types::agent::AgentState::Running
+        ) {
+            return Err(format!(
+                "Agent {} is {:?}; start or replace it before delegation",
+                target_entry.name, target_entry.state
+            ));
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let request = NewAgentDelegationJob {
+            id: uuid::Uuid::new_v4().to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            caller_agent_id: caller.to_string(),
+            target_agent_id: target.to_string(),
+            title: title.to_string(),
+            task: task.to_string(),
+            max_tokens,
+            depends_on: depends_on.to_vec(),
+            created_at_unix_ms: now,
+        };
+        let record = self
+            .agent_delegation_store()
+            .enqueue(&request)
+            .map_err(|error| error.to_string())?;
+        self.agent_delegation_notify.notify_one();
+        super::kernel_agent_delegation::publish_agent_delegation_event(self, &record);
+        Ok(record)
+    }
+
+    pub(super) fn handle_agent_delegation_status(
+        &self,
+        caller_agent_ref: &str,
+        job_id: &str,
+    ) -> Result<Option<AgentDelegationJobRecord>, String> {
+        let caller = self.resolve_agent_id(caller_agent_ref)?;
+        self.agent_delegation_store()
+            .get_for_caller(&caller.to_string(), job_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn handle_list_agent_delegations(
+        &self,
+        caller_agent_ref: &str,
+        status: Option<AgentDelegationStatus>,
+        limit: usize,
+    ) -> Result<Vec<AgentDelegationJobRecord>, String> {
+        let caller = self.resolve_agent_id(caller_agent_ref)?;
+        self.agent_delegation_store()
+            .list_for_caller(&caller.to_string(), status, limit)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn handle_cancel_agent_delegation(
+        &self,
+        caller_agent_ref: &str,
+        job_id: &str,
+    ) -> Result<AgentDelegationJobRecord, String> {
+        let caller = self.resolve_agent_id(caller_agent_ref)?;
+        let record = self
+            .agent_delegation_store()
+            .request_cancel(
+                &caller.to_string(),
+                job_id,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| error.to_string())?;
+        if record.status == AgentDelegationStatus::CancelRequested {
+            if let Some(signal) = self.agent_delegation_cancellations.get(job_id) {
+                signal.notify_one();
+            }
+        }
+        self.agent_delegation_notify.notify_one();
+        super::kernel_agent_delegation::publish_agent_delegation_event(self, &record);
+        Ok(record)
+    }
+
+    pub(super) fn handle_resume_agent_delegation(
+        &self,
+        caller_agent_ref: &str,
+        job_id: &str,
+    ) -> Result<AgentDelegationJobRecord, String> {
+        let caller = self.resolve_agent_id(caller_agent_ref)?;
+        let record = self
+            .agent_delegation_store()
+            .resume(
+                &caller.to_string(),
+                job_id,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| error.to_string())?;
+        self.agent_delegation_notify.notify_one();
+        super::kernel_agent_delegation::publish_agent_delegation_event(self, &record);
+        Ok(record)
+    }
+
+    pub(super) fn agent_delegation_store(&self) -> AgentDelegationJobStore {
+        AgentDelegationJobStore::new(self.memory.usage_conn())
     }
 
     pub(super) fn handle_find_agents(&self, query: &str) -> Vec<kernel_handle::AgentInfo> {

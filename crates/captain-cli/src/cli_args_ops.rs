@@ -52,11 +52,11 @@ pub(crate) enum AgentCommands {
         /// Agent ID (UUID).
         agent_id: String,
     },
-    /// Set an agent property (e.g., model).
+    /// Set an agent property (model or reasoning).
     Set {
         /// Agent ID (UUID).
         agent_id: String,
-        /// Field to set (model).
+        /// Field to set (model or reasoning).
         field: String,
         /// New value.
         value: String,
@@ -364,7 +364,7 @@ pub(crate) enum SecurityCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Verify audit trail integrity (Merkle chain).
+    /// Verify audit trail integrity (versioned SHA-256 hash chain).
     Verify,
 }
 

@@ -34,7 +34,7 @@ fn non_attachment_commands_are_ignored() {
 }
 
 #[test]
-fn upload_status_messages_preserve_hermes_full_tui_text() {
+fn upload_status_messages_preserve_expected_full_tui_text() {
     assert_eq!(
         upload_requires_daemon_message(),
         "Les images requièrent le mode daemon avec un agent actif."
@@ -58,7 +58,7 @@ fn upload_status_messages_preserve_hermes_full_tui_text() {
 }
 
 #[test]
-fn picker_and_inprocess_messages_preserve_hermes_text() {
+fn picker_and_inprocess_messages_preserve_expected_text() {
     assert_eq!(
         attachments_ignored_without_daemon_message(),
         "Pièces jointes ignorées: requièrent le mode daemon."

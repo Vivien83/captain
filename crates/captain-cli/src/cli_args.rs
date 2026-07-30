@@ -13,6 +13,12 @@ pub(crate) enum VaultCommands {
     },
     /// List all keys in the vault (values are hidden).
     List,
+    /// Inspect external secret-source readiness (values and paths are hidden).
+    Sources {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove a credential from the vault.
     Remove {
         /// Credential key.
@@ -194,16 +200,23 @@ pub(crate) enum SessionsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Export a session as JSON or Markdown.
+    /// Export one session or the full persisted catalog.
     Export {
-        /// Session UUID to export.
-        session_id: String,
+        /// Session UUID to export. Omit only with --all.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        session_id: Option<String>,
+        /// Export every persisted session as versioned JSONL.
+        #[arg(long, conflicts_with = "session_id")]
+        all: bool,
+        /// Restrict --all to one agent name or ID.
+        #[arg(long, requires = "all")]
+        agent: Option<String>,
         /// Optional output file. Defaults to stdout.
         #[arg(long)]
         out: Option<PathBuf>,
-        /// Export format.
-        #[arg(long, value_enum, default_value_t = SessionExportFormat::Json)]
-        format: SessionExportFormat,
+        /// Export format. Defaults to JSON for one session and JSONL for --all.
+        #[arg(long, value_enum)]
+        format: Option<SessionExportFormat>,
     },
     /// Delete old sessions with explicit safeguards.
     Prune {
@@ -244,6 +257,7 @@ pub(crate) enum AutonomyCommands {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum SessionExportFormat {
     Json,
+    Jsonl,
     Markdown,
 }
 

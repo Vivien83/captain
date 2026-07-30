@@ -18,6 +18,10 @@ pub(crate) fn cmd_vault_init() {
 
 pub(crate) fn cmd_vault_set(key: &str) {
     let home = captain_home();
+    if let Err(error) = ensure_vault_key_is_local(&home, key) {
+        ui::error(&error);
+        std::process::exit(2);
+    }
     let vault_path = home.join("vault.enc");
     let mut vault = captain_extensions::vault::CredentialVault::new(vault_path);
 
@@ -42,6 +46,48 @@ pub(crate) fn cmd_vault_set(key: &str) {
             ui::error(&format!("Failed to store: {e}"));
             std::process::exit(1);
         }
+    }
+}
+
+pub(crate) fn cmd_vault_sources(json: bool) {
+    let home = captain_home();
+    let config_path =
+        home.join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME);
+    let sources = load_external_sources(&home);
+    let statuses = sources.statuses();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "count": statuses.len(),
+                "sources": statuses,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    if statuses.is_empty() {
+        println!("No external secret sources configured.");
+        ui::hint(&format!(
+            "Create {} to reference mounted secret files.",
+            config_path.display()
+        ));
+        return;
+    }
+
+    println!("{:<32} {:<8} {:<10} DETAIL", "KEY", "TYPE", "STATUS");
+    println!("{}", "-".repeat(76));
+    for status in statuses {
+        let state = if status.ready { "ready" } else { "error" };
+        let detail = status
+            .error_code
+            .or(status.warning_code)
+            .unwrap_or_else(|| "live rotation".to_string());
+        println!(
+            "{:<32} {:<8} {:<10} {}",
+            status.key, status.source_type, state, detail
+        );
     }
 }
 
@@ -72,6 +118,10 @@ pub(crate) fn cmd_vault_list() {
 
 pub(crate) fn cmd_vault_remove(key: &str) {
     let home = captain_home();
+    if let Err(error) = ensure_vault_key_is_local(&home, key) {
+        ui::error(&error);
+        std::process::exit(2);
+    }
     let vault_path = home.join("vault.enc");
     let mut vault = captain_extensions::vault::CredentialVault::new(vault_path);
 
@@ -91,5 +141,51 @@ pub(crate) fn cmd_vault_remove(key: &str) {
             ui::error(&format!("Failed to remove: {e}"));
             std::process::exit(1);
         }
+    }
+}
+
+fn ensure_vault_key_is_local(home: &std::path::Path, key: &str) -> Result<(), String> {
+    if load_external_sources(home).is_configured(key) {
+        Err(format!(
+            "'{key}' is managed by secret-sources.toml; change the external mapping or file instead."
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn load_external_sources(
+    home: &std::path::Path,
+) -> captain_extensions::external_secret_sources::ExternalSecretSources {
+    let path = home.join(captain_extensions::external_secret_sources::SECRET_SOURCES_FILENAME);
+    captain_extensions::external_secret_sources::ExternalSecretSources::load(&path).unwrap_or_else(
+        |error| {
+            ui::error(&format!("Secret sources unavailable: {error}"));
+            std::process::exit(1);
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_vault_key_is_local;
+
+    #[test]
+    fn vault_mutations_refuse_externally_managed_keys() {
+        let home = tempfile::tempdir().unwrap();
+        let mounted = home.path().join("mounted-secret");
+        std::fs::write(&mounted, "value\n").unwrap();
+        std::fs::write(
+            home.path().join("secret-sources.toml"),
+            format!(
+                "version = 1\n[sources.TEST_EXTERNAL_VAULT]\ntype = \"file\"\npath = {:?}\n",
+                mounted.display().to_string()
+            ),
+        )
+        .unwrap();
+
+        let error = ensure_vault_key_is_local(home.path(), "TEST_EXTERNAL_VAULT").unwrap_err();
+        assert!(error.contains("managed by secret-sources.toml"));
+        assert!(ensure_vault_key_is_local(home.path(), "LOCAL_VAULT_KEY").is_ok());
     }
 }

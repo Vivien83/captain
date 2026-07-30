@@ -24,7 +24,7 @@ use crate::tools::{
     render_error_with_suggestion, sanitize_canvas_html, tool_apply_patch, tool_canvas_present,
     tool_capability_search, tool_edit_file, tool_execute_code, tool_file_inspect_batch,
     tool_file_write, tool_glob, tool_grep, tool_learning_review_decide, tool_learning_review_list,
-    tool_multi_edit, tool_pkg_wrapper, tool_search, tool_self_improvement_review, tool_shell_exec,
+    tool_multi_edit, tool_pkg_wrapper, tool_search, tool_self_improvement_review,
     tool_skill_refinement_decide, tool_skill_refinement_list, tool_skill_refinement_propose,
     tool_skill_refinement_restore, tool_skill_refinement_update, tool_skill_search,
     tool_ssh_download, tool_ssh_exec, tool_ssh_upload, tool_system_bug_list,

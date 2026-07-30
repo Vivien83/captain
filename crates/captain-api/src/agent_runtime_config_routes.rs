@@ -26,6 +26,12 @@ pub struct ModelSwitchApplyRequest {
     pub session_strategy: ModelSwitchSessionStrategy,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ReasoningEffortRequest {
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
 fn parse_agent_id(id: &str) -> Result<AgentId, JsonResponse> {
     id.parse().map_err(|_| {
         (
@@ -151,6 +157,46 @@ pub async fn set_model(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("{e}")})),
+        ),
+    }
+}
+
+/// GET /api/agents/{id}/reasoning - Read configured/effective reasoning.
+pub async fn get_agent_reasoning(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let agent_id = match parse_agent_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    match state.kernel.agent_reasoning_status(agent_id) {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": error.to_string()})),
+        ),
+    }
+}
+
+/// PUT /api/agents/{id}/reasoning - Set an effort or reset with auto/null.
+pub async fn set_agent_reasoning(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<ReasoningEffortRequest>,
+) -> impl IntoResponse {
+    let agent_id = match parse_agent_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    match state
+        .kernel
+        .set_agent_reasoning_effort(agent_id, body.effort.as_deref())
+    {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error.to_string()})),
         ),
     }
 }

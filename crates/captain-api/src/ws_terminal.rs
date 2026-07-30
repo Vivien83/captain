@@ -27,7 +27,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use captain_runtime::pty_session::{PtyEvent, SessionActor, SessionSpec};
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
@@ -109,6 +109,7 @@ pub async fn terminal_ws(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     uri: Uri,
+    ticket_authorization: Option<Extension<crate::web_auth_security::RealtimeTicketAuthorization>>,
 ) -> impl IntoResponse {
     if !state.kernel.config.web_terminal.enabled {
         return terminal_error(StatusCode::NOT_FOUND, "web terminal is disabled");
@@ -116,7 +117,7 @@ pub async fn terminal_ws(
     if let Err(e) = validate_session_id(&session_id) {
         return terminal_error(StatusCode::BAD_REQUEST, &e);
     }
-    if let Err(e) = authorize(&state, &headers, &uri) {
+    if let Err(e) = authorize(&state, &headers, ticket_authorization.is_some()) {
         return e.into_response();
     }
     if let Err(e) = validate_origin(&headers) {
@@ -248,7 +249,11 @@ impl TerminalAuthError {
     }
 }
 
-fn authorize(state: &AppState, headers: &HeaderMap, uri: &Uri) -> Result<(), TerminalAuthError> {
+fn authorize(
+    state: &AppState,
+    headers: &HeaderMap,
+    realtime_ticket_authorized: bool,
+) -> Result<(), TerminalAuthError> {
     let auth_snapshot = crate::session_auth::load_web_auth_snapshot(
         &state.kernel.config.home_dir,
         &state.kernel.config.api_key,
@@ -264,6 +269,10 @@ fn authorize(state: &AppState, headers: &HeaderMap, uri: &Uri) -> Result<(), Ter
         });
     }
 
+    if realtime_ticket_authorized {
+        return Ok(());
+    }
+
     if !api_key.is_empty() {
         let header_auth = headers
             .get("authorization")
@@ -272,15 +281,12 @@ fn authorize(state: &AppState, headers: &HeaderMap, uri: &Uri) -> Result<(), Ter
             .or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()))
             .map(|t| ct_eq(t, api_key))
             .unwrap_or(false);
-        let query_auth = query_param(uri, "token")
-            .map(|t| ct_eq(&t, api_key))
-            .unwrap_or(false);
-        if header_auth || query_auth {
+        if header_auth {
             return Ok(());
         }
     }
 
-    if auth_cfg.enabled && !auth_snapshot.session_secret().is_empty() {
+    if auth_cfg.enabled && auth_snapshot.session_secret().is_some() {
         if let Some(token) = extract_session_cookie(headers) {
             if crate::session_auth::verify_session_token_for_auth(&token, &auth_snapshot).is_some()
             {

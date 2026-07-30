@@ -13,8 +13,10 @@
 //! lightweight stub.
 //!
 //! Safety:
-//! * `Goal::validate` (kernel-side) refuses critical_patterns at insert
-//!   time so a check_command can't be `rm -rf /`.
+//! * Every tick revalidates the live command through `guarded_exec`; editing
+//!   or restoring a goal cannot bypass critical patterns or execution policy.
+//! * Child processes receive a scrubbed environment and cannot inherit the
+//!   daemon's provider keys or `secrets.env` values.
 //! * Each tick re-reads the goal via `goal_status` so a `goal_pause`
 //!   takes effect at the very next tick.
 //! * If `goal_status` returns NotFound, the loop exits cleanly.
@@ -27,8 +29,8 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::{interval, timeout};
+use std::time::Duration;
+use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 use crate::kernel_handle::KernelHandle;
@@ -271,21 +273,87 @@ pub async fn tick_once(
     previous_progress_signature: Option<&str>,
     ops: Arc<dyn GoalLoopOps>,
 ) {
-    let (ok, output, latency_ms) = run_shell_with_timeout(check_command, working_dir).await;
-    debug!(goal = %id, ok, latency_ms, "check executed");
+    let execution = execute_goal_check(
+        check_command,
+        recovery_command,
+        working_dir,
+        previous_progress_signature,
+    )
+    .await;
+    debug!(
+        goal = %id,
+        ok = execution.ok,
+        latency_ms = execution.latency_ms,
+        recovery_attempted = execution.recovery_attempted,
+        "check executed"
+    );
 
-    // If the first check fails AND a recovery is set, try it ONCE then
-    // re-check. Whatever the re-check says is what we record (single
-    // CheckResult per tick to keep recent_checks meaningful).
-    let (final_ok, final_output, final_latency) = match (ok, recovery_command) {
-        (false, Some(rec_cmd)) => {
-            info!(goal = %id, "check failed — attempting recovery");
-            let (rec_ok, rec_out, _rec_lat) = run_shell_with_timeout(rec_cmd, working_dir).await;
-            if !rec_ok {
-                warn!(goal = %id, "recovery_command itself failed: {}", truncate(&rec_out, 200));
+    let consecutive_fails =
+        match ops.goal_record_check(id, execution.ok, &execution.output, execution.latency_ms) {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(goal = %id, "goal_record_check failed: {e}");
+                return;
             }
-            let (post_ok, post_out, post_lat) =
-                run_shell_with_timeout(check_command, working_dir).await;
+        };
+
+    if !execution.ok && consecutive_fails >= escalation_threshold {
+        escalate(
+            id,
+            goal_name,
+            consecutive_fails,
+            escalation_channel,
+            execution.escalation_reason.as_deref(),
+            ops,
+        )
+        .await;
+    }
+}
+
+/// One bounded execution of a goal's check contract. Project verification
+/// reuses this primitive so periodic monitoring and completion evidence cannot
+/// drift on timeout, workspace, recovery, or convergence semantics.
+#[derive(Debug, Clone)]
+pub struct GoalCheckExecution {
+    pub ok: bool,
+    pub output: String,
+    pub latency_ms: u64,
+    pub recovery_attempted: bool,
+    pub escalation_reason: Option<String>,
+}
+
+pub async fn execute_goal_check(
+    check_command: &str,
+    recovery_command: Option<&str>,
+    working_dir: Option<&str>,
+    previous_progress_signature: Option<&str>,
+) -> GoalCheckExecution {
+    let (ok, output, latency_ms) = run_shell_with_timeout(
+        check_command,
+        working_dir,
+        crate::guarded_exec::ExecSurface::GoalCheck,
+    )
+    .await;
+
+    // If the first check fails and recovery is configured, try it once, then
+    // record only the recheck as the final result.
+    let (final_ok, final_output, final_latency, recovery_attempted) = match (ok, recovery_command) {
+        (false, Some(rec_cmd)) => {
+            let (rec_ok, rec_out, _rec_lat) = run_shell_with_timeout(
+                rec_cmd,
+                working_dir,
+                crate::guarded_exec::ExecSurface::GoalRecovery,
+            )
+            .await;
+            if !rec_ok {
+                warn!("goal recovery command failed: {}", truncate(&rec_out, 200));
+            }
+            let (post_ok, post_out, post_lat) = run_shell_with_timeout(
+                check_command,
+                working_dir,
+                crate::guarded_exec::ExecSurface::GoalCheck,
+            )
+            .await;
             let combined = format!(
                 "[recovery {}] {} | [recheck {}] {}",
                 if rec_ok { "ok" } else { "fail" },
@@ -293,35 +361,18 @@ pub async fn tick_once(
                 if post_ok { "ok" } else { "fail" },
                 truncate(&post_out, 1000)
             );
-            (post_ok, combined, post_lat)
+            (post_ok, combined, post_lat, true)
         }
-        _ => (ok, output, latency_ms),
+        _ => (ok, output, latency_ms, false),
     };
 
     let progress = classify_progress_result(final_ok, final_output, previous_progress_signature);
-    let final_ok = progress.ok;
-    let final_output = progress.output;
-    let escalation_reason = progress.escalation_reason;
-
-    let consecutive_fails = match ops.goal_record_check(id, final_ok, &final_output, final_latency)
-    {
-        Ok(n) => n,
-        Err(e) => {
-            warn!(goal = %id, "goal_record_check failed: {e}");
-            return;
-        }
-    };
-
-    if !final_ok && consecutive_fails >= escalation_threshold {
-        escalate(
-            id,
-            goal_name,
-            consecutive_fails,
-            escalation_channel,
-            escalation_reason.as_deref(),
-            ops,
-        )
-        .await;
+    GoalCheckExecution {
+        ok: progress.ok,
+        output: progress.output,
+        latency_ms: final_latency,
+        recovery_attempted,
+        escalation_reason: progress.escalation_reason,
     }
 }
 
@@ -385,7 +436,7 @@ fn classify_progress_result(
         };
     }
 
-    let Some(current) = progress_signature(&output) else {
+    let Some(current) = goal_progress_signature(&output) else {
         return ProgressClassification {
             ok,
             output,
@@ -437,12 +488,12 @@ fn latest_progress_signature(goal_snapshot: &serde_json::Value) -> Option<String
                 check
                     .get("output")
                     .and_then(|value| value.as_str())
-                    .and_then(progress_signature)
+                    .and_then(goal_progress_signature)
             })
         })
 }
 
-fn progress_signature(output: &str) -> Option<String> {
+pub fn goal_progress_signature(output: &str) -> Option<String> {
     for line in output.lines() {
         let trimmed = line.trim();
         for prefix in ["CAPTAIN_PROGRESS=", "captain_progress="] {
@@ -469,40 +520,40 @@ fn progress_value_to_string(value: &serde_json::Value) -> Option<String> {
     .filter(|value| !value.is_empty())
 }
 
-/// Run a shell command via `sh -c` with a hard timeout. Returns
+/// Run a shell command through the shared guarded boundary. Returns
 /// `(ok, output, latency_ms)`.
-async fn run_shell_with_timeout(cmd: &str, working_dir: Option<&str>) -> (bool, String, u64) {
-    let start = Instant::now();
-    let mut command = tokio::process::Command::new("sh");
-    command
-        .arg("-c")
-        .arg(cmd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(dir) = working_dir.filter(|dir| !dir.trim().is_empty()) {
-        command.current_dir(dir);
-    }
-    let fut = command.output();
-
-    let res = timeout(SHELL_TIMEOUT, fut).await;
-    let elapsed = start.elapsed().as_millis() as u64;
-
-    match res {
-        Ok(Ok(out)) => {
-            let mut combined = String::new();
-            combined.push_str(&String::from_utf8_lossy(&out.stdout));
-            if !out.stderr.is_empty() {
+async fn run_shell_with_timeout(
+    cmd: &str,
+    working_dir: Option<&str>,
+    surface: crate::guarded_exec::ExecSurface,
+) -> (bool, String, u64) {
+    let started = std::time::Instant::now();
+    let workspace = working_dir
+        .filter(|dir| !dir.trim().is_empty())
+        .map(std::path::Path::new);
+    match crate::guarded_exec::run_unattended_shell(crate::guarded_exec::ShellExecRequest {
+        surface,
+        command: cmd,
+        policy: None,
+        workspace,
+        allowed_env_vars: &[],
+        explicit_env: &[],
+        timeout_secs: SHELL_TIMEOUT.as_secs(),
+        no_output_timeout_secs: Some(SHELL_TIMEOUT.as_secs()),
+        bash_required: false,
+    })
+    .await
+    {
+        Ok(outcome) => {
+            let success = outcome.success();
+            let mut combined = outcome.stdout;
+            if !outcome.stderr.is_empty() {
                 combined.push_str("\n[stderr] ");
-                combined.push_str(&String::from_utf8_lossy(&out.stderr));
+                combined.push_str(&outcome.stderr);
             }
-            (out.status.success(), combined, elapsed)
+            (success, combined, outcome.elapsed_ms)
         }
-        Ok(Err(e)) => (false, format!("spawn error: {e}"), elapsed),
-        Err(_) => (
-            false,
-            format!("timeout after {}s", SHELL_TIMEOUT.as_secs()),
-            elapsed,
-        ),
+        Err(error) => (false, error, started.elapsed().as_millis() as u64),
     }
 }
 

@@ -154,6 +154,9 @@ async fn run_project_runtime_v2(
         &run_id,
         project_session_id(&updated),
     );
+    if runtime.get("status").and_then(serde_json::Value::as_str) != Some("done") {
+        return Ok(());
+    }
     crate::project_ask::expire_project_asks_for_run(&project_id);
     Ok(())
 }

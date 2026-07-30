@@ -9,6 +9,7 @@
 
 pub mod bundled;
 pub mod credentials;
+pub mod external_secret_sources;
 pub mod health;
 pub mod installer;
 pub mod oauth;
@@ -33,6 +34,8 @@ pub enum ExtensionError {
     CredentialNotFound(String),
     #[error("Vault error: {0}")]
     Vault(String),
+    #[error("External secret source error: {0}")]
+    SecretSource(String),
     #[error("Vault locked — unlock with vault key or CAPTAIN_VAULT_KEY env var")]
     VaultLocked,
     #[error("OAuth error: {0}")]

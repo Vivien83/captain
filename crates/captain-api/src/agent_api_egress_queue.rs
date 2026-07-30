@@ -112,9 +112,17 @@ pub(crate) async fn retry_agent_api_callback_now(
     audit_log: &AuditLog,
     agent_id: &AgentId,
     id: &str,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
+    is_externally_managed: &(dyn Fn(&str) -> bool + Send + Sync),
 ) -> Result<AgentApiEgressRetryResult, AgentApiEgressRetryError> {
     let entry = reserve_manual_retry(home_dir, agent_id, id).await?;
-    let delivery = deliver_agent_api_callback(&entry.agent_id, &entry.payload).await;
+    let delivery = deliver_agent_api_callback(
+        &entry.agent_id,
+        &entry.payload,
+        resolve,
+        is_externally_managed,
+    )
+    .await;
     let delivered = delivery.delivered();
     let outcome = delivery.audit_outcome();
     let dead_letter = update_after_attempt(home_dir, &entry.id, delivery).await;
@@ -139,10 +147,25 @@ pub(crate) async fn retry_agent_api_callback_now(
     })
 }
 
-pub(crate) fn spawn_agent_api_egress_queue_drain(home_dir: PathBuf, audit_log: Arc<AuditLog>) {
+pub(crate) fn spawn_agent_api_egress_queue_drain(
+    home_dir: PathBuf,
+    audit_log: Arc<AuditLog>,
+    kernel: std::sync::Weak<captain_kernel::CaptainKernel>,
+) {
     tokio::spawn(async move {
         loop {
-            let summary = drain_due_agent_api_callbacks(&home_dir, audit_log.as_ref()).await;
+            let summary = {
+                let Some(kernel) = kernel.upgrade() else {
+                    return;
+                };
+                drain_due_agent_api_callbacks(
+                    &home_dir,
+                    audit_log.as_ref(),
+                    &|key| kernel.resolve_credential(key),
+                    &|key| kernel.credential_is_externally_managed(key),
+                )
+                .await
+            };
             if summary.failed > 0 {
                 tracing::warn!(
                     drained = summary.drained,
@@ -165,7 +188,12 @@ struct DrainSummary {
     dead_lettered: usize,
 }
 
-async fn drain_due_agent_api_callbacks(home_dir: &Path, audit_log: &AuditLog) -> DrainSummary {
+async fn drain_due_agent_api_callbacks(
+    home_dir: &Path,
+    audit_log: &AuditLog,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
+    is_externally_managed: &(dyn Fn(&str) -> bool + Send + Sync),
+) -> DrainSummary {
     let due = match reserve_due_callbacks(home_dir).await {
         Ok(due) => due,
         Err(err) => {
@@ -179,7 +207,13 @@ async fn drain_due_agent_api_callbacks(home_dir: &Path, audit_log: &AuditLog) ->
         ..DrainSummary::default()
     };
     for entry in due {
-        let delivery = deliver_agent_api_callback(&entry.agent_id, &entry.payload).await;
+        let delivery = deliver_agent_api_callback(
+            &entry.agent_id,
+            &entry.payload,
+            resolve,
+            is_externally_managed,
+        )
+        .await;
         let outcome = delivery.audit_outcome();
         if delivery.delivered() {
             summary.delivered += 1;
@@ -452,9 +486,16 @@ mod tests {
     async fn manual_retry_missing_entry_reports_not_found() {
         let tmp = tempfile::tempdir().unwrap();
         let log = AuditLog::new();
-        let err = retry_agent_api_callback_now(tmp.path(), &log, &sample_agent_id(), "missing")
-            .await
-            .unwrap_err();
+        let err = retry_agent_api_callback_now(
+            tmp.path(),
+            &log,
+            &sample_agent_id(),
+            "missing",
+            &|key| std::env::var(key).ok(),
+            &|_| false,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, AgentApiEgressRetryError::NotFound));
     }
 
@@ -474,9 +515,16 @@ mod tests {
             save_queue(tmp.path(), &queue).unwrap();
         }
 
-        let result = retry_agent_api_callback_now(tmp.path(), &log, &agent_id, &id)
-            .await
-            .unwrap();
+        let result = retry_agent_api_callback_now(
+            tmp.path(),
+            &log,
+            &agent_id,
+            &id,
+            &|key| std::env::var(key).ok(),
+            &|_| false,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.status, "dead_letter");
         assert_eq!(result.attempts, 1);
         let queue = load_queue(tmp.path()).unwrap();

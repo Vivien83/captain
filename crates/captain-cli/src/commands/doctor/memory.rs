@@ -240,6 +240,7 @@ fn column_exists(conn: &rusqlite::Connection, table: &str, column: &str) -> bool
         return false;
     };
     let exists = rows.filter_map(Result::ok).any(|name| name == column);
+    drop(stmt);
     exists
 }
 

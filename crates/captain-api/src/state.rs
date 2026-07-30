@@ -20,8 +20,6 @@ pub struct AppState {
     pub channels_config: tokio::sync::RwLock<captain_types::config::ChannelsConfig>,
     /// Notify handle to trigger graceful HTTP server shutdown from the API.
     pub shutdown_notify: Arc<tokio::sync::Notify>,
-    /// ClawHub response cache: cache key -> (fetched_at, response_json).
-    pub clawhub_cache: DashMap<String, (Instant, serde_json::Value)>,
     /// Answer channel for an agent's currently-pending ask_user question,
     /// keyed by agent and optional persisted session. Populated by
     /// send_message_stream while its SSE stream is open, drained by POST

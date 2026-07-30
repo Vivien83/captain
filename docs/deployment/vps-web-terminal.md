@@ -44,9 +44,15 @@ reverse_proxy = "caddy"
 [auth]
 enabled = true
 username = "admin"
-password_hash = "<sha256>"
 session_ttl_hours = 72
+session_cookie_secure = "always"
 ```
+
+Run `captain setup` or the native `web_credentials_update` tool to provision
+the password. `password_hash`, `session_secret`, and `session_epoch` are
+Captain-managed and intentionally omitted from the deployment snippet. The
+session secret is unique per installation; password rotation increments the
+epoch and invalidates every older browser session.
 
 To expose raw shell mode for technical clients, set:
 
@@ -59,9 +65,15 @@ For a VPS, keep `session_ttl_hours` between 24 and 72. New installs default to
 72 hours; lower it to 24 hours for highly exposed hosts.
 
 The interactive browser page requires web-session auth so it uses the HttpOnly
-`captain_session` cookie. The terminal WebSocket still accepts API-key auth for
-technical clients and automation, but the browser UI does not ask users to paste
-API keys.
+`captain_session` cookie. Set `session_cookie_secure = "always"` on an HTTPS
+VPS. `"auto"` also enables `Secure` when the declared public URL is HTTPS or a
+trusted loopback reverse proxy reports `X-Forwarded-Proto: https`; `"never"`
+is only for explicit local HTTP development.
+
+Before opening WebSocket or SSE, the browser exchanges its authenticated
+cookie for a path/IP/session-epoch-bound ticket that expires after 30 seconds
+and works once. Technical clients may still send API-key auth in headers.
+Captain never accepts an API key or session token from a URL query string.
 
 `/config` follows the same web-session rule. It edits the full `config.toml`
 instead of a partial form, creates timestamped backups, validates before save,

@@ -4,6 +4,28 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Current Release Candidate
+
+`v0.1.0-alpha.10` is the current locally certified release candidate. It
+promotes the deny-by-default API and browser perimeter, guarded host execution,
+append-only audit recovery, crash-safe outbound delivery and delegation,
+evidence-bound project completion, synchronized budgets, complete memory
+write opt-out, exact Codex quota/reasoning controls, truthful compaction
+progress, and authoritative external secret sources.
+
+Its host release contract contains exactly 22 files: five archives, five
+SHA-256 sidecars, five platform manifests, four installers, one aggregate
+manifest, one deterministic in-toto/SLSA v1 provenance statement, and its
+SHA-256 sidecar. The five host targets and both Docker architectures must be
+built strictly one at a time with disk/load checks between them.
+
+Public source commit, annotated tag object, publication timestamp, GitHub asset
+digests, OCI index and architecture digests, moving-channel parity, and
+anonymous install evidence are intentionally unset until the candidate is
+published and verified. Candidate docs must not copy provenance from an older
+release or describe the GitHub/GHCR surfaces as live before those observations
+exist.
+
 ## Current Public Release
 
 `v0.1.0-alpha.9` is the current public prerelease. It combines durable
@@ -33,6 +55,161 @@ because the release was built and published locally.
 Known `alpha.9` limitation: an explicit per-turn memory write opt-out still
 allows the core agent-loop finalizer to write one local episodic interaction
 fragment. Normal transcript and audit retention remain intentional.
+
+The `alpha.10` candidate closes that published limitation. The shared
+streaming/non-streaming finalizer checks the explicit per-turn opt-out before
+embedding or storing its episodic interaction. The normal resumable transcript
+and mandatory operational/audit records remain intentional.
+
+## Alpha 10 Release Provenance Contract
+
+Local release builds remain the source of truth and do not consume automatic
+GitHub Actions minutes. The five host targets are built sequentially with a
+disk/load checkpoint before and after each target. The publisher adds a
+deterministic in-toto/SLSA v1 statement and checksum to the 20 base assets,
+making 22 uploaded assets for the next release. The statement binds every base
+asset to the public Git commit/tree and exact `Cargo.lock`; verification rejects
+asset, source, or lockfile drift.
+
+Docker `linux/amd64` completes and is remotely inspectable before
+`linux/arm64` begins. Only then is the multi-architecture index assembled.
+Each architecture carries BuildKit provenance `mode=max`. The host statement
+is SHA-256-bound but not independently signed in this alpha, so Captain does
+not claim a SLSA certification level.
+
+The versioned public `main` policy requires reviewed pull requests for non-admin
+contributors, resolved conversations, linear history, and forbids force-pushes
+or deletion. Administrators retain the audited local publication path. No
+automatic status check is required because the complete gate runs locally;
+the three-OS workflow remains a manual fallback. The next publication must
+apply and read back that policy before claiming it is active remotely.
+
+## Alpha 10 Live Budget Contract
+
+The boot configuration is immutable; the current global budget has one
+synchronized live authority. An API update validates a complete candidate,
+persists the exact TOML snapshot atomically, and publishes it only after the
+write succeeds. A persistence failure keeps the preceding live state. Reads
+from REST, WebSocket, Control/channel status, agent spawn/restore, and config
+hot-reload therefore cannot observe a partially updated budget.
+
+Finite non-negative cost limits are capped at `1_000_000_000` USD,
+`alert_threshold` is restricted to `[0,1]`, and token limits must fit TOML's
+signed integer representation. Streaming and non-streaming turns enforce the
+same live global cost guard before the per-agent scheduler quota. Agent token
+edits update that scheduler immediately.
+
+## Alpha 10 Guarded Execution Contract
+
+`captain-runtime::guarded_exec` is the single security boundary for
+agent-controlled subprocesses. It covers the shell and package tools, goal
+checks/recovery, Markdown skill capabilities, `execute_code`, workflow shell
+actions, static skill checks, Hand dependency installation, and WASM host
+execution. Each surface applies execution policy and critical-pattern review,
+clears the inherited daemon environment, restores only safe or explicitly
+authorized values, sets workspace and timeout bounds, limits captured output,
+and emits command-free structured audit events.
+
+Only the interactive shell rail can request one-shot operator approval, and
+its permit is bound to the exact content digest and execution surface.
+Unattended surfaces block critical commands. `scripts/guarded-exec-audit.sh`
+runs in tranche and release gates and rejects raw process construction or
+environment mutation in every covered sink.
+
+## Alpha 10 Host Execution Posture
+
+New installations use execution policy `full` with critical mode `safe`.
+Routine host commands remain available, while recognized catastrophic commands
+fail closed. `open` remains an explicit operator opt-in for content-bound
+approval, and `paranoid` requests approval for every shell-affecting operation.
+
+The host backend reports `host_process`, isolation level `environment_scrub`,
+`os_isolation: false`, and danger guard
+`normalized_lexical_heuristic` through CLI, TUI, authenticated health/status,
+and Security API surfaces. Environment clearing, workspace/process bounds, and
+normalized command recognition are not an operating-system sandbox. Docker and
+WASM are separate explicit isolation backends.
+
+## Alpha 10 Browser Session Contract
+
+Each installation owns one 32-byte browser-session signing key generated by the
+operating-system CSPRNG and durably persisted at first boot. Session signing is
+independent of the daemon API key and password hash. Tokens include a managed
+credential epoch; setup and `web_credentials_update` advance it whenever an
+existing password changes, invalidating older sessions immediately.
+
+The signing key and password hash are redacted from CLI and API config-display
+surfaces. Raw config writes preserve the managed values without returning them
+and reject attempts to replace the key or change the epoch directly. A
+persisted auth table with a missing, malformed, or incomplete signing state
+fails closed instead of falling back to stale in-memory key material.
+
+New hashes are salted Argon2id PHC strings. A successful legacy SHA-256 login
+atomically migrates the persisted hash before issuing a session. A bounded
+limiter tracks IP and normalized username independently, starts exponential
+backoff after five failures, and caps it at 15 minutes. Cookies have explicit
+`auto`/`always`/`never` Secure policy. Browser WebSocket/SSE transports use
+30-second path/IP/epoch-bound tickets removed on their first consume attempt;
+query-string API keys and session tokens are rejected. This closes F3.
+
+## Alpha 10 API Authentication Contract
+
+With API-key or browser-session authentication enabled, the API is
+deny-by-default. One typed source allowlist contains only `GET /`, embedded
+`/assets/*` and boot icons/manifests, minimal `GET /api/health`,
+`GET /api/version`, browser login/check/logout, and the exact UUID-shaped
+per-agent ingress route. That ingress remains protected by its own per-agent
+Bearer token, request bounds, idempotency, and rate limit.
+
+Operational state is private: detailed health/status, agents, sessions,
+approvals, budgets, channels, logs, models/providers, Config/Terminal pages,
+A2A discovery/tasks, and GitHub Copilot OAuth all require global
+authentication. The OAuth flow is deliberately private because completion can
+persist a provider credential; A2A discovery is private because it returns
+agent manifests. Control consumes protected-route `401` responses centrally
+and returns to the login screen.
+
+## Alpha 10 Browser Origin Contract
+
+CORS is fail-closed independently of daemon API-key presence. Its default
+origins are the API port on `localhost`, `127.0.0.1`, and IPv6 loopback.
+`deployment.public_url` and exact entries in `[api].allowed_origins` extend
+that list explicitly; malformed or non-HTTP(S) entries are ignored rather than
+opening the policy. Methods and request headers are enumerated, never wildcard.
+
+An outer request middleware rejects a missing, ambiguous, malformed, or
+undeclared `Host` with `400` before the route, authentication, or application
+handler runs. Loopback, a concrete configured listen IP, and hosts derived
+from the declared origins are accepted. Because these layers are constructed
+at daemon startup, changing `[api].allowed_origins` requires a restart.
+
+## Alpha 10 Audit Hash Chain Contract
+
+Captain's audit trail is a versioned linear SHA-256 hash chain, not a tree.
+Version 2 prefixes every encoded field with its `u64` big-endian byte length,
+so different field boundaries cannot produce the same serialized input.
+SQLite schema v36 retains version-1 rows byte-for-byte and records the hash
+version and epoch for every entry.
+
+An append reaches durable storage before the in-memory tip advances. A failed
+write returns an error, discards the candidate entry, emits a high-severity
+alert, and degrades audit health. Operations that cannot be rolled back use
+the explicit `record_or_alert` policy; they never treat a failed candidate as
+part of the validated chain.
+
+Startup verifies the active epoch. If it was altered, Captain never rewrites
+the original rows: it seals that epoch as invalid and transactionally opens a
+new epoch with a `ChainRecovery` entry anchored to the preceding stored
+terminal digest. Every sequence at or after the active epoch start must belong
+to that epoch, so altering an entry's epoch cannot hide it from verification;
+recovery IDs also skip any value present in altered rows. Historical corruption
+remains visible after every restart while the recovery epoch remains writable.
+Unknown action names retain their exact stored value.
+
+Authenticated `/api/health/detail`, Prometheus metrics, `captain security`,
+`captain doctor --full`, and the TUI expose the same integrity state. The
+public health probe reports only overall `ok` or `degraded` plus version.
+There is no repair operation and no mounted HTTP repair endpoint.
 
 ## Previous Public Release
 
@@ -93,6 +270,89 @@ tag for GitHub asset download while using its canonical semantic version only
 for comparison and display. Power loss between decision, child launch, result,
 restart, and notification is bounded by durable state, timeout recovery,
 quarantine, and delivery leases.
+
+## Alpha 10 First-Use Interaction Contract
+
+The seven-question first-use interview remains deterministic, durable, and
+free of LLM token cost. Bounded preferences are projected as non-blocking
+suggested replies on Ratatui, Control Web/Desktop, and Telegram; free-text
+answers remain valid everywhere. The shared stream contract distinguishes
+these suggestions from blocking `ask_user` decisions, and an empty suggestion
+set explicitly clears stale controls. Explicit bounded notification answers
+also control `channels.silent_mode`; ambiguous free text remains profile data
+without silently changing runtime policy.
+
+## Alpha 10 Credential Contract
+
+The `alpha.10` candidate has one credential resolution contract:
+an explicitly mapped file in `secret-sources.toml` is authoritative, followed
+only when no mapping exists by `secrets.env`, `vault.enc`, legacy `.env`, and
+the process environment. Active LLM drivers and provider status, channels,
+event webhooks, per-agent API ingress and signed callback egress, MCP
+injection, CLI credential writes, provider tests, update checks, and doctor use
+that same chain. An
+unavailable external file fails closed and never reveals or revives a stale
+fallback value.
+
+External mappings accept no command source. The versioned registry and source
+files are bounded, permission-checked, blocked from generic file tools, and
+their values are zeroized after use. `captain vault sources [--json]` exposes
+logical keys and stable readiness codes only; individual paths and values are
+not an operator status surface. Resolver-backed consumers observe file
+rotation live; cached adapters require explicit reload, while registry edits
+and boot credentials such as the daemon API key require restart.
+
+## Alpha 10 Learning Visibility Contract
+
+Skill Learning V2 persists a process-scoped heartbeat in schema v34 and
+projects one public-safe status snapshot from a single SQLite read transaction.
+It distinguishes disabled, starting, healthy, active, recovering, degraded,
+and stalled states; a model binding failure is degraded and a stale heartbeat
+requires operator attention. The snapshot includes only bounded error scopes
+and codes, never provider output, raw jobs, credentials, or host paths.
+
+The exact same contract is consumed by `GET /api/learning/status`, TUI
+Learning, Control Web and Desktop, Telegram Rich `/learning`, and the `engine`
+object returned by `workflow_learning_list`. `/learnings` remains the memory
+review queue. None of these surfaces claims percentage progress for opaque
+model work.
+
+## Alpha 10 Compaction Progress Contract
+
+Context compaction has one typed, session-scoped progress contract across
+Ratatui, Control Web and Desktop, the Web terminal, Telegram Rich, agent
+WebSocket, and daemon SSE. The wire object contains phase, state, operation,
+runtime, agent and session identity, context pressure, and optional exact chunk
+units. It deliberately contains no percentage. Consumers derive a gauge only
+when both completed and total units are present and the total is non-zero;
+opaque model calls remain visibly indeterminate.
+
+Manual compaction remains conservative. Captain prunes only eligible old tool
+payloads and summarizes only a complete older conversational prefix. When the
+recent coherent turn consumes the whole history, no empty model request is
+issued, no prior summary is replaced, and the stored session is not rewritten
+or repaired as a side effect. The terminal result reports that the intact
+recent context was retained instead of claiming that zero messages were
+summarized.
+
+Telegram renders every compaction gauge inside a fixed visible track. Exact
+running chunk units retain their derived percentage, opaque running work stays
+indeterminate, and a successful terminal state always overrides stale
+intermediate units with a full `100%` gauge. Failure and interruption never
+claim completion.
+
+SQLite schema v35 stores only active compaction operations. Every progress
+event and active-state transition shares one transaction with the append-only
+session timeline. A normal cancellation or dropped task emits an
+`interrupted` terminal state. After an abrupt process or host stop, startup
+closes operations owned by the previous runtime instance and retains the full
+recoverable session. Reconciliation is idempotent and never relies on a guessed
+timeout.
+
+The versioned `scripts/compaction-progress-terminal-smoke.mjs` proof renders
+the exact and indeterminate contracts on desktop and mobile. The standard
+`chat` surface gate also runs the cross-crate compaction tests and the Control
+performance smoke, so release validation cannot silently omit either Web UI.
 
 ## Earlier Public Release
 
@@ -163,6 +423,7 @@ These files are maintained as current operator or runtime-facing references:
   `docs/troubleshooting.md`, `docs/DEPLOY.md`
 - `docs/cli-reference.md`, `docs/api-reference.md`, `docs/configuration.md`
 - `docs/channel-adapters.md`, `docs/providers.md`, `docs/skill-development.md`
+- `docs/performance-budgets.md`
 - `docs/SKILL_LEARNING_V2.md`
 - `docs/CAPTAIN_FORGE_CAPSPEC.md`
 - `docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md`
@@ -202,6 +463,7 @@ captain models list
 scripts/docs-global-audit.sh
 scripts/docs-release-audit.sh
 scripts/control-web-audit.sh
+scripts/control-chat-performance-smoke.mjs
 scripts/launch-site-audit.sh
 node scripts/launch-site-browser-smoke.mjs
 scripts/web-terminal-unicode-smoke.mjs
@@ -246,11 +508,22 @@ tree.
 
 ## Frozen Compatibility
 
-Marketplace, ClawHub, long-tail channels, desktop packaging, and other non-core
-surfaces may exist in code or compatibility docs, but they must not be presented
-as active Hermes-level product paths unless the current plan explicitly reopens
-them. Current docs must label them as frozen, compatibility, historical, or
-outside the active release path.
+Remote skill marketplaces are disabled rather than merely de-emphasized: active
+HTTP routes and TUI actions are absent, `captain skill install` accepts only an
+existing local directory, and retained compatibility clients fail before
+network or filesystem access. Reopening them requires publisher-backed
+integrity.
+
+The skill prompt-text scanner reports `advisory_heuristic` assurance. The
+loader's conservative refusal of high-risk phrase matches is a policy choice,
+not proof that matched content is malicious or unmatched content is safe.
+Operator review of complete local source remains required.
+
+Long-tail channels, desktop packaging, and other non-core surfaces may exist in
+code or compatibility docs, but they must not be presented as active
+production-grade product paths unless the current plan explicitly reopens them.
+Current docs must label them as frozen, compatibility, historical, or outside
+the active release path.
 
 The private checkout retains the old Tauri packaging references in
 `docs/desktop.md` and `docs/production-checklist.md`; both are excluded from the
@@ -301,6 +574,23 @@ files receive a `.json.imported` sidecar so migration stays one-shot.
 The frozen Tauri Desktop wrapper serves the same Control app and kernel, so it
 inherits this contract rather than maintaining a separate history.
 
+`captain sessions export --all [--agent <name|id>]` reads this global catalog
+without activation and emits one `captain.session.export.v1` JSONL record per
+session in newest-first catalog order. A file destination is written atomically
+and owner-private on Unix. The artifact is a sensitive, user-facing export for
+inspection or external archiving, not a raw hidden reasoning dump and not a
+supported restore format.
+
+Tool approvals are one shared operator contract across TUI, authenticated
+Control Web/Desktop, API, and Telegram Rich. Interactive session and durable
+decisions bind the exact agent, tool, and action digest; only the administrator
+configuration can still grant a broad `allow_always` override. Durable rules
+are human-readable in `approval-rules.json`, crash-safe, bounded, secret-
+scanned, fail closed when corrupt, and revocable by ID. Denial reasons are
+bounded and reach the blocked agent. Raw actions are not persisted in rules or
+audit entries. The digest is computed from the complete untruncated tool input,
+never from its bounded display preview.
+
 Codex model availability is live runtime state, not a fixed documentation
 list. With a Codex agent registered, the daemon refreshes the official catalog
 after startup and hourly, persists newly seen IDs as deduplicated pending
@@ -308,6 +598,15 @@ decisions, and exposes them through authenticated Control/API plus configured
 Telegram delivery. Availability never changes an active model by itself:
 keeping is explicit, and switching requires an agent and a provider-portable
 session strategy (`new_session` or `compact_session`).
+
+Reasoning selection is durable per agent and shared by Ratatui, Control,
+Desktop compatibility, REST, CLI and Telegram. Auto means no request override
+and stays distinct from explicit `none`. A Codex catalogue may expose Ultra as
+a product mode even though the response endpoint accepts `max` as its highest
+wire effort; Captain therefore persists and displays `ultra`, maps the provider
+request to `max`, and enables proactive delegation only for a depth-zero agent
+that can reach native coordination tools. Sub-agents never inherit that
+proactive policy.
 
 Context capacity is model-scoped live metadata. Every turn resolves the
 configured provider/model from the runtime catalog; compaction, agent/session
@@ -350,7 +649,8 @@ DOC2 is enforced by:
   and WebAssembly binding compilation with a supported CPython interpreter.
 - `scripts/docs-release-audit.sh` for high-risk release-facing claims.
 - `scripts/control-web-audit.sh` for the six-hub Control contract and JavaScript
-  syntax.
+  syntax. `scripts/control-chat-performance-smoke.mjs` certifies exact delta
+  batching, long transcript hydration, tail pinning, and desktop/mobile layout.
 - `scripts/docs-global-audit.sh` also parses the bundled JavaScript/Python API
   clients and pins their cross-surface session primitives.
 - In the private maintainer checkout only, `scripts/launch-site-audit.sh` and
@@ -362,9 +662,12 @@ DOC2 is enforced by:
   and publish dependencies.
 - `scripts/prepare-github-export.sh` for a committed, history-free public source
   tree and `scripts/public-release-audit.sh` for forbidden paths, gitleaks,
-  manual-only Actions, and exact-case Markdown links.
+  manual-only Actions, exact-case Markdown links, and the encoded
+  `scripts/public-boundary-guard.sh` policy. The guard scans hidden paths and
+  file contents without spelling maintainer-only names in the public tree.
   `scripts/public-export-smoke.sh` repeats that export from a dirty development
-  tranche and executes DOC2 inside the reduced tree before commit.
+  tranche, proves that forbidden path and content probes are rejected, and
+  executes DOC2 inside the reduced tree before commit.
 - `scripts/release-readiness.sh`, which runs both docs audits before release.
 - `scripts/core-surface-gates.sh --surface settings-status`, which includes the
   docs audits in the status/settings surface gate.

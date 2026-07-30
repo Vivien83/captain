@@ -5,6 +5,7 @@ use crate::kernel_handle::KernelHandle;
 use crate::tools::{require_kernel, AGENT_CALL_DEPTH, MAX_AGENT_CALL_DEPTH};
 use captain_types::agent::AgentManifest;
 use captain_types::agent_api::{AgentApiSpawnProvisionReport, AgentApiSpawnProvisionRequest};
+use captain_types::agent_delegation::{AgentDelegationJobRecord, AgentDelegationStatus};
 use captain_types::tool_compat::normalize_tool_name;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -279,25 +280,241 @@ pub(crate) async fn tool_agent_watch(
 pub(crate) async fn tool_agent_delegate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+    tool_use_id: &str,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let caller_agent_id = caller_agent_id.ok_or("Agent ID required for agent_delegate")?;
     let agent_id = input["agent_id"].as_str().ok_or("Missing 'agent_id'")?;
     let task = input["task"].as_str().ok_or("Missing 'task'")?;
     let max_tokens = input["max_tokens"].as_u64().unwrap_or(5000);
-    let current_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
-    if current_depth >= MAX_AGENT_CALL_DEPTH {
-        return Err(format!(
-            "Inter-agent delegation depth exceeded (max {}). \
-             A->B->C chain is too deep. Use task_post/task_claim instead.",
-            MAX_AGENT_CALL_DEPTH
-        ));
+    let depends_on = parse_agent_job_dependencies(input)?;
+    let title = input["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| delegation_title(task));
+    let idempotency_key = delegation_idempotency_key(caller_agent_id, tool_use_id);
+    let job = kh.start_agent_delegation(
+        caller_agent_id,
+        agent_id,
+        &title,
+        task,
+        max_tokens,
+        &depends_on,
+        &idempotency_key,
+    )?;
+    if !input["wait_for_result"].as_bool().unwrap_or(false) {
+        return Ok(render_agent_job(&job, false, false));
     }
 
-    AGENT_CALL_DEPTH
-        .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.delegate_task(agent_id, task, max_tokens).await
+    let timeout = input["timeout_seconds"]
+        .as_u64()
+        .unwrap_or(120)
+        .clamp(1, 600);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    loop {
+        let current = kh
+            .agent_delegation_status(caller_agent_id, &job.id)?
+            .ok_or_else(|| format!("Delegation job vanished: {}", job.id))?;
+        if current.status.is_terminal() {
+            return Ok(render_agent_job(&current, true, false));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(render_agent_job(&current, false, true));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+pub(crate) fn tool_agent_job_status(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caller = caller_agent_id.ok_or("Agent ID required for agent_job_status")?;
+    let job_id = input["job_id"].as_str().ok_or("Missing 'job_id'")?;
+    let job = kh
+        .agent_delegation_status(caller, job_id)?
+        .ok_or_else(|| format!("Delegation job not found: {job_id}"))?;
+    Ok(render_agent_job(&job, false, false))
+}
+
+pub(crate) fn tool_agent_job_result(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caller = caller_agent_id.ok_or("Agent ID required for agent_job_result")?;
+    let job_id = input["job_id"].as_str().ok_or("Missing 'job_id'")?;
+    let job = kh
+        .agent_delegation_status(caller, job_id)?
+        .ok_or_else(|| format!("Delegation job not found: {job_id}"))?;
+    Ok(render_agent_job(&job, job.status.is_terminal(), false))
+}
+
+pub(crate) fn tool_agent_job_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caller = caller_agent_id.ok_or("Agent ID required for agent_job_list")?;
+    let status = input["status"]
+        .as_str()
+        .map(|status| {
+            AgentDelegationStatus::parse(status).ok_or_else(|| {
+                format!(
+                    "Unknown delegation status '{status}'. Use blocked, queued, running, \
+                     cancel_requested, succeeded, failed, cancelled, uncertain, or dependency_failed."
+                )
+            })
         })
-        .await
+        .transpose()?;
+    let jobs = kh.list_agent_delegations(
+        caller,
+        status,
+        input["limit"].as_u64().unwrap_or(20).clamp(1, 100) as usize,
+    )?;
+    let jobs = jobs
+        .iter()
+        .map(|job| agent_job_value(job, false, false))
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "count": jobs.len(),
+        "jobs": jobs,
+    }))
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn tool_agent_job_cancel(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caller = caller_agent_id.ok_or("Agent ID required for agent_job_cancel")?;
+    let job_id = input["job_id"].as_str().ok_or("Missing 'job_id'")?;
+    let job = kh.cancel_agent_delegation(caller, job_id)?;
+    Ok(render_agent_job(&job, false, false))
+}
+
+pub(crate) fn tool_agent_job_resume(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caller = caller_agent_id.ok_or("Agent ID required for agent_job_resume")?;
+    let job_id = input["job_id"].as_str().ok_or("Missing 'job_id'")?;
+    let job = kh.resume_agent_delegation(caller, job_id)?;
+    Ok(render_agent_job(&job, false, false))
+}
+
+fn parse_agent_job_dependencies(input: &serde_json::Value) -> Result<Vec<String>, String> {
+    let Some(value) = input.get("depends_on") else {
+        return Ok(Vec::new());
+    };
+    let items = value
+        .as_array()
+        .ok_or("'depends_on' must be an array of delegation job ids")?;
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .ok_or_else(|| "'depends_on' contains an invalid job id".to_string())
+        })
+        .collect()
+}
+
+fn delegation_idempotency_key(caller_agent_id: &str, tool_use_id: &str) -> String {
+    format!(
+        "agent-delegation:{}",
+        blake3::hash(format!("{caller_agent_id}\0{tool_use_id}").as_bytes()).to_hex()
+    )
+}
+
+fn delegation_title(task: &str) -> String {
+    let first_line = task
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Delegated task");
+    captain_types::truncate_str(first_line, 160).to_string()
+}
+
+fn render_agent_job(
+    job: &AgentDelegationJobRecord,
+    include_result: bool,
+    wait_timed_out: bool,
+) -> String {
+    serde_json::to_string_pretty(&agent_job_value(job, include_result, wait_timed_out))
+        .unwrap_or_else(|_| format!("Delegation job {}: {}", job.id, job.status.as_str()))
+}
+
+fn agent_job_value(
+    job: &AgentDelegationJobRecord,
+    include_result: bool,
+    wait_timed_out: bool,
+) -> serde_json::Value {
+    let terminal = job.status.is_terminal();
+    let cancellable = matches!(
+        job.status,
+        AgentDelegationStatus::Blocked
+            | AgentDelegationStatus::Queued
+            | AgentDelegationStatus::Running
+            | AgentDelegationStatus::CancelRequested
+    );
+    let resumable = matches!(
+        job.status,
+        AgentDelegationStatus::Failed
+            | AgentDelegationStatus::Uncertain
+            | AgentDelegationStatus::DependencyFailed
+    );
+    serde_json::json!({
+        "job_id": job.id,
+        "title": job.title,
+        "target_agent_id": job.target_agent_id,
+        "status": job.status.as_str(),
+        "detached": true,
+        "state_version": job.state_version,
+        "attempt_count": job.attempt_count,
+        "depends_on": job.depends_on,
+        "budget_tokens": job.max_tokens,
+        "used_tokens": job.used_tokens,
+        "budget_exceeded": job.used_tokens.is_some_and(|used| used > job.max_tokens),
+        "result_available": terminal && job.result.is_some(),
+        "result_truncated": job.result_truncated,
+        "result": include_result.then(|| job.result.clone()).flatten(),
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+        "cancellable": cancellable,
+        "resumable": resumable,
+        "wait_timed_out": wait_timed_out,
+        "replay_requires_explicit_resume": job.status == AgentDelegationStatus::Uncertain,
+        "next_actions": if terminal {
+            if resumable {
+                vec![
+                    "Inspect this record, then use agent_job_resume only if replay is intentional.",
+                    "Use agent_job_list to inspect sibling and dependent jobs.",
+                ]
+            } else {
+                vec!["Use agent_job_result to read the bounded final result."]
+            }
+        } else {
+            vec![
+                "Continue other independent work; do not block on this job.",
+                "Use agent_job_status or agent_job_list to return to it later.",
+                "Use agent_job_cancel if it should stop.",
+            ]
+        },
+    })
 }
 
 pub(crate) async fn tool_agent_correct(
@@ -441,5 +658,68 @@ mod tests {
         assert!(parsed.provision_ingress_token);
         assert!(parsed.generate_callback_secret);
         assert!(parsed.egress_callback_url.is_none());
+    }
+
+    #[test]
+    fn delegation_idempotency_is_stable_and_scoped_to_caller_and_tool_call() {
+        let first = delegation_idempotency_key("captain", "tool-42");
+        assert_eq!(first, delegation_idempotency_key("captain", "tool-42"));
+        assert_ne!(first, delegation_idempotency_key("captain", "tool-43"));
+        assert_ne!(first, delegation_idempotency_key("other-agent", "tool-42"));
+        assert!(first.starts_with("agent-delegation:"));
+    }
+
+    #[test]
+    fn job_projection_hides_result_until_explicit_result_read() {
+        let mut job = delegation_record(AgentDelegationStatus::Succeeded);
+        job.result = Some("bounded private result".to_string());
+        let status = agent_job_value(&job, false, false);
+        assert!(status["result"].is_null());
+        assert_eq!(status["result_available"], true);
+        assert!(status.get("task").is_none());
+
+        let result = agent_job_value(&job, true, false);
+        assert_eq!(result["result"], "bounded private result");
+    }
+
+    #[test]
+    fn uncertain_projection_requires_an_explicit_replay_decision() {
+        let job = delegation_record(AgentDelegationStatus::Uncertain);
+        let value = agent_job_value(&job, false, false);
+        assert_eq!(value["resumable"], true);
+        assert_eq!(value["replay_requires_explicit_resume"], true);
+        assert!(value["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("replay is intentional"));
+    }
+
+    fn delegation_record(status: AgentDelegationStatus) -> AgentDelegationJobRecord {
+        AgentDelegationJobRecord {
+            id: "job-42".to_string(),
+            idempotency_key: "idem-42".to_string(),
+            caller_agent_id: "captain".to_string(),
+            target_agent_id: "reviewer".to_string(),
+            title: "Review".to_string(),
+            task: "Private task".to_string(),
+            max_tokens: 5_000,
+            depends_on: Vec::new(),
+            status,
+            state_version: 1,
+            attempt_count: 1,
+            lease_owner: None,
+            lease_expires_at_unix_ms: None,
+            effect_state: captain_types::agent_delegation::AgentDelegationEffectState::Completed,
+            result: None,
+            result_truncated: false,
+            used_tokens: Some(100),
+            error_code: None,
+            error_message: None,
+            cancel_requested_at_unix_ms: None,
+            started_at_unix_ms: Some(1),
+            completed_at_unix_ms: Some(2),
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 2,
+        }
     }
 }

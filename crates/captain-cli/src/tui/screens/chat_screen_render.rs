@@ -10,7 +10,10 @@ use super::{
     chat_screen_layout::{chat_screen_areas, draw_separator, reasoning_areas, ChatScreenAreas},
     chat_session_picker::draw_session_picker,
     chat_slash_picker::draw_slash_picker_live,
-    chat_status_line::{build_provider_quota_lines, build_status_line, draw_provider_quota_status},
+    chat_status_line::{
+        build_compaction_progress_lines, build_provider_quota_lines, build_status_line,
+        draw_provider_quota_status,
+    },
     chat_thinking_block::draw_thinking,
     chat_transcript_render::draw_messages,
 };
@@ -33,8 +36,9 @@ pub(super) fn draw_chat_screen(
     image_cache: &mut ImagePreviewCache,
 ) {
     let inner = draw_chat_frame(f, area, state);
-    let provider_quota_lines = build_provider_quota_lines(state, inner.width as usize);
-    let areas = draw_chat_body(f, inner, state, image_cache, provider_quota_lines);
+    let mut status_lines = build_compaction_progress_lines(state, inner.width as usize);
+    status_lines.extend(build_provider_quota_lines(state, inner.width as usize));
+    let areas = draw_chat_body(f, inner, state, image_cache, status_lines);
     draw_chat_overlays(f, inner, areas.input, state);
 }
 

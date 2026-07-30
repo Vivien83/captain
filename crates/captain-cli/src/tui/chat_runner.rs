@@ -5,7 +5,9 @@
 //! `ChatState`, `chat::draw()`, event spawning, and the theme system.
 
 use super::event::{self, AppEvent};
-use super::screens::chat::{self, ChatAction, ChatMouseAction, ChatState, PendingAskUser, Role};
+use super::screens::chat::{
+    self, ChatAction, ChatMouseAction, ChatState, PendingAskUser, PendingSuggestedReplies, Role,
+};
 use super::session_runtime::{
     public_session_label, restore_public_session_messages, LoadedSession,
 };
@@ -19,6 +21,7 @@ use super::slash_info;
 use super::slash_kill;
 use super::slash_local;
 use super::slash_model;
+use super::slash_reasoning;
 use super::slash_reload;
 use super::slash_retry;
 use super::slash_scroll;
@@ -123,6 +126,9 @@ impl StandaloneChat {
                             model_id,
                             session_strategy,
                         } => self.switch_model(&model_id, Some(&session_strategy)),
+                        ChatMouseAction::SendMessage(message) => {
+                            self.handle_chat_action(ChatAction::SendMessage(message));
+                        }
                         ChatMouseAction::ApproveRequest(_)
                         | ChatMouseAction::ApproveSessionRequest(_)
                         | ChatMouseAction::ApproveAlwaysRequest(_)
@@ -290,6 +296,11 @@ impl StandaloneChat {
                 }
                 self.chat.push_message(Role::Agent, content);
             }
+            StreamEvent::SuggestedReplies { options } => {
+                self.chat.quick_action_click_zones.clear();
+                self.chat.pending_suggested_replies =
+                    (!options.is_empty()).then_some(PendingSuggestedReplies { options });
+            }
             StreamEvent::AskUser { question, options } => {
                 let options = options.unwrap_or_default();
                 if options.is_empty() {
@@ -308,6 +319,9 @@ impl StandaloneChat {
                 chunk,
             } => {
                 self.chat.tool_output_delta(&tool_use_id, stream, &chunk);
+            }
+            StreamEvent::CompactionProgress { progress } => {
+                self.chat.apply_compaction_progress(progress);
             }
         }
     }
@@ -388,6 +402,7 @@ impl StandaloneChat {
                 if let Some(context_window) = kernel.effective_context_window_for_agent(agent_id) {
                     self.chat.set_context_window_tokens(context_window as u64);
                 }
+                self.chat.reasoning_status = kernel.agent_reasoning_status(agent_id).ok();
             }
             Backend::None => {}
         }
@@ -802,6 +817,10 @@ impl StandaloneChat {
             }
             return true;
         }
+        if let Some(reasoning) = slash_reasoning::command_for(command, args) {
+            self.handle_reasoning_slash(reasoning);
+            return true;
+        }
         if slash_think::is_think_command(command) {
             self.chat.toggle_thinking();
             return true;
@@ -815,6 +834,53 @@ impl StandaloneChat {
             return true;
         }
         false
+    }
+
+    fn handle_reasoning_slash(
+        &mut self,
+        command: Result<slash_reasoning::ReasoningCommand, String>,
+    ) {
+        let command = match command {
+            Ok(command) => command,
+            Err(error) => {
+                self.chat.push_message(Role::System, error);
+                return;
+            }
+        };
+        enum Route {
+            Daemon(String, String),
+            InProcess(Arc<CaptainKernel>, AgentId),
+            Missing,
+        }
+        let route = match &self.backend {
+            Backend::Daemon { base_url } => self
+                .agent_id_daemon
+                .clone()
+                .map(|id| Route::Daemon(base_url.clone(), id))
+                .unwrap_or(Route::Missing),
+            Backend::InProcess { kernel } => self
+                .agent_id_inprocess
+                .map(|id| Route::InProcess(Arc::clone(kernel), id))
+                .unwrap_or(Route::Missing),
+            Backend::None => Route::Missing,
+        };
+        let result = match route {
+            Route::Daemon(base_url, agent_id) => {
+                slash_reasoning::run_daemon(&base_url, &agent_id, &command)
+            }
+            Route::InProcess(kernel, agent_id) => {
+                slash_reasoning::run_inprocess(&kernel, agent_id, &command)
+            }
+            Route::Missing => Err("Aucun agent actif pour configurer le raisonnement.".to_string()),
+        };
+        match result {
+            Ok(status) => {
+                let message = slash_reasoning::status_message(&status);
+                self.chat.reasoning_status = Some(status);
+                self.chat.push_message(Role::System, message);
+            }
+            Err(error) => self.chat.push_message(Role::System, error),
+        }
     }
 
     fn handle_kill_slash(&mut self, lang: crate::i18n::Lang) {
@@ -2257,15 +2323,15 @@ pub fn run_chat_tui(config: Option<PathBuf>, agent_name: Option<String>) {
         terminal
             .draw(|frame| state.draw(frame))
             .expect("Failed to draw");
-
-        match rx.recv_timeout(Duration::from_millis(33)) {
-            Ok(ev) => state.handle_event(ev),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        // Drain queued events
-        while let Ok(ev) = rx.try_recv() {
+        let last_frame_at = std::time::Instant::now();
+        let Some(events) = event::receive_frame_events(&rx, last_frame_at) else {
+            break;
+        };
+        for ev in events {
             state.handle_event(ev);
+            if state.should_quit {
+                break;
+            }
         }
     }
 

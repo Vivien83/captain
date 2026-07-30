@@ -325,18 +325,16 @@ pub(crate) fn channel_config_values(
     }
 }
 
-pub(crate) fn build_field_json(
+pub(crate) fn build_field_json_with(
     field: &ChannelField,
     config_values: Option<&serde_json::Value>,
+    resolve: &dyn Fn(&str) -> Option<String>,
 ) -> serde_json::Value {
     let env_var = field_env_name(field, config_values);
     let has_secret = env_var
         .as_deref()
-        .map(|env| {
-            std::env::var(env)
-                .map(|value| !value.is_empty())
-                .unwrap_or(false)
-        })
+        .and_then(resolve)
+        .map(|value| !value.is_empty())
         .unwrap_or(false);
     let mut result = serde_json::json!({
         "key": field.key,
@@ -402,15 +400,24 @@ fn value_is_empty(value: &serde_json::Value) -> bool {
             .unwrap_or(false)
 }
 
+#[cfg(test)]
 pub(crate) fn field_is_ready(
     field: &ChannelField,
     config_values: Option<&serde_json::Value>,
+) -> bool {
+    field_is_ready_with(field, config_values, &|env| std::env::var(env).ok())
+}
+
+pub(crate) fn field_is_ready_with(
+    field: &ChannelField,
+    config_values: Option<&serde_json::Value>,
+    resolve: &dyn Fn(&str) -> Option<String>,
 ) -> bool {
     if !field.required {
         return true;
     }
     if let Some(env) = field_env_name(field, config_values) {
-        return std::env::var(env)
+        return resolve(&env)
             .map(|value| !value.is_empty())
             .unwrap_or(false);
     }

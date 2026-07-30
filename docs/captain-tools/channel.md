@@ -6,7 +6,7 @@
 
 ## Tools
 
-Captain talks to the outside world through a per-channel adapter pool managed by `BridgeManager`. The active core setup surface is Telegram, Discord, Signal, and Email; non-core channels may remain compiled for compatibility but are frozen out of setup and normal bridge startup until the core is Hermes-level. The tools below let an agent push a message to any active channel, rotate adapter config without disturbing the others, and manage Telegram topic routing.
+Captain talks to the outside world through a per-channel adapter pool managed by `BridgeManager`. The active core setup surface is Telegram, Discord, Signal, and Email; non-core channels may remain compiled for compatibility but are frozen out of setup and normal bridge startup until the core is production-grade. The tools below let an agent push a message to any active channel, rotate adapter config without disturbing the others, and manage Telegram topic routing.
 
 ### `channel_delivery_batch`
 
@@ -80,11 +80,37 @@ Pending inbound follow-ups are durably stored in `channel_inbound_queue.json` un
 
 Most end-user traffic is expected to come from Telegram. Treat Telegram as a primary UX surface, not as a logging sink.
 
+- At each successful Telegram connection, Captain synchronizes the canonical
+  active command catalogue through Bot API
+  [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands), in
+  parallel for the default English menu and `fr`. Telegram can then show the
+  contextual command picker as soon as the user types `/`. Command names,
+  `/help`, text-command bypass, and menu descriptions share one source;
+  compatibility-only frozen routes remain callable by exact name but are not
+  promoted. A menu-sync rejection is bounded, logged, and non-fatal to message
+  polling.
 - Send the actual answer/content, not a meta confirmation. Never add a second message like "Rappel envoyé sur Telegram".
 - Normal final answers are Rich-first and preserve GFM tables, lists, code, and collapsible details. Keep each message readable on mobile; for long reports, lead with the conclusion and structure details instead of flattening them into ASCII.
+- `/usage` is a Rich operational card: it shows session tokens/cost, only the
+  provider limits applicable to the selected model, their real remaining
+  headroom and reset, plus exact spend-control values when reported. Other
+  model families are summarized as annexes rather than drawn as misleading
+  gauges.
+- `/reasoning` opens a Rich card for the exact selected agent. Telegram buttons
+  persist Auto or a catalogue-supported effort, including `ultra` when the
+  current model/account publishes it, without rerouting to another agent if the
+  original card becomes stale. Auto omits the override and is not explicit
+  `none`; Codex Ultra is labelled as `max` model effort plus proactive
+  root-agent delegation. `/think` never changes model behavior on a channel.
+- `/learning` renders the live Skill Learning V2 engine as a Rich operational
+  card: exact bound model, heartbeat and last scan, durable jobs and
+  notifications, retries/dead/uncertain state, and recovery. It never fabricates
+  a completion percentage. `/learnings` remains the separate list of generic
+  memory candidates awaiting review.
 - Consecutive independent tool starts share one live activity board. A progress or result event closes that parallel wave; a dependent tool belongs to the next board. Do not narrate each tool in a second message.
 - Private long turns refresh one ephemeral operational draft after 20 seconds of real inactivity and before Telegram's 30-second draft TTL. Text, tool activity, and visible edits reset that timer. Do not manually add duplicate "still working" messages unless the next action genuinely changed.
 - `ask_user` questions are stateful Rich cards. A button or freeform reply must reach the active turn before the card is confirmed; answered and expired cards clear their keyboard. Never tell the user a choice was recorded merely because a callback arrived.
+- Non-blocking suggested replies use a one-turn reply keyboard on the normal Rich response. A tap is an ordinary user message, free text remains available, and an empty suggestion set removes a stale keyboard. Do not treat these choices as a blocking `ask_user` approval.
 - Explicitly unsupported Rich endpoints use the cached HTML/plain fallback. Network ambiguity and 5xx failures must not be retried through another send path because Telegram may already have accepted the request.
 - During a long channel turn, exact mobile messages like `Stop`, `annule`, or `/stop` plus recognized slash commands (`/approve`, `/reject`, `/status`, `/new`, etc.) bypass the active-session queue and run immediately. Normal plain text follow-ups for the same channel/chat/user/thread are first offered to the active stream as context interjections; `/steer <message>` forces that explicit intent, and `/queue <message>` skips active interjection to preserve the message for the next turn. If no active stream accepts a follow-up, it is queued, the first queued follow-up gets a short debounced acknowledgment, rapid text bursts are appended into one pending turn, and the bridge drains that pending turn before releasing the session.
 - When a cron/goal is created from Telegram, set explicit Telegram delivery/escalation when the tool supports it; do not rely on a hidden home-channel guess.
@@ -116,7 +142,7 @@ Use these only for Telegram groups with forum topics enabled. For a one-off thre
 
 `is_authorized` is enforced **at the adapter parse path**, before
 `dispatch_message` -> `handle_command` ever sees the message. That means
-sensitive slash commands (`model`, `compact`, `stop`, `usage`, `think`,
+Sensitive slash commands (`model`, `reasoning`, `compact`, `stop`, `usage`, `think`,
 `new`/`clear`) are protected only on adapters that wire the helper.
 
 | Adapter | RBAC enforced | Sensitive commands gated |

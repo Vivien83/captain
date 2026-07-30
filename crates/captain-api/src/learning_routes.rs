@@ -157,6 +157,19 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     )
 }
 
+/// GET /api/learning/status — exact worker, model, queue and recovery state.
+pub async fn workflow_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.kernel.workflow_learning_status() {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(status).unwrap_or_else(|error| {
+                serde_json::json!({ "error": format!("workflow status encoding failed: {error}") })
+            })),
+        ),
+        Err(error) => server_error(error),
+    }
+}
+
 /// GET /api/learning/workflows — shared durable Skill/CapSpec/Automation view.
 pub async fn list_workflows(
     State(state): State<Arc<AppState>>,
@@ -294,7 +307,9 @@ mod tests {
         let api_source = include_str!("../static/js/app/api.js");
         let learning_source = include_str!("../static/js/app/views/Learning.js");
         assert!(api_source.contains("/api/learning/workflows"));
+        assert!(api_source.contains("/api/learning/status"));
         assert!(learning_source.contains("workflowLearning"));
+        assert!(learning_source.contains("learningStatus"));
         assert!(!learning_source.contains("/api/skills/proposals"));
     }
 }

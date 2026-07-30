@@ -102,6 +102,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()));
 
             let ready = matches!(entry.state, AgentState::Running) && auth_status != "missing";
+            let reasoning = state.kernel.agent_reasoning_status(entry.id).ok();
             serde_json::json!({
                 "id": entry.id.to_string(),
                 "name": entry.name,
@@ -112,6 +113,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "model_provider": provider,
                 "model_name": model,
                 "model_tier": tier,
+                "reasoning": reasoning,
                 "context_window_tokens": context_window_tokens,
                 "auth_status": auth_status,
                 "ready": ready,
@@ -157,6 +159,7 @@ pub async fn get_agent(
         .kernel
         .effective_context_window_for_agent(agent_id)
         .unwrap_or_default();
+    let reasoning = state.kernel.agent_reasoning_status(agent_id).ok();
 
     (
         StatusCode::OK,
@@ -172,6 +175,7 @@ pub async fn get_agent(
                 "provider": entry.manifest.model.provider,
                 "model": entry.manifest.model.model,
             },
+            "reasoning": reasoning,
             "context_window_tokens": context_window_tokens,
             "capabilities": declared_capabilities,
             "capabilities_effective": effective_capabilities,

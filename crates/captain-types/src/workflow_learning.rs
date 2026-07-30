@@ -1,10 +1,119 @@
 //! Channel-neutral operator projection for durable workflow learning.
 
+use crate::config::LearningMode;
 use serde::{Deserialize, Serialize};
 
 pub const PROPOSAL_CARD_SCHEMA_VERSION: u16 = 2;
 pub const WORKFLOW_LIFECYCLE_CARD_SCHEMA_VERSION: u16 = 1;
 pub const WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION: u16 = 1;
+pub const WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLearningRuntimeState {
+    Disabled,
+    Starting,
+    Healthy,
+    Active,
+    Recovering,
+    Degraded,
+    Stalled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLearningRecoveryState {
+    Disabled,
+    Starting,
+    InSync,
+    AutomaticRetryActive,
+    OperatorAttention,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLearningWorkerPhase {
+    Starting,
+    Running,
+    Degraded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningModelIdentity {
+    pub provider: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningWorkerView {
+    pub phase: WorkflowLearningWorkerPhase,
+    pub bound_model: Option<WorkflowLearningModelIdentity>,
+    pub started_at_unix_ms: i64,
+    pub heartbeat_at_unix_ms: i64,
+    pub heartbeat_age_ms: u64,
+    pub last_scan_at_unix_ms: Option<i64>,
+    pub last_progress_at_unix_ms: Option<i64>,
+    pub last_error_scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningJobQueueView {
+    pub pending: u64,
+    pub running: u64,
+    pub retry_wait: u64,
+    pub uncertain: u64,
+    pub dead: u64,
+    pub oldest_actionable_at_unix_ms: Option<i64>,
+    pub next_retry_at_unix_ms: Option<i64>,
+    pub last_activity_at_unix_ms: Option<i64>,
+    pub last_error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningNotificationQueueView {
+    pub pending: u64,
+    pub delivering: u64,
+    pub retry_wait: u64,
+    pub dead: u64,
+    pub oldest_actionable_at_unix_ms: Option<i64>,
+    pub next_retry_at_unix_ms: Option<i64>,
+    pub last_activity_at_unix_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningWorkloadView {
+    pub total: u64,
+    pub processing: u64,
+    pub awaiting_decision: u64,
+    pub active: u64,
+    pub attention: u64,
+    pub last_activity_at_unix_ms: Option<i64>,
+}
+
+/// Shared operational truth for Skill Learning V2.
+///
+/// Counts and timestamps come from one SQLite snapshot. `bound_model` is only
+/// written after the worker has built a proposer for that exact model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningStatus {
+    pub schema_version: u16,
+    pub enabled: bool,
+    pub mode: LearningMode,
+    pub state: WorkflowLearningRuntimeState,
+    pub recovery: WorkflowLearningRecoveryState,
+    pub expected_model: WorkflowLearningModelIdentity,
+    pub worker: Option<WorkflowLearningWorkerView>,
+    pub jobs: WorkflowLearningJobQueueView,
+    pub notifications: WorkflowLearningNotificationQueueView,
+    pub workflows: WorkflowLearningWorkloadView,
+    pub generated_at_unix_ms: i64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

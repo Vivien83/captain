@@ -166,7 +166,7 @@ pub(crate) fn record_shutdown_deferred(
     trigger: &str,
     work: ActiveShutdownWork,
 ) {
-    kernel.audit_log.record(
+    kernel.audit_log.record_or_alert(
         "system",
         AuditAction::ConfigChange,
         format!("{trigger} shutdown deferred because active work is running"),

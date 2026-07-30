@@ -1,7 +1,7 @@
 //! Installed-skill API and compatibility tombstone for SkillSynthesizer v3.13.
 
 use crate::state::AppState;
-use crate::types::{SkillInstallRequest, SkillUninstallRequest};
+use crate::types::SkillUninstallRequest;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -161,37 +161,6 @@ pub async fn list_skills(State(state): State<Arc<AppState>>) -> impl IntoRespons
     Json(serde_json::json!({ "skills": skills, "total": total }))
 }
 
-/// POST /api/skills/install - Install a skill from Captain Marketplace.
-pub async fn install_skill(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SkillInstallRequest>,
-) -> impl IntoResponse {
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    let config = captain_skills::marketplace::MarketplaceConfig::default();
-    let client = captain_skills::marketplace::MarketplaceClient::new(config);
-
-    match client.install(&req.name, &skills_dir).await {
-        Ok(version) => {
-            state.kernel.reload_skills();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "installed",
-                    "name": req.name,
-                    "version": version,
-                })),
-            )
-        }
-        Err(e) => {
-            tracing::warn!("Skill install failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Install failed: {e}")})),
-            )
-        }
-    }
-}
-
 /// POST /api/skills/uninstall - Uninstall a skill.
 pub async fn uninstall_skill(
     State(state): State<Arc<AppState>>,
@@ -213,40 +182,6 @@ pub async fn uninstall_skill(
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("{e}")})),
         ),
-    }
-}
-
-/// GET /api/marketplace/search - Search the Captain Marketplace.
-pub async fn marketplace_search(
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let query = params.get("q").cloned().unwrap_or_default();
-    if query.is_empty() {
-        return Json(serde_json::json!({"results": [], "total": 0}));
-    }
-
-    let config = captain_skills::marketplace::MarketplaceConfig::default();
-    let client = captain_skills::marketplace::MarketplaceClient::new(config);
-
-    match client.search(&query).await {
-        Ok(results) => {
-            let items: Vec<serde_json::Value> = results
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "name": r.name,
-                        "description": r.description,
-                        "stars": r.stars,
-                        "url": r.url,
-                    })
-                })
-                .collect();
-            Json(serde_json::json!({"results": items, "total": items.len()}))
-        }
-        Err(e) => {
-            tracing::warn!("Marketplace search failed: {e}");
-            Json(serde_json::json!({"results": [], "total": 0, "error": format!("{e}")}))
-        }
     }
 }
 

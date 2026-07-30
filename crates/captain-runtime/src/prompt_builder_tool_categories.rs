@@ -52,7 +52,8 @@ pub fn tool_category(name: &str) -> &'static str {
         | "checkpoint_save" => "Projects",
 
         "agent_send" | "agent_spawn" | "agent_list" | "agent_kill" | "agent_status"
-        | "agent_watch" | "agent_delegate" | "agent_correct" => "Agents",
+        | "agent_watch" | "agent_delegate" | "agent_job_status" | "agent_job_result"
+        | "agent_job_list" | "agent_job_cancel" | "agent_job_resume" | "agent_correct" => "Agents",
 
         "ask_user" | "channel_send" | "channel_reconfigure" => "User and channels",
 

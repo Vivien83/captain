@@ -675,6 +675,40 @@ body.terminal-body ::-webkit-scrollbar-thumb {
   word-break: break-word;
 }
 
+.terminal-activity-progress {
+  position: relative;
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid #252525;
+  background: #101010;
+}
+
+.terminal-activity-progress-label {
+  margin-top: 7px;
+  color: #8b8170;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+.terminal-activity-progress > span {
+  display: block;
+  height: 100%;
+  background: #d9a441;
+}
+
+.terminal-activity-progress.indeterminate > span {
+  position: absolute;
+  width: 24%;
+  animation: terminal-compaction-scan 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes terminal-compaction-scan {
+  from { left: 0; }
+  to { left: 76%; }
+}
+
 .terminal-rail-metrics div {
   display: grid;
   gap: 4px;
@@ -1193,6 +1227,7 @@ body[data-terminal-state="error"] .terminal-frame {
   .terminal-placeholder::after,
   .terminal-chip,
   .terminal-dot,
+  .terminal-activity-progress.indeterminate > span,
   .terminal-auth-card {
     animation: none;
   }

@@ -1,6 +1,9 @@
 use crate::project_lifecycle::runtime_progress_for_phase;
 use crate::project_runtime_asks::close_runtime_project_asks_for_run;
 use crate::project_runtime_checkpoints::PROJECT_RUNTIME_PROTOCOL;
+use crate::project_runtime_completion::{
+    aggregate_contract_is_satisfied, aggregate_project_completion_contract,
+};
 use crate::project_runtime_events::append_runtime_event;
 use chrono::Utc;
 
@@ -170,7 +173,32 @@ pub(crate) fn mark_runtime_completed(
     run_id: &str,
     project_id: &str,
     project_slug: &str,
-) {
+) -> bool {
+    let completion_contract = aggregate_project_completion_contract(runtime);
+    let completion_satisfied = aggregate_contract_is_satisfied(&completion_contract);
+    runtime["completion_contract"] = completion_contract;
+    if !completion_satisfied {
+        runtime["status"] = serde_json::json!("blocked");
+        runtime["current_phase"] = serde_json::json!("verify");
+        runtime["progress"] = serde_json::json!(runtime_progress_for_phase("verify", "paused"));
+        runtime["updated_at"] = serde_json::json!(Utc::now().to_rfc3339());
+        deactivate_runtime_orchestrator(runtime, "completion_evidence_missing");
+        append_runtime_event(
+            runtime,
+            "project.completion_rejected",
+            "Project completion rejected",
+            "Captain refused to mark the run complete because one or more project phases lack a satisfied durable completion contract.",
+            "captain",
+            "verify",
+            "blocked",
+            serde_json::json!({
+                "run_id": run_id,
+                "project_id": project_id,
+                "slug": project_slug,
+            }),
+        );
+        return false;
+    }
     runtime["status"] = serde_json::json!("done");
     runtime["current_phase"] = serde_json::json!("learn");
     runtime["progress"] = serde_json::json!(100);
@@ -191,6 +219,7 @@ pub(crate) fn mark_runtime_completed(
             "slug": project_slug,
         }),
     );
+    true
 }
 
 #[cfg(test)]

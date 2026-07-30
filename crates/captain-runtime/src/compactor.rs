@@ -12,11 +12,12 @@
 
 use crate::compaction_boundary::coherent_recent_split;
 use crate::compactor_summarization::{
-    adaptive_chunk_size, summarize_in_chunks, summarize_messages,
+    adaptive_chunk_size, summarize_in_chunks_with_progress, summarize_messages,
 };
 use crate::tool_output_pruning::{prune_old_tool_outputs, PRUNE_RESERVED_RECENT_TOKENS};
 use crate::{compaction_handoff, llm_driver::LlmDriver};
 use captain_memory::session::Session;
+use captain_types::compaction::{CompactionPhase, CompactionProgressUnit};
 use captain_types::message::Message;
 use captain_types::tool::ToolDefinition;
 use std::sync::Arc;
@@ -116,9 +117,37 @@ pub struct CompactionResult {
     pub used_fallback: bool,
     /// Number of old tool results whose content was pruned before summarization.
     pub pruned_tool_results: usize,
-    /// True when pruning alone was enough: no LLM summarization ran, no
-    /// summary was produced, and `kept_messages` is the full pruned history.
+    /// True when pruning was the only history mutation: no LLM summarization
+    /// ran, no summary was produced, and `kept_messages` is the full pruned
+    /// history.
     pub pruned_only: bool,
+}
+
+impl CompactionResult {
+    /// Whether compaction left the canonical history byte-for-byte unchanged.
+    pub fn is_unchanged(&self) -> bool {
+        self.compacted_count == 0 && self.pruned_tool_results == 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionStageUpdate {
+    pub phase: CompactionPhase,
+    pub detail: String,
+    pub completed_units: Option<u32>,
+    pub total_units: Option<u32>,
+    pub unit: Option<CompactionProgressUnit>,
+}
+
+pub type CompactionStageObserver = Arc<dyn Fn(CompactionStageUpdate) + Send + Sync>;
+
+pub(crate) fn emit_compaction_stage(
+    observer: Option<&CompactionStageObserver>,
+    update: CompactionStageUpdate,
+) {
+    if let Some(observer) = observer {
+        observer(update);
+    }
 }
 
 /// Check whether a session needs compaction (message-count trigger).
@@ -170,7 +199,9 @@ pub fn needs_compaction_by_tokens(estimated_tokens: usize, config: &CompactionCo
 /// First prunes the content of old tool results outside the reserved recent
 /// window (deterministic, no LLM). If pruning alone brings the session back
 /// under the compaction thresholds, no LLM summarization runs at all and the
-/// pruned history is returned as-is (`pruned_only`).
+/// pruned history is returned as-is (`pruned_only`). If the coherent recent
+/// turn consumes the whole history, the full history is likewise returned
+/// without issuing an empty LLM summarization request.
 ///
 /// Otherwise takes all messages except the most recent `keep_recent` and uses
 /// a multi-stage approach to produce a concise summary:
@@ -192,6 +223,35 @@ pub async fn compact_session(
     config: &CompactionConfig,
     non_message_overhead_tokens: usize,
 ) -> Result<CompactionResult, String> {
+    compact_session_with_progress(
+        driver,
+        model,
+        session,
+        config,
+        non_message_overhead_tokens,
+        None,
+    )
+    .await
+}
+
+pub async fn compact_session_with_progress(
+    driver: Arc<dyn LlmDriver>,
+    model: &str,
+    session: &Session,
+    config: &CompactionConfig,
+    non_message_overhead_tokens: usize,
+    observer: Option<CompactionStageObserver>,
+) -> Result<CompactionResult, String> {
+    emit_compaction_stage(
+        observer.as_ref(),
+        CompactionStageUpdate {
+            phase: CompactionPhase::Pruning,
+            detail: "Pruning old tool outputs".to_string(),
+            completed_units: None,
+            total_units: None,
+            unit: None,
+        },
+    );
     let prune = prune_old_tool_outputs(&session.messages, PRUNE_RESERVED_RECENT_TOKENS);
     let messages = prune.messages;
     let msg_count = messages.len();
@@ -230,6 +290,22 @@ pub async fn compact_session(
     }
 
     let split_at = coherent_recent_split(&messages, config.keep_recent);
+    if split_at == 0 {
+        info!(
+            total = msg_count,
+            pruned = prune.pruned_results,
+            "Compaction skipped to preserve the coherent recent turn"
+        );
+        return Ok(CompactionResult {
+            summary: String::new(),
+            kept_messages: messages,
+            compacted_count: 0,
+            chunks_used: 0,
+            used_fallback: false,
+            pruned_tool_results: prune.pruned_results,
+            pruned_only: prune.pruned_results > 0,
+        });
+    }
     let to_compact = &messages[..split_at];
     let kept = &messages[split_at..];
 
@@ -252,6 +328,17 @@ pub async fn compact_session(
             to_compact,
         ))
     });
+
+    emit_compaction_stage(
+        observer.as_ref(),
+        CompactionStageUpdate {
+            phase: CompactionPhase::Summarizing,
+            detail: "Summarizing the compacted history in one opaque model call".to_string(),
+            completed_units: None,
+            total_units: None,
+            unit: None,
+        },
+    );
 
     match summarize_messages(driver.clone(), model, to_compact, config).await {
         Ok(summary) => {
@@ -278,7 +365,15 @@ pub async fn compact_session(
         }
     }
 
-    match summarize_in_chunks(driver.clone(), model, to_compact, config).await {
+    match summarize_in_chunks_with_progress(
+        driver.clone(),
+        model,
+        to_compact,
+        config,
+        observer.as_ref(),
+    )
+    .await
+    {
         Ok(summary) => {
             let chunk_size = adaptive_chunk_size(to_compact, config);
             let num_chunks = (to_compact.len() as f64 / chunk_size as f64).ceil() as u32;

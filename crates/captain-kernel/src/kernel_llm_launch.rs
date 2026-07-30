@@ -268,8 +268,10 @@ async fn run_streaming_llm_task(
         &kernel_clone,
         task.agent_id,
         &mut task.session,
+        &task.manifest,
         task.effective_ctx_window,
         task.pre_loop_compaction,
+        task.tx.clone(),
     )
     .await;
 
@@ -357,16 +359,24 @@ async fn apply_streaming_pre_loop_compaction(
     kernel: &CaptainKernel,
     agent_id: AgentId,
     session: &mut Session,
+    manifest: &AgentManifest,
     effective_ctx_window: usize,
     pre_loop_compaction: LlmPreLoopCompactionDecision,
+    tx: tokio::sync::mpsc::Sender<StreamEvent>,
 ) {
+    let progress_sink: super::kernel_compaction_runtime::CompactionProgressSink =
+        Arc::new(move |progress| {
+            let _ = tx.try_send(StreamEvent::CompactionProgress { progress });
+        });
     kernel
         .execute_llm_session_compaction_plan(
             agent_id,
             session,
+            manifest,
             effective_ctx_window,
             LlmPreLoopCompactionStage::StreamingAuto,
             pre_loop_compaction,
+            Some(progress_sink),
         )
         .await;
 }

@@ -2,8 +2,8 @@
 
 use super::approvals::ApprovalRequest;
 use super::chat::{
-    ChatState, ModelSwitchChoice, PendingAskUser, PendingModelSwitch, QuickActionChoiceId,
-    QuickActionClickZone,
+    ChatState, ModelSwitchChoice, PendingAskUser, PendingModelSwitch, PendingSuggestedReplies,
+    QuickActionChoiceId, QuickActionClickZone,
 };
 use crate::tui::theme;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -188,10 +188,14 @@ pub(super) fn build_quick_action_prompt(state: &ChatState) -> Option<QuickAction
         return Some(build_ask_user_prompt(pending));
     }
 
+    if let Some(pending) = state.pending_model_switch.as_ref() {
+        return Some(build_model_switch_prompt(pending));
+    }
+
     state
-        .pending_model_switch
+        .pending_suggested_replies
         .as_ref()
-        .map(build_model_switch_prompt)
+        .map(build_suggested_replies_prompt)
 }
 
 fn build_ask_user_prompt(pending: &PendingAskUser) -> QuickActionPrompt {
@@ -215,6 +219,26 @@ fn ask_user_choices(options: &[String]) -> Vec<QuickActionChoice> {
             style: QuickActionChoiceStyle::Primary,
         })
         .collect()
+}
+
+fn build_suggested_replies_prompt(pending: &PendingSuggestedReplies) -> QuickActionPrompt {
+    QuickActionPrompt {
+        title: "Réponses rapides".to_string(),
+        risk: "optionnel".to_string(),
+        details: Vec::new(),
+        lead: String::new(),
+        choices: pending
+            .options
+            .iter()
+            .enumerate()
+            .map(|(idx, option)| QuickActionChoice {
+                id: QuickActionChoiceId::SuggestedReply(idx),
+                label: format!("[{}] {option}", idx + 1),
+                style: QuickActionChoiceStyle::Primary,
+            })
+            .collect(),
+        hint: String::new(),
+    }
 }
 
 fn build_approval_prompt(req: &ApprovalRequest) -> QuickActionPrompt {
@@ -254,7 +278,7 @@ fn approval_choices() -> Vec<QuickActionChoice> {
         },
         QuickActionChoice {
             id: QuickActionChoiceId::ApprovalAlways,
-            label: "[A] Toujours".to_string(),
+            label: "[A] Cette action".to_string(),
             style: QuickActionChoiceStyle::Warning,
         },
         QuickActionChoice {
@@ -400,19 +424,23 @@ fn quick_action_prompt_lines(
     inner_modal: Rect,
 ) -> Vec<Line<'static>> {
     let mut lines = quick_action_detail_lines(&prompt.details);
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        prompt.lead.clone(),
-        Style::default()
-            .fg(theme::TEXT_PRIMARY)
-            .add_modifier(Modifier::BOLD),
-    )]));
+    if !prompt.lead.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            prompt.lead.clone(),
+            Style::default()
+                .fg(theme::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )]));
+    }
     push_quick_action_choice_lines(&mut lines, zones, &prompt.choices, inner_modal);
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        prompt.hint.clone(),
-        theme::hint_style(),
-    )]));
+    if !prompt.hint.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            prompt.hint.clone(),
+            theme::hint_style(),
+        )]));
+    }
     truncate_quick_action_lines(&mut lines, inner_modal.height);
     lines
 }

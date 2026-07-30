@@ -156,21 +156,32 @@ async fn request_approval_if_needed(
     let agent_id_str = caller_agent_id.unwrap_or("unknown");
     let summary =
         approval_preview_summary(tool_name, input, kernel, caller_agent_id, workspace_root);
+    let action_input = serde_json::to_vec(input).unwrap_or_else(|_| input.to_string().into_bytes());
+    let action_digest = captain_types::approval::approval_action_digest(tool_name, &action_input);
     match kernel
-        .request_approval(agent_id_str, tool_name, &summary)
+        .request_approval(agent_id_str, tool_name, &summary, &action_digest)
         .await
     {
-        Ok(true) => {
+        Ok(outcome) if outcome.is_approved() => {
             debug!(tool_name, "Approval granted — proceeding with execution");
             None
         }
-        Ok(false) => {
-            warn!(tool_name, "Approval denied — blocking tool execution");
+        Ok(outcome) => {
+            warn!(tool_name, decision = ?outcome.decision, reason = ?outcome.reason, "Approval denied — blocking tool execution");
+            let reason = outcome
+                .reason
+                .as_deref()
+                .map(|reason| format!(" Operator reason: {reason}"))
+                .unwrap_or_default();
+            let rule = outcome
+                .rule_id
+                .map(|id| format!(" Durable rule: {id}."))
+                .unwrap_or_default();
             Some(denied_tool_result(
                 tool_use_id,
                 tool_name,
                 &format!(
-                    "Execution denied: '{tool_name}' requires human approval and was denied or timed out. The operation was not performed."
+                    "Execution denied: '{tool_name}' requires human approval and was denied or timed out. The operation was not performed.{reason}{rule} Do not retry the same action unchanged."
                 ),
             ))
         }

@@ -263,13 +263,34 @@ fn provider_quota_line(quota: &ProviderQuota) -> Line<'static> {
         .as_deref()
         .map(|value| format!(" [{value}]"))
         .unwrap_or_default();
-    let windows = quota
+    let mut windows = quota
         .primary
         .iter()
         .chain(quota.secondary.iter())
         .map(provider_window_label)
-        .collect::<Vec<_>>()
-        .join(" | ");
+        .collect::<Vec<_>>();
+    if let Some(limit) = quota
+        .spend_control
+        .as_ref()
+        .and_then(|control| control.individual_limit.as_ref())
+    {
+        let reset = limit
+            .resets_at
+            .as_ref()
+            .map(compact_reset_label)
+            .map(|value| format!(" reset {value}"))
+            .unwrap_or_else(|| {
+                format!(
+                    " reset ~{}",
+                    provider_duration_label(limit.reset_after_seconds)
+                )
+            });
+        windows.push(format!(
+            "monthly {}% remaining ({}/{}){reset}",
+            limit.remaining_percent, limit.remaining, limit.limit
+        ));
+    }
+    let windows = windows.join(" | ");
     let stale = if quota.stale { " stale" } else { "" };
     let text = format!(
         "{}/{}{}  {}  [{}{}]",
@@ -297,17 +318,20 @@ fn provider_window_label(window: &ProviderQuotaWindow) -> String {
                 .map(|seconds| format!(" reset ~{}", provider_duration_label(seconds)))
         })
         .unwrap_or_default();
-    format!("{duration} {:.1}%{reset}", window.used_percent)
+    format!(
+        "{duration} {:.1}% remaining{reset}",
+        window.remaining_percent
+    )
 }
 
 fn provider_duration_label(seconds: u64) -> String {
-    if seconds % 604_800 == 0 {
+    if seconds.is_multiple_of(604_800) {
         format!("{}w", seconds / 604_800)
-    } else if seconds % 86_400 == 0 {
+    } else if seconds.is_multiple_of(86_400) {
         format!("{}d", seconds / 86_400)
-    } else if seconds % 3_600 == 0 {
+    } else if seconds.is_multiple_of(3_600) {
         format!("{}h", seconds / 3_600)
-    } else if seconds % 60 == 0 {
+    } else if seconds.is_multiple_of(60) {
         format!("{}m", seconds / 60)
     } else {
         format!("{seconds}s")
@@ -342,20 +366,25 @@ mod tests {
             "stale": false,
             "primary": {
                 "used_percent": 72.5,
+                "remaining_percent": 27.5,
                 "window_seconds": 18000,
                 "resets_at": "2026-07-18T18:00:00Z"
             },
-            "secondary": {"used_percent": 41.0, "window_seconds": 604800}
+            "secondary": {
+                "used_percent": 41.0,
+                "remaining_percent": 59.0,
+                "window_seconds": 604800
+            }
         }));
 
         assert_eq!(quota.primary.as_ref().unwrap().window_seconds, Some(18_000));
         assert_eq!(
             provider_window_label(quota.primary.as_ref().unwrap()),
-            "5h 72.5% reset 2026-07-18 18:00"
+            "5h 27.5% remaining reset 2026-07-18 18:00"
         );
         assert_eq!(
             provider_window_label(quota.secondary.as_ref().unwrap()),
-            "1w 41.0%"
+            "1w 59.0% remaining"
         );
     }
 }

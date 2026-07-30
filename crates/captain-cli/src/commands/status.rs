@@ -81,6 +81,7 @@ fn print_daemon_runtime(body: &serde_json::Value) {
     print_runtime_health_summary(body);
     print_shutdown_drain_summary(body);
     print_disk_summary(body);
+    print_execution_summary(&body["execution"]);
     print_runtime_update_summary(body);
     let channels = &body["channels"];
     let configured = channels["configured_count"]
@@ -123,6 +124,27 @@ fn print_daemon_runtime(body: &serde_json::Value) {
     );
     print_native_capability_summary(body);
     ui::kv("Media", &media_summary(body));
+}
+
+fn execution_summary(execution: &serde_json::Value) -> Option<String> {
+    let backend = execution["backend"].as_str()?;
+    let isolation = execution["isolation_level"].as_str().unwrap_or("unknown");
+    let mode = execution["policy_mode"].as_str().unwrap_or("unknown");
+    let critical = execution["critical_mode"].as_str().unwrap_or("unknown");
+    let os_isolation = if execution["os_isolation"].as_bool().unwrap_or(false) {
+        "OS-isolated"
+    } else {
+        "no OS isolation"
+    };
+    Some(format!(
+        "{backend}; {isolation}; {mode}/{critical}; {os_isolation}"
+    ))
+}
+
+fn print_execution_summary(execution: &serde_json::Value) {
+    if let Some(summary) = execution_summary(execution) {
+        ui::kv("Host execution", &summary);
+    }
 }
 
 fn print_streaming_summary(body: &serde_json::Value) {
@@ -364,6 +386,26 @@ fn provider_quota_item_summary(item: &serde_json::Value) -> String {
         summary.push_str(" -- ");
         summary.push_str(&windows.join(" | "));
     }
+    if let Some(spend) = item["spend_control"]["individual_limit"].as_object() {
+        let remaining = spend
+            .get("remaining")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?");
+        let limit = spend
+            .get("limit")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?");
+        let remaining_percent = spend
+            .get("remaining_percent")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default();
+        summary.push_str(&format!(
+            " | monthly {remaining_percent}% remaining ({remaining}/{limit})"
+        ));
+        if let Some(reset) = spend.get("resets_at").and_then(serde_json::Value::as_str) {
+            summary.push_str(&format!(", reset {reset}"));
+        }
+    }
     let alert = item["alert_level"].as_str().unwrap_or("normal");
     if alert != "normal" {
         summary.push_str(&format!(" [{alert}]"));
@@ -376,6 +418,9 @@ fn provider_quota_item_summary(item: &serde_json::Value) -> String {
 
 fn provider_window_summary(window: &serde_json::Value) -> Option<String> {
     let used = window["used_percent"].as_f64()?;
+    let remaining = window["remaining_percent"]
+        .as_f64()
+        .unwrap_or_else(|| (100.0 - used).clamp(0.0, 100.0));
     let duration = window["window_seconds"]
         .as_u64()
         .map(provider_window_duration)
@@ -384,17 +429,17 @@ fn provider_window_summary(window: &serde_json::Value) -> Option<String> {
         .as_str()
         .map(|value| format!(", reset {value}"))
         .unwrap_or_default();
-    Some(format!("{duration} {used:.1}%{reset}"))
+    Some(format!("{duration} {remaining:.1}% remaining{reset}"))
 }
 
 fn provider_window_duration(seconds: u64) -> String {
-    if seconds % 604_800 == 0 {
+    if seconds.is_multiple_of(604_800) {
         format!("{}w", seconds / 604_800)
-    } else if seconds % 86_400 == 0 {
+    } else if seconds.is_multiple_of(86_400) {
         format!("{}d", seconds / 86_400)
-    } else if seconds % 3_600 == 0 {
+    } else if seconds.is_multiple_of(3_600) {
         format!("{}h", seconds / 3_600)
-    } else if seconds % 60 == 0 {
+    } else if seconds.is_multiple_of(60) {
         format!("{}m", seconds / 60)
     } else {
         format!("{seconds}s")
@@ -584,6 +629,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
         "default_model": kernel.config.default_model.model.clone(),
         "llm_driver_ready": llm_driver_ready,
         "llm_driver_error": llm_driver_error.clone(),
+        "execution": kernel.config.exec_policy.host_execution_posture(),
         "daemon": false,
         "shutdown": {"status": "idle", "active_work_count": 0, "active_run_count": 0, "active_process_count": 0, "operator_actions": []},
         "native_embeddings": captain_runtime::native_embeddings::status(),
@@ -611,6 +657,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
     print_llm_status(llm_driver_ready, llm_driver_error.as_deref(), false);
     print_runtime_health_summary(&status_body);
     print_disk_summary(&status_body);
+    print_execution_summary(&status_body["execution"]);
     print_runtime_update_summary(&status_body);
     print_provider_subscription_summary(&status_body["budget"]["provider_subscriptions"], verbose);
     print_in_process_embeddings();
@@ -730,6 +777,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_summary_states_the_absence_of_os_isolation() {
+        let summary = execution_summary(&serde_json::json!({
+            "backend": "host_process",
+            "isolation_level": "environment_scrub",
+            "policy_mode": "full",
+            "critical_mode": "safe",
+            "os_isolation": false
+        }))
+        .unwrap();
+
+        assert_eq!(
+            summary,
+            "host_process; environment_scrub; full/safe; no OS isolation"
+        );
+    }
+
+    #[test]
     fn agent_api_queue_issue_summary_is_hidden_when_clean() {
         let queue = serde_json::json!({
             "readable": true,
@@ -797,11 +861,13 @@ mod tests {
             "alert_level": "warning",
             "primary": {
                 "used_percent": 72.5,
+                "remaining_percent": 27.5,
                 "window_seconds": 18000,
                 "resets_at": "2026-07-18T18:00:00Z"
             },
             "secondary": {
                 "used_percent": 41.0,
+                "remaining_percent": 59.0,
                 "window_seconds": 604800
             }
         });
@@ -809,8 +875,8 @@ mod tests {
         let summary = provider_quota_item_summary(&item);
 
         assert!(summary.contains("Codex [pro]"));
-        assert!(summary.contains("5h 72.5%"));
-        assert!(summary.contains("1w 41.0%"));
+        assert!(summary.contains("5h 27.5% remaining"));
+        assert!(summary.contains("1w 59.0% remaining"));
         assert!(summary.contains("2026-07-18T18:00:00Z"));
         assert!(summary.contains("[warning]"));
     }

@@ -2,8 +2,9 @@
 # Publish a complete Captain release from a maintainer workstation.
 #
 # This path intentionally does not depend on GitHub Actions. It validates the
-# five local CLI bundles, pushes a multi-architecture image to GHCR, creates
-# and pushes the release tag, then creates or refreshes the GitHub Release.
+# five local CLI bundles and their SLSA provenance, builds and pushes each
+# Docker architecture sequentially, assembles the GHCR index, creates and
+# pushes the release tag, then creates or refreshes the GitHub Release.
 #
 # Environment:
 #   CAPTAIN_VERSION             Release tag (defaults to dist/releases/latest.txt)
@@ -53,6 +54,20 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+release_host_checkpoint() {
+    local label="$1"
+    local available_kib
+    local min_free_gib
+    local min_free_kib
+    available_kib="$(df -Pk "$ROOT_DIR" | awk 'END {print $4}')"
+    min_free_gib="${CAPTAIN_RELEASE_MIN_FREE_GIB:-15}"
+    min_free_kib=$((min_free_gib * 1024 * 1024))
+    printf '  Host checkpoint (%s): %s GiB free; %s\n' \
+        "$label" "$((available_kib / 1024 / 1024))" "$(uptime | sed 's/^[[:space:]]*//')" >&2
+    [ "$available_kib" -gt "$min_free_kib" ] \
+        || fail "release publication requires more than ${min_free_gib} GiB free"
+}
+
 if is_yes "${CAPTAIN_RELEASE_POLICY_TEST:-}"; then
     [ "$(release_channel_for_version v0.1.0-alpha.1)" = "alpha" ] || exit 1
     [ "$(release_channel_for_version v0.1.0-beta.2)" = "beta" ] || exit 1
@@ -97,6 +112,10 @@ RELEASE_NOTES_FILE="$ROOT_DIR/docs/releases/$VERSION.md"
 
 VERSION_DIR="$ROOT_DIR/dist/releases/$VERSION"
 [ -d "$VERSION_DIR" ] || fail "release directory not found: $VERSION_DIR"
+
+if [ -n "$(git status --porcelain)" ]; then
+    fail "worktree must be clean before local validation or publication"
+fi
 
 platforms=(
     aarch64-apple-darwin
@@ -174,6 +193,16 @@ for platform in "${platforms[@]}"; do
     [ "$aggregate_hash" = "$expected_hash" ] || fail "aggregate checksum mismatch for $platform"
 done
 
+CAPTAIN_VERSION="$VERSION" \
+CAPTAIN_DIST_DIR="$ROOT_DIR/dist/releases" \
+    "$ROOT_DIR/scripts/release-provenance.sh"
+CAPTAIN_VERSION="$VERSION" \
+CAPTAIN_DIST_DIR="$ROOT_DIR/dist/releases" \
+    "$ROOT_DIR/scripts/release-provenance.sh" --verify
+provenance="$VERSION_DIR/provenance.intoto.jsonl"
+provenance_checksum="$provenance.sha256"
+assets+=("$provenance" "$provenance_checksum")
+
 printf '  Captain local release assets\n'
 printf '  Version: %s\n' "$VERSION"
 printf '  Channel: %s (%s)\n' "$RELEASE_CHANNEL" "$([ "$IS_PRERELEASE" = "1" ] && printf prerelease || printf stable)"
@@ -193,10 +222,6 @@ OWNER_LOWER="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
 IMAGE="${CAPTAIN_IMAGE:-ghcr.io/$OWNER_LOWER/captain-agent-os}"
 BRANCH="$(git branch --show-current)"
 [ -n "$BRANCH" ] || fail "detached HEAD is not a valid release source"
-
-if [ -n "$(git status --porcelain)" ]; then
-    fail "worktree must be clean before local publication"
-fi
 
 printf '\n== deterministic embedding cache\n'
 "$ROOT_DIR/scripts/prepare-docker-embedding-cache.sh"
@@ -218,19 +243,50 @@ if ! is_yes "${CAPTAIN_SKIP_DOCKER_PUSH:-}"; then
     printf '\n== GHCR login\n'
     gh auth token | docker login ghcr.io -u "$OWNER" --password-stdin
 
-    printf '\n== multi-architecture image build and push\n'
+    printf '\n== sequential architecture image builds and push\n'
     docker buildx inspect --bootstrap >/dev/null
-    docker buildx build \
-        --file Dockerfile.release \
-        --platform linux/amd64,linux/arm64 \
-        --build-arg "CAPTAIN_RELEASE_VERSION=$VERSION" \
-        --label "org.opencontainers.image.source=https://github.com/$REPO" \
-        --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
-        --label "org.opencontainers.image.version=$VERSION" \
+    docker_metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/captain-docker-publish.XXXXXX")"
+    cleanup_docker_metadata() {
+        rm -rf "$docker_metadata_dir"
+    }
+    trap cleanup_docker_metadata EXIT
+
+    build_and_push_architecture() {
+        local architecture="$1"
+        local metadata="$docker_metadata_dir/$architecture.json"
+        local digest
+        release_host_checkpoint "before Docker linux/$architecture"
+        docker buildx build \
+            --file Dockerfile.release \
+            --platform "linux/$architecture" \
+            --build-arg "CAPTAIN_RELEASE_VERSION=$VERSION" \
+            --label "org.opencontainers.image.source=https://github.com/$REPO" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --provenance=mode=max \
+            --metadata-file "$metadata" \
+            --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" \
+            . >&2
+        digest="$(jq -r '."containerimage.digest" // empty' "$metadata")"
+        case "$digest" in
+            sha256:*) ;;
+            *) fail "Docker linux/$architecture build returned no registry digest" ;;
+        esac
+        docker buildx imagetools inspect "$IMAGE@$digest" >/dev/null \
+            || fail "cannot inspect pushed Docker linux/$architecture digest"
+        release_host_checkpoint "after Docker linux/$architecture"
+        printf '%s\n' "$digest"
+    }
+
+    amd64_digest="$(build_and_push_architecture amd64)"
+    arm64_digest="$(build_and_push_architecture arm64)"
+
+    printf '\n== assemble multi-architecture image index\n'
+    docker buildx imagetools create \
         --tag "$IMAGE:$VERSION" \
         --tag "$IMAGE:$RELEASE_CHANNEL" \
-        --push \
-        .
+        "$IMAGE@$amd64_digest" \
+        "$IMAGE@$arm64_digest"
 fi
 
 printf '\n== Git tag\n'
@@ -283,8 +339,12 @@ jq -e --arg tag "$VERSION" --argjson prerelease "$IS_PRERELEASE" '
 for image_ref in "$IMAGE:$VERSION" "$IMAGE:$RELEASE_CHANNEL"; do
     docker buildx imagetools inspect "$image_ref" --raw | jq -e '
         [.manifests[]?.platform | select(.os == "linux") | .architecture] as $architectures
+        | [.manifests[]?
+           | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")]
+          as $attestations
         | ($architectures | index("amd64")) != null
           and ($architectures | index("arm64")) != null
+          and ($attestations | length) >= 2
     ' >/dev/null || fail "remote image is missing linux/amd64 or linux/arm64: $image_ref"
 done
 

@@ -325,7 +325,11 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AuditState) {
     let hints = if !state.status_msg.is_empty() {
         Line::from(vec![Span::styled(
             format!("  {}", state.status_msg),
-            Style::default().fg(theme::GREEN),
+            Style::default().fg(if state.chain_verified == Some(false) {
+                theme::RED
+            } else {
+                theme::GREEN
+            }),
         )])
     } else {
         Line::from(vec![Span::styled(

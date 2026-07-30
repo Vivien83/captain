@@ -818,6 +818,10 @@ model = "{model}"
 
 [memory]
 decay_rate = 0.05
+
+[exec_policy]
+mode = "full"
+critical_mode = "safe"
 "#,
         provider = provider.name,
     )
@@ -954,7 +958,7 @@ fn draw_welcome(f: &mut Frame, area: Rect) {
 
     let sec2 = Paragraph::new(Line::from(vec![
         Span::styled("  \u{1f512} ", Style::default().fg(theme::GREEN)),
-        Span::raw("Signed manifests, audit trail, taint tracking"),
+        Span::raw("Signed manifests, audit trail, content pattern guards"),
     ]));
     f.render_widget(sec2, chunks[6]);
 
@@ -1568,6 +1572,9 @@ mod tests {
         assert!(!config.contains("[routing]"));
         assert!(!config.contains("simple_model"));
         assert!(!config.contains("complex_model"));
+        assert!(config.contains("[exec_policy]"));
+        assert!(config.contains("mode = \"full\""));
+        assert!(config.contains("critical_mode = \"safe\""));
     }
 
     #[test]

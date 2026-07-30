@@ -1,8 +1,8 @@
-//! ClawHub marketplace client — search and install skills from clawhub.ai.
+//! Frozen ClawHub marketplace compatibility client.
 //!
-//! ClawHub hosts 3,000+ community skills in both SKILL.md (prompt-only)
-//! and package.json (Node.js) formats. This client downloads, converts,
-//! and security-scans skills before installation.
+//! The parsers and response types remain available for compatibility, but
+//! publisher-backed integrity is not available. Every public remote operation
+//! fails before network or filesystem access.
 //!
 //! API reference: <https://clawhub.ai/api/v1/>
 //! - Search: `GET /api/v1/search?q=...&limit=20`
@@ -13,7 +13,7 @@
 
 use crate::openclaw_compat;
 use crate::verify::{SkillVerifier, SkillWarning, WarningSeverity};
-use crate::SkillError;
+use crate::{require_remote_marketplace_access, SkillError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -394,6 +394,7 @@ impl ClawHubClient {
         query: &str,
         limit: u32,
     ) -> Result<ClawHubSearchResponse, SkillError> {
+        require_remote_marketplace_access()?;
         let url = format!(
             "{}/search?q={}&limit={}",
             self.base_url,
@@ -420,6 +421,7 @@ impl ClawHubClient {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<ClawHubBrowseResponse, SkillError> {
+        require_remote_marketplace_access()?;
         let mut url = format!(
             "{}/skills?limit={}&sort={}",
             self.base_url,
@@ -446,6 +448,7 @@ impl ClawHubClient {
     /// Uses `GET /api/v1/skills/{slug}`.
     /// Response is `{ skill: {...}, latestVersion: {...}, owner: {...}, moderation: null }`.
     pub async fn get_skill(&self, slug: &str) -> Result<ClawHubSkillDetail, SkillError> {
+        require_remote_marketplace_access()?;
         let url = format!("{}/skills/{}", self.base_url, urlencoded(slug));
 
         let response = self.get_with_retry(&url, "ClawHub skill detail").await?;
@@ -472,6 +475,7 @@ impl ClawHubClient {
     ///
     /// Uses `GET /api/v1/skills/{slug}/file?path=SKILL.md`.
     pub async fn get_file(&self, slug: &str, path: &str) -> Result<String, SkillError> {
+        require_remote_marketplace_access()?;
         let url = format!(
             "{}/skills/{}/file?path={}",
             self.base_url,
@@ -491,12 +495,12 @@ impl ClawHubClient {
 
     /// Install a skill from ClawHub into the target directory.
     ///
-    /// Security pipeline:
+    /// Legacy compatibility pipeline (unreachable while the marketplace is frozen):
     /// 1. Download skill zip and compute SHA256
     /// 2. Detect format (SKILL.md vs package.json)
     /// 3. Convert to Captain manifest
     /// 4. Run manifest security scan
-    /// 5. If prompt-only: run prompt injection scan
+    /// 5. If prompt-only: collect advisory phrase matches
     /// 6. Check binary dependencies
     /// 7. Write skill.toml with `verified: false`
     pub async fn install(
@@ -504,6 +508,7 @@ impl ClawHubClient {
         slug: &str,
         target_dir: &Path,
     ) -> Result<ClawHubInstallResult, SkillError> {
+        require_remote_marketplace_access()?;
         // Use /api/v1/download?slug=... endpoint
         let url = format!("{}/download?slug={}", self.base_url, urlencoded(slug));
 
@@ -585,14 +590,17 @@ impl ClawHubClient {
             is_prompt_only =
                 converted.manifest.runtime.runtime_type == crate::SkillRuntime::PromptOnly;
 
-            // Step 5: Prompt injection scan
-            let prompt_warnings = SkillVerifier::scan_prompt_content(&converted.prompt_context);
-            if prompt_warnings
+            // Step 5: advisory prompt-text heuristic. This legacy path remains
+            // fail-closed on high-risk matches if it is ever reopened.
+            let prompt_report =
+                SkillVerifier::scan_prompt_content_advisory(&converted.prompt_context);
+            if prompt_report
+                .findings
                 .iter()
                 .any(|w| w.severity == WarningSeverity::Critical)
             {
-                // Block installation of skills with critical prompt injection
-                let critical_msgs: Vec<_> = prompt_warnings
+                let critical_msgs: Vec<_> = prompt_report
+                    .findings
                     .iter()
                     .filter(|w| w.severity == WarningSeverity::Critical)
                     .map(|w| w.message.clone())
@@ -602,11 +610,12 @@ impl ClawHubClient {
                 let _ = std::fs::remove_dir_all(&skill_dir);
 
                 return Err(SkillError::SecurityBlocked(format!(
-                    "Skill blocked due to prompt injection: {}",
+                    "Skill refused by conservative {} policy: {}",
+                    prompt_report.assurance.as_str(),
                     critical_msgs.join("; ")
                 )));
             }
-            all_warnings.extend(prompt_warnings);
+            all_warnings.extend(prompt_report.findings);
 
             // Write prompt context
             openclaw_compat::write_prompt_context(&skill_dir, &converted.prompt_context)?;
@@ -906,5 +915,36 @@ mod tests {
             }),
         };
         assert_eq!(ClawHubClient::entry_version(&entry), "2.0.0");
+    }
+
+    #[tokio::test]
+    async fn all_remote_operations_fail_before_network_or_install_mutation() {
+        let cache = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let client = ClawHubClient::with_url("http://127.0.0.1:9", cache.path().to_path_buf());
+
+        assert!(matches!(
+            client.search("demo", 10).await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(matches!(
+            client
+                .browse(ClawHubSort::Trending, 10, Some("cursor"))
+                .await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(matches!(
+            client.get_skill("demo").await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(matches!(
+            client.get_file("demo", "SKILL.md").await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(matches!(
+            client.install("demo", target.path()).await,
+            Err(SkillError::RemoteMarketplaceFrozen)
+        ));
+        assert!(!target.path().join("demo").exists());
     }
 }

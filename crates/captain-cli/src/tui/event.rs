@@ -6,13 +6,20 @@ use captain_runtime::agent_loop::AgentLoopResult;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_types::agent::AgentId;
 use captain_types::workflow_learning::{
-    ProposalCardAction, ProposalOperatorResolution, WorkflowLearningList, WorkflowLearningView,
+    ProposalCardAction, ProposalOperatorResolution, WorkflowLearningList, WorkflowLearningStatus,
+    WorkflowLearningView,
 };
 use ratatui::crossterm::event::{
     self, Event as CtEvent, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
 };
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Non-interactive updates are coalesced so streaming cannot force an
+/// unbounded number of complete Ratatui renders. Keyboard and pointer input
+/// bypass this deadline and remain immediate.
+pub const BACKGROUND_FRAME_INTERVAL: Duration = Duration::from_millis(34);
+const MAX_EVENTS_PER_FRAME: usize = 2048;
 
 use super::event_memory::memory_event_from_json;
 use super::event_stream::{daemon_stream_events_from_sse_line, DaemonStreamState};
@@ -35,7 +42,7 @@ use super::screens::{
     security::SecurityFeature,
     sessions::SessionInfo,
     settings::{ModelInfo, ProviderInfo, TestResult, ToolInfo},
-    skills::{ClawHubResult, McpServerInfo, SkillInfo},
+    skills::{McpServerInfo, SkillInfo},
     skills_proposed::SkillsMetrics,
     templates::ProviderAuth,
     triggers::TriggerInfo,
@@ -219,6 +226,8 @@ pub enum AppEvent {
     Tick,
     /// A streaming event from the LLM (daemon SSE or kernel mpsc).
     Stream(StreamEvent),
+    /// Durable compaction progress received outside the initiating stream.
+    CompactionProgress(captain_types::compaction::CompactionProgress),
     /// The streaming agent loop finished.
     StreamDone(Result<AgentLoopResult, String>),
     /// IJ.4 — fired right after `send_message_streaming` returns the live
@@ -360,6 +369,7 @@ pub enum AppEvent {
     SkillsProposedLoaded {
         workflows: Vec<WorkflowLearningView>,
         metrics: Option<crate::tui::screens::skills_proposed::SkillsMetrics>,
+        status: WorkflowLearningStatus,
     },
     /// An exact workflow-learning action was accepted by the daemon.
     WorkflowProposalDecided {
@@ -371,9 +381,14 @@ pub enum AppEvent {
     /// Phase-h.3: a cron job mutation completed (toggle/run/delete).
     CronJobMutated { id: String, what: &'static str },
     /// Phase-h.4: approvals list loaded.
-    ApprovalsLoaded(Vec<crate::tui::screens::approvals::ApprovalRequest>),
+    ApprovalsLoaded {
+        pending: Vec<crate::tui::screens::approvals::ApprovalRequest>,
+        rules: Vec<crate::tui::screens::approvals::ApprovalRule>,
+    },
     /// Phase-h.4: an approval was resolved.
     ApprovalDecided { id: String, approved: bool },
+    /// One durable exact-action approval rule was revoked.
+    ApprovalRuleRevoked { id: String },
     /// Phase-i.6: a fresh approval request found for the chat agent — used to
     /// trigger the in-chat modal popup. None means the poll found nothing.
     ChatApprovalDetected(Option<crate::tui::screens::approvals::ApprovalRequest>),
@@ -405,10 +420,6 @@ pub enum AppEvent {
     MemoryKvDeleted(String),
     /// Skills loaded.
     SkillsLoaded(Vec<SkillInfo>),
-    /// ClawHub results loaded.
-    ClawHubLoaded(Vec<ClawHubResult>),
-    /// Skill installed.
-    SkillInstalled(String),
     /// Skill uninstalled.
     SkillUninstalled(String),
     /// MCP servers loaded.
@@ -431,7 +442,7 @@ pub enum AppEvent {
     /// Audit entries loaded (full audit screen).
     AuditEntriesLoaded(Vec<AuditEntry>),
     /// Audit chain verified.
-    AuditChainVerified(bool),
+    AuditChainVerified { valid: bool, message: String },
     /// Usage summary loaded.
     UsageSummaryLoaded(UsageSummary),
     /// Usage by model loaded.
@@ -557,6 +568,88 @@ pub fn spawn_event_thread(
     });
 
     (tx, rx)
+}
+
+/// Receive one exact, ordered event batch for the next frame.
+///
+/// The first event blocks without polling. Background events then accumulate
+/// until the 34 ms frame deadline (about 29 fps), while direct operator input
+/// returns immediately. No event is dropped; the hard batch cap only leaves
+/// excess events queued for the following frame.
+pub fn receive_frame_events(
+    rx: &mpsc::Receiver<AppEvent>,
+    last_frame_at: Instant,
+) -> Option<Vec<AppEvent>> {
+    let mut events = vec![rx.recv().ok()?];
+    let deadline = last_frame_at + BACKGROUND_FRAME_INTERVAL;
+
+    loop {
+        while events.len() < MAX_EVENTS_PER_FRAME {
+            match rx.try_recv() {
+                Ok(event) => events.push(event),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return Some(events),
+            }
+        }
+
+        if events.len() >= MAX_EVENTS_PER_FRAME
+            || events.iter().any(event_requires_immediate_frame)
+            || Instant::now() >= deadline
+        {
+            return Some(events);
+        }
+
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(event) => events.push(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => return Some(events),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Some(events),
+        }
+    }
+}
+
+fn event_requires_immediate_frame(event: &AppEvent) -> bool {
+    matches!(
+        event,
+        AppEvent::Key(_)
+            | AppEvent::Paste(_)
+            | AppEvent::Scroll { .. }
+            | AppEvent::MouseClick { .. }
+    )
+}
+
+#[cfg(test)]
+mod frame_budget_tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn background_frame_budget_stays_below_thirty_frames_per_second() {
+        assert!(BACKGROUND_FRAME_INTERVAL >= Duration::from_millis(34));
+    }
+
+    #[test]
+    fn queued_background_events_are_drained_in_order() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(AppEvent::Tick).unwrap();
+        tx.send(AppEvent::Tick).unwrap();
+
+        let events = receive_frame_events(&rx, Instant::now() - BACKGROUND_FRAME_INTERVAL).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event, AppEvent::Tick)));
+    }
+
+    #[test]
+    fn operator_input_bypasses_background_deadline() {
+        let (tx, rx) = mpsc::channel();
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(event_requires_immediate_frame(&event));
+        tx.send(event).unwrap();
+
+        let events = receive_frame_events(&rx, Instant::now()).unwrap();
+
+        assert_eq!(events.len(), 1);
+    }
 }
 
 // ── Original spawn functions ────────────────────────────────────────────────
@@ -718,6 +811,9 @@ pub fn spawn_memory_subscriber(
                                     confidence,
                                     family,
                                 },
+                                ChatStreamEvent::CompactionProgress { progress } => {
+                                    AppEvent::CompactionProgress(progress)
+                                }
                                 _ => continue,
                             },
                             EventPayload::Lifecycle(lifecycle_ev) => {
@@ -747,6 +843,12 @@ pub fn spawn_memory_subscriber(
                                 tool_name: run_ev.tool_name,
                                 status: run_ev.status,
                                 caller_agent_id: run_ev.caller_agent_id,
+                            },
+                            EventPayload::AgentDelegation(job) => AppEvent::ToolRunStatus {
+                                run_id: format!("delegation:{}", job.job_id),
+                                tool_name: format!("délégation {}", job.title),
+                                status: job.status,
+                                caller_agent_id: Some(job.caller_agent_id),
                             },
                             _ => continue,
                         };
@@ -794,9 +896,10 @@ pub fn spawn_kernel_boot(config: Option<std::path::PathBuf>, tx: mpsc::Sender<Ap
     });
 }
 
-/// Keep the exact CapSpec operator-resume queue alive for the TUI's local
-/// kernel fallback. This intentionally starts no agent/autonomy background
-/// loops and exits once the App releases its last kernel reference.
+/// Keep exact CapSpec operator recovery and durable detached delegations alive
+/// for the TUI's local kernel fallback. This intentionally starts no other
+/// agent/autonomy loops and exits once the App releases its last kernel
+/// reference.
 pub fn spawn_inprocess_capspec_resume_recovery(kernel: Arc<CaptainKernel>) {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Runtime::new() {
@@ -807,6 +910,7 @@ pub fn spawn_inprocess_capspec_resume_recovery(kernel: Arc<CaptainKernel>) {
             }
         };
         runtime.block_on(async move {
+            kernel.start_agent_delegation_worker();
             let task = kernel.spawn_capspec_operator_resume_recovery();
             drop(kernel);
             if let Err(error) = task.await {
@@ -1822,6 +1926,15 @@ fn runtime_workers_from_json(v: &serde_json::Value) -> Vec<ProjectRuntimeWorker>
                     status: worker["status"].as_str().unwrap_or("").to_string(),
                     agent_id: worker["agent_id"].as_str().unwrap_or("").to_string(),
                     summary: worker["summary"].as_str().unwrap_or("").to_string(),
+                    completion_decision: worker
+                        .pointer("/completion_contract/decision")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    completion_evidence_count: worker
+                        .pointer("/completion_contract/evidence_count")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0),
                 })
                 .collect()
         })
@@ -2847,22 +2960,33 @@ pub fn spawn_fetch_skills_proposed(backend: BackendRef, tx: mpsc::Sender<AppEven
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = daemon_client();
-            let result = client
+            let workflows = client
                 .get(format!("{base_url}/api/learning/workflows?limit=100"))
                 .send()
                 .and_then(reqwest::blocking::Response::error_for_status)
                 .and_then(|response| response.json::<WorkflowLearningList>());
-            match result {
-                Ok(list) => {
+            let status = client
+                .get(format!("{base_url}/api/learning/status"))
+                .send()
+                .and_then(reqwest::blocking::Response::error_for_status)
+                .and_then(|response| response.json::<WorkflowLearningStatus>());
+            match (workflows, status) {
+                (Ok(list), Ok(status)) => {
                     let metrics = Some(SkillsMetrics::from_workflows(&list.workflows));
                     let _ = tx.send(AppEvent::SkillsProposedLoaded {
                         workflows: list.workflows,
                         metrics,
+                        status,
                     });
                 }
-                Err(error) => {
+                (Err(error), _) => {
                     let _ = tx.send(AppEvent::FetchError(format!(
                         "Workflow learning fetch failed: {error}"
+                    )));
+                }
+                (_, Err(error)) => {
+                    let _ = tx.send(AppEvent::FetchError(format!(
+                        "Workflow learning status failed: {error}"
                     )));
                 }
             }
@@ -2879,7 +3003,8 @@ pub fn spawn_fetch_skills_proposed(backend: BackendRef, tx: mpsc::Sender<AppEven
 mod skills_proposed_fetch_tests {
     use super::*;
     use captain_types::workflow_learning::{
-        ProposalCardState, WorkflowProjectionStatus, WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
+        ProposalCardState, WorkflowLearningRuntimeState, WorkflowProjectionStatus,
+        WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION, WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
     };
 
     #[test]
@@ -2915,6 +3040,31 @@ mod skills_proposed_fetch_tests {
             list.workflows[0].projection_status,
             WorkflowProjectionStatus::Invalid
         );
+    }
+
+    #[test]
+    fn operational_status_deserializes_as_the_same_strict_contract() {
+        let payload = serde_json::json!({
+            "schema_version": WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
+            "enabled": true,
+            "mode": "approval",
+            "state": "healthy",
+            "recovery": "in_sync",
+            "expected_model": { "provider": "codex", "model": "gpt-5.6-sol" },
+            "worker": null,
+            "jobs": { "pending": 0, "running": 0, "retry_wait": 0, "uncertain": 0,
+                "dead": 0, "oldest_actionable_at_unix_ms": null, "next_retry_at_unix_ms": null,
+                "last_activity_at_unix_ms": null, "last_error_code": null },
+            "notifications": { "pending": 0, "delivering": 0, "retry_wait": 0, "dead": 0,
+                "oldest_actionable_at_unix_ms": null, "next_retry_at_unix_ms": null,
+                "last_activity_at_unix_ms": null },
+            "workflows": { "total": 0, "processing": 0, "awaiting_decision": 0,
+                "active": 0, "attention": 0, "last_activity_at_unix_ms": null },
+            "generated_at_unix_ms": 10
+        });
+        let status: WorkflowLearningStatus = serde_json::from_value(payload).unwrap();
+        assert_eq!(status.state, WorkflowLearningRuntimeState::Healthy);
+        assert_eq!(status.expected_model.model, "gpt-5.6-sol");
     }
 }
 
@@ -3084,38 +3234,56 @@ pub fn spawn_cron_delete(backend: BackendRef, id: String, tx: mpsc::Sender<AppEv
 
 /// Phase-h.4: fetch pending approvals.
 pub fn spawn_fetch_approvals(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    use crate::tui::screens::approvals::ApprovalRequest;
+    use crate::tui::screens::approvals::{ApprovalRequest, ApprovalRule};
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = daemon_client();
-            let items: Vec<ApprovalRequest> = client
+            let response = client
                 .get(format!("{base_url}/api/approvals"))
                 .send()
                 .ok()
-                .and_then(|r| r.json::<serde_json::Value>().ok())
-                .and_then(|v| {
-                    v.get("approvals").and_then(|a| a.as_array()).map(|arr| {
-                        arr.iter()
-                            .map(|a| ApprovalRequest {
-                                id: a["id"].as_str().unwrap_or_default().to_string(),
-                                agent_name: a["agent_name"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                tool_name: a["tool_name"].as_str().unwrap_or_default().to_string(),
-                                description: a["description"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                action: a["action"].as_str().unwrap_or_default().to_string(),
-                                risk_level: a["risk_level"].as_str().unwrap_or("low").to_string(),
-                                created_at: a["created_at"].as_i64().unwrap_or(0),
-                            })
-                            .collect()
-                    })
+                .and_then(|r| r.json::<serde_json::Value>().ok());
+            let pending: Vec<ApprovalRequest> = response
+                .as_ref()
+                .and_then(|value| value.get("approvals"))
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|a| ApprovalRequest {
+                            id: a["id"].as_str().unwrap_or_default().to_string(),
+                            agent_name: a["agent_name"].as_str().unwrap_or_default().to_string(),
+                            tool_name: a["tool_name"].as_str().unwrap_or_default().to_string(),
+                            description: a["description"].as_str().unwrap_or_default().to_string(),
+                            action: a["action"].as_str().unwrap_or_default().to_string(),
+                            risk_level: a["risk_level"].as_str().unwrap_or("low").to_string(),
+                            created_at: a["created_at"].as_i64().unwrap_or(0),
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
-            let _ = tx.send(AppEvent::ApprovalsLoaded(items));
+            let rules: Vec<ApprovalRule> = response
+                .as_ref()
+                .and_then(|value| value.get("rules"))
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|rule| ApprovalRule {
+                            id: rule["id"].as_str().unwrap_or_default().to_string(),
+                            effect: rule["effect"].as_str().unwrap_or_default().to_string(),
+                            agent_id: rule["agent_id"].as_str().unwrap_or_default().to_string(),
+                            tool_name: rule["tool_name"].as_str().unwrap_or_default().to_string(),
+                            action_digest: rule["action_digest"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
+                            reason: rule["reason"].as_str().unwrap_or_default().to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = tx.send(AppEvent::ApprovalsLoaded { pending, rules });
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError(
@@ -3133,6 +3301,7 @@ pub fn spawn_decide_approval(
     backend: BackendRef,
     id: String,
     decision_path: &'static str,
+    reason: Option<String>,
     tx: mpsc::Sender<AppEvent>,
 ) {
     std::thread::spawn(move || match backend {
@@ -3140,7 +3309,13 @@ pub fn spawn_decide_approval(
             let client = daemon_client();
             let url = format!("{base_url}/api/approvals/{id}/{decision_path}");
             let approved = decision_path != "reject";
-            match client.post(&url).send() {
+            let request = client.post(&url);
+            let request = if decision_path.starts_with("reject") {
+                request.json(&serde_json::json!({ "reason": reason }))
+            } else {
+                request
+            };
+            match request.send() {
                 Ok(r) if r.status().is_success() => {
                     let _ = tx.send(AppEvent::ApprovalDecided { id, approved });
                 }
@@ -3153,6 +3328,30 @@ pub fn spawn_decide_approval(
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError("Approvals require daemon".to_string()));
+        }
+    });
+}
+
+pub fn spawn_revoke_approval_rule(backend: BackendRef, id: String, tx: mpsc::Sender<AppEvent>) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/approvals/rules/{id}");
+            match client.delete(&url).send() {
+                Ok(response) if response.status().is_success() => {
+                    let _ = tx.send(AppEvent::ApprovalRuleRevoked { id });
+                }
+                _ => {
+                    let _ = tx.send(AppEvent::FetchError(
+                        "Approval rule revoke failed".to_string(),
+                    ));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::FetchError(
+                "Approval rules require daemon mode".to_string(),
+            ));
         }
     });
 }
@@ -3864,102 +4063,6 @@ pub fn spawn_fetch_skills(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
     });
 }
 
-/// Search ClawHub marketplace.
-pub fn spawn_search_clawhub(backend: BackendRef, query: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            let encoded: String = query
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-                        c.to_string()
-                    } else {
-                        format!("%{:02X}", c as u32)
-                    }
-                })
-                .collect();
-            let url = format!("{base_url}/api/clawhub/search?q={encoded}");
-            if let Ok(resp) = client.get(&url).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let results = parse_clawhub_results(&body);
-                    let _ = tx.send(AppEvent::ClawHubLoaded(results));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::ClawHubLoaded(Vec::new()));
-        }
-    });
-}
-
-/// Browse ClawHub marketplace.
-pub fn spawn_browse_clawhub(backend: BackendRef, sort: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            let url = format!("{base_url}/api/clawhub/browse?sort={sort}");
-            if let Ok(resp) = client.get(&url).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let results = parse_clawhub_results(&body);
-                    let _ = tx.send(AppEvent::ClawHubLoaded(results));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::ClawHubLoaded(Vec::new()));
-        }
-    });
-}
-
-fn parse_clawhub_results(body: &serde_json::Value) -> Vec<ClawHubResult> {
-    // API returns {"items": [...]} wrapper, fall back to bare array for compat
-    let items = body
-        .get("items")
-        .and_then(|v| v.as_array())
-        .or_else(|| body.as_array());
-
-    items
-        .map(|arr| {
-            arr.iter()
-                .map(|r| ClawHubResult {
-                    name: r["name"].as_str().unwrap_or("").to_string(),
-                    slug: r["slug"].as_str().unwrap_or("").to_string(),
-                    description: r["description"].as_str().unwrap_or("").to_string(),
-                    downloads: r["downloads"].as_u64().unwrap_or(0),
-                    runtime: r["runtime"].as_str().unwrap_or("").to_string(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Install a skill from ClawHub.
-pub fn spawn_install_skill(backend: BackendRef, slug: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!("{base_url}/api/clawhub/install"))
-                .json(&serde_json::json!({"slug": slug}))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::SkillInstalled(slug));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Failed to install {slug}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Skill installation not available in in-process mode".to_string(),
-            ));
-        }
-    });
-}
-
 /// Uninstall a skill.
 pub fn spawn_uninstall_skill(backend: BackendRef, name: String, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
@@ -4047,6 +4150,23 @@ pub fn spawn_fetch_template_providers(backend: BackendRef, tx: mpsc::Sender<AppE
     });
 }
 
+fn security_features_from_status(body: &serde_json::Value) -> Vec<SecurityFeature> {
+    let execution = &body["execution"];
+    let Some(policy_mode) = execution["policy_mode"].as_str() else {
+        return Vec::new();
+    };
+    let critical_mode = execution["critical_mode"].as_str().unwrap_or("unknown");
+    let isolation_level = execution["isolation_level"].as_str().unwrap_or("unknown");
+    let os_isolation = execution["os_isolation"].as_bool().unwrap_or(false);
+
+    super::screens::security::features_for_execution_summary(
+        policy_mode,
+        critical_mode,
+        isolation_level,
+        os_isolation,
+    )
+}
+
 /// Fetch security status.
 pub fn spawn_fetch_security(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
@@ -4054,40 +4174,56 @@ pub fn spawn_fetch_security(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
             let client = daemon_client();
             if let Ok(resp) = client.get(format!("{base_url}/api/security")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let features: Vec<SecurityFeature> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|f| {
-                                    use super::screens::security::SecuritySection;
-                                    let section = match f["section"].as_str().unwrap_or("core") {
-                                        "configurable" => SecuritySection::Configurable,
-                                        "monitoring" => SecuritySection::Monitoring,
-                                        _ => SecuritySection::Core,
-                                    };
-                                    SecurityFeature {
-                                        name: f["name"].as_str().unwrap_or("").to_string(),
-                                        active: f["active"].as_bool().unwrap_or(true),
-                                        description: f["description"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        section,
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    let features = security_features_from_status(&body);
                     if !features.is_empty() {
                         let _ = tx.send(AppEvent::SecurityLoaded(features));
                     }
                 }
             }
         }
-        BackendRef::InProcess(_) => {
-            // Use builtin defaults (already loaded in SecurityState::new())
+        BackendRef::InProcess(kernel) => {
+            let posture = kernel.config.exec_policy.host_execution_posture();
+            let features = super::screens::security::features_for_execution_summary(
+                posture.policy_mode.as_str(),
+                posture.critical_mode.as_str(),
+                posture.isolation_level,
+                posture.os_isolation,
+            );
+            let _ = tx.send(AppEvent::SecurityLoaded(features));
         }
     });
+}
+
+#[cfg(test)]
+mod security_status_tests {
+    use super::security_features_from_status;
+
+    #[test]
+    fn structured_security_status_exposes_host_boundary_without_os_claim() {
+        let features = security_features_from_status(&serde_json::json!({
+            "execution": {
+                "policy_mode": "full",
+                "critical_mode": "safe",
+                "isolation_level": "environment_scrub",
+                "os_isolation": false
+            }
+        }));
+
+        let boundary = features
+            .iter()
+            .find(|feature| feature.name == "Host Subprocess Boundary")
+            .expect("host boundary feature");
+        assert!(boundary.active);
+        assert!(boundary.description.contains("environment_scrub"));
+        assert!(boundary.description.contains("full/safe"));
+
+        let os = features
+            .iter()
+            .find(|feature| feature.name == "Host OS Isolation")
+            .expect("OS isolation feature");
+        assert!(!os.active);
+        assert!(os.description.contains("None for shell_exec"));
+    }
 }
 
 /// Verify audit chain.
@@ -4099,26 +4235,51 @@ pub fn spawn_verify_chain(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                 Ok(resp) => {
                     let body: serde_json::Value = resp.json().unwrap_or_default();
                     let valid = body["valid"].as_bool().unwrap_or(false);
-                    let message = body["message"]
-                        .as_str()
-                        .unwrap_or("Verification complete")
-                        .to_string();
-                    let _ = tx.send(AppEvent::SecurityChainVerified { valid, message });
-                    let _ = tx.send(AppEvent::AuditChainVerified(valid));
+                    let message =
+                        body["message"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| {
+                                audit_integrity_message(
+                                    valid,
+                                    body["active_epoch"].as_u64().unwrap_or(0),
+                                    body["error"].as_str(),
+                                )
+                            });
+                    let _ = tx.send(AppEvent::SecurityChainVerified {
+                        valid,
+                        message: message.clone(),
+                    });
+                    let _ = tx.send(AppEvent::AuditChainVerified { valid, message });
                 }
                 Err(e) => {
+                    let message = e.to_string();
                     let _ = tx.send(AppEvent::SecurityChainVerified {
                         valid: false,
-                        message: format!("{e}"),
+                        message: message.clone(),
+                    });
+                    let _ = tx.send(AppEvent::AuditChainVerified {
+                        valid: false,
+                        message,
                     });
                 }
             }
         }
-        BackendRef::InProcess(_) => {
+        BackendRef::InProcess(kernel) => {
+            let integrity = kernel.audit_log.integrity_status();
+            let verification = kernel.audit_log.verify_integrity();
+            let valid = verification.is_ok();
+            let error = verification
+                .as_ref()
+                .err()
+                .map(String::as_str)
+                .or(integrity.last_error.as_deref());
+            let message = audit_integrity_message(valid, integrity.active_epoch, error);
             let _ = tx.send(AppEvent::SecurityChainVerified {
-                valid: true,
-                message: "In-process mode: chain not applicable".to_string(),
+                valid,
+                message: message.clone(),
             });
+            let _ = tx.send(AppEvent::AuditChainVerified { valid, message });
         }
     });
 }
@@ -4134,6 +4295,16 @@ pub fn spawn_fetch_audit(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
             {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
                     let tip_hash = body["tip_hash"].as_str().unwrap_or("").to_string();
+                    let integrity_event = body.get("integrity").map(|integrity| {
+                        let valid = integrity["valid"].as_bool().unwrap_or(false);
+                        let active_epoch = integrity["active_epoch"].as_u64().unwrap_or(0);
+                        let message = audit_integrity_message(
+                            valid,
+                            active_epoch,
+                            integrity["last_error"].as_str(),
+                        );
+                        AppEvent::AuditChainVerified { valid, message }
+                    });
                     let entries: Vec<AuditEntry> = body
                         .as_array()
                         .or_else(|| body.get("entries").and_then(|entries| entries.as_array()))
@@ -4154,13 +4325,105 @@ pub fn spawn_fetch_audit(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                         })
                         .unwrap_or_default();
                     let _ = tx.send(AppEvent::AuditEntriesLoaded(entries));
+                    if let Some(event) = integrity_event {
+                        let _ = tx.send(event);
+                    }
                 }
             }
         }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::AuditEntriesLoaded(Vec::new()));
+        BackendRef::InProcess(kernel) => {
+            let integrity = kernel.audit_log.integrity_status();
+            let entries = kernel
+                .audit_log
+                .recent(200)
+                .into_iter()
+                .map(|entry| AuditEntry {
+                    timestamp: entry.timestamp,
+                    action: entry.action.to_string(),
+                    agent: entry.agent_id,
+                    detail: entry.detail,
+                    tip_hash: entry.hash,
+                })
+                .collect();
+            let message = audit_integrity_message(
+                integrity.valid,
+                integrity.active_epoch,
+                integrity.last_error.as_deref(),
+            );
+            let _ = tx.send(AppEvent::AuditEntriesLoaded(entries));
+            let _ = tx.send(AppEvent::AuditChainVerified {
+                valid: integrity.valid,
+                message,
+            });
         }
     });
+}
+
+fn audit_integrity_message(valid: bool, active_epoch: u64, error: Option<&str>) -> String {
+    if valid {
+        format!("Hash chain healthy in epoch {active_epoch}")
+    } else {
+        error.map(str::to_owned).unwrap_or_else(|| {
+            format!("Audit degraded; recovery continues in epoch {active_epoch}")
+        })
+    }
+}
+
+#[cfg(test)]
+mod audit_event_tests {
+    use super::*;
+    use captain_types::config::{DefaultModelConfig, KernelConfig};
+
+    #[test]
+    fn in_process_audit_fetch_uses_the_runtime_chain() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = KernelConfig {
+            home_dir: temp.path().to_path_buf(),
+            data_dir: temp.path().join("data"),
+            default_model: DefaultModelConfig {
+                provider: "ollama".to_string(),
+                model: "test-model".to_string(),
+                api_key_env: "OLLAMA_API_KEY".to_string(),
+                base_url: None,
+            },
+            ..KernelConfig::default()
+        };
+        let kernel = Arc::new(CaptainKernel::boot_with_config(config).unwrap());
+        kernel
+            .audit_log
+            .record(
+                "captain",
+                captain_runtime::audit::AuditAction::ConfigChange,
+                "in-process proof",
+                "ok",
+            )
+            .unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        spawn_fetch_audit(BackendRef::InProcess(Arc::clone(&kernel)), tx);
+
+        let mut saw_entry = false;
+        let mut saw_integrity = false;
+        for _ in 0..2 {
+            match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                AppEvent::AuditEntriesLoaded(entries) => {
+                    saw_entry = entries.iter().any(|entry| {
+                        entry.agent == "captain"
+                            && entry.action == "ConfigChange"
+                            && entry.detail == "in-process proof"
+                    });
+                }
+                AppEvent::AuditChainVerified { valid, message } => {
+                    saw_integrity = valid && message.contains("epoch 0");
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_entry);
+        assert!(saw_integrity);
+        kernel.shutdown();
+    }
 }
 
 /// Fetch usage summary.
@@ -5493,5 +5756,24 @@ mod tests_api_payload_compat {
             source_label(&serde_json::json!({"type": "clawhub", "slug": "demo"})),
             "clawhub"
         );
+    }
+
+    #[test]
+    fn runtime_worker_parser_keeps_safe_completion_proof_summary() {
+        let workers = runtime_workers_from_json(&serde_json::json!({
+            "workers": [{
+                "role": "verifier",
+                "phase": "verify",
+                "status": "done",
+                "completion_contract": {
+                    "decision": "satisfied",
+                    "evidence_count": 3
+                }
+            }]
+        }));
+
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].completion_decision, "satisfied");
+        assert_eq!(workers[0].completion_evidence_count, 3);
     }
 }

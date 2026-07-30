@@ -139,8 +139,9 @@ async fn ssh_exec_inner(
 
 fn decode_stored_key(key: &SshKey) -> Result<PrivateKey, String> {
     let pp = key.passphrase.as_ref().map(|p| p.as_str());
-    decode_secret_key(key.private_key.as_str(), pp)
-        .map_err(|e| format!("Failed to parse stored private key: {e}"))
+    decode_secret_key(key.private_key.as_str(), pp).map_err(|e| {
+        crate::ssh_vault::private_key_parse_error("Failed to parse stored private key", e)
+    })
 }
 
 async fn connect_session(
@@ -174,20 +175,12 @@ async fn authenticate_session(
     key_pair: PrivateKey,
     review_window: Option<Duration>,
 ) -> Result<(), String> {
-    // For RSA keys the server may not accept the legacy ssh-rsa (SHA-1)
-    // signature scheme; negotiate the strongest scheme it advertises via
-    // the server-sig-algs extension. Non-RSA keys ignore this hint.
-    let hash_alg = session
-        .best_supported_rsa_hash()
-        .await
-        .map_err(|e| format!("Authentication error: {e}"))?
-        .flatten();
     let auth = with_optional_timeout(
         "authenticate",
         review_window,
         session.authenticate_publickey(
             &key.user,
-            russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg),
+            russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None),
         ),
     )
     .await
@@ -414,7 +407,10 @@ mod tests {
         key.private_key = Zeroizing::new("not a key".to_string());
         let r = ssh_exec(&key, "true", Duration::from_secs(2)).await;
         assert!(r.is_err());
-        assert!(r.unwrap_err().contains("Failed to parse"));
+        let error = r.unwrap_err();
+        assert!(error.contains("Failed to parse"));
+        assert!(error.contains("Ed25519 or ECDSA P-256"));
+        assert!(error.contains("RUSTSEC-2023-0071"));
     }
 
     #[tokio::test]

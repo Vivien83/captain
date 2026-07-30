@@ -22,6 +22,7 @@ use crate::provider_quota::{
 use async_trait::async_trait;
 use captain_types::message::{ContentBlock, MessageContent, Role, StopReason, TokenUsage};
 use captain_types::quota::{ProviderQuotaSnapshot, ProviderQuotaSource, QuotaExceededInfo};
+use captain_types::reasoning::ReasoningEffort;
 use captain_types::tool::ToolCall;
 use futures::StreamExt;
 use serde::Serialize;
@@ -199,7 +200,7 @@ struct CodexRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning: Option<CodexReasoning>,
+    reasoning: Option<CodexReasoning<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     include: Vec<&'static str>,
     #[serde(skip_serializing_if = "is_false")]
@@ -211,12 +212,22 @@ struct CodexRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct CodexReasoning {
-    effort: &'static str,
+struct CodexReasoning<'a> {
+    effort: &'a str,
 }
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn reasoning_effort_for_request(effort: &ReasoningEffort) -> &str {
+    // Codex exposes Ultra as a product mode, while its backend accepts Max as
+    // the highest wire-level model effort.
+    if effort.as_str() == ReasoningEffort::ULTRA {
+        ReasoningEffort::MAX
+    } else {
+        effort.as_str()
+    }
 }
 
 fn build_payload(req: &CompletionRequest, stream: bool) -> CodexRequest<'_> {
@@ -324,9 +335,13 @@ fn build_payload(req: &CompletionRequest, stream: bool) -> CodexRequest<'_> {
         } else {
             None
         },
-        reasoning: supports_reasoning.then(|| CodexReasoning {
-            effort: codex_reasoning_effort(req),
-        }),
+        reasoning: if supports_reasoning {
+            req.reasoning_effort.as_ref().map(|effort| CodexReasoning {
+                effort: reasoning_effort_for_request(effort),
+            })
+        } else {
+            None
+        },
         include: if supports_reasoning {
             vec!["reasoning.encrypted_content"]
         } else {
@@ -342,15 +357,6 @@ fn build_payload(req: &CompletionRequest, stream: bool) -> CodexRequest<'_> {
 fn codex_model_supports_reasoning(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
     model.contains("gpt-5") || model.starts_with('o') || model.contains("/o")
-}
-
-fn codex_reasoning_effort(req: &CompletionRequest) -> &'static str {
-    match req.thinking.as_ref().map(|t| t.budget_tokens) {
-        Some(1..=2_048) => "low",
-        Some(30_001..) => "xhigh",
-        Some(12_001..) => "high",
-        _ => "medium",
-    }
 }
 
 fn codex_reasoning_input_from_metadata(metadata: Option<&Value>) -> Option<InputItem> {
@@ -1200,6 +1206,7 @@ mod tests {
             temperature: 0.7,
             system: Some("you are helpful".into()),
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
@@ -1232,6 +1239,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: Some(json!("required")),
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
@@ -1261,6 +1269,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
@@ -1291,6 +1300,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default()
                 .with_prompt_cache_key(Some("captain-session-test".into())),
@@ -1298,13 +1308,16 @@ mod tests {
         let encoded = serde_json::to_value(build_payload(&req, true)).unwrap();
         assert_eq!(encoded["tool_choice"], json!("auto"));
         assert_eq!(encoded["parallel_tool_calls"], json!(true));
-        assert_eq!(encoded["reasoning"]["effort"], json!("medium"));
+        assert!(
+            encoded.get("reasoning").is_none(),
+            "auto must preserve the selected model's provider-owned default"
+        );
         assert_eq!(encoded["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(encoded["prompt_cache_key"], json!("captain-session-test"));
     }
 
     #[test]
-    fn build_payload_maps_large_thinking_budget_to_xhigh() {
+    fn build_payload_honors_explicit_reasoning_effort() {
         let req = CompletionRequest {
             model: "gpt-5.5".into(),
             messages: vec![Message::user("hard task")],
@@ -1316,11 +1329,31 @@ mod tests {
                 budget_tokens: 40_000,
                 stream_thinking: false,
             }),
+            reasoning_effort: Some("xhigh".parse().unwrap()),
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
         let encoded = serde_json::to_value(build_payload(&req, true)).unwrap();
         assert_eq!(encoded["reasoning"]["effort"], json!("xhigh"));
+    }
+
+    #[test]
+    fn build_payload_maps_ultra_mode_to_max_wire_effort() {
+        let req = CompletionRequest {
+            model: "gpt-5.6-sol".into(),
+            messages: vec![Message::user("hard task")],
+            tools: vec![],
+            max_tokens: 1024,
+            temperature: 0.7,
+            system: None,
+            thinking: None,
+            reasoning_effort: Some(ReasoningEffort::ULTRA.parse().unwrap()),
+            tool_choice: None,
+            cache_hints: crate::llm_driver::CacheHints::default(),
+        };
+
+        let encoded = serde_json::to_value(build_payload(&req, true)).unwrap();
+        assert_eq!(encoded["reasoning"]["effort"], json!("max"));
     }
 
     #[test]
@@ -1359,6 +1392,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
@@ -1400,6 +1434,7 @@ mod tests {
             temperature: 0.7,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             tool_choice: None,
             cache_hints: crate::llm_driver::CacheHints::default(),
         };
@@ -1726,6 +1761,7 @@ mod tests {
             }),
             secondary: None,
             credits: None,
+            spend_control: None,
             plan_type: Some("plus".to_string()),
             rate_limit_reached_type: Some("primary".to_string()),
             source: ProviderQuotaSource::ErrorResponse,

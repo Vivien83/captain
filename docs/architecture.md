@@ -55,20 +55,20 @@ operator surfaces
 
 | Crate | Description |
 |-------|-------------|
-| **captain-types** | Shared contracts for agents, capabilities, events, tools, configuration, taint/signing, model catalog, MCP/A2A compatibility, web, and agent-as-service. Config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
+| **captain-types** | Shared contracts for agents, capabilities, events, tools, configuration, signing, model catalog, MCP/A2A compatibility, web, and agent-as-service. Config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
 | **captain-capspec** | Captain Forge compiler, versioned capability registry, hot-reload watcher, encrypted durable DAG executor, approval boundary, run recovery, and rollback state for readable `.captain` files. Primitive steps are invoked only through `captain-runtime`'s central ToolRunner. |
 | **captain-memory** | SQLite-backed durable substrate for KV memory, semantic search, graph entities/relations, sessions, tasks, usage, canonical cross-channel context, projects, and detached tool-run history. Ordered migrations upgrade existing databases to the current schema at boot. |
 | **captain-runtime** | Agent execution engine for streaming/non-streaming LLM turns, fail-closed native tool parallelism, durable tool-use boundaries, loop guards, session repair, compaction, detached tool supervision, built-in tools, WASM, MCP/A2A compatibility, web access, audit, and embeddings. Defines `KernelHandle` to avoid circular dependencies. |
 | **captain-kernel** | Central coordinator for registry, scheduler, capabilities, event bus, supervisor, workflows/triggers/crons, metering/budgets, configured model selection, authentication, background work, project/goals, agent API provisioning, checkpoint recovery, and graceful shutdown. Boot reconciles interrupted detached work and restores persistent agents/sessions. |
 | **captain-api** | Axum REST/WS/SSE server, agent-as-service ingress/egress, OpenAI-compatible API, authenticated six-hub Control web app, health/status, and frozen compatibility routes. Middleware covers authentication, request ids/logging, rate limiting, security headers, and health redaction. |
-| **captain-channels** | Channel bridge layer. The active Hermes-level user path is Telegram, Discord, Signal, and Email; long-tail adapters remain compatibility/frozen unless explicitly reopened. Each adapter implements the `ChannelAdapter` trait. Features: `AgentRouter` for message routing, `BridgeManager` for lifecycle coordination, `ChannelRateLimiter` (per-user DashMap tracking), `formatter.rs` (Markdown to TelegramHTML/SlackMrkdwn/PlainText), `ChannelOverrides` (model/system_prompt/dm_policy/group_policy/rate_limit/threading/output_format), DM/group policy enforcement. |
+| **captain-channels** | Channel bridge layer. The active production-grade user path is Telegram, Discord, Signal, and Email; long-tail adapters remain compatibility/frozen unless explicitly reopened. Each adapter implements the `ChannelAdapter` trait. Features: `AgentRouter` for message routing, `BridgeManager` for lifecycle coordination, `ChannelRateLimiter` (per-user DashMap tracking), `formatter.rs` (Markdown to TelegramHTML/SlackMrkdwn/PlainText), `ChannelOverrides` (model/system_prompt/dm_policy/group_policy/rate_limit/threading/output_format), DM/group policy enforcement. |
 | **captain-wire** | Captain Protocol (OFP) for peer-to-peer agent communication. JSON-framed messages over TCP with HMAC-SHA256 mutual authentication (nonce + constant-time verify via `subtle`). `PeerNode` listens for connections and manages peers. `PeerRegistry` tracks known remote peers and their agents. |
 | **captain-cli** | Clap CLI and six-hub Ratatui desktop experience. It discovers the daemon through `~/.captain/daemon.json`, uses HTTP when available, and supports an in-process fallback plus MCP server mode. |
 | **captain-desktop** | Retained Tauri wrapper. Its implementation remains buildable for compatibility, but Tauri packaging and promotion are frozen; it is not the active release path. |
 | **captain-hands** | Retained curated capability packages. Hands are frozen/hidden from the primary product navigation. |
 | **captain-extensions** | Retained integration registry and credential compatibility. Experimental integrations remain frozen. |
 | **captain-graph** | Graph projection and relationship support for runtime knowledge paths. |
-| **captain-skills** | Skill system for pluggable tool bundles. Bundled skills are compiled via `include_str!()`, while installed and generated skills live on disk. Skills are `skill.toml` + Python/WASM/Node.js/PromptOnly code. `SkillManifest` defines metadata, runtime config, provided tools, and requirements. `SkillRegistry` manages installed and bundled skills. Marketplace/ClawHub code paths are compatibility/frozen outside the active core release path. `SKILL.md` parser supports OpenClaw compatibility (YAML frontmatter + Markdown body). `SkillVerifier` provides SHA256 verification. Prompt injection scanner (`scan_prompt_content()`) detects override attempts, data exfiltration, and shell references. |
+| **captain-skills** | Skill system for pluggable tool bundles. Bundled skills are compiled via `include_str!()`, while installed and generated skills live on disk. Skills are `skill.toml` + Python/WASM/Node.js/PromptOnly code. `SkillManifest` defines metadata, runtime config, provided tools, and requirements. `SkillRegistry` manages installed and bundled skills. Remote marketplace clients are frozen compatibility code and fail before I/O. `SKILL.md` parsing supports compatible YAML frontmatter + Markdown bodies. `SkillVerifier` provides SHA256 verification, manifest review signals, and an explicitly qualified `advisory_heuristic` phrase report. |
 | **xtask** | Build automation tasks (cargo-xtask pattern). |
 
 Daemon shutdown closes the API listener and gives long-lived HTTP connections
@@ -231,7 +231,9 @@ they never grant Captain access to the host Docker socket or package manager.
 
 1. **RBAC check**: `AuthManager` resolves channel identity and checks user role permissions.
 2. **Channel policy check**: `ChannelBridgeHandle.authorize_channel_user()` enforces DM/group policy.
-3. **Quota check**: `AgentScheduler` verifies the agent has not exceeded its token-per-hour limit.
+3. **Budget and quota check**: the Kernel reads one coherent live global
+   `BudgetConfig` snapshot, asks `MeteringEngine` to enforce its cost windows,
+   then asks `AgentScheduler` to enforce the agent's token-per-hour limit.
 4. **Entry lookup**: Fetch `AgentEntry` from the registry.
 5. **Module dispatch**: Based on `manifest.module`:
    - `builtin:chat` or unrecognized: LLM agent loop
@@ -251,6 +253,13 @@ they never grant Captain access to the host Docker socket or package manager.
 7. **Cost estimation**: `MeteringEngine.estimate_cost_with_catalog()` computes cost in USD.
 8. **Record usage**: Update quota tracking with token counts; persist usage event.
 9. **Return result**: `AgentLoopResult` with response text, token usage, iteration count, and `cost_usd`.
+
+The boot-time `KernelConfig` remains immutable. Runtime budget edits use a
+dedicated `RwLock<BudgetConfig>` plus a serialized update boundary: clone the
+current snapshot, apply and validate the complete candidate, atomically persist
+it, then publish it under the write lock. Persistence failure never changes
+live state. API, WebSocket, Control/channel projections, agent spawn and
+restore, config hot-reload, and both turn paths all read this same authority.
 
 ### Kill Flow
 
@@ -356,6 +365,15 @@ economy profile while other providers use the general profile. Model switches
 and hourly Codex catalog refreshes therefore change the next turn's budget
 without a daemon restart. Session usage totals remain separate from the active
 prompt estimate used for context pressure.
+
+Compaction progress is a typed session operation rather than a spinner inferred
+by each UI. Preparing, pruning, model summarization, exact chunking, merging,
+persistence, completion, failure, and interruption flow through the same
+contract. A gauge exists only for exact completed/total chunk units; opaque
+model work is indeterminate. SQLite schema v35 commits the append-only timeline
+event and active-operation state together. On startup, active rows owned by a
+previous runtime instance are closed as interrupted while the original session
+remains recoverable.
 
 ---
 
@@ -648,9 +666,33 @@ Captain implements defense-in-depth security systems organized around critical r
 
 `safe_resolve_path()` and `safe_resolve_parent()` in WASM host functions prevent directory traversal attacks. Path validation in `tool_runner.rs` (`validate_path`) protects file tools. Capability check runs BEFORE path resolution (deny first, then validate).
 
-### Subprocess Isolation
+### Host Subprocess Boundary
 
-`subprocess_sandbox.rs` provides a secure execution environment for Python/Node skill runtimes. All subprocess invocations use `cmd.env_clear()` followed by selective environment variable injection, preventing secret leakage.
+`guarded_exec.rs` is the execution boundary for every agent-controlled child
+process: shell/package tools, goals, Markdown skills, `execute_code`,
+workflows, static skill checks, Hand installers, and WASM host calls. It
+combines execution policy and critical-pattern review with `env_clear()`,
+selective host variables, explicit per-call injection, workspace, timeout,
+bounded output, and command-free structured audit events. Interactive shell
+approval yields a content-bound permit; unattended surfaces fail closed.
+
+`scripts/guarded-exec-audit.sh` mechanically rejects raw process construction
+or environment mutation in those sinks and is run by every tranche gate and
+release readiness. `subprocess_env_scrub.rs` owns explicit environment
+inheritance, while `subprocess_guard.rs` owns lower-level command/path checks
+and process-tree helpers used by this boundary and existing managed process
+services. Neither module claims an operating-system sandbox.
+
+The ordinary host backend is deliberately reported as `host_process` with
+isolation level `environment_scrub` and `os_isolation: false`. Clearing the
+environment, bounding output and time, validating workspaces, and recognizing
+dangerous commands reduce risk but do not create a namespace, seccomp,
+Landlock, chroot, or container boundary. New installations use execution policy
+`full` with critical mode `safe`: routine host commands remain available while
+recognized catastrophic commands fail closed. `open` is an explicit operator
+opt-in that permits a recognized command only after content-bound approval.
+Docker and WASM remain separate explicit backends when real isolation is
+required.
 
 ### SSRF Protection
 
@@ -660,13 +702,20 @@ Captain implements defense-in-depth security systems organized around critical r
 
 WASM sandbox uses both Wasmtime fuel metering (instruction count) and epoch interruption (wall-clock timeout via watchdog thread). This prevents both CPU-bound and time-bound runaway modules.
 
-### Merkle Audit Trail
+### Versioned Audit Hash Chain
 
-`audit.rs` implements a Merkle hash chain where each audit entry includes a hash of the previous entry. This provides tamper-evident logging of all agent actions.
+`audit.rs`, `audit_chain.rs`, and `audit_persistence.rs` implement a linear,
+versioned SHA-256 hash chain. Version-2 entries length-prefix every field.
+Persistent appends reach SQLite before the in-memory tip advances. A corrupt
+active epoch is sealed as invalid and followed by an anchored `ChainRecovery`
+epoch; historical rows are never repaired or rewritten.
 
-### Information Flow Taint Tracking
+### Heuristic Content Guards
 
-`taint.rs` in `captain-types` implements taint labels and taint sets. Data from external sources carries taint labels that propagate through operations, enabling information flow analysis.
+`tools/security.rs` in `captain-runtime` classifies a reviewed set of dangerous
+shell and secret-bearing URL patterns at selected execution boundaries. These
+checks do not propagate source labels and are not an information-flow or
+provenance system.
 
 ### Ed25519 Manifest Signing
 
@@ -686,11 +735,47 @@ Generic Cell Rate Algorithm with cost-aware token buckets. Per-IP tracking with 
 
 ### Health Endpoint Redaction
 
-Public health endpoint (`/api/health`) returns minimal status. Detailed health (`/api/health/detail`) requires authentication and shows database stats, agent counts, and subsystem status.
+Public health endpoint (`/api/health`) returns minimal status. Detailed health
+(`/api/health/detail`) requires authentication and shows database state, agent
+counts, audit integrity/epochs, and subsystem status.
 
-### Prompt Injection Scanner
+### Browser Session Signing State
 
-`scan_prompt_content()` in the skills crate detects override attempts, data exfiltration patterns, and shell references in skill content. Applied to all bundled and installed skills and to SKILL.md auto-conversion.
+The first kernel boot provisions a per-install 32-byte CSPRNG
+`auth.session_secret` and persists it atomically in the owner-private
+configuration. Browser session HMAC keys are decoded only from this field;
+daemon API keys and password hashes never enter key derivation. Tokens include
+the current `auth.session_epoch`, and every password rotation advances that
+epoch in the same durable config write as the new credential.
+
+Live auth reload fails closed when the persisted signing key or epoch is
+missing or malformed. CLI and API config-display paths remove both the password
+hash and signing key. Raw config edits merge the existing managed values back
+before atomic persistence and reject attempts to replace the secret or change
+the epoch directly.
+
+New browser passwords are salted Argon2id PHC strings. A successful legacy
+SHA-256 verification performs an atomic in-place migration before issuing a
+session. A bounded login-specific limiter tracks IP and normalized username
+independently, starts exponential backoff after five failures, and caps it at
+15 minutes. Cookie `Secure` policy is explicit (`auto`, `always`, `never`);
+automatic mode trusts configured HTTPS or HTTPS forwarded by a declared
+loopback reverse proxy.
+
+Browser WebSocket and SSE transports use CSPRNG one-time tickets with a
+30-second lifetime. The server binds each ticket to path, effective client IP,
+and session epoch, removes it on the first consume attempt, and rejects replay.
+Header authentication remains available to technical clients. Query-string
+API keys and session tokens are not credentials.
+
+### Advisory Skill Phrase Review
+
+`scan_prompt_content_advisory()` reports bounded phrase matches for instruction
+override, possible exfiltration, shell references, and excessive size. Every
+report carries `advisory_heuristic`: a match does not prove malicious intent and
+an empty report does not prove safety. The registry conservatively refuses
+high-risk matches, while operator review of the complete local source remains
+mandatory.
 
 ### Secret Zeroization
 
@@ -719,7 +804,7 @@ channels and frozen compatibility adapters.
 
 | Status | Channels |
 |--------|----------|
-| Active Hermes-level UX | Telegram, Discord, Signal, Email |
+| Active production-grade UX | Telegram, Discord, Signal, Email |
 | Frozen compatibility | Every non-core external adapter; these are omitted from active setup and readiness claims |
 
 Use `captain channel list`, `captain status`, and `/api/channels` to inspect
@@ -732,7 +817,18 @@ the runtime active/frozen state.
 - **Formatter**: `formatter.rs` converts Markdown to platform-specific formats (TelegramHTML, SlackMrkdwn, PlainText).
 - **Rate Limiter**: `ChannelRateLimiter` with per-user DashMap tracking prevents message flooding.
 - **Threading**: `send_in_thread()` trait method for platforms that support threaded conversations.
-- **Chat Commands**: `/models`, `/providers`, `/new`, `/compact`, `/model`, `/stop`, `/usage`, `/think` handled by `ChannelBridgeHandle`.
+- **Chat Commands**: `/models`, `/providers`, `/new`, `/compact`, `/model`,
+  `/stop`, `/usage`, and `/reasoning` are handled by `ChannelBridgeHandle`.
+  `/think` is explicitly a terminal rendering toggle and cannot masquerade as
+  a model-setting command on external channels.
+- **Durable final delivery**: Agent replies, sanitized error replies,
+  auto-replies, broadcasts, and channel commands are persisted before send.
+  The kernel leases each attempt, records the real adapter result, and retries
+  after restart without rerunning the agent turn. An uncertain replay carries a
+  visible possible-duplicate marker instead of pretending exactly-once delivery.
+- **Bounded ledger**: Each durable response is capped at 2 MiB and live payloads
+  at 32 MiB. Delivered and dead records retain only minimal audit metadata;
+  response content and display identity are discarded.
 
 ---
 
@@ -760,17 +856,23 @@ inventory is code-defined and should be checked with `captain skill list`:
 
 ### Security Pipeline
 
-All skills pass through a security pipeline before activation:
+Local skills pass through a review and execution pipeline before activation:
 
-1. **SHA256 verification** (`SkillVerifier`): Ensures skill content matches its declared hash.
-2. **Prompt injection scan** (`scan_prompt_content()`): Detects malicious patterns in skill prompts and descriptions.
+1. **Integrity metadata** (`SkillVerifier`): Compares content to a known SHA256
+   value when trusted metadata exists; a self-declared hash is not publisher
+   identity.
+2. **Advisory phrase review** (`scan_prompt_content_advisory()`): Reports a
+   bounded set of phrase matches with `advisory_heuristic` assurance. The loader
+   conservatively refuses high-risk matches.
 3. **Trust boundary markers**: Skill-injected context in system prompts is wrapped with trust boundary markers.
 4. **Subprocess env_clear()**: Skill code execution uses environment isolation.
 
 ### Ecosystem Bridges
 
 - **Marketplace/ClawHub compatibility**: frozen outside the active core release
-  path. Do not present these as Hermes-level active product flows.
+  path. API routes and TUI actions are absent, the CLI accepts only an existing
+  local directory, and retained remote clients fail before network or
+  filesystem access.
 - **SKILL.md Parser**: Auto-converts OpenClaw SKILL.md format (YAML frontmatter + Markdown body) to `skill.toml`.
 - **Tool Compat**: OpenClaw-to-Captain tool name mappings in `tool_compat.rs`.
 
@@ -901,7 +1003,15 @@ five-second `/api/budget` watcher. In-process Ratatui reads the equivalent
 persisted quota store directly. Compact Chat bands classify provider-wide,
 active-model, and alternative-model limit families before rendering: only the
 first two receive gauges, while Status and Budget preserve the complete
-provider observation. No operator surface calls Codex itself.
+provider observation. Their gauges represent remaining headroom; exact Codex
+monthly spend controls remain distinct from rolling-window percentages. The
+same surfaces read and persist the agent's reasoning selection, showing Auto
+separately from the effective model/provider default. Auto omits the request
+override and is not explicit `none`. When the live Codex catalogue exposes
+Ultra, the durable product mode remains `ultra`, the driver maps it to `max`
+at the provider boundary, and request assembly adds proactive delegation
+instructions only for a depth-zero agent with a coordination path.
+No operator surface calls Codex itself.
 
 ---
 

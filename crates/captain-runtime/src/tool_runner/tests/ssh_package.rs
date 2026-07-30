@@ -36,10 +36,14 @@ async fn test_tool_ssh_exec_blocks_critical_in_safe_mode() {
     assert!(err.contains("Refused before sending"), "got: {err}");
 }
 
-/// Q.7 — open mode also refuses (because no interactive bridge yet).
+/// Q.7 — explicit open mode also refuses because the SSH path has no
+/// interactive approval transport.
 #[tokio::test]
 async fn test_tool_ssh_exec_blocks_critical_in_open_mode() {
-    let policy = captain_types::config::ExecPolicy::default(); // Open by default
+    let policy = captain_types::config::ExecPolicy {
+        critical_mode: captain_types::config::CriticalMode::Open,
+        ..Default::default()
+    };
     let input = serde_json::json!({
         "key_name": "anything",
         "command": "DROP DATABASE prod"
@@ -48,7 +52,7 @@ async fn test_tool_ssh_exec_blocks_critical_in_open_mode() {
     assert!(r.is_err());
     assert!(
         r.unwrap_err().contains("interactive approval"),
-        "open-mode SSH critical must surface the not-yet-implemented note"
+        "open-mode SSH critical must explain that approval is unavailable"
     );
 }
 

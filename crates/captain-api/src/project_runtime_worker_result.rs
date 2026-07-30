@@ -1,4 +1,7 @@
 use crate::project_lifecycle::runtime_progress_for_phase;
+use crate::project_runtime_completion::{
+    phase_completion_contract, CompletionContract, ProjectGoalCheckReceipt,
+};
 use crate::project_runtime_events::append_runtime_event;
 use crate::project_runtime_orchestrator::deactivate_runtime_orchestrator;
 use crate::project_runtime_tool_status::{
@@ -15,6 +18,8 @@ pub(crate) struct RuntimeWorkerTurnOutcome {
     pub(crate) summary: String,
     pub(crate) blocked: bool,
     pub(crate) final_status: &'static str,
+    pub(crate) completion_contract: CompletionContract,
+    pub(crate) blocking_reason: Option<String>,
     tool_request: Option<Value>,
     repeated_denied_tool_request: bool,
 }
@@ -23,11 +28,20 @@ pub(crate) fn runtime_worker_turn_outcome(
     spec: &RuntimeWorkerSpec,
     result: &AgentLoopResult,
     runtime_snapshot: &Value,
+    goal_checks: &[ProjectGoalCheckReceipt],
 ) -> RuntimeWorkerTurnOutcome {
     let summary =
         runtime_worker_summary(spec.role, spec.phase, &result.response, &result.tool_calls);
-    let blocked =
+    let declared_blocked =
         response_declares_blocked(&result.response) || response_declares_blocked(&summary);
+    let completion_contract = phase_completion_contract(
+        spec.phase,
+        &summary,
+        &result.tool_calls,
+        declared_blocked,
+        goal_checks,
+    );
+    let blocked = declared_blocked || !completion_contract.is_satisfied();
     let tool_request = if blocked {
         extract_runtime_tool_request(&summary)
             .map(|request| repeated_denied_tool_request(runtime_snapshot, spec.phase, request))
@@ -46,6 +60,8 @@ pub(crate) fn runtime_worker_turn_outcome(
         summary,
         blocked,
         final_status: if blocked { "blocked" } else { "done" },
+        blocking_reason: completion_contract.blocking_reason.clone(),
+        completion_contract,
         tool_request,
         repeated_denied_tool_request,
     }
@@ -118,6 +134,10 @@ fn mark_runtime_worker_record(
         if let Some(cost) = result.cost_usd {
             worker.insert("cost_usd".to_string(), serde_json::json!(cost));
         }
+        worker.insert(
+            "completion_contract".to_string(),
+            serde_json::to_value(&outcome.completion_contract).unwrap_or_default(),
+        );
         if let Some(request) = outcome.tool_request.clone() {
             worker.insert("tool_request".to_string(), request);
         } else {
@@ -148,6 +168,7 @@ fn write_worker_result(
         "tool_calls": result.tool_calls.len(),
         "tool_decisions": worker_tool_decisions(&result.tool_calls),
         "cost_usd": result.cost_usd,
+        "completion_contract": outcome.completion_contract,
     });
 }
 
@@ -189,7 +210,9 @@ fn append_worker_result_event(
         .to_string();
     append_runtime_event(
         runtime,
-        if outcome.blocked {
+        if outcome.completion_contract.decision == "insufficient_evidence" {
+            "worker.completion_rejected"
+        } else if outcome.blocked {
             "worker.blocked"
         } else {
             "worker.completed"
@@ -197,7 +220,9 @@ fn append_worker_result_event(
         &format!(
             "{} {}",
             spec.role,
-            if outcome.blocked {
+            if outcome.completion_contract.decision == "insufficient_evidence" {
+                "completion rejected"
+            } else if outcome.blocked {
                 "blocked"
             } else {
                 "completed"
@@ -214,6 +239,8 @@ fn append_worker_result_event(
             "iterations": result.iterations,
             "tool_decisions": worker_tool_decisions(&result.tool_calls),
             "cost_usd": result.cost_usd,
+            "completion_decision": outcome.completion_contract.decision,
+            "completion_evidence_count": outcome.completion_contract.evidence_count,
         }),
     );
 }
@@ -334,8 +361,10 @@ mod tests {
         let project = project();
         let spec = &RUNTIME_WORKER_SPECS[3];
         let worker_id = crate::project_runtime_workers::runtime_worker_id(&project, spec.phase);
-        let result = agent_result("STATUS: complete\nSUMMARY: Build done.");
-        let outcome = runtime_worker_turn_outcome(spec, &result, &serde_json::json!({}));
+        let result = agent_result(
+            "STATUS: complete\nSUMMARY: Build done.\nVERIFY: cargo test passed\nNEXT: verify",
+        );
+        let outcome = runtime_worker_turn_outcome(spec, &result, &serde_json::json!({}), &[]);
         let mut runtime = serde_json::json!({
             "workers": [{
                 "id": worker_id,
@@ -407,7 +436,7 @@ mod tests {
             },
             "orchestrator": { "active": true, "run_id": "run-2" }
         });
-        let outcome = runtime_worker_turn_outcome(spec, &result, &snapshot);
+        let outcome = runtime_worker_turn_outcome(spec, &result, &snapshot, &[]);
         let mut runtime = serde_json::json!({
             "orchestrator": { "active": true, "run_id": "run-2" },
             "timeline": []
@@ -437,5 +466,45 @@ mod tests {
         );
         assert_eq!(runtime["timeline"][0]["status"], "denied");
         assert_eq!(runtime["timeline"][1]["kind"], "worker.blocked");
+    }
+
+    #[test]
+    fn mark_runtime_worker_turn_result_rejects_unproved_completion() {
+        let project = project();
+        let spec = &RUNTIME_WORKER_SPECS[5];
+        let mut result = agent_result(
+            "STATUS: complete\nSUMMARY: Everything looks fine.\nVERIFY: cargo test passed",
+        );
+        result.tool_calls.clear();
+        let outcome = runtime_worker_turn_outcome(spec, &result, &serde_json::json!({}), &[]);
+        let mut runtime = serde_json::json!({
+            "orchestrator": { "active": true },
+            "timeline": []
+        });
+
+        mark_runtime_worker_turn_result(
+            &mut runtime,
+            &project,
+            spec,
+            "run-3",
+            "agent-3",
+            &result,
+            &outcome,
+        );
+
+        assert!(outcome.blocked);
+        assert_eq!(
+            outcome.completion_contract.decision,
+            "insufficient_evidence"
+        );
+        let verify_worker = runtime["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|worker| worker["phase"] == "verify")
+            .unwrap();
+        assert_eq!(verify_worker["status"], "blocked");
+        assert_eq!(runtime["timeline"][0]["kind"], "worker.completion_rejected");
+        assert_eq!(runtime["status"], "blocked");
     }
 }

@@ -54,6 +54,8 @@ pub struct ProjectRuntimeWorker {
     pub status: String,
     pub agent_id: String,
     pub summary: String,
+    pub completion_decision: String,
+    pub completion_evidence_count: u64,
 }
 
 #[derive(Clone, Default)]
@@ -814,12 +816,20 @@ fn draw_runtime(
                         worker.agent_id.chars().take(8).collect::<String>()
                     )
                 };
+                let proof = if worker.completion_decision.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " · proof:{} ({})",
+                        worker.completion_decision, worker.completion_evidence_count
+                    )
+                };
                 ListItem::new(vec![
                     Line::from(vec![
                         Span::styled(worker.role.clone(), theme::title_style()),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{} / {}{}", worker.status, worker.phase, agent),
+                            format!("{} / {}{}{}", worker.status, worker.phase, agent, proof),
                             theme::hint_style(),
                         ),
                     ]),

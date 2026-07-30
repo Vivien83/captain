@@ -1,12 +1,18 @@
 //! Execution approval manager — gates dangerous operations behind human approval.
 
 use captain_types::approval::{
-    ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
+    is_valid_approval_action_digest, normalize_approval_reason, ApprovalDecision, ApprovalOutcome,
+    ApprovalPolicy, ApprovalRequest, ApprovalResponse, ApprovalRule, ApprovalRuleEffect, RiskLevel,
 };
 use chrono::Utc;
 use dashmap::DashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+use crate::approval_rules::ApprovalRuleStore;
+use captain_runtime::audit::{AuditAction, AuditLog};
 
 /// Max pending requests per agent.
 const MAX_PENDING_PER_AGENT: usize = 5;
@@ -14,25 +20,64 @@ const MAX_PENDING_PER_AGENT: usize = 5;
 /// Manages approval requests with oneshot channels for blocking resolution.
 pub struct ApprovalManager {
     pending: DashMap<Uuid, PendingRequest>,
-    policy: std::sync::RwLock<ApprovalPolicy>,
-    /// Q.11 — session approval cache. `(agent_id, tool_name)` → unit.
+    policy: RwLock<ApprovalPolicy>,
+    /// Session approval cache scoped to the exact agent/tool/action tuple.
     /// Cleared on daemon restart. Populated when user picks
-    /// `ApprovedSession` in the modal.
-    session_cache: DashMap<(String, String), ()>,
+    /// a session-scoped allow or deny decision.
+    session_cache: DashMap<ApprovalActionKey, ApprovalOutcome>,
+    rules: ApprovalRuleStore,
+    audit_log: Option<Arc<AuditLog>>,
+    resolution_lock: Mutex<()>,
 }
 
 struct PendingRequest {
     request: ApprovalRequest,
-    sender: tokio::sync::oneshot::Sender<ApprovalDecision>,
+    sender: tokio::sync::oneshot::Sender<ApprovalOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ApprovalActionKey {
+    agent_id: String,
+    tool_name: String,
+    action_digest: String,
+}
+
+impl ApprovalActionKey {
+    fn from_request(request: &ApprovalRequest) -> Self {
+        Self {
+            agent_id: request.agent_id.clone(),
+            tool_name: request.tool_name.clone(),
+            action_digest: request.action_digest.clone(),
+        }
+    }
 }
 
 impl ApprovalManager {
     pub fn new(policy: ApprovalPolicy) -> Self {
         Self {
             pending: DashMap::new(),
-            policy: std::sync::RwLock::new(policy),
+            policy: RwLock::new(policy),
             session_cache: DashMap::new(),
+            rules: ApprovalRuleStore::in_memory(),
+            audit_log: None,
+            resolution_lock: Mutex::new(()),
         }
+    }
+
+    /// Create a manager backed by a crash-safe, human-readable exact-rule file.
+    pub fn with_persistence(
+        policy: ApprovalPolicy,
+        captain_home: &Path,
+        audit_log: Arc<AuditLog>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            pending: DashMap::new(),
+            policy: RwLock::new(policy),
+            session_cache: DashMap::new(),
+            rules: ApprovalRuleStore::load(captain_home.join("approval-rules.json"))?,
+            audit_log: Some(audit_log),
+            resolution_lock: Mutex::new(()),
+        })
     }
 
     /// Check if a tool requires approval based on current policy.
@@ -41,11 +86,54 @@ impl ApprovalManager {
         policy.require_approval.iter().any(|t| t == tool_name)
     }
 
-    /// Q.11 — Submit an approval request. Short-circuits to `Approved`
-    /// when the tool is in `allow_always` (persistent) or when the
-    /// `(agent, tool)` pair is in the in-memory session cache.
-    pub async fn request_approval(&self, req: ApprovalRequest) -> ApprovalDecision {
-        // 1. Always-allow shortcut (persistent policy).
+    /// Submit an approval request. Broad administrator policy remains a
+    /// compatibility override; interactive session and durable decisions are
+    /// always scoped to the exact `(agent, tool, action digest)` tuple.
+    pub async fn request_approval(&self, req: ApprovalRequest) -> ApprovalOutcome {
+        if !is_valid_approval_action_digest(&req.action_digest) {
+            warn!(
+                agent = %req.agent_id,
+                tool = %req.tool_name,
+                "Approval request denied: malformed exact-action digest"
+            );
+            return ApprovalOutcome {
+                decision: ApprovalDecision::Denied,
+                reason: Some(
+                    "Approval request was malformed and was denied without executing the action."
+                        .to_string(),
+                ),
+                rule_id: None,
+            };
+        }
+        let cache_key = ApprovalActionKey::from_request(&req);
+
+        // 1. Durable exact-action rule. Explicit deny wins over broad config.
+        if let Some(rule) = self.rules.matching(
+            &cache_key.agent_id,
+            &cache_key.tool_name,
+            &cache_key.action_digest,
+        ) {
+            let decision = match rule.effect {
+                ApprovalRuleEffect::Allow => ApprovalDecision::ApprovedAlways,
+                ApprovalRuleEffect::Deny => ApprovalDecision::DeniedAlways,
+            };
+            let outcome = ApprovalOutcome {
+                decision,
+                reason: rule.reason.clone(),
+                rule_id: Some(rule.id),
+            };
+            self.audit_outcome(&req, &outcome, "durable-rule", "applied");
+            debug!(
+                agent = %req.agent_id,
+                tool = %req.tool_name,
+                rule_id = %rule.id,
+                ?decision,
+                "Approval resolved by durable exact-action rule"
+            );
+            return outcome;
+        }
+
+        // 2. Administrator-configured broad allow shortcut.
         {
             let policy = self.policy.read().unwrap_or_else(|e| e.into_inner());
             if policy.allow_always.iter().any(|t| t == &req.tool_name) {
@@ -53,17 +141,17 @@ impl ApprovalManager {
                     tool = %req.tool_name,
                     "Approval auto-granted: tool in allow_always policy"
                 );
-                return ApprovalDecision::ApprovedAlways;
+                return ApprovalOutcome::from_decision(ApprovalDecision::ApprovedAlways);
             }
         }
-        // 2. Session-cache shortcut (in-memory until daemon restart).
-        let cache_key = (req.agent_id.clone(), req.tool_name.clone());
-        if self.session_cache.contains_key(&cache_key) {
+        // 3. Exact session-cache shortcut (in-memory until daemon restart).
+        if let Some(outcome) = self.session_cache.get(&cache_key) {
             debug!(
                 agent = %req.agent_id, tool = %req.tool_name,
-                "Approval auto-granted: pair in session cache"
+                decision = ?outcome.decision,
+                "Approval resolved by exact session rule"
             );
-            return ApprovalDecision::ApprovedSession;
+            return outcome.clone();
         }
 
         // Check per-agent pending limit
@@ -74,7 +162,13 @@ impl ApprovalManager {
             .count();
         if agent_pending >= MAX_PENDING_PER_AGENT {
             warn!(agent_id = %req.agent_id, "Approval request rejected: too many pending");
-            return ApprovalDecision::Denied;
+            return ApprovalOutcome {
+                decision: ApprovalDecision::Denied,
+                reason: Some(
+                    "Too many approval requests are already pending for this agent.".to_string(),
+                ),
+                rule_id: None,
+            };
         }
 
         let timeout = std::time::Duration::from_secs(req.timeout_secs);
@@ -91,48 +185,96 @@ impl ApprovalManager {
 
         info!(request_id = %id, "Approval request submitted, waiting for resolution");
 
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(decision)) => {
+        let mut rx = rx;
+        tokio::select! {
+            result = &mut rx => {
+                let decision = result.unwrap_or_else(|_| ApprovalOutcome {
+                    decision: ApprovalDecision::TimedOut,
+                    reason: Some("Approval resolver closed without a decision.".to_string()),
+                    rule_id: None,
+                });
                 debug!(request_id = %id, ?decision, "Approval resolved");
-                // Promote to session/always cache so the next call short-circuits.
-                if let Some(_pending) = self.pending.get(&id) {
-                    // pending was already removed by resolve(); fall through
-                }
-                self.persist_decision(&decision, &cache_key);
                 decision
             }
-            _ => {
+            _ = tokio::time::sleep(timeout) => {
+                let _resolution = self
+                    .resolution_lock
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                // A resolver that entered the critical section just before the
+                // deadline may complete while this branch waits for the lock.
+                // Keep the receiver alive so that exact outcome wins over a
+                // false timeout after a session or durable rule was committed.
+                if let Ok(outcome) = rx.try_recv() {
+                    return outcome;
+                }
                 self.pending.remove(&id);
                 warn!(request_id = %id, "Approval request timed out");
-                ApprovalDecision::TimedOut
+                ApprovalOutcome {
+                    decision: ApprovalDecision::TimedOut,
+                    reason: Some("Approval expired before an operator responded.".to_string()),
+                    rule_id: None,
+                }
             }
         }
     }
 
-    /// Q.11 — Apply a decision's side effect on the cache/policy.
-    /// Called from `request_approval` after the user resolves a prompt
-    /// (and from `resolve_with_request` so the test path can target it).
-    fn persist_decision(&self, decision: &ApprovalDecision, cache_key: &(String, String)) {
-        match decision {
-            ApprovalDecision::ApprovedSession => {
-                self.session_cache.insert(cache_key.clone(), ());
+    fn persist_outcome(
+        &self,
+        request: &ApprovalRequest,
+        outcome: &mut ApprovalOutcome,
+        decided_by: &str,
+    ) -> Result<(), String> {
+        let cache_key = ApprovalActionKey::from_request(request);
+        match outcome.decision {
+            ApprovalDecision::ApprovedSession | ApprovalDecision::DeniedSession => {
+                self.session_cache
+                    .insert(cache_key.clone(), outcome.clone());
                 info!(
-                    agent = %cache_key.0, tool = %cache_key.1,
-                    "Approval cached for session"
+                    agent = %cache_key.agent_id,
+                    tool = %cache_key.tool_name,
+                    decision = ?outcome.decision,
+                    "Exact approval decision cached for session"
                 );
             }
-            ApprovalDecision::ApprovedAlways => {
-                let mut policy = self.policy.write().unwrap_or_else(|e| e.into_inner());
-                if !policy.allow_always.iter().any(|t| t == &cache_key.1) {
-                    policy.allow_always.push(cache_key.1.clone());
-                    info!(
-                        tool = %cache_key.1,
-                        "Approval persisted to allow_always policy"
-                    );
+            ApprovalDecision::ApprovedAlways | ApprovalDecision::DeniedAlways => {
+                if outcome.decision == ApprovalDecision::DeniedAlways && outcome.reason.is_none() {
+                    return Err("a durable deny rule requires an operator reason".to_string());
                 }
+                if let Some(reason) = outcome.reason.as_deref() {
+                    if let Some(kind) = captain_runtime::memory_policy::scan_for_secrets(reason) {
+                        return Err(format!(
+                            "approval reason contains secret-like material ({kind}); remove it before persisting the rule"
+                        ));
+                    }
+                }
+                let effect = if outcome.decision.is_approved() {
+                    ApprovalRuleEffect::Allow
+                } else {
+                    ApprovalRuleEffect::Deny
+                };
+                let rule = self.rules.upsert(ApprovalRule {
+                    id: Uuid::new_v4(),
+                    effect,
+                    agent_id: cache_key.agent_id.clone(),
+                    tool_name: cache_key.tool_name.clone(),
+                    action_digest: cache_key.action_digest.clone(),
+                    created_at: Utc::now(),
+                    created_by: decided_by.to_string(),
+                    reason: outcome.reason.clone(),
+                })?;
+                outcome.rule_id = Some(rule.id);
+                info!(
+                    agent = %cache_key.agent_id,
+                    tool = %cache_key.tool_name,
+                    rule_id = %rule.id,
+                    ?effect,
+                    "Exact approval rule persisted"
+                );
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Q.11 — Clear the session cache (e.g. on user logout).
@@ -142,7 +284,7 @@ impl ApprovalManager {
         info!(removed = n, "Session approval cache cleared");
     }
 
-    /// Q.11 — Number of cached `(agent, tool)` session pairs.
+    /// Number of cached exact `(agent, tool, action digest)` session rules.
     pub fn session_cache_size(&self) -> usize {
         self.session_cache.len()
     }
@@ -154,26 +296,64 @@ impl ApprovalManager {
         decision: ApprovalDecision,
         decided_by: Option<String>,
     ) -> Result<ApprovalResponse, String> {
-        match self.pending.remove(&request_id) {
-            Some((_, pending)) => {
-                let response = ApprovalResponse {
-                    request_id,
-                    decision,
-                    decided_at: Utc::now(),
-                    decided_by,
-                };
-                let cache_key = (
-                    pending.request.agent_id.clone(),
-                    pending.request.tool_name.clone(),
-                );
-                self.persist_decision(&decision, &cache_key);
-                // Send decision to waiting agent (ignore error if receiver dropped)
-                let _ = pending.sender.send(decision);
-                info!(request_id = %request_id, ?decision, "Approval request resolved");
-                Ok(response)
+        self.resolve_with_reason(request_id, decision, None, decided_by)
+    }
+
+    /// Resolve a pending request with bounded operator context.
+    pub fn resolve_with_reason(
+        &self,
+        request_id: Uuid,
+        decision: ApprovalDecision,
+        reason: Option<&str>,
+        decided_by: Option<String>,
+    ) -> Result<ApprovalResponse, String> {
+        let reason = normalize_approval_reason(reason)?;
+        if let Some(reason) = reason.as_deref() {
+            if let Some(kind) = captain_runtime::memory_policy::scan_for_secrets(reason) {
+                return Err(format!(
+                    "approval reason contains secret-like material ({kind}); remove it before sending the decision"
+                ));
             }
-            None => Err(format!("No pending approval request with id {request_id}")),
         }
+        let actor = normalize_actor(decided_by.as_deref())?;
+        let _resolution = self
+            .resolution_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let request = self
+            .pending
+            .get(&request_id)
+            .map(|pending| pending.request.clone())
+            .ok_or_else(|| format!("No pending approval request with id {request_id}"))?;
+        let expires_at = request.requested_at
+            + chrono::Duration::seconds(request.timeout_secs.min(i64::MAX as u64) as i64);
+        if Utc::now() >= expires_at {
+            self.pending.remove(&request_id);
+            return Err(format!("Approval request {request_id} has expired"));
+        }
+
+        let mut outcome = ApprovalOutcome {
+            decision,
+            reason,
+            rule_id: None,
+        };
+        self.persist_outcome(&request, &mut outcome, &actor)?;
+        let (_, pending) = self
+            .pending
+            .remove(&request_id)
+            .ok_or_else(|| format!("Approval request {request_id} was already resolved"))?;
+        let response = ApprovalResponse {
+            request_id,
+            decision,
+            decided_at: Utc::now(),
+            decided_by: Some(actor.clone()),
+            reason: outcome.reason.clone(),
+            rule_id: outcome.rule_id,
+        };
+        let _ = pending.sender.send(outcome.clone());
+        self.audit_outcome(&request, &outcome, &actor, "operator");
+        info!(request_id = %request_id, ?decision, rule_id = ?outcome.rule_id, "Approval request resolved");
+        Ok(response)
     }
 
     /// List all pending requests (for API/dashboard display).
@@ -187,6 +367,35 @@ impl ApprovalManager {
     /// Number of pending requests.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// List durable exact-action rules without exposing raw action payloads.
+    pub fn list_rules(&self) -> Vec<ApprovalRule> {
+        self.rules.list()
+    }
+
+    /// Revoke one durable rule and record the operator action.
+    pub fn revoke_rule(
+        &self,
+        id: Uuid,
+        decided_by: Option<&str>,
+    ) -> Result<Option<ApprovalRule>, String> {
+        let actor = normalize_actor(decided_by)?;
+        let revoked = self.rules.revoke(id)?;
+        if let Some(rule) = revoked.as_ref() {
+            if let Some(audit) = self.audit_log.as_ref() {
+                audit.record_or_alert(
+                    rule.agent_id.clone(),
+                    AuditAction::ApprovalDecision,
+                    format!(
+                        "rule_id={} tool={} action_digest={} actor={actor}",
+                        rule.id, rule.tool_name, rule.action_digest
+                    ),
+                    "revoked",
+                );
+            }
+        }
+        Ok(revoked)
     }
 
     /// Update the approval policy (for hot-reload).
@@ -211,6 +420,53 @@ impl ApprovalManager {
             _ => RiskLevel::Low,
         }
     }
+
+    fn audit_outcome(
+        &self,
+        request: &ApprovalRequest,
+        outcome: &ApprovalOutcome,
+        actor: &str,
+        source: &str,
+    ) {
+        let Some(audit) = self.audit_log.as_ref() else {
+            return;
+        };
+        let detail = format!(
+            "request_id={} tool={} action_digest={} actor={} source={} rule_id={}",
+            request.id,
+            request.tool_name,
+            request.action_digest,
+            actor,
+            source,
+            outcome
+                .rule_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        let mut status = format!("{:?}", outcome.decision).to_lowercase();
+        if let Some(reason) = outcome.reason.as_deref() {
+            status.push_str(": ");
+            status.push_str(reason);
+        }
+        audit.record_or_alert(
+            request.agent_id.clone(),
+            AuditAction::ApprovalDecision,
+            detail,
+            status,
+        );
+    }
+}
+
+fn normalize_actor(actor: Option<&str>) -> Result<String, String> {
+    let actor = actor.unwrap_or("operator");
+    if actor.chars().any(char::is_control) {
+        return Err("decided_by must not contain control characters".to_string());
+    }
+    let actor = actor.trim();
+    if actor.is_empty() || actor.chars().count() > 128 {
+        return Err("decided_by must contain 1..=128 characters".to_string());
+    }
+    Ok(actor.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +490,10 @@ mod tests {
             tool_name: tool_name.to_string(),
             description: "test operation".to_string(),
             action_summary: "test action".to_string(),
+            action_digest: captain_types::approval::approval_action_digest(
+                tool_name,
+                b"test action",
+            ),
             risk_level: RiskLevel::High,
             requested_at: Utc::now(),
             timeout_secs,
@@ -523,11 +783,23 @@ mod tests {
         assert_eq!(d1, ApprovalDecision::ApprovedSession);
         assert_eq!(mgr.session_cache_size(), 1);
 
-        // Second call for SAME (agent, tool) → short-circuited, no resolve needed
+        // Same exact action → short-circuited, no resolve needed.
         let req2 = make_request("agent-y", "shell_exec", 60);
         let d2 = mgr.request_approval(req2).await;
         assert_eq!(d2, ApprovalDecision::ApprovedSession);
         assert_eq!(mgr.pending_count(), 0);
+
+        // Same agent and tool but a different action must never inherit the
+        // cached decision.
+        let mut req_different_action = make_request("agent-y", "shell_exec", 1);
+        req_different_action.action_summary = "a different command".to_string();
+        req_different_action.action_digest =
+            captain_types::approval::approval_action_digest("shell_exec", b"a different command");
+        assert_eq!(
+            mgr.request_approval(req_different_action).await,
+            ApprovalDecision::TimedOut,
+            "a session decision must be bound to the exact action digest"
+        );
 
         // Different tool for same agent → still prompted (separate cache key)
         let req3 = make_request("agent-y", "file_write", 1); // 1s timeout to avoid blocking
@@ -539,16 +811,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn exact_decision_never_uses_a_truncated_display_preview_as_its_binding() {
+        let mgr = Arc::new(default_manager());
+        let preview = "x".repeat(512);
+        let mut first = make_request("agent-y", "shell_exec", 60);
+        first.action_summary = preview.clone();
+        first.action_digest = captain_types::approval::approval_action_digest(
+            "shell_exec",
+            format!("{preview}A").as_bytes(),
+        );
+        let id = first.id;
+        let resolver = Arc::clone(&mgr);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            resolver
+                .resolve(
+                    id,
+                    ApprovalDecision::ApprovedSession,
+                    Some("test".to_string()),
+                )
+                .unwrap();
+        });
+        assert_eq!(
+            mgr.request_approval(first).await,
+            ApprovalDecision::ApprovedSession
+        );
+
+        let mut second = make_request("agent-y", "shell_exec", 1);
+        second.action_summary = preview.clone();
+        second.action_digest = captain_types::approval::approval_action_digest(
+            "shell_exec",
+            format!("{preview}B").as_bytes(),
+        );
+        assert_eq!(
+            mgr.request_approval(second).await,
+            ApprovalDecision::TimedOut,
+            "identical truncated previews must not share an approval decision"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_action_digest_fails_closed_before_queueing() {
+        let mgr = default_manager();
+        let mut request = make_request("agent-y", "shell_exec", 60);
+        request.action_digest = "invalid".to_string();
+
+        let outcome = mgr.request_approval(request).await;
+
+        assert_eq!(outcome, ApprovalDecision::Denied);
+        assert_eq!(mgr.pending_count(), 0);
+    }
+
     // -----------------------------------------------------------------------
-    // Q.11 — ApprovedAlways from a prompt persists into policy
+    // Durable exact-action rule persistence
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_q11_approved_always_persists_into_policy() {
-        let mgr = Arc::new(default_manager());
+    async fn approved_always_persists_exact_rule_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = Arc::new(AuditLog::new());
+        let mgr = Arc::new(
+            ApprovalManager::with_persistence(
+                ApprovalPolicy::default(),
+                dir.path(),
+                Arc::clone(&audit),
+            )
+            .unwrap(),
+        );
         assert!(mgr.policy().allow_always.is_empty());
 
         let req = make_request("agent-z", "shell_exec", 60);
+        let exact_key = ApprovalActionKey::from_request(&req);
         let id = req.id;
         let mgr2 = Arc::clone(&mgr);
         tokio::spawn(async move {
@@ -558,18 +892,153 @@ mod tests {
         let d = mgr.request_approval(req).await;
         assert_eq!(d, ApprovalDecision::ApprovedAlways);
 
-        // Policy now contains shell_exec in allow_always
-        let p = mgr.policy();
-        assert!(
-            p.allow_always.iter().any(|t| t == "shell_exec"),
-            "shell_exec must be in allow_always after ApprovedAlways: {:?}",
-            p.allow_always
-        );
+        assert!(mgr.policy().allow_always.is_empty());
+        assert_eq!(mgr.list_rules().len(), 1);
+        assert!(mgr
+            .rules
+            .matching(
+                &exact_key.agent_id,
+                &exact_key.tool_name,
+                &exact_key.action_digest
+            )
+            .is_some());
+        assert!(mgr
+            .rules
+            .matching("agent-other", "shell_exec", &exact_key.action_digest)
+            .is_none());
 
-        // Subsequent calls — even from a DIFFERENT agent — short-circuit
-        let req2 = make_request("agent-other", "shell_exec", 60);
+        drop(mgr);
+        let mgr = ApprovalManager::with_persistence(ApprovalPolicy::default(), dir.path(), audit)
+            .unwrap();
+        let req2 = make_request("agent-z", "shell_exec", 60);
         let d2 = mgr.request_approval(req2).await;
         assert_eq!(d2, ApprovalDecision::ApprovedAlways);
+        assert!(d2.rule_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn durable_deny_returns_reason_and_can_be_revoked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = Arc::new(
+            ApprovalManager::with_persistence(
+                ApprovalPolicy::default(),
+                dir.path(),
+                Arc::new(AuditLog::new()),
+            )
+            .unwrap(),
+        );
+        let request = make_request("agent-z", "shell_exec", 60);
+        let id = request.id;
+        let mgr2 = Arc::clone(&mgr);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            mgr2.resolve_with_reason(
+                id,
+                ApprovalDecision::DeniedAlways,
+                Some("Use the staging host instead"),
+                Some("test".to_string()),
+            )
+            .unwrap();
+        });
+
+        let outcome = mgr.request_approval(request).await;
+        assert_eq!(outcome, ApprovalDecision::DeniedAlways);
+        assert_eq!(
+            outcome.reason.as_deref(),
+            Some("Use the staging host instead")
+        );
+        let rule_id = outcome.rule_id.expect("durable rule id");
+
+        let repeated = mgr
+            .request_approval(make_request("agent-z", "shell_exec", 60))
+            .await;
+        assert_eq!(repeated, ApprovalDecision::DeniedAlways);
+        assert_eq!(repeated.reason, outcome.reason);
+        assert!(mgr.revoke_rule(rule_id, Some("test")).unwrap().is_some());
+        assert!(mgr.list_rules().is_empty());
+    }
+
+    #[tokio::test]
+    async fn durable_deny_requires_non_secret_reason_without_consuming_request() {
+        let mgr = Arc::new(default_manager());
+        let request = make_request("agent-z", "shell_exec", 60);
+        let id = request.id;
+        let mgr2 = Arc::clone(&mgr);
+        let task = tokio::spawn(async move { mgr2.request_approval(request).await });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        assert!(mgr
+            .resolve_with_reason(
+                id,
+                ApprovalDecision::DeniedAlways,
+                None,
+                Some("test".to_string())
+            )
+            .unwrap_err()
+            .contains("requires an operator reason"));
+        assert_eq!(mgr.pending_count(), 1);
+        assert!(mgr
+            .resolve_with_reason(
+                id,
+                ApprovalDecision::DeniedAlways,
+                Some("Authorization: Bearer abcd1234567890abcdef=="),
+                Some("test".to_string())
+            )
+            .unwrap_err()
+            .contains("secret-like material"));
+        assert_eq!(mgr.pending_count(), 1);
+        mgr.resolve_with_reason(
+            id,
+            ApprovalDecision::Denied,
+            Some("No"),
+            Some("test".to_string()),
+        )
+        .unwrap();
+        assert_eq!(task.await.unwrap().decision, ApprovalDecision::Denied);
+    }
+
+    #[tokio::test]
+    async fn approval_decision_and_revocation_are_audited_without_raw_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = Arc::new(AuditLog::new());
+        let mgr = Arc::new(
+            ApprovalManager::with_persistence(
+                ApprovalPolicy::default(),
+                dir.path(),
+                Arc::clone(&audit),
+            )
+            .unwrap(),
+        );
+        let mut request = make_request("agent-audit", "shell_exec", 60);
+        request.action_summary = "sensitive raw command".to_string();
+        request.action_digest =
+            captain_types::approval::approval_action_digest("shell_exec", b"sensitive raw command");
+        let id = request.id;
+        let mgr2 = Arc::clone(&mgr);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            mgr2.resolve_with_reason(
+                id,
+                ApprovalDecision::DeniedAlways,
+                Some("Use staging"),
+                Some("api:test".to_string()),
+            )
+            .unwrap();
+        });
+        let outcome = mgr.request_approval(request).await;
+        mgr.revoke_rule(outcome.rule_id.unwrap(), Some("api:test"))
+            .unwrap();
+
+        let entries = audit.recent(10);
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .all(|entry| entry.action == AuditAction::ApprovalDecision));
+        assert!(entries
+            .iter()
+            .all(|entry| !entry.detail.contains("sensitive raw command")));
+        assert!(entries[0].detail.contains("action_digest="));
+        assert_eq!(entries[1].outcome, "revoked");
     }
 
     // -----------------------------------------------------------------------
@@ -612,6 +1081,8 @@ mod tests {
         assert!(ApprovalDecision::ApprovedSession.is_approved());
         assert!(ApprovalDecision::ApprovedAlways.is_approved());
         assert!(!ApprovalDecision::Denied.is_approved());
+        assert!(!ApprovalDecision::DeniedSession.is_approved());
+        assert!(!ApprovalDecision::DeniedAlways.is_approved());
         assert!(!ApprovalDecision::TimedOut.is_approved());
     }
 

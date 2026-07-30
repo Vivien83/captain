@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn exit_commands_match_hermes_set() {
+fn exit_commands_match_expected_set() {
     assert!(is_exit_command("/exit"));
     assert!(is_exit_command("/quit"));
 }

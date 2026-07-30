@@ -67,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    fn default_max_iterations_stays_hermes_90() {
+    fn default_max_iterations_stays_at_90() {
         assert_eq!(MAX_ITERATIONS, 90);
         assert_eq!(max_iterations_for_manifest(&AgentManifest::default()), 90);
     }

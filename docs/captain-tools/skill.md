@@ -22,6 +22,20 @@ artifact, validates it, asks the operator, installs it, runs a canary, and can
 roll it back. The configured active Captain model generates the draft; no
 legacy proposer model or silent fallback exists.
 
+## Installation Boundary
+
+The active Skill surface is local: bundled, generated, workspace, or explicitly
+installed from a reviewed directory. Remote marketplace search and installation
+are absent from API and TUI, and `captain skill install` accepts only an
+existing local directory. Retained compatibility clients return
+`RemoteMarketplaceFrozen` before network or filesystem access.
+
+`scan_prompt_content_advisory()` reports bounded phrase matches with
+`advisory_heuristic` assurance. A match is not proof of malicious intent and no
+match is not proof of safety. The loader conservatively refuses high-risk
+matches, but the operator must still review the complete local source,
+including scripts and linked files.
+
 ## Tools
 
 ### `skill_search`
@@ -67,7 +81,9 @@ skill.
 | `max_shell_blocks` | no | 1 to 50, default 20. |
 
 Shell blocks are parsed with `bash -n`; they are not executed. A failed
-preflight blocks execution.
+preflight blocks execution. The parser subprocess crosses `guarded_exec`, so it
+starts from a cleared environment with a bounded timeout and cannot bypass
+critical-content policy.
 
 ### `skill_execute`
 
@@ -79,8 +95,11 @@ Execute a declared capability from an installed skill.
 | `capability` | yes | Declared capability slug. |
 | `args` | no | Structured arguments exposed as scoped environment values. |
 
-The runtime uses the skill directory as its working directory and receives only
-the minimal environment plus explicitly declared secret injections.
+The runtime uses the skill directory as its working directory. `guarded_exec`
+reviews the exact capability source, clears the inherited environment, restores
+only the minimal safe variables, then adds declared arguments and secret
+injections explicitly. The opaque permit is bound to the skill source digest
+and cannot be reused after the source changes.
 
 ## Manual Creation
 
@@ -110,9 +129,13 @@ Desktop.
 |---|---|---|
 | `limit` | no | 1 to 50, default 50. |
 
-The projection includes generation, validation, proposal, isolated test,
-installation, canary, activation, failure, and rollback state. Output is
-operator-safe: secrets and local paths are redacted.
+The output includes an `engine` object followed by the learned items. `engine`
+is the exact versioned Learning status: configured and actually bound model,
+worker heartbeat and last scan/progress, durable job and notification queues,
+retry/dead/uncertain counts, and recovery state. It never invents a progress
+percentage. The item projection includes generation, validation, proposal,
+isolated test, installation, canary, activation, failure, and rollback state.
+All output is operator-safe: secrets and local paths are redacted.
 
 This tool is read-only. There is deliberately no
 `workflow_learning_decide` agent tool. Exact decisions are bound to the
@@ -124,6 +147,11 @@ current revision and authenticated operator card:
 - Desktop, through the embedded Captain API;
 - authenticated API calls carrying the exact operator token and decision
   version.
+
+Operators can inspect the same engine status directly through
+`GET /api/learning/status` or Telegram Rich `/learning`. Telegram
+`/learnings` is intentionally different: it lists generic memory candidates
+awaiting review.
 
 Supported card actions are `Activate`, `Test`, `Details`, `Edit`,
 `Later`, and `Ignore` when the validated card exposes them. An old card,
@@ -165,7 +193,12 @@ skills and can be refined or replaced through current controls.
 ## Sandbox
 
 - Skills receive only declared secrets through `env_inject`.
-- Child processes start from a cleared, minimal environment.
+- Skill checks and executions use `guarded_exec`; child processes start from a
+  cleared, minimal environment before declared values are added.
+- Critical shell patterns, literal credentials, unbounded background forms,
+  timeouts, output bounds, and workspace are enforced before spawn.
+- Structured lifecycle audit never records capability source or injected
+  values.
 - Relative linked files cannot escape the skill root.
 - A learned draft can require only tools present in its canonical observed
   workflow; the active model cannot introduce new authority.

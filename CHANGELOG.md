@@ -6,6 +6,138 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.10] - 2026-07-30
+
+Early-access production-hardening release focused on a deny-by-default
+security perimeter, guarded host execution, durable crash recovery, coherent
+operator controls, and locally attested sequential release builds.
+
+### Added
+
+- Context compaction now exposes one typed live operation across Ratatui,
+  Control Web, Desktop, the Web terminal, Telegram Rich, agent WebSocket, and
+  daemon SSE. Exact chunk counts produce a real gauge; opaque model work stays
+  explicitly indeterminate instead of inventing a percentage.
+- `captain sessions export --all [--agent <name|id>]` emits a versioned JSONL
+  catalog without switching any active conversation. Single-session JSON and
+  Markdown exports remain compatible; file destinations are replaced
+  atomically and kept owner-private on Unix.
+- Generic channel replies now enter a durable delivery ledger before the
+  adapter sends them. Final agent replies, sanitized agent errors, auto-replies,
+  broadcasts, and command responses share idempotency keys, bounded leases,
+  retry backoff, dead-letter state, and exact transport receipts.
+- `captain status` and `GET /api/status` expose pending, attempting, delivered,
+  dead, and potentially ambiguous outbound deliveries.
+- `$CAPTAIN_HOME/secret-sources.toml` maps logical credential keys to
+  read-only mounted files for Docker, Kubernetes, systemd credentials, or
+  secret-manager sidecars. `captain vault sources [--json]` and full doctor
+  expose redacted readiness without values or individual paths.
+
+### Reliability
+
+- Local releases now publish deterministic in-toto/SLSA v1 provenance for all
+  host assets. Every subject is bound to the public Git revision and
+  `Cargo.lock`; Docker architectures build one at a time with host-capacity
+  checkpoints and BuildKit provenance before the multi-architecture index is
+  assembled.
+- Dependency release checks now audit both the configured RustSec view and a
+  complete unfiltered view with an exact reviewed baseline. The vulnerable
+  `time 0.3.45` and both unresolved RSA branches are gone; SSH accepts
+  Ed25519/ECDSA P-256 and fails clearly on RSA. The sole remaining
+  vulnerability exception is the unreachable parser surface of
+  `quick-xml 0.37.5` in the Windows notification backend, pinned by package,
+  parent, and advisory until its upstream chain moves to 0.8.
+- The persistent runtime cache now uses a versioned JSON envelope instead of
+  the unmaintained `bincode` 1.x format. Upgrade atomically discards only the
+  recomputable legacy cache table, and malformed cache entries become purged
+  misses instead of failing an agent turn.
+- Remote skill marketplace installation is now fail-closed and absent from the
+  active API and TUI. `captain skill install` accepts only an existing reviewed
+  local directory; retained marketplace clients return a typed frozen error
+  before network or filesystem access. Skill prompt-text review now reports
+  explicit `advisory_heuristic` assurance. High-risk matches remain
+  conservatively refused, but Captain no longer presents phrase matching or a
+  self-declared SHA256 digest as publisher-backed proof.
+- New installations keep routine host execution available under
+  `full`/`safe`, while recognized catastrophic commands fail closed. Detection
+  normalizes flag order, whitespace, long flags, common wrappers, and nested
+  shell payloads. Status, health, Security, doctor, TUI, and API surfaces now
+  report the exact host posture: `host_process`, `environment_scrub`, and
+  `os_isolation: false`. Docker and WASM remain explicit isolation backends.
+- The misleading internal `subprocess_sandbox` boundary and unused
+  `sandbox_command` helper are gone. Environment inheritance now lives in
+  `subprocess_env_scrub`, command/path checks live in `subprocess_guard`, and
+  every agent-controlled process still enters through `guarded_exec`.
+- Security audit history now uses a versioned SHA-256 hash chain with
+  injective, length-prefixed fields. SQLite schema v36 preserves legacy rows
+  without rehashing and adds append-only recovery epochs: corruption seals the
+  affected epoch as invalid and opens a `ChainRecovery` epoch anchored to its
+  stored terminal digest. Audit writes persist before in-memory validation;
+  failures are returned, logged, and exposed through health, metrics, CLI, and
+  TUI. The history-rewriting HTTP repair endpoint has been removed.
+- Browser-origin security is now fail-closed independently of API-key
+  presence. CORS uses exact loopback, declared public, or explicitly configured
+  origins plus reviewed methods and headers. A request `Host` allowlist rejects
+  missing, ambiguous, malformed, and undeclared hosts before routing to prevent
+  loopback DNS rebinding. `[api].allowed_origins` extends the policy explicitly
+  and requires a daemon restart.
+- API authentication is now deny-by-default whenever credentials are
+  configured. Only Control boot/static assets, minimal health/version,
+  login/check/logout, and the exact self-authenticated per-agent ingress route
+  bypass the global middleware. Operational reads, Config/Terminal pages, A2A,
+  and provider OAuth are protected; Control returns to login on a protected
+  `401`.
+- All agent-controlled subprocess sinks now share one guarded execution
+  boundary. Shell/package tools, goals, skills, code, workflows, static skill
+  checks, Hand installers, and WASM host calls apply execution policy,
+  content guards, `env_clear()` plus explicit injection, workspace, timeout,
+  bounded output, and command-free audit events. Interactive approvals produce
+  a content-bound permit; unattended critical commands fail closed. A
+  mandatory source audit rejects raw process construction in these sinks.
+- Browser sessions now use a per-install 32-byte CSPRNG signing key generated
+  and durably persisted at first boot. The key is never derived from an API
+  key or password hash. Session tokens carry a managed credential epoch;
+  password rotation through setup or the native web-credentials tool advances
+  that epoch and immediately invalidates older sessions. Config display
+  surfaces redact the signing key and password hash, while raw edits preserve
+  but cannot replace the managed state.
+- Global budget edits now validate finite bounded values, persist one complete
+  TOML snapshot atomically, and publish it to the live runtime only after that
+  write succeeds. Concurrent API, WebSocket, Control, channel, spawn, restore,
+  hot-reload, streaming, and non-streaming paths observe one coherent budget;
+  the previous shared-reference pointer mutation has been removed.
+- Explicit per-turn memory opt-out now suppresses the core agent-loop
+  finalizer's episodic embedding and local semantic fragment on both streaming
+  and non-streaming turns. The resumable session transcript and mandatory
+  operational/audit records remain retained.
+- SQLite schema v35 records each active compaction in the same transaction as
+  its append-only session event. Normal cancellation emits `interrupted`, and
+  startup closes operations left by an earlier runtime instance while keeping
+  the original session recoverable.
+- A daemon restart reclaims responses owned by the previous process without
+  rerunning the model or its tools. When the remote outcome is unknowable, the
+  replay is visibly marked as a possible duplicate. A channel send failure can
+  no longer be recorded as successful delivery.
+- Durable outbound payloads are size-bounded. Terminal records discard response
+  content and display identity while retaining the minimal audit and
+  idempotency metadata.
+- TUI and Web terminal background rendering is frame-bounded and reuses parsed
+  settled transcript history. Control Web and Desktop batch ordered streaming
+  deltas without loss, contain restored rows, and retain live-tail or operator
+  scrollback intent across DOM growth.
+- External secret mappings are authoritative: an unavailable source never
+  falls back to stale local state. Strict schemas, bounded one-descriptor
+  reads, permission checks, file-tool blocklists, local-write refusal, and
+  fail-closed signed webhooks protect the path. Resolver-backed consumers
+  observe file rotation live; cached adapters require reload, while registry
+  edits and boot credentials such as the daemon API key require restart.
+- Per-agent API bearer auth, signed callback delivery and durable retries use
+  the same resolver; externally managed values are neither returned nor
+  overwritten during provisioning.
+- CLI channel setup now uses the same resolver instead of legacy `.env`,
+  preserves external secret pointers without copying values, and emits the
+  actual `phone_number` Signal field with TOML-safe user input.
+
 ## [0.1.0-alpha.9] - 2026-07-22
 
 Early-access learning and operations release focused on durable native
@@ -340,7 +472,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.9...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.10...HEAD
+[0.1.0-alpha.10]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.9...v0.1.0-alpha.10
 [0.1.0-alpha.9]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.8...v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.7...v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.6...v0.1.0-alpha.7

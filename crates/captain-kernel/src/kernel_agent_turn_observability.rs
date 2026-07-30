@@ -107,7 +107,7 @@ impl CaptainKernel {
     }
 
     fn record_successful_turn_audit(&self, agent_id: AgentId, result: &AgentLoopResult) {
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             agent_id.to_string(),
             AuditAction::AgentMessage,
             format!(
@@ -124,7 +124,7 @@ impl CaptainKernel {
         entry: &AgentEntry,
         error: &KernelError,
     ) {
-        self.audit_log.record(
+        self.audit_log.record_or_alert(
             agent_id.to_string(),
             AuditAction::AgentMessage,
             "agent loop failed",

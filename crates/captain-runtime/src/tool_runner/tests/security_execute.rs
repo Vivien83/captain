@@ -6,12 +6,13 @@ use super::*;
 /// bash one-liner that prints it, and assert the subprocess sees nothing.
 #[tokio::test]
 async fn execute_code_strips_inherited_secret() {
+    let _guard = crate::guarded_exec::TEST_ASYNC_ENV_LOCK.lock().await;
     std::env::set_var("CAPTAIN_TEST_SECRET_B1", "topsecret_42");
     let input = serde_json::json!({
         "language": "bash",
         "code": "echo MARKER=$CAPTAIN_TEST_SECRET_B1"
     });
-    let res = tool_execute_code(&input, None)
+    let res = tool_execute_code(&input, None, None)
         .await
         .expect("execute_code ok");
     let body: serde_json::Value = serde_json::from_str(&res).unwrap();
@@ -31,7 +32,7 @@ async fn execute_code_preserves_path() {
         "language": "bash",
         "code": "if [ -n \"$PATH\" ]; then echo PATH_OK; else echo PATH_MISSING; fi"
     });
-    let res = tool_execute_code(&input, None)
+    let res = tool_execute_code(&input, None, None)
         .await
         .expect("execute_code ok");
     let body: serde_json::Value = serde_json::from_str(&res).unwrap();
@@ -40,6 +41,20 @@ async fn execute_code_preserves_path() {
         stdout.contains("PATH_OK"),
         "PATH must survive env_clear whitelist — got stdout: {stdout}"
     );
+}
+
+#[tokio::test]
+async fn execute_code_blocks_critical_content_before_spawn() {
+    let input = serde_json::json!({
+        "language": "bash",
+        "code": "rm -rf /"
+    });
+
+    let error = tool_execute_code(&input, None, None)
+        .await
+        .expect_err("critical code must be blocked");
+
+    assert!(error.contains("critical pattern"), "{error}");
 }
 
 const TEST_GOOGLE_API_KEY: &str = "AIzaSyC3_abcdefghij1234567890ABCDEFGhij";
@@ -154,7 +169,7 @@ async fn execute_and_shell_reject_literal_secret_before_spawn() {
         "language": "python",
         "code": format!("API_KEY = \"{TEST_GOOGLE_API_KEY}\"")
     });
-    let code_err = tool_execute_code(&code_input, None)
+    let code_err = tool_execute_code(&code_input, None, None)
         .await
         .expect_err("execute_code must reject raw secrets");
     assert_secret_feedback(&code_err);
@@ -162,9 +177,13 @@ async fn execute_and_shell_reject_literal_secret_before_spawn() {
     let shell_input = serde_json::json!({
         "command": format!("echo {TEST_GOOGLE_API_KEY}")
     });
-    let shell_err = tool_shell_exec(&shell_input, &[], None, None)
-        .await
-        .expect_err("shell_exec must reject raw secrets");
+    let shell_err = crate::guarded_exec::review_shell(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        shell_input["command"].as_str().unwrap(),
+        None,
+        true,
+    )
+    .expect_err("shell_exec must reject raw secrets");
     assert_secret_feedback(&shell_err);
 }
 
@@ -173,9 +192,13 @@ async fn shell_exec_rejects_raw_secrets_env_sourcing() {
     let shell_input = serde_json::json!({
         "command": "set -a; . /root/.captain/secrets.env; set +a; curl -s https://example.com"
     });
-    let shell_err = tool_shell_exec(&shell_input, &[], None, None)
-        .await
-        .expect_err("shell_exec must reject raw secrets.env sourcing");
+    let shell_err = crate::guarded_exec::review_shell(
+        crate::guarded_exec::ExecSurface::ShellTool,
+        shell_input["command"].as_str().unwrap(),
+        None,
+        true,
+    )
+    .expect_err("shell_exec must reject raw secrets.env sourcing");
     assert!(shell_err.contains("secret_read"));
     assert!(shell_err.contains("env_inject"));
 }
@@ -223,7 +246,7 @@ async fn execute_code_bash_tolerates_empty_pip_install() {
         "code": "echo EMPTY_PIP_INSTALL_OK",
         "pip_install": []
     });
-    let res = tool_execute_code(&input, None)
+    let res = tool_execute_code(&input, None, None)
         .await
         .expect("empty pip_install must not block a non-Python execute_code call");
     let body: serde_json::Value = serde_json::from_str(&res).unwrap();
@@ -243,7 +266,7 @@ async fn execute_code_bash_rejects_nonempty_pip_install() {
         "code": "echo should_not_run",
         "pip_install": ["requests"]
     });
-    let err = tool_execute_code(&input, None)
+    let err = tool_execute_code(&input, None, None)
         .await
         .expect_err("non-empty pip_install must still be rejected for bash");
     assert!(err.contains("pip_install is only valid for language=python"));
@@ -266,7 +289,7 @@ async fn test_execute_code_python_echo() {
         "code": "print('hello_v3_8f')",
         "language": "python",
     });
-    let result = tool_execute_code(&input, None).await;
+    let result = tool_execute_code(&input, None, None).await;
     let text = result.expect("execute_code should succeed");
     assert!(text.contains("hello_v3_8f"), "stdout missing: {text}");
     assert!(text.contains("\"exit_code\":0"));

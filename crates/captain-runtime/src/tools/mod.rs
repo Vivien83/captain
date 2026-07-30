@@ -143,10 +143,12 @@ pub(crate) use agent_dispatch::dispatch_agent_tool;
 #[cfg(test)]
 pub(crate) use agent_ops::validate_child_agent_tool_scope;
 pub(crate) use agent_ops::{
-    tool_agent_caps, tool_agent_correct, tool_agent_delegate, tool_agent_kill, tool_agent_list,
-    tool_agent_send, tool_agent_spawn, tool_agent_status, tool_agent_watch,
-    tool_fleet_close_manager, tool_fleet_configure_autoscale, tool_fleet_create_manager,
-    tool_fleet_list_managers, tool_fleet_metrics, tool_fleet_set_mission,
+    tool_agent_caps, tool_agent_correct, tool_agent_delegate, tool_agent_job_cancel,
+    tool_agent_job_list, tool_agent_job_result, tool_agent_job_resume, tool_agent_job_status,
+    tool_agent_kill, tool_agent_list, tool_agent_send, tool_agent_spawn, tool_agent_status,
+    tool_agent_watch, tool_fleet_close_manager, tool_fleet_configure_autoscale,
+    tool_fleet_create_manager, tool_fleet_list_managers, tool_fleet_metrics,
+    tool_fleet_set_mission,
 };
 pub(crate) use automation_dispatch::dispatch_automation_tool;
 pub use browser_definitions::browser_tool_definitions;
@@ -316,7 +318,7 @@ pub(crate) use search::{
     snippet_for_tokens,
 };
 pub(crate) use security::{
-    check_taint_browser_batch, check_taint_net_fetch, check_taint_shell_exec,
+    check_browser_content_guard, check_shell_content_guard, check_url_content_guard,
     ensure_no_secret_literal,
 };
 pub use session_workspace_definitions::session_workspace_tool_definitions;
@@ -368,4 +370,4 @@ pub(crate) use web_dispatch::{dispatch_web_tool, WebDispatchOutcome};
 pub(crate) use web_download::tool_web_download;
 #[cfg(test)]
 pub(crate) use web_download::{ensure_extension_for_mime, sanitize_download_filename};
-pub(crate) use web_ops::{tool_web_fetch_legacy, tool_web_research_batch, tool_web_search_legacy};
+pub(crate) use web_ops::tool_web_research_batch;

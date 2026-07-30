@@ -32,10 +32,11 @@ impl CaptainKernel {
         let run_id = uuid::Uuid::new_v4();
         let response = result.response.clone();
         let usage = result.total_usage;
+        let suggested_replies = result.directives.suggested_replies.clone();
         let handle = self.spawn_supervised_agent_task(agent_id, async move {
             let _running_task_cleanup =
                 RunningTaskCleanup::new(Arc::clone(&kernel_clone), agent_id, run_id);
-            send_complete_response(tx, response, usage).await;
+            send_complete_response(tx, response, usage, suggested_replies).await;
             kernel_clone.scheduler.record_usage(agent_id, &usage);
             if usage.total() > 0 {
                 if let Some(entry) = kernel_clone.registry.get(agent_id) {
@@ -88,7 +89,13 @@ impl CaptainKernel {
             match result {
                 Ok(result) => {
                     let usage = result.total_usage;
-                    send_complete_response(tx, result.response.clone(), usage).await;
+                    send_complete_response(
+                        tx,
+                        result.response.clone(),
+                        usage,
+                        result.directives.suggested_replies.clone(),
+                    )
+                    .await;
                     kernel_clone.scheduler.record_usage(agent_id, &usage);
                     let _ = kernel_clone
                         .registry
@@ -223,7 +230,11 @@ async fn send_complete_response(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     response: String,
     usage: captain_types::message::TokenUsage,
+    suggested_replies: Option<Vec<String>>,
 ) {
+    if let Some(options) = suggested_replies {
+        let _ = tx.send(StreamEvent::SuggestedReplies { options }).await;
+    }
     let _ = tx.send(StreamEvent::TextDelta { text: response }).await;
     let _ = tx
         .send(StreamEvent::ContentComplete {
@@ -315,6 +326,48 @@ mod tests {
             Some(AgentState::Running)
         ));
 
+        kernel.shutdown();
+    }
+
+    #[tokio::test]
+    async fn static_stream_result_emits_suggested_replies_before_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("static-stream-suggestions");
+        let kernel = Arc::new(
+            CaptainKernel::boot_with_config(KernelConfig {
+                home_dir: home_dir.clone(),
+                data_dir: home_dir.join("data"),
+                ..KernelConfig::default()
+            })
+            .expect("kernel boot"),
+        );
+        let agent_id = principal_agent_id(&kernel);
+        let mut result = test_result();
+        result.directives.suggested_replies =
+            Some(vec!["Choice A".to_string(), "Choice B".to_string()]);
+
+        let (mut rx, handle, _user_input_tx) = kernel
+            .static_stream_result(agent_id, result)
+            .expect("static stream result");
+
+        match rx.recv().await.expect("suggested replies") {
+            StreamEvent::SuggestedReplies { options } => {
+                assert_eq!(options, vec!["Choice A", "Choice B"]);
+            }
+            other => panic!("unexpected first event: {other:?}"),
+        }
+        assert!(matches!(
+            rx.recv().await.expect("text delta"),
+            StreamEvent::TextDelta { text } if text == "stream ok"
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("completion"),
+            StreamEvent::ContentComplete { .. }
+        ));
+        handle
+            .await
+            .expect("join static stream")
+            .expect("static stream ok");
         kernel.shutdown();
     }
 

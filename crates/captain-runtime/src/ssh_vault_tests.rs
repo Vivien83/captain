@@ -23,15 +23,25 @@ impl SshSecretStore for MemStore {
     }
 }
 
+fn openssh_private_key_fixture(body: &str) -> String {
+    let mut pem = String::from("-----BEGIN OPENSSH ");
+    pem.push_str("PRIVATE KEY-----\n");
+    pem.push_str(body);
+    if !body.ends_with('\n') {
+        pem.push('\n');
+    }
+    pem.push_str("-----END OPENSSH ");
+    pem.push_str("PRIVATE KEY-----\n");
+    pem
+}
+
 fn sample_key(name: &str) -> SshKey {
     SshKey {
         name: name.to_string(),
         host: "server.example.com".into(),
         port: 22,
         user: "captain".into(),
-        private_key: Zeroizing::new(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n".into(),
-        ),
+        private_key: Zeroizing::new(openssh_private_key_fixture("fake")),
         passphrase: None,
         fingerprint: "SHA256:abc123".into(),
         added_at: 1_700_000_000,
@@ -140,14 +150,15 @@ fn set_default_requires_existing_key() {
 
 #[test]
 fn fingerprint_of_unencrypted_ed25519_matches_ssh_keygen_format() {
-    let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+    let pem = openssh_private_key_fixture(
+        "\
         b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
         QyNTUxOQAAACC+h2XHFRvMhz24O6tMKm+B4QWriqoCGRDOYMa9suc91wAAAJjaN0w+2jdM\n\
         PgAAAAtzc2gtZWQyNTUxOQAAACC+h2XHFRvMhz24O6tMKm+B4QWriqoCGRDOYMa9suc91w\n\
         AAAEC6CAU3QqHvG1dbSzfbmLdSAVxzjYbVbfM+hPRn8M3p5b6HZccVG8yHPbg7q0wqb4Hh\n\
-        BauKqgIZEM5gxr2y5z3XAAAAEXRlc3QtcTYtdGhyb3dhd2F5AQIDBA==\n\
-        -----END OPENSSH PRIVATE KEY-----\n";
-    let fp = fingerprint_of(pem, None).expect("valid key");
+        BauKqgIZEM5gxr2y5z3XAAAAEXRlc3QtcTYtdGhyb3dhd2F5AQIDBA==\n",
+    );
+    let fp = fingerprint_of(&pem, None).expect("valid key");
     assert_eq!(
         fp, "SHA256:cn5IEOhe/2DG5+14DcUbPM6kcab6TKj0pknTjrhyf5E",
         "fingerprint must match `ssh-keygen -lf` output"
@@ -155,10 +166,29 @@ fn fingerprint_of_unencrypted_ed25519_matches_ssh_keygen_format() {
 }
 
 #[test]
+fn fingerprint_of_unencrypted_ecdsa_p256_remains_supported() {
+    let pem = openssh_private_key_fixture(
+        "\
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS\n\
+        1zaGEyLW5pc3RwMjU2AAAACG5pc3RwMjU2AAAAQQR8H9hzDOU0V76NkkCY7DZIgw+Sqooj\n\
+        Y6xlb91FIfpjE+UR8YkbTp5ar44ULQatFaZqQlfz8FHYTooOL5G6gHBHAAAAsB8RBhUfEQ\n\
+        YVAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHwf2HMM5TRXvo2S\n\
+        QJjsNkiDD5KqiiNjrGVv3UUh+mMT5RHxiRtOnlqvjhQtBq0VpmpCV/PwUdhOig4vkbqAcE\n\
+        cAAAAhAMp4pkd0v643EjIkk38DmJYBiXB6ygqGRc60NZxCO6B5AAAAEHVzZXJAZXhhbXBs\n\
+        ZS5jb20BAgMEBQYH\n",
+    );
+    let fp = fingerprint_of(&pem, None).expect("valid ECDSA P-256 key");
+    assert_eq!(fp, "SHA256:JQ6FV0rf7qqJHZqIj4zNH8eV0oB8KLKh9Pph3FTD98g");
+}
+
+#[test]
 fn fingerprint_of_invalid_pem_returns_clear_error() {
     let r = fingerprint_of("not a key", None);
     assert!(r.is_err());
-    assert!(r.unwrap_err().contains("parse"));
+    let error = r.unwrap_err();
+    assert!(error.contains("parse"));
+    assert!(error.contains("Ed25519 or ECDSA P-256"));
+    assert!(error.contains("RUSTSEC-2023-0071"));
 }
 
 #[test]

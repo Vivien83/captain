@@ -96,7 +96,8 @@ fn runtime_worker_system_prompt_lists_tools_and_tool_request_contract() {
     assert!(prompt.contains("build phase"));
     assert!(prompt.contains("Authorized tools: file_read, shell_exec."));
     assert!(prompt.contains("TOOL_REQUEST"));
-    assert!(prompt.contains("STATUS, SUMMARY, ACTIONS, FILES, VERIFY, NEXT, LEARN"));
+    assert!(prompt.contains("STATUS, SUMMARY, CHANGED_FILES, VERIFY, NEXT"));
+    assert!(!prompt.contains("ACTIONS, FILES"));
 }
 
 #[test]

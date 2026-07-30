@@ -12,7 +12,8 @@
 //!
 //! **No-op** (informational only): log_level, language, mode.
 //!
-//! **Restart required**: api_listen, api_key, network, memory, outbound webhooks.
+//! **Restart required**: api_listen, api_key, API origin policy, network,
+//! memory, outbound webhooks.
 
 use captain_types::config::{KernelConfig, ReloadMode};
 use tracing::{info, warn};
@@ -54,6 +55,8 @@ pub enum HotAction {
     UpdateDefaultModel,
     /// Text-to-speech config changed — update the runtime TTS engine.
     UpdateTtsConfig,
+    /// Global budget changed — publish one validated live snapshot.
+    UpdateBudgetConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +176,10 @@ fn add_restart_required_changes(plan: &mut ReloadPlan, old: &KernelConfig, new: 
         plan.require_restart("api_key changed");
     }
 
+    if field_changed(&old.api, &new.api) {
+        plan.require_restart("API allowed origins changed");
+    }
+
     if old.network_enabled != new.network_enabled {
         plan.require_restart("network_enabled changed");
     }
@@ -263,6 +270,10 @@ fn add_hot_reload_actions(plan: &mut ReloadPlan, old: &KernelConfig, new: &Kerne
     if field_changed(&old.tts, &new.tts) {
         plan.push_hot_action(HotAction::UpdateTtsConfig);
     }
+
+    if field_changed(&old.budget, &new.budget) {
+        plan.push_hot_action(HotAction::UpdateBudgetConfig);
+    }
 }
 
 fn add_noop_changes(plan: &mut ReloadPlan, old: &KernelConfig, new: &KernelConfig) {
@@ -305,6 +316,10 @@ pub fn validate_config_for_reload(config: &KernelConfig) -> Result<(), Vec<Strin
     // Validate approval policy
     if let Err(e) = config.approval.validate() {
         errors.push(format!("approval policy: {e}"));
+    }
+
+    if let Err(error) = config.budget.validate() {
+        errors.push(format!("budget: {error}"));
     }
 
     // Network config: if network is enabled, shared_secret must be set

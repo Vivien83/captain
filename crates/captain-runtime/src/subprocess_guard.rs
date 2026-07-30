@@ -1,12 +1,7 @@
-//! Subprocess environment sandboxing.
+//! Subprocess policy validation and lifecycle helpers.
 //!
-//! When the runtime spawns child processes (e.g. for the `shell` tool), we
-//! must strip the inherited environment to prevent accidental leakage of
-//! secrets (API keys, tokens, credentials) into untrusted code.
-//!
-//! This module provides helpers to:
-//! - Clear the child's environment and re-add only a safe allow-list.
-//! - Validate executable paths before spawning.
+//! These checks reduce risk before guarded host execution. They do not provide
+//! an operating-system sandbox or process isolation.
 
 use std::path::Path;
 
@@ -14,59 +9,6 @@ pub use crate::subprocess_tree_kill::{
     kill_child_tree, kill_process_tree, wait_or_kill, wait_or_kill_with_idle, DEFAULT_GRACE_MS,
     MAX_GRACE_MS,
 };
-
-/// Environment variables considered safe to inherit on all platforms.
-pub const SAFE_ENV_VARS: &[&str] = &[
-    "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM",
-];
-
-/// Additional environment variables considered safe on Windows.
-#[cfg(windows)]
-pub const SAFE_ENV_VARS_WINDOWS: &[&str] = &[
-    "USERPROFILE",
-    "SYSTEMROOT",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "COMSPEC",
-    "WINDIR",
-    "PATHEXT",
-];
-
-/// Sandboxes a `tokio::process::Command` by clearing its environment and
-/// selectively re-adding only safe variables.
-///
-/// After calling this function the child process will only see:
-/// - The platform-independent safe variables (`SAFE_ENV_VARS`)
-/// - On Windows, the Windows-specific safe variables (`SAFE_ENV_VARS_WINDOWS`)
-/// - Any additional variables the caller explicitly allows via `allowed_env_vars`
-///
-/// Variables that are not set in the current process environment are silently
-/// skipped (rather than being set to empty strings).
-pub fn sandbox_command(cmd: &mut tokio::process::Command, allowed_env_vars: &[String]) {
-    cmd.env_clear();
-
-    // Re-add platform-independent safe vars.
-    for var in SAFE_ENV_VARS {
-        if let Ok(val) = std::env::var(var) {
-            cmd.env(var, val);
-        }
-    }
-
-    // Re-add Windows-specific safe vars.
-    #[cfg(windows)]
-    for var in SAFE_ENV_VARS_WINDOWS {
-        if let Ok(val) = std::env::var(var) {
-            cmd.env(var, val);
-        }
-    }
-
-    // Re-add caller-specified allowed vars.
-    for var in allowed_env_vars {
-        if let Ok(val) = std::env::var(var) {
-            cmd.env(var, val);
-        }
-    }
-}
 
 /// Validates that an executable path does not contain directory traversal
 /// components (`..`).
@@ -224,9 +166,10 @@ pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<
             Err("Shell execution is disabled (exec_policy.mode = deny)".to_string())
         }
         ExecSecurityMode::Full => {
-            // Check blocklist — dangerous commands are rejected even in Full mode
+            // Check the blocklist after shared lexical normalization so trivial
+            // case, whitespace, and short-flag reordering cannot bypass it.
             for blocked in &policy.blocked_commands {
-                if command.contains(blocked.as_str()) {
+                if crate::critical_patterns::matches_blocked_pattern(command, blocked) {
                     return Err(format!("Command blocked by blocklist: matches '{blocked}'"));
                 }
             }
@@ -261,5 +204,5 @@ pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<
 }
 
 #[cfg(test)]
-#[path = "subprocess_sandbox_tests.rs"]
+#[path = "subprocess_guard_tests.rs"]
 mod tests;

@@ -178,3 +178,20 @@ fn daemon_stream_parser_maps_ask_user_without_options() {
         other => panic!("unexpected event: {other:?}"),
     }
 }
+
+#[test]
+fn daemon_stream_parser_maps_suggested_replies() {
+    let mut state = DaemonStreamState::default();
+
+    let events = daemon_stream_events_from_sse_line(
+        r#"data: {"type":"suggested_replies","options":["Court","Détaillé"]}"#,
+        &mut state,
+    );
+
+    match &events[0] {
+        StreamEvent::SuggestedReplies { options } => {
+            assert_eq!(options, &["Court".to_string(), "Détaillé".to_string()]);
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}

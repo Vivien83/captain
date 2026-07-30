@@ -255,6 +255,34 @@ pub struct ResourceQuota {
     pub max_cost_per_month_usd: f64,
 }
 
+impl ResourceQuota {
+    /// Validate the API-editable cost and token limits.
+    pub fn validate_budget_limits(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("max_cost_per_hour_usd", self.max_cost_per_hour_usd),
+            ("max_cost_per_day_usd", self.max_cost_per_day_usd),
+            ("max_cost_per_month_usd", self.max_cost_per_month_usd),
+        ] {
+            if !value.is_finite() {
+                return Err(format!("{name} must be finite"));
+            }
+            if value < 0.0 {
+                return Err(format!("{name} must be non-negative"));
+            }
+            if value > crate::config::MAX_BUDGET_LIMIT_USD {
+                return Err(format!(
+                    "{name} exceeds the maximum supported value of {}",
+                    crate::config::MAX_BUDGET_LIMIT_USD
+                ));
+            }
+        }
+        if self.max_llm_tokens_per_hour > i64::MAX as u64 {
+            return Err("max_llm_tokens_per_hour exceeds TOML integer range".to_string());
+        }
+        Ok(())
+    }
+}
+
 impl Default for ResourceQuota {
     fn default() -> Self {
         Self {
@@ -393,6 +421,9 @@ pub struct ModelConfig {
     pub api_key_env: Option<String>,
     /// Optional base URL override for the provider.
     pub base_url: Option<String>,
+    /// Explicit model reasoning effort. `None` follows the provider model
+    /// catalog default and is the safest value across model switches.
+    pub reasoning_effort: Option<crate::reasoning::ReasoningEffort>,
 }
 
 impl Default for ModelConfig {
@@ -405,6 +436,7 @@ impl Default for ModelConfig {
             system_prompt: "You are a helpful AI agent.".to_string(),
             api_key_env: None,
             base_url: None,
+            reasoning_effort: None,
         }
     }
 }

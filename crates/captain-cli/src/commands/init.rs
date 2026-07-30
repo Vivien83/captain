@@ -252,6 +252,10 @@ api_key_env = "{api_key_env}"
 
 [memory]
 decay_rate = 0.05
+
+[exec_policy]
+mode = "full"
+critical_mode = "safe"
 "#
         );
         captain_types::durable_fs::atomic_write(&config_path, default_config.as_bytes())

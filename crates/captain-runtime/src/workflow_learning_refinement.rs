@@ -196,7 +196,7 @@ impl WorkflowRefinementCoordinator {
 fn validate_instruction(value: &str) -> Result<&str, WorkflowRefinementCoordinatorError> {
     let value = value.trim();
     let len = value.chars().count();
-    if len < 4 || len > MAX_INSTRUCTION_CHARS || value.contains('\0') {
+    if !(4..=MAX_INSTRUCTION_CHARS).contains(&len) || value.contains('\0') {
         return Err(WorkflowRefinementCoordinatorError::InvalidInput(
             "instruction length or content is invalid".to_string(),
         ));

@@ -16,7 +16,7 @@ fn project() -> project::Project {
 }
 
 #[test]
-fn worker_specs_keep_hermes_phase_order_and_dependencies() {
+fn worker_specs_keep_defined_phase_order_and_dependencies() {
     let phases = RUNTIME_WORKER_SPECS
         .iter()
         .map(|spec| spec.phase)

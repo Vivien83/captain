@@ -26,6 +26,14 @@ fn ingress_route_match_is_exact_enough() {
         &Method::POST,
         "/hooks/agents/01234567-89ab-cdef-0123-456789abcdef/other"
     ));
+    assert!(!is_agent_api_ingress_route(
+        &Method::POST,
+        "/hooks/agents/not-an-agent/ingress"
+    ));
+    assert!(!is_agent_api_ingress_route(
+        &Method::POST,
+        "/hooks/agents/01234567-89ab-cdef-0123-456789abcdef/extra/ingress"
+    ));
 }
 
 #[test]
@@ -36,6 +44,23 @@ fn descriptor_includes_operator_manifest_url() {
         descriptor.manifest_url,
         "/api/agents/01234567-89ab-cdef-0123-456789abcdef/api/manifest"
     );
+}
+
+#[test]
+fn descriptor_and_ingress_auth_use_the_injected_credential_resolver() {
+    let agent_id = sample_agent_id();
+    let token_env = agent_api_token_env(&agent_id);
+    let token = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let resolve = |key: &str| (key == token_env).then(|| token.to_string());
+    let descriptor = agent_api_descriptor_with(&agent_id, &resolve, &|_| false);
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+
+    assert!(descriptor.token_configured);
+    assert!(validate_agent_api_token_with(&headers, &agent_id, &resolve));
+    assert!(!validate_agent_api_token_with(&headers, &agent_id, &|_| {
+        None
+    }));
 }
 
 #[test]

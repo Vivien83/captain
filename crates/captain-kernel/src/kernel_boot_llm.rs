@@ -210,9 +210,15 @@ fn provider_api_key(
     provider: &str,
     explicit_env: &str,
 ) -> Option<String> {
+    let key = api_key_env_for_provider(config, provider, explicit_env);
     credential_resolver
-        .resolve(&api_key_env_for_provider(config, provider, explicit_env))
+        .resolve(&key)
         .map(|z: zeroize::Zeroizing<String>| z.to_string())
+        .or_else(|| {
+            credential_resolver
+                .is_externally_managed(&key)
+                .then(String::new)
+        })
 }
 
 fn api_key_env_for_provider(config: &KernelConfig, provider: &str, explicit_env: &str) -> String {

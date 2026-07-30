@@ -20,7 +20,7 @@ pub async fn webhook_wake(
         }
     };
 
-    if !validate_webhook_token(&headers, &webhook_config.token_env) {
+    if !validate_webhook_token(&state, &headers, &webhook_config.token_env) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Invalid or missing token"})),
@@ -71,7 +71,7 @@ pub async fn webhook_agent(
         }
     };
 
-    if !validate_webhook_token(&headers, &webhook_config.token_env) {
+    if !validate_webhook_token(&state, &headers, &webhook_config.token_env) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Invalid or missing token"})),
@@ -140,9 +140,23 @@ fn resolve_webhook_agent(state: &AppState, agent_ref: Option<&str>) -> Option<Ag
     }
 }
 
-fn validate_webhook_token(headers: &axum::http::HeaderMap, token_env: &str) -> bool {
-    let expected = match std::env::var(token_env) {
-        Ok(token) if token.len() >= 32 => token,
+fn validate_webhook_token(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    token_env: &str,
+) -> bool {
+    validate_webhook_token_with(headers, token_env, |key| {
+        state.kernel.resolve_credential(key)
+    })
+}
+
+fn validate_webhook_token_with(
+    headers: &axum::http::HeaderMap,
+    token_env: &str,
+    resolve: impl FnOnce(&str) -> Option<String>,
+) -> bool {
+    let expected = match resolve(token_env) {
+        Some(token) if token.len() >= 32 => token,
         _ => return false,
     };
 
@@ -162,4 +176,55 @@ fn validate_webhook_token(headers: &axum::http::HeaderMap, token_env: &str) -> b
         return false;
     }
     provided.as_bytes().ct_eq(expected.as_bytes()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn bearer_headers(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        headers
+    }
+
+    #[test]
+    fn webhook_token_uses_resolver_and_constant_time_comparison_contract() {
+        let token = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let headers = bearer_headers(token);
+
+        assert!(validate_webhook_token_with(
+            &headers,
+            "CAPTAIN_WEBHOOK_TOKEN",
+            |key| {
+                assert_eq!(key, "CAPTAIN_WEBHOOK_TOKEN");
+                Some(token.to_string())
+            }
+        ));
+        assert!(!validate_webhook_token_with(
+            &bearer_headers("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "CAPTAIN_WEBHOOK_TOKEN",
+            |_| Some(token.to_string())
+        ));
+    }
+
+    #[test]
+    fn webhook_token_fails_closed_for_missing_or_short_sources() {
+        let headers = bearer_headers("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        assert!(!validate_webhook_token_with(
+            &headers,
+            "CAPTAIN_WEBHOOK_TOKEN",
+            |_| None
+        ));
+        assert!(!validate_webhook_token_with(
+            &headers,
+            "CAPTAIN_WEBHOOK_TOKEN",
+            |_| Some("too-short".to_string())
+        ));
+    }
 }

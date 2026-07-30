@@ -193,7 +193,10 @@ pub struct OutboundWebhookTestReq {
     pub dry_run: bool,
 }
 
-pub async fn test_outbound_webhook(Json(req): Json<OutboundWebhookTestReq>) -> impl IntoResponse {
+pub async fn test_outbound_webhook(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<OutboundWebhookTestReq>,
+) -> impl IntoResponse {
     let event_kind = req.event.unwrap_or_else(|| "webhook.test".to_string());
     let endpoint = OutboundWebhookEndpoint {
         name: "manual-test".to_string(),
@@ -223,7 +226,17 @@ pub async fn test_outbound_webhook(Json(req): Json<OutboundWebhookTestReq>) -> i
             );
         }
     };
-    let signature = signature_header(&endpoint.secret_env, &body).ok();
+    let signature = match optional_signature(&endpoint.secret_env, &body, |key| {
+        state.kernel.resolve_credential(key)
+    }) {
+        Ok(signature) => signature,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+        }
+    };
 
     if req.dry_run {
         return (
@@ -287,7 +300,8 @@ async fn deliver_event(
     event_kind: &str,
     event: &Event,
 ) -> Result<(), String> {
-    let prepared = prepare_webhook_delivery(config, endpoint, event_kind, event).await?;
+    let resolve = |key: &str| state.kernel.resolve_credential(key);
+    let prepared = prepare_webhook_delivery(config, endpoint, event_kind, event, &resolve).await?;
     let mut last_err = None;
     for attempt in 1..=prepared.attempts {
         publish_webhook_step(
@@ -337,6 +351,7 @@ async fn prepare_webhook_delivery(
     endpoint: &OutboundWebhookEndpoint,
     event_kind: &str,
     event: &Event,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
 ) -> Result<PreparedWebhookDelivery, String> {
     validate_public_webhook_url(&endpoint.url)?;
     // Outbound event webhooks have no local-testing escape hatch — see
@@ -349,7 +364,7 @@ async fn prepare_webhook_delivery(
         "captain_event": event,
     });
     let body = serde_json::to_vec(&payload).map_err(|err| err.to_string())?;
-    let signature = signature_header(&endpoint.secret_env, &body).ok();
+    let signature = optional_signature(&endpoint.secret_env, &body, resolve)?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.timeout_secs.max(1)))
         .redirect(reqwest::redirect::Policy::none())
@@ -551,6 +566,7 @@ fn event_kind(event: &Event) -> String {
         EventPayload::MemoryUpdate(_) => "memory.updated",
         EventPayload::Network(_) => "network.event",
         EventPayload::ToolRun(_) => "tool_run.status_changed",
+        EventPayload::AgentDelegation(_) => "agent.delegation_status_changed",
         EventPayload::Custom(data) => {
             return custom_event_field(data).unwrap_or_else(|| "custom".to_string());
         }
@@ -595,6 +611,12 @@ fn event_text(event: &Event) -> String {
                 run.run_id, run.tool_name, run.status
             )
         }
+        EventPayload::AgentDelegation(job) => {
+            format!(
+                "Agent delegation {} ({}): {}",
+                job.job_id, job.title, job.status
+            )
+        }
         _ => event_kind(event),
     }
 }
@@ -613,18 +635,33 @@ fn custom_event_field(data: &[u8]) -> Option<String> {
     }
 }
 
-fn signature_header(secret_env: &str, body: &[u8]) -> Result<String, String> {
+fn signature_header_with(
+    secret_env: &str,
+    body: &[u8],
+    resolve: impl FnOnce(&str) -> Option<String>,
+) -> Result<String, String> {
     let secret_env = secret_env.trim();
     if secret_env.is_empty() {
         return Err("no secret env configured".to_string());
     }
-    let secret = std::env::var(secret_env).map_err(|_| "secret env is not set".to_string())?;
+    let secret = resolve(secret_env).ok_or_else(|| "secret env is not set".to_string())?;
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|err| err.to_string())?;
     mac.update(body);
     Ok(format!(
         "sha256={}",
         hex::encode(mac.finalize().into_bytes())
     ))
+}
+
+fn optional_signature(
+    secret_env: &str,
+    body: &[u8],
+    resolve: impl FnOnce(&str) -> Option<String>,
+) -> Result<Option<String>, String> {
+    if secret_env.trim().is_empty() {
+        return Ok(None);
+    }
+    signature_header_with(secret_env, body, resolve).map(Some)
 }
 
 fn redact_env_name(value: &str) -> String {
@@ -874,7 +911,7 @@ pub(crate) fn validate_public_webhook_url(url: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use captain_types::agent::AgentId;
-    use captain_types::event::{EventTarget, FileEventKind, TriggerId};
+    use captain_types::event::{AgentDelegationEvent, EventTarget, FileEventKind, TriggerId};
 
     #[test]
     fn endpoint_wildcard_and_prefix_matching() {
@@ -893,6 +930,27 @@ mod tests {
         assert!(validate_public_webhook_url("http://127.0.0.1/hook").is_err());
         assert!(validate_public_webhook_url("http://192.168.1.5/hook").is_err());
         assert!(validate_public_webhook_url("https://example.com/hook").is_ok());
+    }
+
+    #[test]
+    fn configured_webhook_signature_fails_closed_when_secret_is_unavailable() {
+        let error = optional_signature("MOUNTED_WEBHOOK_SECRET", b"payload", |_| None)
+            .expect_err("configured signing must not degrade to unsigned delivery");
+
+        assert_eq!(error, "secret env is not set");
+        assert_eq!(optional_signature("", b"payload", |_| None).unwrap(), None);
+    }
+
+    #[test]
+    fn webhook_signature_uses_injected_credential_resolver() {
+        let signature = optional_signature("MOUNTED_WEBHOOK_SECRET", b"payload", |key| {
+            assert_eq!(key, "MOUNTED_WEBHOOK_SECRET");
+            Some("mounted-secret".to_string())
+        })
+        .unwrap()
+        .unwrap();
+
+        assert!(signature.starts_with("sha256="));
     }
 
     #[tokio::test]
@@ -920,7 +978,10 @@ mod tests {
             EventPayload::System(SystemEvent::KernelStarted),
         );
 
-        let prepared = prepare_webhook_delivery(&config, &endpoint, "kernel.started", &event)
+        let prepared =
+            prepare_webhook_delivery(&config, &endpoint, "kernel.started", &event, &|key| {
+                std::env::var(key).ok()
+            })
             .await
             .unwrap();
 
@@ -955,9 +1016,11 @@ mod tests {
             EventPayload::System(SystemEvent::KernelStarted),
         );
 
-        let err = prepare_webhook_delivery(&config, &endpoint, "kernel.started", &event)
-            .await
-            .unwrap_err();
+        let err = prepare_webhook_delivery(&config, &endpoint, "kernel.started", &event, &|key| {
+            std::env::var(key).ok()
+        })
+        .await
+        .unwrap_err();
 
         std::env::remove_var(SECRET_ENV);
         assert!(err.contains("loopback"), "got: {err}");
@@ -997,6 +1060,27 @@ mod tests {
             }),
         );
         assert_eq!(event_kind(&event), "project.ask_user");
+    }
+
+    #[test]
+    fn event_kind_maps_durable_agent_delegation_without_payload_content() {
+        let event = Event::new(
+            AgentId::new(),
+            EventTarget::Broadcast,
+            EventPayload::AgentDelegation(AgentDelegationEvent {
+                job_id: "job-7".to_string(),
+                title: "Check migration".to_string(),
+                target_agent_id: "agent-2".to_string(),
+                status: "succeeded".to_string(),
+                caller_agent_id: "captain".to_string(),
+                attempt_count: 1,
+                used_tokens: Some(120),
+                error_code: None,
+            }),
+        );
+        assert_eq!(event_kind(&event), "agent.delegation_status_changed");
+        assert!(event_text(&event).contains("job-7"));
+        assert!(!event_text(&event).contains("migration output"));
     }
 
     #[test]

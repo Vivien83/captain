@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 pub(crate) const DEFAULT_MEMORY_CONTEXT_MIN_SIMILARITY: f64 = 0.75;
+type MemoryWriteCandidates = (Vec<captain_memory::memory_writer::MemoryWrite>, Vec<String>);
 
 pub(crate) fn memory_context_tokens(text: &str) -> Vec<String> {
     const STOPWORDS: &[&str] = &[
@@ -422,7 +423,7 @@ fn search_memory_write_candidates(
     query: &str,
     kernel: Option<&Arc<dyn KernelHandle>>,
     max_items: usize,
-) -> Result<Option<(Vec<captain_memory::memory_writer::MemoryWrite>, Vec<String>)>, String> {
+) -> Result<Option<MemoryWriteCandidates>, String> {
     let Some(conn) = kernel.and_then(|kh| kh.memory_writes_conn()) else {
         return Ok(None);
     };

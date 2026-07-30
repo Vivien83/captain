@@ -2,8 +2,9 @@ use captain_types::{
     agent::AgentId,
     agent_api::{
         failed_egress_report, generate_agent_api_callback_secret, generate_agent_api_token,
-        pending_egress_report, ready_egress_report, ready_ingress_report, skipped_ingress_report,
-        AgentApiEgressProvisionReport, AgentApiSpawnProvisionReport, AgentApiSpawnProvisionRequest,
+        pending_egress_report, ready_egress_report, ready_existing_ingress_report,
+        ready_ingress_report, skipped_ingress_report, AgentApiEgressProvisionReport,
+        AgentApiSpawnProvisionReport, AgentApiSpawnProvisionRequest,
     },
 };
 
@@ -24,16 +25,25 @@ impl CaptainKernel {
 
         let mut actions = Vec::new();
         let ingress = if request.provision_ingress_token {
-            let token = generate_agent_api_token();
             let token_env = captain_types::agent_api::agent_api_token_env(&agent_id);
-            write_secret_env_value(
-                &self.config.home_dir.join("secrets.env"),
-                &token_env,
-                &token,
-            )
-            .map_err(|err| format!("Failed to write ingress token: {err}"))?;
-            std::env::set_var(token_env, &token);
-            ready_ingress_report(&agent_id, token)
+            if self.credential_is_externally_managed(&token_env) {
+                if self
+                    .resolve_credential(&token_env)
+                    .is_some_and(|token| token.len() >= 32)
+                {
+                    ready_existing_ingress_report(&agent_id)
+                } else {
+                    actions.push(format!(
+                        "{token_env} is externally managed but unavailable or too short; fix its mounted file."
+                    ));
+                    skipped_ingress_report(&agent_id)
+                }
+            } else {
+                let token = generate_agent_api_token();
+                self.handle_secret_write(&token_env, &token)
+                    .map_err(|err| format!("Failed to write ingress token: {err}"))?;
+                ready_ingress_report(&agent_id, token)
+            }
         } else {
             actions.push(format!(
                 "Rotate ingress token with {} before external callers use the agent.",
@@ -54,6 +64,28 @@ impl CaptainKernel {
         request: AgentApiSpawnProvisionRequest,
         actions: &mut Vec<String>,
     ) -> Result<AgentApiEgressProvisionReport, String> {
+        let url_env = captain_types::agent_api::agent_api_callback_url_env(agent_id);
+        let secret_env = captain_types::agent_api::agent_api_callback_secret_env(agent_id);
+        if self.credential_is_externally_managed(&url_env)
+            || self.credential_is_externally_managed(&secret_env)
+        {
+            let external_url = self.resolve_credential(&url_env);
+            let external_secret = self.resolve_credential(&secret_env);
+            let ready = external_url
+                .as_deref()
+                .is_some_and(|url| validate_agent_api_callback_url(url).is_ok())
+                && external_secret
+                    .as_deref()
+                    .is_some_and(|value| value.len() >= 16);
+            if ready {
+                return Ok(ready_egress_report(agent_id, None));
+            }
+            let issue =
+                "externally managed callback URL or secret is unavailable or invalid".to_string();
+            actions.push(format!("Fix egress callback configuration: {issue}"));
+            return Ok(failed_egress_report(agent_id, issue));
+        }
+
         let Some(callback_url) = request
             .egress_callback_url
             .as_deref()
@@ -88,15 +120,10 @@ impl CaptainKernel {
             return Ok(failed_egress_report(agent_id, issue));
         }
 
-        let url_env = captain_types::agent_api::agent_api_callback_url_env(agent_id);
-        let secret_env = captain_types::agent_api::agent_api_callback_secret_env(agent_id);
-        let secrets_path = self.config.home_dir.join("secrets.env");
-        write_secret_env_value(&secrets_path, &url_env, callback_url)
+        self.handle_secret_write(&url_env, callback_url)
             .map_err(|err| format!("Failed to write callback URL: {err}"))?;
-        write_secret_env_value(&secrets_path, &secret_env, &secret)
+        self.handle_secret_write(&secret_env, &secret)
             .map_err(|err| format!("Failed to write callback secret: {err}"))?;
-        std::env::set_var(url_env, callback_url);
-        std::env::set_var(secret_env, &secret);
 
         Ok(ready_egress_report(
             agent_id,
@@ -105,6 +132,7 @@ impl CaptainKernel {
     }
 }
 
+#[cfg(test)]
 fn write_secret_env_value(
     path: &std::path::Path,
     key: &str,
@@ -131,6 +159,7 @@ fn write_secret_env_value(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_secret_env_entry(key: &str, value: &str) -> Result<(), std::io::Error> {
     if key.is_empty()
         || key.contains('=')

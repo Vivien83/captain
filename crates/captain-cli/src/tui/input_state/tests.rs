@@ -73,6 +73,12 @@ fn chat_mouse_actions_map_to_app_effects() {
             chat::ChatAction::RejectRequest("req-4".into())
         ))
     );
+    assert_eq!(
+        chat_mouse_effect_for_action(chat::ChatMouseAction::SendMessage("Détaillé".into())),
+        Some(ChatMouseEffect::ChatAction(chat::ChatAction::SendMessage(
+            "Détaillé".into()
+        )))
+    );
 }
 
 #[test]

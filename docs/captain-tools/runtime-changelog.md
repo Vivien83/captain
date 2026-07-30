@@ -26,6 +26,214 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.10 — Production hardening and durable operations
+
+Agent-facing changes:
+
+- Release artifacts now include a machine-readable in-toto/SLSA v1 provenance
+  statement tied to the exact public source and lockfile. Local host and Docker
+  targets are built one architecture at a time with capacity checkpoints;
+  Captain does not claim an independent signature or SLSA certification level
+  for the alpha host statement.
+- Captain's SSH vault accepts Ed25519 and ECDSA P-256 private keys. RSA keys
+  now fail with an actionable message because the upstream Rust RSA
+  implementation still has an unresolved timing-side-channel advisory. The
+  release dependency gate also checks the complete RustSec report outside its
+  exception file, so a new or silently ignored finding blocks release.
+- Remote skill marketplaces are disabled. Their HTTP routes and TUI actions are
+  absent, `captain skill install` accepts only an existing reviewed local
+  directory, and retained compatibility clients fail before network or
+  filesystem access. Prompt-text findings carry explicit
+  `advisory_heuristic` assurance; the loader conservatively refuses high-risk
+  matches, but Captain does not claim that phrase matching proves safety or
+  malicious intent.
+- New installations use host execution policy `full` with critical mode
+  `safe`: routine commands remain available, while recognized catastrophic
+  commands fail closed. The guard normalizes flag order, whitespace, long
+  options, common wrappers, and nested shell payloads. Status, health,
+  Security, doctor, TUI, and API surfaces state the exact boundary:
+  `host_process`, `environment_scrub`, and `os_isolation: false`. Captain does
+  not present environment clearing as an OS sandbox; Docker and WASM remain
+  separate explicit backends. Its internal modules now use the same exact
+  vocabulary: environment inheritance belongs to `subprocess_env_scrub`,
+  command/path checks belong to `subprocess_guard`, and the unused
+  `sandbox_command` symbol has been removed.
+- Audit history now uses a versioned SHA-256 hash chain with unambiguous
+  length-prefixed fields. Durable writes complete before the in-memory tip
+  advances; a failed append is returned and leaves a visible degraded health
+  state. If startup detects altered history, Captain seals the affected epoch
+  without rewriting its rows and opens a `ChainRecovery` epoch anchored to the
+  stored terminal digest. Unknown action names remain exact, and there is no
+  HTTP repair operation.
+- Browser-origin access no longer becomes permissive when the daemon API key
+  is empty. CORS accepts only exact loopback, declared public, or explicitly
+  configured HTTP(S) origins with reviewed methods and headers. Every request
+  also passes an exact `Host` allowlist before routing, so an undeclared DNS
+  rebinding host receives `400`. Operators can extend the policy through
+  `[api].allowed_origins`; changes require a daemon restart.
+- The authenticated API no longer treats operational reads as public. Agent
+  lists, sessions, approvals, budgets, logs, models/providers, Config,
+  Terminal, A2A, and provider OAuth now require the daemon API key or a valid
+  browser session. Only Control boot/static assets, minimal health/version,
+  login/check/logout, and the exact per-agent ingress endpoint remain outside
+  global auth; ingress still enforces its own per-agent Bearer token. Control
+  returns to login when a protected request reports `401`.
+- Browser session signatures now use one independent 32-byte random key per
+  Captain installation. First boot persists it durably; API keys and password
+  hashes are never signing material. Session tokens include a managed
+  credential epoch, so password rotation through setup or
+  `web_credentials_update` invalidates every older token. CLI/API config
+  display redacts the key and hash, raw edits preserve but cannot replace the
+  managed state, and incomplete persisted signing state fails closed.
+- New web passwords are salted Argon2id PHC strings. A successful legacy
+  SHA-256 login atomically migrates the durable hash before issuing a session.
+  Bounded login state applies exponential backoff per IP and normalized
+  username after five failures, capped at 15 minutes. Cookies have explicit
+  automatic/always/never Secure policy. Browser WebSocket and SSE use
+  30-second path/IP/epoch-bound single-use tickets; API keys and session tokens
+  are no longer accepted from URL query strings.
+- Global budget changes now pass through one synchronized live snapshot. The
+  full candidate is validated and atomically persisted before publication; a
+  disk failure leaves the preceding limits active. REST, WebSocket, status,
+  channels, spawn/restore, hot-reload, streaming, and non-streaming paths all
+  observe the same state, and both turn paths enforce the global cost guard
+  before the agent token quota.
+- An explicit per-turn memory write opt-out now reaches the shared core
+  finalizer before episodic embedding or storage. Streaming and non-streaming
+  turns keep the normal resumable transcript and mandatory operational/audit
+  records, but no extra semantic interaction fragment is created. Published
+  alpha.6 through alpha.9 retain their documented limitation.
+- The deterministic seven-question first-use interview now emits channel-neutral
+  non-blocking reply suggestions whenever a bounded answer is possible. TUI,
+  Control Web/Desktop, and Telegram render clickable choices while preserving
+  free-text input; Telegram uses a one-turn reply keyboard. Suggestions never
+  arm or impersonate the blocking `ask_user` tool. An explicit no-notification
+  answer also enables the native proactive-notification `silent_mode`; bounded
+  positive choices disable it, while ambiguous free text does not mutate it.
+- Final agent replies, sanitized error replies, auto-replies, broadcasts, and
+  channel commands are written to one durable outbound ledger before the
+  adapter is called. A transport failure is no longer reported as successful
+  delivery.
+- Captain retries the stored formatted response after restart without rerunning
+  the model or any tools. A replay whose prior remote outcome is unknowable is
+  visibly marked as a possible duplicate.
+- Attempts use expiring leases, bounded backoff, three-attempt dead-lettering,
+  idempotency keys, and exact adapter receipts. `captain status` and
+  `/api/status` expose the operator-safe projection.
+- Individual and aggregate live payloads are bounded. Delivered and dead
+  records discard response content and display identity while preserving
+  minimal audit metadata.
+- Codex rolling windows retain the provider's consumed percentage and expose a
+  clearly derived remaining percentage. Provider-reported monthly spend
+  control preserves exact limit, used, remaining, percentages, and reset.
+- TUI, Web Control, its Desktop wrapper, CLI status/caps, and Telegram `/usage`
+  share the same active-model quota classification. A quota for another model
+  remains an annex and never becomes the active gauge.
+- Reasoning is now a durable per-agent setting. Auto omits the provider field
+  and stays visibly distinct from both explicit `none` and the effective
+  model/provider default;
+  catalogue-supported levels are available through TUI `/reasoning`, Web and
+  Desktop selection, CLI `agent set`, REST, and Telegram Rich buttons. Values
+  remain open at the catalogue and persisted-state boundaries rather than
+  being rejected by a frozen Captain enum. Codex Ultra is a product mode:
+  Captain keeps it visible, sends the accepted `max` effort to the provider,
+  and enables bounded proactive delegation only for a root agent with a
+  coordination path. Workers cannot recursively inherit that policy.
+- `/think` controls only whether the terminal renders reasoning blocks already
+  received. It no longer returns a fake success suggesting that model behavior
+  changed.
+- Telegram now synchronizes its canonical active slash-command catalogue with
+  `setMyCommands` after authentication. Typing `/` opens the native contextual
+  menu with localized default/French descriptions; `/help` and immediate
+  command bypass consume the same catalogue. Both locale calls run in parallel
+  with a bounded timeout, and a rejected menu update is visible but never
+  disables polling.
+- A manual compaction never summarizes an empty prefix. If the recent coherent
+  turn leaves no completed older turn that can be removed safely, Captain
+  leaves both the stored session and prior summary untouched and reports the
+  safe no-op explicitly.
+- Telegram compaction cards use a bounded progress track. The durable success
+  card always shows a complete `100%` state even if intermediate chunk units
+  arrive near the terminal update; opaque model work remains indeterminate
+  while running, and failures never claim completion.
+- `captain sessions export --all` now exports the complete durable session
+  catalog as `captain.session.export.v1` JSONL, optionally filtered by agent,
+  without changing any agent's active session. Existing single-session JSON
+  and Markdown output stays compatible. File exports use Captain's atomic,
+  owner-private write path; they remain sensitive user-owned transcripts, not
+  raw provider reasoning dumps or an import promise.
+- Production credentials can come from authoritative read-only files declared
+  in `secret-sources.toml`. Provider catalog/auth tests, active channels,
+  webhook ingress/egress, MCP injection, CLI setup, and doctor use the same
+  fail-closed resolver; no arbitrary secret command is executed.
+- Resolver-backed consumers observe source rotation live. Cached channel
+  adapters require reload; registry edits and boot credentials such as the
+  daemon API key require restart. `captain vault sources [--json]` reports only
+  key, type, readiness, and stable error/warning state. Generic file tools
+  cannot read the registry or any configured source target.
+- Per-agent API bearer tokens, callback URLs, callback signatures, retries,
+  manifests, and readiness use the same resolver. Existing mounted tokens are
+  never disclosed or overwritten during provisioning.
+- CLI channel setup no longer bypasses the resolver through legacy `.env`.
+  Web setup can bind an already mounted channel secret without receiving its
+  raw value, and Signal setup now writes the runtime's real `phone_number`
+  field with safe TOML encoding.
+- Tool approval decisions now distinguish allow and deny scopes for one call,
+  this daemon session, or a durable exact-action rule. Interactive durable
+  choices never broaden the administrator `allow_always` policy.
+- Durable rules persist only an agent/tool/action digest, are bounded,
+  secret-scanned, crash-safe, fail closed when malformed, audited, and
+  revocable. A durable denial requires a reason; all denial reasons reach the
+  blocked tool so the agent can adapt instead of retrying unchanged.
+- The exact-action digest uses the complete untruncated tool input. Its bounded
+  operator preview is display-only and cannot widen a rule.
+- TUI, authenticated Control Web/Desktop, REST, and Telegram Rich expose the
+  same pending queue and rule semantics. Telegram offers six scoped buttons
+  and explicit commands for reasoned rejection and rule revocation.
+- `agent_delegate` now creates a durable detached job by default and returns a
+  `job_id` immediately. Captain can run independent jobs concurrently, express
+  real dependencies, inspect status/results later, cancel cooperatively, and
+  resume failed or ambiguous work explicitly after a restart.
+- Delegations whose model effect had started before an interruption become
+  `uncertain` and are never replayed silently. TUI and authenticated Web/Desktop
+  receive the same bounded status events; raw tasks and results are excluded
+  from those broadcasts and webhook summaries.
+- Durable project phases now carry `captain.completion.v1` contracts. A worker
+  cannot turn a phase into `done` with text alone when execution evidence is
+  required; Captain binds the handoff to actual hashed tool receipts and marks
+  missing proof as `insufficient_evidence`.
+- The VERIFY phase runs every active project goal check itself in the real
+  project workspace, using the same bounded timeout and one-shot recovery as
+  continuous goal monitoring, including stalled progress detection. Failed or
+  unrecorded goal checks and failed persisted VERIFY receipts block completion.
+- A project reaches 100% only when all seven phase contracts are satisfied.
+  Legacy `done` workers without proof are replayed once on resume. TUI and
+  authenticated Web/Desktop show the proof decision and receipt count without
+  exposing commands, tool input/output, paths, or secrets.
+- Ratatui and the Web terminal now redraw background activity on a bounded
+  34 ms cadence while keyboard, paste, scroll, and mouse input remain
+  immediate. Settled transcript Markdown is cached by revision and width,
+  instead of being reparsed on every live frame.
+- Control Web and its Desktop wrapper batch exact ordered text deltas once per
+  34 ms visual window, flush before every non-text boundary, and never drop
+  content at the bounded pending-buffer threshold. Restored long sessions skip
+  row animations and preserve the operator's tail or scrollback intent.
+- Skill Learning V2 now persists its main worker heartbeat and exposes one
+  versioned operational snapshot: exact configured and bound model, worker
+  phase, last scan/progress, durable job and notification queues, retries,
+  uncertain/dead work, and recovery state. TUI Learning, Control Web/Desktop,
+  `GET /api/learning/status`, Telegram Rich `/learning`, and the `engine`
+  section of `workflow_learning_list` consume that same truth. No surface
+  fabricates a completion percentage.
+- Context compaction now publishes one session-scoped operation to Ratatui,
+  Control Web/Desktop, the Web terminal, Telegram Rich, agent WebSocket, and
+  daemon SSE. Exact chunk counts render a real fraction and derived gauge;
+  opaque model calls remain visibly indeterminate.
+- Compaction progress and its active-operation registry are committed together
+  in SQLite schema v35. Cancellation records `interrupted`; after an abrupt
+  process or host stop, the next runtime closes operations owned by the prior
+  instance without discarding or silently rewriting the recoverable session.
+
 ### 0.1.0-alpha.9 — Durable workflow learning and native release updates
 
 Agent-facing changes:
@@ -746,7 +954,7 @@ How to answer the user:
 Agent-facing changes:
 
 - Captain's core release-grade path is now closed against the Core Excellence
-  plan: real user smoke, Hermes-vs-Captain comparison, release readiness,
+  plan: real user smoke, release readiness,
   plan/approval safety, capabilities and budgets, restart recovery,
   explainable replay, streaming latency telemetry, and agent-as-service are all
   backed by reproducible gates or live smoke artifacts.
@@ -890,9 +1098,9 @@ How to answer the user:
 - If several diagnostics are independent, launch them with `tool_run_start` and
   poll with `tool_run_status`; if one diagnostic depends on another run's
   result, declare `depends_on` or wait for `tool_run_result` before starting it.
-- If asked about Hermes-level, say Captain now proves the core path at
-  Hermes-level or better for the validated surfaces, while Hermes still remains
-  the comparison reference for future UX and long-workflow hardening.
+- If asked about production readiness, say Captain proves the core path for the
+  validated surfaces. Describe future UX and long-workflow hardening only from
+  Captain's own gates and evidence.
 - If asked about the web UI, explain that there is no blocking backend gap, but
   the richer operator cockpit belongs to `WEB1` before a web-first launch.
 
@@ -929,7 +1137,7 @@ How to answer the user:
 - If asked whether Captain is release-ready, say that this changelog gate and
   the secret scan pre-blocker pass, and package/install/export are now proved.
   Full release readiness still requires the remaining live user smoke,
-  Hermes-vs-Captain run, and final no-skip validation.
+  compatibility and resilience checks, and final no-skip validation.
 
 ### 0.1.0-dev.2026-05-20a — Cron delivery reliability
 
@@ -1007,19 +1215,19 @@ Agent-facing changes:
   while no longer living in the main TUI coordinator.
 - TUI command argument helpers now cover `/model` session-strategy parsing and
   Project URL path-segment encoding. The visible `/model` flags stay compatible
-  with the existing Hermes-style `--new` and `--compact` behavior.
+  with the existing `--new` and `--compact` behavior.
 - TUI hub shortcuts now share the same tested decision helper as the hub
   navigation line. `Alt+←/→` and `Alt+1..n` keep their visible behavior while
   out-of-range numeric shortcuts are ignored consistently.
 - TUI default chat target selection now uses a tested helper for the
-  Hermes-style priority order: existing target, `.captain.toml` agent id,
+  tested priority order: existing target, `.captain.toml` agent id,
   `.captain.toml` agent name, an agent named `captain`, then the first agent.
   Kernel and daemon side effects stay in the main TUI coordinator.
 - TUI event feedback lines for stored memory, queued learning, and proposed
-  skills now use a small tested formatter. The visible Hermes-style truncation,
+  skills now use a small tested formatter. The visible bounded truncation,
   short proposal id, Captain family label, and localized trigger hint stay
   stable while the main event coordinator gets smaller.
-- TUI boot auto-routing now uses a tested helper for the Hermes-style welcome
+- TUI boot auto-routing now uses a tested helper for the welcome
   decision. The `CAPTAIN_NO_AUTO_DAEMON` escape hatch still keeps the menu
   visible, daemon detection still connects to the daemon, and no-daemon boot
   still starts the in-process kernel.
@@ -1028,7 +1236,7 @@ Agent-facing changes:
   or select it only when no selection already exists. Empty-list behavior stays
   unchanged.
 - TUI fetch-error routing now uses a tested helper for the active tab/sub-view
-  target. Errors still land on the local status surface Hermes-style, while
+  target. Errors still land on the local status surface as before, while
   Captain's Automation, Learning, Connections, and Capabilities sub-views keep
   their more precise routing.
 - TUI tick routing now uses a tested helper for periodic decisions. The
@@ -1053,7 +1261,7 @@ Agent-facing changes:
   are tested separately.
 - TUI slash navigation now uses a tested mapper for `/home`, `/projects`,
   `/project`, Automation/Learning/Capabilities/Connections hub shortcuts, and
-  Budget/Logs/Settings overlays. Hermes-style direct navigation remains intact,
+  Budget/Logs/Settings overlays. Direct navigation remains intact,
   while Captain-specific hub subviews stay explicit and backend commands remain
   in the main handler.
 - TUI slash info output now uses tested helpers for `/status`, `/sessions`,
@@ -1093,12 +1301,12 @@ Agent-facing changes:
   and standalone English variants are covered separately.
 - `/export` result messages now use a tested helper shared by the full TUI and
   standalone `captain chat`. Markdown writing stays in `ChatState`, while
-  Hermes full-TUI French success/error text and standalone localized variants
+  existing full-TUI French success/error text and standalone localized variants
   are covered separately.
 - `/kill` guard and result messages now use a tested helper shared by the full
   TUI and standalone `captain chat`. Backend deletion remains in each handler,
   while Captain protection, success/failure/error text, and no-backend output
-  keep the existing Hermes/i18n behavior.
+  keep the established i18n behavior.
 - `/help` text now uses a tested TUI helper. The full TUI still delegates to
   the localized `help.body` text, while standalone `captain chat` keeps its
   narrower SSH/chat-focused command list with advanced screens routed to
@@ -1140,7 +1348,7 @@ Agent-facing changes:
   actual recording spawn remains in the TUI handler.
 - `/reload` local-session result messages now use the shared reload slash
   helper in both the full TUI and standalone chat. Daemon forwarding and
-  session replay effects remain in the handlers, while French Hermes text and
+  session replay effects remain in the handlers, while existing French text and
   standalone English variants are tested together.
 - `/clear`, `/undo`, and `/queue` now resolve their shared i18n text through
   the local slash helper. Chat history mutation and staged-message state remain
@@ -1149,76 +1357,76 @@ Agent-facing changes:
   the daemon slash helper. The handlers still own backend forwarding, while the
   full TUI French text and standalone English text stay tested together.
 - Unknown slash-command messages now use the same helper in the full TUI and
-  standalone chat. The localized Hermes text still echoes the unknown command
+  standalone chat. The localized text still echoes the unknown command
   token when one is present.
 - `/retry` fallback text now lives with the shared retry slash helper. The full
   TUI and standalone chat still perform their own send/fallback effects, while
   the no-previous-user-message text is tested in French and English.
 - `/fortune` localized text now lives with the shared fortune slash helper. The
-  full TUI and standalone chat still own the clock read, while the Hermes quote
-  mapping is tested in French and English.
+  full TUI and standalone chat still own the clock read, while the localized
+  quote mapping is tested in French and English.
 - Slash command parsing now lives in a shared helper used by the full TUI and
-  standalone chat. Hermes-style space splitting remains covered, and Captain's
+  standalone chat. Existing space splitting remains covered, and Captain's
   extra trimming for tabs and invisible command characters is kept under tests.
 - `/sessions`, `/tasks`, and `/agents` now resolve their empty/not-connected
   fallback text through the shared slash info helper. Backend fetches and
   daemon/in-process line construction stay in the handlers.
 - `/copy` clipboard success and failure text now lives with the shared local
   slash helper. Clipboard access stays in the full TUI and standalone handlers,
-  while the Hermes French and English status messages are tested together.
+  while the French and English status messages are tested together.
 - Full-TUI `/like` and `/dislike` status text now lives with the shared
   feedback slash helper. The TUI handler still owns the daemon POST, while the
-  Hermes French daemon-required, success, HTTP failure, and network failure
+  French daemon-required, success, HTTP failure, and network failure
   messages are tested in one place.
 - Full-TUI `/image` and `/file` upload status text now lives with the shared
   attachment slash helper. The TUI handler still owns picker opening, local
-  upload preparation, daemon upload, and pending-attachment drain, while Hermes
+  upload preparation, daemon upload, and pending-attachment drain, while the
   French status/error text is tested in one place.
 - Full-TUI `/voice` completion status text now lives with the shared local
   slash helper. Recording and upload still stay in the TUI event handler, while
-  Hermes French upload/error messages are tested with the existing voice start
+  French upload/error messages are tested with the existing voice start
   text.
 - Full-TUI `/model` safe-switch status text now lives with the shared model
   slash helper. The TUI handler still owns model catalog reads, preflight/apply
   HTTP calls, in-process kernel calls, and model-label updates, while the
-  Hermes preflight, blocked, safe-apply, and no-backend messages are tested in
+  preflight, blocked, safe-apply, and no-backend messages are tested in
   one place.
 - Chat session startup help text now lives with the shared session slash
-  helper. The full TUI and standalone `captain chat` keep the exact Hermes
+  helper. The full TUI and standalone `captain chat` keep the exact
   `"/help for commands • /exit to quit"` message while session binding and
   restore effects remain in their handlers.
 - Standalone `captain chat` now reuses the shared model slash status helpers
   for empty catalogs, daemon preflight failures, blocking issues, safe-apply
   errors, in-process preflight/apply errors, and no-backend mode. Backend HTTP
-  and kernel calls stay in the runner, while the visible Hermes wording is
+  and kernel calls stay in the runner, while the visible wording is
   tested in `tui/slash_model.rs`.
 - Standalone `captain chat` runtime status messages now live with the
   standalone slash helper. Stream errors, missing active connections, daemon
   spawn failures, template loading failures, and in-process spawn failures keep
-  the Hermes wording while boot and spawn effects remain in `chat_runner.rs`.
+  the existing wording while boot and spawn effects remain in `chat_runner.rs`.
 - `/new` backend reset errors now live with the shared session slash helper.
-  The full TUI and standalone `captain chat` keep the Hermes daemon-agent,
+  The full TUI and standalone `captain chat` keep the existing daemon-agent,
   in-process-agent, no-backend, and daemon HTTP error wording while reset
   effects stay in their HTTP/kernel handlers.
 - File picker runtime errors now use the shared attachment slash helper. The
-  full TUI keeps the Hermes `Explorateur: ...` wording while picker state and
+  full TUI keeps the `Explorateur: ...` wording while picker state and
   upload handling remain in the TUI event handler.
 - Full-TUI agent spawn status text now lives in a tested TUI helper. Invalid
   manifests, in-process spawn failures, and missing backend mode keep the exact
-  Hermes wording while parsing and spawn effects remain in the TUI handler.
+  wording while parsing and spawn effects remain in the TUI handler.
 - Full-TUI agent event status text now uses the same tested TUI helper. Agent
   kill, kill failure, skill update, and MCP server update messages keep the
-  Hermes wording while list mutations and refreshes remain in the TUI handler.
+  existing wording while list mutations and refreshes remain in the TUI handler.
 - Full-TUI workflow, trigger, and cron status text now lives in a tested
   automation TUI helper. Creation, deletion, toggle, and mutation messages keep
-  the Hermes wording while screen mutations and refreshes remain in the TUI
+  the existing wording while screen mutations and refreshes remain in the TUI
   handler.
 - Full-TUI Learning, skill-proposal, and approval decision status text now uses
-  a tested TUI helper. Approved/refused messages keep the Hermes French wording
+  a tested TUI helper. Approved/refused messages keep the existing French wording
   while list mutations and refreshes remain in the TUI handler.
 - Full-TUI resource mutation status text now lives in a tested TUI helper.
   Session deletion, memory key save/delete, skill install/uninstall, and
-  provider key save/delete messages keep the Hermes wording while storage
+  provider key save/delete messages keep the existing wording while storage
   mutations and refreshes remain in the TUI handler.
 - The boot-time resume prompt now has its summary and relative-age formatting
   isolated behind a small tested TUI helper. The visible prompt behavior stays
@@ -1548,7 +1756,7 @@ Agent-facing changes:
   exact `captain project answer` next command for pending questions. Text and
   JSON output omit stored answers, agent ids, run ids, worker ids, raw timeline
   payloads, runtime metadata, workspace paths, tokens, and secrets.
-- `captain project replay <project>` now prints a bounded Hermes-style reprise
+- `captain project replay <project>` now prints a bounded structured resume
   capsule from `/api/projects/{id}/runtime`. It combines runtime state,
   transcript/session counters, recent transcript events, worker summaries,
   pending questions with answer commands, and next operator actions. It accepts
@@ -1658,7 +1866,7 @@ Agent-facing changes:
   unchanged, but it is tested alongside approved/denied/retry handling.
 - Project runtime worker prompt context now lives in a small tested module.
   Acceptance criteria, project goal check commands, phase gates, and prior phase
-  summaries stay compact for Hermes-style resume without keeping that prompt
+  summaries stay compact for reliable resume without keeping that prompt
   shaping logic in the route orchestrator.
 - Project launch task blueprints now live in a small tested module. The
   OBSERVE-to-LEARN backbone, descending priorities, acceptance criteria
@@ -1762,7 +1970,7 @@ Agent-facing changes:
   incoherent non-stale `running` worker now fails as already running instead of
   being hidden inside route branching.
 - Project runtime worker manifest preparation now lives with the manifest
-  helpers. Worker spawn still uses the same Hermes-style project worker name,
+  helpers. Worker spawn still uses the same stable project worker name,
   high priority, phase tags, model policy, workspace fallback, project-source
   workspace metadata, and approved runtime tool allowlist; route code now only
   consumes the prepared manifest and allowlist before spawning the sub-agent.
@@ -1813,7 +2021,7 @@ Agent-facing changes:
   project still creates the active project metadata/runtime, optional guard
   goal, phase task backbone, first delivery milestone, launch checkpoint, and
   operator-safe `project.created` event, but `launch_project` is now only the
-  Hermes-style HTTP orchestration wrapper.
+  thin HTTP orchestration wrapper.
 - Project launch orchestration now uses a small tested flow helper. The route
   still normalizes input, maps workspace/storage/slug errors to the same HTTP
   responses, publishes `project.created`, and returns the same public response,
@@ -2080,7 +2288,7 @@ Agent-facing changes:
 - Active stream interjections are now scoped by the channel session key, not
   only by agent id. Two Telegram chats, users, or forum topics targeting the
   same agent can no longer inject follow-ups into each other's stream.
-- Channel follow-ups support explicit control commands inspired by Hermes:
+- Channel follow-ups support explicit control commands:
   `/queue <message>` stores the stripped message for the next turn, while
   `/steer <message>` explicitly targets the active stream and falls back to the
   pending queue when the stream cannot accept it.
@@ -2450,7 +2658,7 @@ Status.
   focused tests for exit/close behavior, readline actions, slash completion,
   reasoning/tool toggles, and model-picker state guards. Applying those global
   actions is now isolated inside `ChatState`, and `Ctrl+M` during streaming is
-  an explicit no-op like Hermes, so it cannot fall through into typed input.
+  an explicit no-op, so it cannot fall through into typed input.
   Session/model picker action application is also isolated behind `ChatState`
   helpers, with state tests for navigation, close, model filtering, and model
   selection. Streaming key application is isolated the same way, with state
@@ -2461,7 +2669,7 @@ Status.
   submit, scroll, edit, and navigation effects to shorter helpers, with a state
   test that editing resets slash-picker selection. The transcript render
   coordinator now lives in `tui/screens/chat_transcript_render.rs`, preserving
-  the Hermes-style logo, empty state, history, live tail, scroll, and tool-zone
+  the existing logo, empty state, history, live tail, scroll, and tool-zone
   flow with focused tests for empty and live transcript construction. The
   public chat `draw` entrypoint now delegates to
   `tui/screens/chat_screen_render.rs`, which separates frame, body,
@@ -2471,7 +2679,7 @@ Status.
   effects to a dedicated helper while preserving the existing approval and
   model-switch tests. Streaming key application now also delegates staging,
   scroll, edit, and navigation effects to short helpers while preserving the
-  Hermes-style non-slash staging behavior during an active stream. Markdown
+  existing non-slash staging behavior during an active stream. Markdown
   session export now lives in `tui/screens/chat_markdown_export.rs`, with a
   testable builder for agent filenames, session metadata, messages, and tool
   blocks while keeping the existing `~/.captain/exports` destination. Session
@@ -2479,24 +2687,24 @@ Status.
   tests for persisted roles, tool status restoration, and runtime identity
   replacement. Quick-action prompt construction and rendering are now split
   into short approval/model-switch and modal-line helpers while preserving the
-  Hermes-style approval keys, model-switch recommendation labels, and clickable
+  existing approval keys, model-switch recommendation labels, and clickable
   choices. Welcome-summary diagnostics now load config/home, orphan channel
   tokens, graph size, active project, rows, and rendering through separate short
-  helpers while preserving the Hermes-style factual empty-state signals.
+  helpers while preserving the factual empty-state signals.
   Expanded tool-call rendering now separates header/duration, streams, result,
   footer, and apply/edit/multi-edit diff helpers, with focused coverage for
-  `edit_file` diffs while keeping the Hermes-style bounded output panel. The
+  `edit_file` diffs while keeping the bounded output panel. The
   model-picker overlay now also separates popup geometry, frame, search line,
   list rows, and scroll-window construction, with tests for tiny views,
   centering, and selected-row visibility. Footer action hints now use static
   state-specific action specs for approval, model switch, pickers, slash mode,
-  streaming, and idle input, with tests for state priority and preserved Hermes
+  streaming, and idle input, with tests for state priority and preserved
   labels. The chat title/status line now also splits spinner, model/mode,
   elapsed time, last-turn tokens/cost, and session totals into short helpers,
   with focused tests for elapsed labels and cached-token effective input. The
   live slash picker now separates popup geometry, visible-row windowing,
   selected row styling, hints, and padding helpers, with tests for tiny views,
-  scroll visibility, and selected-row rendering while preserving Hermes labels.
+  scroll visibility, and selected-row rendering while preserving labels.
   Chat input rendering now splits prompt/cursor styles, raw input lines, line
   body rendering, slash-command highlighting, UTF-8 cursor placement, and
   staged-message badges into short helpers, with tests for explicit newlines and
@@ -2505,7 +2713,7 @@ Status.
   last-turn usage/cost, and status-message rows, with focused tests for token
   estimate labels and empty usage suppression. Collapsed tool-call rendering
   now separates copy eligibility, summary width, duration fallback, header
-  spans, and output rows while preserving Hermes expanded/running delegation,
+  spans, and output rows while preserving expanded/running delegation,
   with tests for copy width, fallback duration, and empty-output omission.
   The setup Docker image now defaults to the public early-access channel
   `ghcr.io/vivien83/captain-agent-os:alpha` and can be overridden with
@@ -2543,7 +2751,7 @@ Status.
   compiled runtime. Attempts to configure/test a known frozen channel now return
   an explicit `410 Gone` response with the active channel list and the product
   reason, instead of looking like an unknown route. Discord and Signal field
-  names were checked against Hermes' local adapter contracts before keeping the
+  names were validated against the active adapter contracts before keeping the
   public setup surface small.
   Usage and budget endpoints now live in
   `captain-api/src/usage_budget_routes.rs`, keeping usage summaries,
@@ -2628,7 +2836,7 @@ Status.
 How to answer the user:
 
 - If asked why tools disappeared, explain that they are frozen from active
-  discovery until the Hermes-level core is stable, not deleted from the binary.
+  discovery until the production-grade core is stable, not deleted from the binary.
 - ClawHub/marketplace is frozen noise for now: do not present it as part of
   the core path unless a future product decision reactivates it.
 - If a task needs a frozen surface, prefer an active-core route first: direct
@@ -3110,7 +3318,7 @@ user.
   observed, lists numbered observed steps/tools when they exist, and tells the
   user to approve only if the workflow is clear and reusable. Empty automatic
   traces no longer render as "0 steps" in French or English.
-- **Hermes-style procedural split**: facts, preferences, API/CLI discoveries,
+- **Procedural/declarative split**: facts, preferences, API/CLI discoveries,
   and tool quirks belong in declarative memory; reusable procedures belong in
   skills or skill refinements, with an existing-skill search before creating a
   duplicate.

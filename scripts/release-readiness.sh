@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.9}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.10}"
 CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
@@ -411,6 +411,7 @@ docs_audit
 release_workflow_audit
 dependency_audit
 public_source_audit
+run "$ROOT_DIR/scripts/guarded-exec-audit.sh"
 
 if [ "$RUN_TESTS" = "1" ]; then
     run_tests

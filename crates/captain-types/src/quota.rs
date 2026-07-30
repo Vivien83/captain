@@ -93,6 +93,37 @@ pub struct ProviderQuotaWindow {
     pub resets_at: Option<DateTime<Utc>>,
 }
 
+impl ProviderQuotaWindow {
+    /// Remaining capacity derived exactly from the provider-reported used
+    /// percentage. This is the same direction shown by the official Codex UI.
+    pub fn remaining_percent(&self) -> f64 {
+        (100.0 - self.used_percent).clamp(0.0, 100.0)
+    }
+}
+
+/// Exact effective monthly spend-control limit returned by Codex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSpendControlLimitSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub limit: String,
+    pub used: String,
+    pub remaining: String,
+    pub used_percent: i32,
+    pub remaining_percent: i32,
+    pub reset_after_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
+/// Provider spend-control state, distinct from rolling quota windows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSpendControlSnapshot {
+    pub reached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub individual_limit: Option<ProviderSpendControlLimitSnapshot>,
+}
+
 /// Optional credits returned by the subscription provider.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderCreditsSnapshot {
@@ -124,6 +155,9 @@ pub struct ProviderQuotaSnapshot {
     /// Account credits, when the provider exposes them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credits: Option<ProviderCreditsSnapshot>,
+    /// Effective monthly spend-control state, when returned by Codex.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend_control: Option<ProviderSpendControlSnapshot>,
     /// Provider subscription plan label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_type: Option<String>,
@@ -139,15 +173,27 @@ pub struct ProviderQuotaSnapshot {
 impl ProviderQuotaSnapshot {
     /// Highest operational severity across this limit's windows.
     pub fn alert_level(&self) -> QuotaAlertLevel {
-        if self.rate_limit_reached_type.is_some() {
+        if self.rate_limit_reached_type.is_some()
+            || self
+                .spend_control
+                .as_ref()
+                .is_some_and(|control| control.reached)
+        {
             return QuotaAlertLevel::Exhausted;
         }
-        let used = self
+        let rolling_used = self
             .primary
             .iter()
             .chain(self.secondary.iter())
             .map(|window| window.used_percent)
             .fold(0.0_f64, f64::max);
+        let spend_used = self
+            .spend_control
+            .as_ref()
+            .and_then(|control| control.individual_limit.as_ref())
+            .map(|limit| f64::from(limit.used_percent))
+            .unwrap_or(0.0);
+        let used = rolling_used.max(spend_used);
         if used >= 100.0 {
             QuotaAlertLevel::Exhausted
         } else if used >= 90.0 {
@@ -337,13 +383,13 @@ fn seconds_until(timestamp: DateTime<Utc>) -> u64 {
 }
 
 fn human_window(seconds: u64) -> String {
-    if seconds % 604_800 == 0 {
+    if seconds.is_multiple_of(604_800) {
         format!("{} sem.", seconds / 604_800)
-    } else if seconds % 86_400 == 0 {
+    } else if seconds.is_multiple_of(86_400) {
         format!("{} j", seconds / 86_400)
-    } else if seconds % 3_600 == 0 {
+    } else if seconds.is_multiple_of(3_600) {
         format!("{} h", seconds / 3_600)
-    } else if seconds % 60 == 0 {
+    } else if seconds.is_multiple_of(60) {
         format!("{} min", seconds / 60)
     } else {
         format!("{seconds} s")
@@ -384,6 +430,7 @@ mod tests {
             }),
             secondary: None,
             credits: None,
+            spend_control: None,
             plan_type: Some("plus".to_string()),
             rate_limit_reached_type: Some("primary".to_string()),
             source: ProviderQuotaSource::ResponseHeaders,

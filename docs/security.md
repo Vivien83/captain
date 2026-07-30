@@ -17,8 +17,8 @@ the source code.
 1.  [Security Overview](#1-security-overview)
 2.  [Capability-Based Security](#2-capability-based-security)
 3.  [WASM Dual Metering](#3-wasm-dual-metering)
-4.  [Merkle Hash Chain Audit Trail](#4-merkle-hash-chain-audit-trail)
-5.  [Information Flow Taint Tracking](#5-information-flow-taint-tracking)
+4.  [Versioned Hash-Chain Audit Trail](#4-versioned-hash-chain-audit-trail)
+5.  [Heuristic Content Guards](#5-heuristic-content-guards)
 6.  [Ed25519 Manifest Signing](#6-ed25519-manifest-signing)
 7.  [SSRF Protection](#7-ssrf-protection)
 8.  [Secret Zeroization](#8-secret-zeroization)
@@ -27,7 +27,7 @@ the source code.
 11. [GCRA Rate Limiter](#11-gcra-rate-limiter)
 12. [Path Traversal Prevention](#12-path-traversal-prevention)
 13. [Subprocess Sandbox](#13-subprocess-sandbox)
-14. [Prompt Injection Scanner](#14-prompt-injection-scanner)
+14. [Advisory Skill Phrase Review](#14-advisory-skill-phrase-review)
 15. [Loop Guard](#15-loop-guard)
 16. [Session Repair](#16-session-repair)
 17. [Health Endpoint Redaction](#17-health-endpoint-redaction)
@@ -38,16 +38,16 @@ the source code.
 
 ## 1. Security Overview
 
-Captain implements **defense-in-depth** security.  No single mechanism is
-trusted to be the sole protector; instead, 16 independent systems form
-overlapping layers so that a failure in any one layer is caught by others.
+Captain implements **defense-in-depth** security. No single mechanism or review
+signal is treated as proof of safety; overlapping controls reduce risk and
+surface decisions that still require operator review.
 
 | # | System | Crate | Protects Against |
 |---|--------|-------|------------------|
 | 1 | Capability-Based Security | `captain-types` | Unauthorized actions by agents |
 | 2 | WASM Dual Metering | `captain-runtime` | Infinite loops, CPU DoS |
-| 3 | Merkle Audit Trail | `captain-runtime` | Tampered audit logs |
-| 4 | Taint Tracking | `captain-types` | Prompt injection, data exfiltration |
+| 3 | Versioned Audit Hash Chain | `captain-runtime` | Tampered audit logs |
+| 4 | Heuristic Content Guards | `captain-runtime` | Obvious dangerous shell and secret-bearing URL patterns |
 | 5 | Ed25519 Manifest Signing | `captain-types` | Supply chain attacks |
 | 6 | SSRF Protection | `captain-runtime` | Server-Side Request Forgery |
 | 7 | Secret Zeroization | `captain-runtime`, `captain-channels` | Memory forensics, key leakage |
@@ -55,8 +55,8 @@ overlapping layers so that a failure in any one layer is caught by others.
 | 9 | Security Headers | `captain-api` | XSS, clickjacking, MIME sniffing |
 | 10 | GCRA Rate Limiter | `captain-api` | API abuse, denial of service |
 | 11 | Path Traversal Prevention | `captain-runtime` | Directory traversal attacks |
-| 12 | Subprocess Sandbox | `captain-runtime` | Secret leakage via child processes |
-| 13 | Prompt Injection Scanner | `captain-skills` | Malicious skill prompts |
+| 12 | Guarded Host Process Boundary | `captain-runtime` | Secret leakage and unbounded child processes; not OS isolation |
+| 13 | Advisory Skill Phrase Review | `captain-skills` | Bounded review signals; not adversarial proof |
 | 14 | Loop Guard | `captain-runtime` | Stuck agent tool loops |
 | 15 | Session Repair | `captain-runtime` | Corrupted LLM conversation history |
 | 16 | Health Endpoint Redaction | `captain-api` | Information leakage |
@@ -214,6 +214,27 @@ The callback bridge handles Telegram decisions before model/session dispatch. Se
 [Captain Forge / CapSpec](CAPTAIN_FORGE_CAPSPEC.md) for activation, recovery,
 the authority boundary, and process-level certification evidence.
 
+### 2.6 Exact Tool Approval Rules
+
+Dangerous native tool calls use a separate operator boundary. A session or
+durable decision is keyed by the agent ID, canonical tool name, and a
+domain-separated BLAKE3 digest of the complete, untruncated tool input. The
+human-facing preview is a separate bounded field and is never used as the rule
+binding. Repeating another command with the same agent and tool therefore
+prompts again, even when both previews share the same truncated prefix. The broad
+`[approval].allow_always` list remains an explicit administrator compatibility
+override; an interactive **always** choice never mutates it.
+
+Durable decisions live in the human-readable
+`~/.captain/approval-rules.json`. Captain writes the file through synchronized
+atomic replacement, limits it to 256 rules and 1 MiB, validates schema,
+identities, unique bindings, bounded reasons, and secret-like content at boot,
+and fails boot closed if the file is malformed. Only the action digest is
+stored, never the raw command. A durable denial requires an operator reason.
+Control, API, TUI, and Telegram can revoke a rule by ID; decisions, automatic
+rule applications, and revocations enter the audit hash chain with actor,
+source, digest, and rule ID.
+
 ---
 
 ## 3. WASM Dual Metering
@@ -299,209 +320,124 @@ pub enum SandboxError {
 
 ---
 
-## 4. Merkle Hash Chain Audit Trail
+## 4. Versioned Hash-Chain Audit Trail
 
-**Source:** `captain-runtime/src/audit.rs`
+**Sources:** `captain-runtime/src/audit.rs`, `audit_chain.rs`,
+`audit_persistence.rs`
 
-Every security-critical action is appended to a tamper-evident Merkle hash
-chain, similar to a blockchain.  Each entry contains the SHA-256 hash of its
-own contents concatenated with the hash of the previous entry.
+Every security-critical action is appended to a tamper-evident SHA-256 hash
+chain. This is a linear chain, not a tree structure: it does not provide tree
+roots or inclusion proofs. New entries use an injective encoding with a
+big-endian `u64` length before every field. Legacy version-1 hashes remain
+readable so upgrades do not rewrite historical rows.
 
 ### 4.1 Auditable Actions
 
+`AuditAction` covers tool, capability, lifecycle, memory, file, network, shell,
+authentication, wire, configuration, learning, and approval activity.
+`ChainRecovery` opens a recovery epoch. `Unknown(String)` retains an action
+name introduced by a future version instead of silently reclassifying it.
+
+### 4.2 Entry and Hash Format
+
+Each entry stores a global `seq`, its `epoch`, `hash_version`, timestamp,
+agent, action, detail, outcome, predecessor digest, and digest. Version 2
+hashes every field, including version, epoch, and sequence:
+
 ```rust
-pub enum AuditAction {
-    ToolInvoke,
-    CapabilityCheck,
-    AgentSpawn,
-    AgentKill,
-    AgentMessage,
-    MemoryAccess,
-    FileAccess,
-    NetworkAccess,
-    ShellExec,
-    AuthAttempt,
-    WireConnect,
-    ConfigChange,
+fn hash_length_prefixed(hasher: &mut Sha256, field: &[u8]) {
+    hasher.update((field.len() as u64).to_be_bytes());
+    hasher.update(field);
 }
 ```
 
-### 4.2 Entry Structure
+Length-prefixing prevents two different field boundaries from producing the
+same encoded input.
 
-```rust
-pub struct AuditEntry {
-    pub seq: u64,          // Monotonically increasing sequence number
-    pub timestamp: String, // ISO-8601
-    pub agent_id: String,
-    pub action: AuditAction,
-    pub detail: String,    // e.g. tool name, file path
-    pub outcome: String,   // "ok", "denied", error message
-    pub prev_hash: String, // SHA-256 of previous entry (or 64 zeros)
-    pub hash: String,      // SHA-256 of this entry + prev_hash
-}
-```
+### 4.3 Persistence and Failure Policy
 
-### 4.3 Hash Computation
+For persistent logs, SQLite insertion completes before the in-memory vector or
+tip advances. `record()` returns `Result<String, AuditError>`. A database,
+schema, sequence, or lock failure discards the candidate entry, emits an error,
+and marks audit health degraded. Operations that cannot be rolled back use the
+explicit `record_or_alert()` policy; they continue only with a visible health
+alert.
 
-Each entry's hash is computed from all of its fields concatenated with the
-previous entry's hash:
+### 4.4 Immutable Recovery Epochs
 
-```rust
-fn compute_entry_hash(
-    seq: u64, timestamp: &str, agent_id: &str,
-    action: &AuditAction, detail: &str,
-    outcome: &str, prev_hash: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(seq.to_string().as_bytes());
-    hasher.update(timestamp.as_bytes());
-    hasher.update(agent_id.as_bytes());
-    hasher.update(action.to_string().as_bytes());
-    hasher.update(detail.as_bytes());
-    hasher.update(outcome.as_bytes());
-    hasher.update(prev_hash.as_bytes());
-    hex::encode(hasher.finalize())
-}
-```
+At boot, Captain verifies the active epoch. If verification fails, one SQLite
+transaction:
 
-### 4.4 Chain Integrity Verification
+1. marks that epoch `invalid` with its stored terminal digest;
+2. creates the next active epoch;
+3. appends `ChainRecovery`, whose predecessor and structured detail reference
+   the previous terminal digest.
 
-`AuditLog::verify_integrity()` walks the entire chain and recomputes every
-hash.  If any entry has been tampered with, the recomputed hash will not match
-the stored hash, or the `prev_hash` linkage will be broken:
+The verifier also requires every sequence at or after the active epoch's
+`start_seq` to belong to that epoch. A modified epoch field therefore cannot
+make an active entry disappear from verification, and the recovery epoch ID is
+chosen above every epoch value present in either metadata or stored entries.
 
-```rust
-pub fn verify_integrity(&self) -> Result<(), String> {
-    let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-    let mut expected_prev = "0".repeat(64);  // Genesis sentinel
+No audit entry is updated or deleted. Historical invalid epochs remain visible,
+so overall integrity stays `degraded` even though the new active epoch is
+verified and writable. A later restart reuses that epoch rather than creating
+another recovery entry.
 
-    for entry in entries.iter() {
-        if entry.prev_hash != expected_prev {
-            return Err(format!(
-                "chain break at seq {}: expected prev_hash {} but found {}",
-                entry.seq, expected_prev, entry.prev_hash
-            ));
-        }
-        let recomputed = compute_entry_hash(/* ... */);
-        if recomputed != entry.hash {
-            return Err(format!(
-                "hash mismatch at seq {}: expected {} but found {}",
-                entry.seq, recomputed, entry.hash
-            ));
-        }
-        expected_prev = entry.hash.clone();
-    }
-    Ok(())
-}
-```
+### 4.5 Verification and Surfaces
 
-### 4.5 Thread Safety
+`AuditLog::verify_integrity()` verifies the active epoch and fails if any
+historical epoch is sealed invalid or a runtime append failed. The authenticated
+`/api/health/detail`, `/api/audit/recent`, `/api/audit/verify`, Prometheus
+metrics, `captain security status`, `captain doctor`, and the TUI Audit screen
+all expose the same redacted state. `/api/health` reports only `ok` or
+`degraded`.
 
-`AuditLog` uses `Mutex<Vec<AuditEntry>>` and `Mutex<String>` for the tip hash.
-Both locks use `unwrap_or_else(|e| e.into_inner())` to recover from poisoned
-mutexes, ensuring the audit log remains available even after a panic.
-
-### 4.6 API
+There is intentionally no repair method and no `/api/audit/repair` route.
 
 | Method | Description |
 |--------|-------------|
-| `AuditLog::new()` | Creates an empty log with genesis sentinel (`"0" * 64`) |
-| `record(agent_id, action, detail, outcome)` | Appends an entry, returns its hash |
-| `verify_integrity()` | Validates the entire chain |
-| `tip_hash()` | Returns the hash of the most recent entry |
+| `AuditLog::new()` | Creates an empty in-memory epoch |
+| `record(...) -> Result<String, AuditError>` | Persists, then validates an entry |
+| `record_or_alert(...)` | Explicit non-rollback policy with health alert |
+| `verify_integrity()` | Validates active and historical integrity state |
+| `integrity_status()` | Returns redacted epoch and health metadata |
+| `tip_hash()` | Returns the active epoch tip |
 | `len()` / `is_empty()` | Entry count |
-| `recent(n)` | Returns the most recent `n` entries (cloned) |
+| `recent(n)` | Returns the most recent `n` entries |
 
 ---
 
-## 5. Information Flow Taint Tracking
+## 5. Heuristic Content Guards
 
-**Source:** `captain-types/src/taint.rs`
+**Source:** `captain-runtime/src/tools/security.rs`
 
-Captain implements a lattice-based taint propagation model that prevents
-tainted values from flowing into sensitive sinks without explicit
-declassification.  This guards against prompt injection, data exfiltration,
-and confused-deputy attacks.
+Captain applies conservative string-pattern checks immediately before selected
+shell and network sinks. These checks are defense in depth. They do **not**
+track data provenance, propagate labels through model context, or prove that
+unmatched content is safe.
 
-### 5.1 Taint Labels
+### 5.1 Shell Command Guard
 
-```rust
-pub enum TaintLabel {
-    ExternalNetwork,  // Data from external network requests
-    UserInput,        // Direct user input
-    Pii,              // Personally identifiable information
-    Secret,           // API keys, tokens, passwords
-    UntrustedAgent,   // Data from sandboxed/untrusted agents
-}
-```
+Outside explicit full-execution policy, the shell boundary rejects known shell
+metacharacter injection forms and a small reviewed list of high-risk patterns
+such as network-to-shell pipelines, decode-and-execute, and `eval`. The
+diagnostic identifies the matched pattern without logging the complete command.
 
-### 5.2 Tainted Values
+### 5.2 URL Content Guard
 
-```rust
-pub struct TaintedValue {
-    pub value: String,              // The payload
-    pub labels: HashSet<TaintLabel>, // Attached taint labels
-    pub source: String,             // Human-readable origin
-}
-```
+Web fetch, web download, web research, direct browser navigation, and browser
+batch navigation reject URLs containing obvious literal credential markers
+such as `api_key=`, `token=`, `secret=`, or `password=`. The diagnostic never
+echoes the supplied URL. Literal secret scanning and SSRF validation remain
+separate controls.
 
-Key methods:
+### 5.3 Explicit Limit
 
-| Method | Description |
-|--------|-------------|
-| `TaintedValue::new(value, labels, source)` | Create with labels |
-| `TaintedValue::clean(value, source)` | Create with no labels (untainted) |
-| `merge_taint(&mut self, other)` | Union of labels (for concatenation) |
-| `check_sink(&self, sink)` | Check if value can flow to sink |
-| `declassify(&mut self, label)` | Remove a specific label (explicit security decision) |
-| `is_tainted(&self) -> bool` | True if any labels present |
-
-### 5.3 Taint Sinks
-
-A `TaintSink` defines which labels are **blocked** from reaching it:
-
-| Sink | Blocked Labels | Rationale |
-|------|---------------|-----------|
-| `TaintSink::shell_exec()` | `ExternalNetwork`, `UntrustedAgent`, `UserInput` | Prevents command injection |
-| `TaintSink::net_fetch()` | `Secret`, `Pii` | Prevents data exfiltration |
-| `TaintSink::agent_message()` | `Secret` | Prevents secret leakage to other agents |
-
-### 5.4 Violation Handling
-
-When `check_sink()` finds a blocked label, it returns a `TaintViolation`:
-
-```rust
-pub struct TaintViolation {
-    pub label: TaintLabel,    // The offending label
-    pub sink_name: String,    // "shell_exec", "net_fetch", etc.
-    pub source: String,       // Where the tainted value came from
-}
-```
-
-Display: `taint violation: label 'Secret' from source 'env_var' is not allowed to reach sink 'net_fetch'`
-
-### 5.5 Declassification
-
-Declassification is an **explicit security decision**.  The caller asserts
-that the value has been sanitized:
-
-```rust
-tainted.declassify(&TaintLabel::ExternalNetwork);
-tainted.declassify(&TaintLabel::UserInput);
-// After declassification, value can flow to shell_exec
-assert!(tainted.check_sink(&TaintSink::shell_exec()).is_ok());
-```
-
-### 5.6 Taint Propagation
-
-When two values are combined (concatenation, interpolation), the result must
-carry the union of both label sets:
-
-```rust
-let mut combined = TaintedValue::new(/* ... */);
-combined.merge_taint(&other_value);
-// combined.labels is now the union of both
-```
+These guards are heuristic pattern classification, not information-flow
+tracking. Content provenance across prompts, tool outputs, transformations,
+and sub-agents is not implemented. A future provenance system requires typed
+source metadata and propagation at every boundary; it must not be inferred
+from the current checks.
 
 ---
 
@@ -675,6 +611,15 @@ http://localhost:8080/api       ->  localhost:8080
 http://example.com              ->  example.com:80
 ```
 
+### 7.6 Protected Web Context
+
+The native `web_fetch`, `web_search`, and `web_research_batch` tools execute
+only through the `WebToolsContext` built by the kernel. If that protected
+context is unavailable, the request fails closed with an explicit runtime
+error. Captain does not create a fallback HTTP client with weaker redirect or
+SSRF rules. `web_download` uses its own bounded download engine, which applies
+the same URL and resolved-address checks before every redirect.
+
 ---
 
 ## 8. Secret Zeroization
@@ -742,6 +687,38 @@ Without zeroization, secrets remain in memory after use until the OS
 reclaims the page.  An attacker with access to a core dump, swap file, or
 memory forensics tool can recover API keys.  `Zeroizing<String>` ensures
 the secret is overwritten as soon as it is no longer needed.
+
+### 8.4 External Secret Files
+
+Production deployments can map logical credential keys to read-only files in
+`$CAPTAIN_HOME/secret-sources.toml`. This supports container secrets, systemd
+credentials, and secret-manager sidecars without copying values into Captain's
+configuration or process environment.
+
+The mapping is authoritative and fail-closed. If a configured source is
+missing, unreadable, unsafe, empty, oversized, or malformed, Captain does not
+fall back to `secrets.env`, `vault.enc`, `.env`, or an environment variable
+with the same key. The registry accepts only absolute `type = "file"` entries;
+arbitrary command execution is intentionally unsupported.
+
+At load and read time Captain enforces a versioned strict schema, bounded
+registry/source sizes, regular-file type, UTF-8 single-line values, and Unix
+write permissions. Both registry and secret reads use one opened descriptor to
+avoid path-swap races. Group/world-writable files are rejected; a read-only
+group/world-readable mount is reported as a warning. Resolved values use
+`Zeroizing<String>`.
+
+The registry and all configured source targets join the kernel's canonical
+file-tool blocklist. Canonical path checks, including symlink resolution, keep
+them inaccessible even when a user adds their parent directory as a workspace.
+Readiness surfaces disclose only key, source type, readiness, and stable
+error/warning codes. Values and individual source paths are never serialized.
+Local writes to an externally managed key are refused, and signed outbound
+event webhooks and per-agent callbacks fail closed rather than sending an
+unsigned request when their mapped secret is unavailable. A durable per-agent
+callback remains queued while its authoritative URL or signing secret is
+temporarily unavailable. Per-agent ingress authentication uses the same
+resolver and constant-time comparison.
 
 ---
 
@@ -906,11 +883,9 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("GET", "/api/config")                        => 2,
         ("GET", "/api/usage")                         => 3,
         ("GET", p) if p.starts_with("/api/audit")     => 5,
-        ("GET", p) if p.starts_with("/api/marketplace")=> 10,
         ("POST", "/api/agents")                       => 50,
         ("POST", p) if p.contains("/message")         => 30,
         ("POST", p) if p.contains("/run")             => 100,
-        ("POST", "/api/skills/install")               => 50,
         ("POST", "/api/skills/uninstall")             => 10,
         ("PUT", p) if p.contains("/update")           => 10,
         _                                             => 5,
@@ -1025,35 +1000,32 @@ pattern like `"*"`, path traversal is still blocked.
 
 ---
 
-## 13. Subprocess Sandbox
+## 13. Guarded Subprocess Boundary
 
-**Source:** `captain-runtime/src/subprocess_sandbox.rs`
+**Sources:** `captain-runtime/src/guarded_exec.rs`,
+`captain-runtime/src/subprocess_env_scrub.rs`,
+`captain-runtime/src/subprocess_guard.rs`
 
-When the runtime spawns child processes (e.g., for the shell tool or skill
-execution), the inherited environment must be stripped to prevent accidental
-leakage of secrets.
+Agent-controlled execution has one shared boundary. It covers the shell tool,
+goal checks and recovery, Markdown skill capabilities, `execute_code`,
+workflow shell actions, static skill checks, package wrappers, Hand dependency
+installation, and WASM host execution.
+
+Before a process can start, `guarded_exec` applies the active execution policy,
+critical-pattern decision, literal-secret and `secrets.env` guards, executable
+path validation, an explicit workspace, bounded runtime/output, and structured
+audit events that never contain the command body. The interactive shell tool
+can return a one-shot approval requirement. Unattended surfaces cannot invent
+an approval: critical content fails closed.
 
 ### 13.1 Environment Clearing
 
-```rust
-pub fn sandbox_command(cmd: &mut tokio::process::Command, allowed_env_vars: &[String]) {
-    cmd.env_clear();  // Remove ALL inherited env vars
-
-    // Re-add platform-independent safe vars
-    for var in SAFE_ENV_VARS {
-        if let Ok(val) = std::env::var(var) {
-            cmd.env(var, val);
-        }
-    }
-
-    // Re-add Windows-specific safe vars (on Windows)
-    #[cfg(windows)]
-    for var in SAFE_ENV_VARS_WINDOWS { /* ... */ }
-
-    // Re-add caller-specified allowed vars
-    for var in allowed_env_vars { /* ... */ }
-}
-```
+Every covered process is constructed or configured by `guarded_exec`. It calls
+`env_clear()` first, restores only the safe host allowlist and any
+caller-authorized variable names, then applies explicit per-call values.
+Credentials intentionally injected for one skill are therefore available to
+that skill, while every unrelated value loaded into the daemon from
+`secrets.env` remains absent.
 
 ### 13.2 Safe Environment Variables
 
@@ -1074,9 +1046,10 @@ pub const SAFE_ENV_VARS_WINDOWS: &[&str] = &[
 ];
 ```
 
-Variables not in these lists and not in `allowed_env_vars` are **never**
-passed to the child process.  This means `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-database credentials, and all other secrets are stripped.
+Variables not in these lists, not explicitly allowlisted by name, and not
+provided as explicit per-call values are **never** passed to the child process.
+This means `OPENAI_API_KEY`, `GEMINI_API_KEY`, database credentials, and all
+other daemon secrets are stripped by default.
 
 ### 13.3 Executable Path Validation
 
@@ -1098,21 +1071,57 @@ pub fn validate_executable_path(path: &str) -> Result<(), String> {
 This prevents an agent from escaping its working directory via crafted paths
 like `../../bin/dangerous`.
 
-### 13.4 Shell Injection Prevention
+### 13.4 Execution Policy and Regression Guard
 
-The `host_shell_exec` function uses `Command::new(command).args(&args)` which
-does **not** invoke a shell.  Each argument is passed directly to the
-process, preventing shell injection via metacharacters like `;`, `|`, `&&`.
+Allowlist mode rejects shell metacharacters before direct argument parsing and
+requires the executable to be explicitly allowed. Full mode still applies the
+configured blocklist and critical-pattern policy. New installations use
+`full`/`safe`: routine commands remain available, while recognized
+catastrophic commands fail closed. `open` is an explicit opt-in that can return
+a content-bound approval requirement, and `paranoid` requests approval for
+every shell-affecting operation.
+
+Critical-command recognition normalizes case, whitespace, short/long flag
+forms, common wrappers, and nested `sh`/`bash`/`zsh`/`dash -c` or `eval`
+payloads before structural checks. This is a
+`normalized_lexical_heuristic`, not proof that arbitrary shell code is safe.
+WASM host execution passes arguments directly without shell parsing, but it
+uses the same content review, environment scrub, output bound, timeout, and
+audit lifecycle.
+
+`scripts/guarded-exec-audit.sh` is mandatory in both tranche and release gates.
+It fails if a covered sink creates a raw process or mutates a child environment
+outside `guarded_exec`; a new literal `bash`, `sh`, or `cmd` constructor
+anywhere else also requires an explicit fixed-command review marker.
+
+### 13.5 Exact Host Isolation Posture
+
+The native execution backend reports:
+
+```json
+{
+  "backend": "host_process",
+  "isolation_level": "environment_scrub",
+  "os_isolation": false,
+  "environment_scrub": true,
+  "dangerous_command_guard": "normalized_lexical_heuristic"
+}
+```
+
+`env_clear()`, workspace validation, process-tree cleanup, and runtime/output
+bounds are host-process protections. They are not namespace, seccomp,
+Landlock, chroot, or container isolation. Operators must choose the explicit
+Docker or WASM backend when an operating-system isolation boundary is required.
 
 ---
 
-## 14. Prompt Injection Scanner
+## 14. Advisory Skill Phrase Review
 
 **Source:** `captain-skills/src/verify.rs`
 
-The `SkillVerifier` provides two scanning functions: `security_scan()` for
-skill manifests and `scan_prompt_content()` for skill prompt text (SKILL.md
-body).
+The `SkillVerifier` provides manifest review signals through `security_scan()`
+and a separately qualified prompt-text report through
+`scan_prompt_content_advisory()`.
 
 ### 14.1 Manifest Security Scan
 
@@ -1128,10 +1137,14 @@ requirements:
 | Filesystem write tool | Warning | Tool is `file_write` or `file_delete` |
 | Too many tools | Info | More than 10 tools required |
 
-### 14.2 Prompt Injection Scan
+### 14.2 Prompt-Text Heuristic
 
-`SkillVerifier::scan_prompt_content(content)` detects common attack patterns
-in skill prompt text:
+`SkillVerifier::scan_prompt_content_advisory(content)` performs lowercase
+phrase matching in skill prompt text. Every result carries
+`assurance = advisory_heuristic`. A finding is not proof of an attack, and an
+empty report is not proof of safety. The registry applies a conservative policy
+that refuses high-risk matches; this policy does not upgrade the scanner's
+assurance.
 
 **Critical -- Prompt override attempts:**
 
@@ -1170,10 +1183,12 @@ pub fn verify_checksum(data: &[u8], expected_sha256: &str) -> bool {
 }
 ```
 
-Skills installed from any configured compatibility source should have their
-content verified against a known SHA256 hash to detect tampering during
-download. ClawHub/marketplace compatibility remains frozen outside the active
-core release path.
+Remote marketplace compatibility is frozen because Captain cannot currently
+bind downloaded content to a reviewed publisher identity. Its API routes and
+TUI actions are absent, the CLI accepts only an existing local directory, and
+retained compatibility clients fail before network or filesystem access.
+SHA256 can detect change only when the expected digest comes from a trusted
+channel; a downloaded self-declared digest is not publisher authentication.
 
 ### 14.4 Warning Structure
 
@@ -1357,29 +1372,62 @@ load balancer health checks.
     "restart_count": 2,
     "agent_count": 15,
     "database": "connected",
+    "audit": {
+        "valid": true,
+        "status": "healthy",
+        "active_epoch": 0,
+        "active_epoch_valid": true,
+        "invalid_epochs": [],
+        "entry_count": 42,
+        "tip_hash": "8f6d..."
+    },
     "config_warnings": []
 }
 ```
 
-### 17.3 Localhost Fallback
+### 17.3 Deny-by-Default Authentication Perimeter
 
-When no API key is configured, the `auth` middleware restricts all
-non-health endpoints to loopback addresses only:
+The global authentication bypass is one typed `PUBLIC_ALLOWLIST`. It contains
+only the Control boot/static files, minimal health and version responses, the
+browser login/check/logout endpoints, and the exact per-agent ingress route.
+Every other method/path pair is private. In particular, `/terminal`, `/config`,
+the A2A agent card and task routes, operational status, agents, sessions,
+approvals, logs, budgets, providers, and the GitHub Copilot OAuth flow require
+global authentication.
 
-```rust
-if api_key.is_empty() {
-    let is_loopback = request.extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip().is_loopback())
-        .unwrap_or(false);
-    if !is_loopback {
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(/* "No API key configured. Remote access denied." */)
-            ...;
-    }
-}
-```
+The per-agent ingress exception is not anonymous access. Only
+`POST /hooks/agents/{uuid}/ingress` bypasses the global middleware, and its
+handler applies the agent-specific Bearer token, body bounds, idempotency, and
+rate limit before an agent turn. Malformed IDs and extra path segments remain
+behind global authentication.
+
+When both the API key and browser authentication are disabled, the auth layer
+allows local development requests. Daemon startup separately refuses a
+non-loopback bind without an API key. That deployment boundary does not add
+paths to the public allowlist.
+
+### 17.4 Browser Origin and Host Perimeter
+
+CORS is restrictive regardless of whether a daemon API key exists. The
+default exact origins are `http://localhost:{api_port}`,
+`http://127.0.0.1:{api_port}`, and the IPv6 loopback equivalent. Captain
+allows only the reviewed `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, and
+`OPTIONS` methods and the `Accept`, `Authorization`, `Content-Type`, and
+`X-Filename` request headers. It never switches to wildcard origins, methods,
+or headers because authentication is absent or present.
+
+Operators can extend the list with exact HTTP(S) origins in
+`[api].allowed_origins`. `deployment.public_url` is an additional explicit
+origin for a declared reverse-proxy deployment. Invalid entries are ignored
+fail-closed and reported without logging their raw value. Policy changes
+require a daemon restart because CORS and request middleware are built at
+server startup.
+
+Every request also passes an exact `Host` check before routing. Loopback hosts,
+the concrete non-wildcard listen address, hosts derived from configured
+origins, and the host in `deployment.public_url` are accepted. Missing,
+ambiguous, malformed, and undeclared hosts return `400`. This check is the DNS
+rebinding boundary; CORS alone is not treated as one.
 
 ---
 
@@ -1390,6 +1438,14 @@ if api_key.is_empty() {
 ```toml
 # API Authentication
 api_key = "your-secret-api-key"  # Empty = localhost-only mode
+
+[api]
+allowed_origins = []  # Exact additional HTTP(S) origins; restart after changes
+
+[auth]
+enabled = true
+session_ttl_hours = 72
+session_cookie_secure = "auto"  # auto, always, or never for explicit local HTTP
 
 # OFP Wire Protocol
 [network]
@@ -1403,11 +1459,18 @@ max_memory_bytes = 16777216 # 16 MB max WASM memory
 
 # Rate Limiting
 # 500 tokens/minute/IP (not currently configurable via config.toml)
+# Web login also has bounded per-IP + per-username exponential backoff.
 
 # Web Search SSRF Protection
 [web]
 # SSRF protection is always on and cannot be disabled
 ```
+
+Web passwords are salted Argon2id PHC strings. Legacy SHA-256 hashes migrate
+atomically after one successful login. Browser session cookies are HttpOnly,
+SameSite=Strict, and `Secure` according to `session_cookie_secure`. Browser
+WebSocket/SSE connections use 30-second path/IP/epoch-bound one-time tickets;
+protected routes never authenticate from a `token` query parameter.
 
 ### 18.2 Environment Variables for Secrets
 
@@ -1460,16 +1523,13 @@ The default `LoopGuardConfig` values are:
 | `block_threshold` | 5 | Identical calls before blocking |
 | `global_circuit_breaker` | 30 | Total calls before circuit break |
 
-### 18.5 Subprocess Sandbox Allowlists
+### 18.5 Subprocess Environment Allowlists
 
-To pass specific environment variables to subprocesses:
-
-```rust
-sandbox_command(&mut cmd, &["MY_CUSTOM_VAR".to_string()]);
-```
-
-Only variables explicitly listed in `allowed_env_vars` (plus the safe
-defaults) will be inherited.
+Agent-controlled child processes must enter through `guarded_exec`; callers do
+not configure a lower-level sandbox helper directly. The boundary clears the
+environment, restores the fixed safe defaults, then adds only names explicitly
+listed in `allowed_env_vars` and values intentionally supplied for that call.
+This is environment scrubbing, not operating-system isolation.
 
 ---
 
@@ -1498,6 +1558,62 @@ defaults) will be inherited.
 - **zeroize:** Official RustCrypto approach to zeroing secrets; integrates with `Drop`.
 - **governor:** Battle-tested GCRA implementation with `DashMap`-backed concurrent state.
 
+### 19.2 Dependency Audit Policy
+
+Release readiness executes `scripts/dependency-audit.sh`. The script does not
+trust the configured ignore list by itself:
+
+1. the normal RustSec audit must contain no unreviewed vulnerability;
+2. an unfiltered audit from outside the repository re-exposes every configured
+   exception;
+3. package names, versions, advisory IDs, enabled features, and direct parent
+   chains must match the reviewed baseline exactly;
+4. `bincode`, `rsa`, `pkcs1`, and `num-bigint-dig` must remain absent;
+5. `russh` and both resolved `ssh-key` versions must have no RSA feature.
+
+`fastembed 5.13.2` remains pinned to `ort 2.0.0-rc.11` because Captain ships
+ONNX Runtime 1.23.2 on every release target. FastEmbed 5.17 requires the ORT
+rc13/ONNX Runtime 1.28 ABI; that upgrade is deferred until all five release
+targets certify the native runtime together. Its `number_prefix 0.4.0`
+warning is therefore accepted transitively and pinned exactly.
+
+`spin 0.9.8` is yanked but not covered by a vulnerability advisory. It is
+present only through `flume 0.12.0`, itself required by `mdns-sd 0.20.3`, and
+is pinned as an explicit release warning rather than hidden.
+
+The two reviewed vulnerability exceptions are RUSTSEC-2026-0194 and
+RUSTSEC-2026-0195 on `quick-xml 0.37.5`. The only parent is
+`tauri-winrt-notification 0.7.2` in the Windows desktop notification chain.
+That crate calls `quick_xml::escape::escape` only; it does not call the
+affected `NsReader`, `Attributes`, or `try_get_attribute` parser paths. The
+other plist/Tauri path has been upgraded to `quick-xml 0.41.0`. The exceptions
+must be removed when `notify-rust` accepts
+`tauri-winrt-notification >=0.8`.
+
+RSA SSH private keys and RSA-only server host keys are intentionally
+unsupported while RUSTSEC-2023-0071 has no fixed upstream implementation.
+Captain accepts Ed25519 and ECDSA P-256 private keys and returns an actionable
+error when an unsupported key is imported or loaded.
+
+### 19.3 Release Provenance
+
+The local release publisher generates one in-toto Statement v1 with a SLSA
+provenance v1 predicate after all five host targets have completed. It binds
+the 20 archive, checksum, manifest, and installer assets to the public Git
+commit and tree, the exact `Cargo.lock`, local toolchain identity, target set,
+and platform-manifest timestamps. Its verifier recomputes the complete subject
+set and rejects any modified or mixed-revision release.
+
+Docker `linux/amd64` and `linux/arm64` are built and pushed sequentially by
+digest with BuildKit provenance `mode=max`. The combined version/channel index
+is created only after both digests are remotely inspectable, and verification
+requires both image platforms plus their attestation manifests.
+
+The alpha host attestation and sidecar are not independently signed and do not
+claim SLSA build-level certification. This limitation, plus the ad-hoc macOS
+signature and absent Windows Authenticode signature, remains public in
+[`docs/release-provenance.md`](release-provenance.md).
+
 ---
 
 ## Threat Model Summary
@@ -1507,9 +1623,9 @@ defaults) will be inherited.
 | Agent requests unauthorized file access | Capability-based security (Section 2) |
 | Agent spawns child with elevated privileges | Capability inheritance validation (Section 2.4) |
 | WASM skill runs infinite loop | Dual metering: fuel + epoch (Section 3) |
-| Attacker tampers with audit log | Merkle hash chain (Section 4) |
-| Prompt injection via external data | Taint tracking (Section 5) |
-| Data exfiltration via LLM | Taint sinks block Secret/PII to net_fetch (Section 5.3) |
+| Attacker tampers with audit log | Versioned hash chain and immutable recovery epochs (Section 4) |
+| Obvious dangerous shell/URL text | Heuristic content guards (Section 5) |
+| Literal secret exfiltration through native tools | Literal-secret scanner plus URL marker guard (Sections 5.2 and 8) |
 | Tampered agent manifest | Ed25519 signing (Section 6) |
 | SSRF to cloud metadata | Private IP + hostname blocking + DNS check (Section 7) |
 | API key recovery from memory dump | Zeroizing<String> (Section 8) |
@@ -1518,7 +1634,7 @@ defaults) will be inherited.
 | API brute force / DoS | GCRA rate limiter (Section 11) |
 | Path traversal via `../` | safe_resolve_path / safe_resolve_parent (Section 12) |
 | Secret leakage to child processes | env_clear() + allowlist (Section 13) |
-| Malicious skills from compatibility sources | Prompt injection scanner + SHA256 checksum (Section 14) |
+| Untrusted skill source | Remote marketplace frozen; complete local source review plus manifest policy and advisory phrase findings (Section 14) |
 | Agent stuck in tool loop | LoopGuard with graduated response (Section 15) |
 | Corrupted LLM session history | Session repair (Section 16) |
 | Information leakage from health endpoint | Redacted public endpoint (Section 17) |

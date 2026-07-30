@@ -14,13 +14,15 @@ pub use crate::telegram_callbacks::{
     build_approval_keyboard, build_ask_user_keyboard, build_capspec_approval_keyboard,
     build_capspec_uncertain_keyboard, build_learning_approval_keyboard,
     build_model_switch_keyboard, build_model_switch_keyboard_with_recommendation,
-    build_project_ask_keyboard, build_skill_refinement_keyboard, parse_approval_callback,
-    parse_ask_user_callback, parse_capspec_callback, parse_learning_callback,
-    parse_model_switch_callback, parse_project_ask_callback, parse_runtime_update_callback,
+    build_project_ask_keyboard, build_reasoning_keyboard, build_skill_refinement_keyboard,
+    build_suggested_replies_keyboard, parse_approval_callback, parse_ask_user_callback,
+    parse_capspec_callback, parse_learning_callback, parse_model_switch_callback,
+    parse_project_ask_callback, parse_reasoning_callback, parse_runtime_update_callback,
     parse_skill_proposal_callback, parse_skill_refinement_callback,
     parse_workflow_learning_callback, CapSpecTelegramAction, CapSpecTelegramCallback,
     RuntimeUpdateTelegramCallback, WorkflowLearningTelegramCallback,
 };
+use crate::telegram_command_menu::sync_telegram_command_menu;
 use crate::telegram_html::{sanitize_telegram_html, telegram_html_to_plain_text};
 use crate::telegram_reply_context::apply_telegram_reply_context;
 use crate::telegram_rich::{
@@ -860,10 +862,8 @@ impl TelegramAdapter {
     /// `ChannelAdapter::send` / `ChannelContent` plumbing (which has no
     /// keyboard variant).
     ///
-    /// Used by the kernel-side memory-approval subscriber to surface
-    /// the four approval buttons (Approve once / Session / Always /
-    /// Reject) right next to the candidate triple, so the user can
-    /// decide without opening the dashboard.
+    /// Used by kernel-side operator cards to surface bounded decisions next
+    /// to their exact request, so the user can act without opening Control.
     pub async fn send_text_with_keyboard(
         &self,
         chat_id: i64,
@@ -1295,6 +1295,8 @@ fn route_known_callback_command(data: &str) -> Option<TelegramKnownCallbackComma
     let (name, args, route, stop_on_closed) =
         if let Some((name, args)) = parse_model_switch_callback(data) {
             (name, args, "model_switch", false)
+        } else if let Some((name, args)) = parse_reasoning_callback(data) {
+            (name, args, "reasoning", false)
         } else if let Some((name, args)) = parse_project_ask_callback(data) {
             (name, args, "project_ask", false)
         } else if let Some((name, args)) = parse_learning_callback(data) {
@@ -1448,6 +1450,23 @@ impl ChannelAdapter for TelegramAdapter {
             *username = Some(bot_name.clone());
         }
         info!("Telegram bot @{bot_name} connected");
+
+        let command_menu_report =
+            sync_telegram_command_menu(&self.client, &self.api_base_url, self.token.as_str()).await;
+        if command_menu_report.failures.is_empty() {
+            info!(
+                command_count = command_menu_report.command_count,
+                locales = command_menu_report.registered_locales,
+                "Telegram: native command menu synchronized"
+            );
+        } else {
+            warn!(
+                command_count = command_menu_report.command_count,
+                locales = command_menu_report.registered_locales,
+                failures = %command_menu_report.failures.join("; "),
+                "Telegram: command menu synchronization incomplete (non-fatal)"
+            );
+        }
 
         // Clear any existing webhook to avoid 409 Conflict during getUpdates polling.
         // This is necessary when the daemon restarts — the old polling session may
@@ -2062,6 +2081,15 @@ mod tests {
         );
         assert!(!model.stop_on_closed);
 
+        let reasoning = route_known_callback_command("reasoning:01234567-abc:high").unwrap();
+        assert_eq!(reasoning.route, "reasoning");
+        assert_eq!(reasoning.name, "reasoning");
+        assert_eq!(
+            reasoning.args,
+            vec!["@agent:01234567-abc".to_string(), "high".to_string()]
+        );
+        assert!(!reasoning.stop_on_closed);
+
         let approval = route_known_callback_command("approval:once:req-42").unwrap();
         assert_eq!(approval.route, "approval");
         assert_eq!(approval.name, "approve");
@@ -2196,9 +2224,9 @@ mod tests {
         );
     }
 
-    /// Q.11.b.2 — keyboard now has the 4 approval choices.
+    /// Approval keyboard exposes exact allow and deny scopes.
     #[test]
-    fn test_q11b_build_approval_keyboard_has_four_buttons() {
+    fn approval_keyboard_has_six_bounded_choices() {
         let kb = build_approval_keyboard("req-42");
         // We accept either one row of 4 buttons or two rows summing to 4.
         let rows = kb["inline_keyboard"]
@@ -2213,15 +2241,13 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            datas.len(),
-            4,
-            "expected 4 buttons (once/session/always/deny), got {datas:?}"
-        );
+        assert_eq!(datas.len(), 6, "expected 6 scoped buttons, got {datas:?}");
         assert!(datas.contains(&"approval:once:req-42"));
         assert!(datas.contains(&"approval:session:req-42"));
         assert!(datas.contains(&"approval:always:req-42"));
         assert!(datas.contains(&"approval:deny:req-42"));
+        assert!(datas.contains(&"approval:deny_session:req-42"));
+        assert!(datas.contains(&"approval:deny_always:req-42"));
     }
 
     #[test]

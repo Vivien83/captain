@@ -6,13 +6,14 @@ pub(crate) async fn send_channel_test_message(
     channel_name: &str,
     target_id: &str,
     config_values: Option<&serde_json::Value>,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let test_msg = "Captain test message - your channel is connected.";
     match channel_name {
         "discord" => {
-            let token = std::env::var("DISCORD_BOT_TOKEN")
-                .map_err(|_| "DISCORD_BOT_TOKEN not set".to_string())?;
+            let token = resolve("DISCORD_BOT_TOKEN")
+                .ok_or_else(|| "DISCORD_BOT_TOKEN not set".to_string())?;
             let url = format!("https://discord.com/api/v10/channels/{target_id}/messages");
             let response = client
                 .post(&url)
@@ -24,8 +25,8 @@ pub(crate) async fn send_channel_test_message(
             require_success(response, "Discord").await
         }
         "telegram" => {
-            let token = std::env::var("TELEGRAM_BOT_TOKEN")
-                .map_err(|_| "TELEGRAM_BOT_TOKEN not set".to_string())?;
+            let token = resolve("TELEGRAM_BOT_TOKEN")
+                .ok_or_else(|| "TELEGRAM_BOT_TOKEN not set".to_string())?;
             let url = format!("https://api.telegram.org/bot{token}/sendMessage");
             let response = client
                 .post(&url)
@@ -36,7 +37,7 @@ pub(crate) async fn send_channel_test_message(
             require_success(response, "Telegram").await
         }
         "signal" => send_signal_test_message(&client, target_id, test_msg, config_values).await,
-        "email" => send_email_test_message(target_id, test_msg, config_values).await,
+        "email" => send_email_test_message(target_id, test_msg, config_values, resolve).await,
         _ => Err(format!(
             "Live test messaging not supported for {channel_name}."
         )),
@@ -78,6 +79,7 @@ async fn send_email_test_message(
     target_id: &str,
     text: &str,
     config_values: Option<&serde_json::Value>,
+    resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
 ) -> Result<(), String> {
     if !target_id.contains('@') || !target_id.contains('.') {
         return Err(format!("Invalid email address: '{target_id}'"));
@@ -86,7 +88,7 @@ async fn send_email_test_message(
         .and_then(|value| value.as_object())
         .ok_or_else(|| "Email config not found".to_string())?;
     let password_env = string_field(values, "password_env").unwrap_or("EMAIL_PASSWORD");
-    let password = std::env::var(password_env).map_err(|_| format!("{password_env} not set"))?;
+    let password = resolve(password_env).ok_or_else(|| format!("{password_env} not set"))?;
     let adapter = captain_channels::email::EmailAdapter::new(
         required_string_field(values, "imap_host")?.to_string(),
         u16_field(values, "imap_port", 993)?,
@@ -202,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn email_test_delivery_requires_config_values() {
-        let err = send_channel_test_message("email", "user@example.com", None)
+        let err = send_channel_test_message("email", "user@example.com", None, &|_| None)
             .await
             .expect_err("email test delivery must require config");
 
@@ -219,7 +221,7 @@ mod tests {
             "allowed_senders": ["user@example.com"]
         });
 
-        let err = send_channel_test_message("email", "not-an-email", Some(&values))
+        let err = send_channel_test_message("email", "not-an-email", Some(&values), &|_| None)
             .await
             .expect_err("email recipient must be validated locally");
 

@@ -5,9 +5,11 @@
 
 pub mod agent;
 pub mod agent_api;
+pub mod agent_delegation;
 pub mod approval;
 pub mod capability;
 pub mod comms;
+pub mod compaction;
 pub mod config;
 pub mod config_template;
 pub mod durable_fs;
@@ -19,11 +21,11 @@ pub mod memory;
 pub mod message;
 pub mod model_catalog;
 pub mod quota;
+pub mod reasoning;
 pub mod release_update;
 pub mod scheduler;
 pub mod serde_compat;
 pub mod ssrf_guard;
-pub mod taint;
 pub mod tool;
 pub mod tool_compat;
 pub mod version;

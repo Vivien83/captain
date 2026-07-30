@@ -668,6 +668,8 @@ fn validate_operator_token(value: &str) -> Result<(), WorkflowLearningControlErr
     }
 }
 
+// The SQL event row is intentionally explicit so field order stays reviewable.
+#[allow(clippy::too_many_arguments)]
 fn insert_event(
     tx: &Transaction<'_>,
     idempotency_key: &str,

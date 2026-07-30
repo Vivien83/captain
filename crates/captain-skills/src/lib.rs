@@ -5,7 +5,9 @@
 //! - TOML + Python scripts
 //! - TOML + WASM modules
 //! - TOML + Node.js modules (OpenClaw compatibility)
-//! - Remote skills from Captain Marketplace registry
+//!
+//! Remote marketplace clients are retained only for format compatibility.
+//! Their public operations fail closed before network or filesystem access.
 
 pub mod bundled;
 pub mod clawhub;
@@ -44,6 +46,18 @@ pub enum SkillError {
     YamlParse(String),
     #[error("Security blocked: {0}")]
     SecurityBlocked(String),
+    #[error(
+        "Remote skill marketplaces are frozen because publisher-backed integrity is unavailable; install only a reviewed local skill directory"
+    )]
+    RemoteMarketplaceFrozen,
+}
+
+/// Enforce the release policy for remote skill marketplaces.
+///
+/// This guard intentionally has no configuration bypass. Reopening remote
+/// installation requires a new publisher-backed integrity design and review.
+pub fn require_remote_marketplace_access() -> Result<(), SkillError> {
+    Err(SkillError::RemoteMarketplaceFrozen)
 }
 
 /// The runtime type for a skill.

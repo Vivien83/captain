@@ -21,6 +21,8 @@ impl Severity {
     }
 }
 
+// Runtime health intentionally assembles independently-owned status domains.
+#[allow(clippy::too_many_arguments)]
 pub fn build_runtime_health_status(
     llm_driver_ready: bool,
     channels: &Value,
@@ -30,6 +32,7 @@ pub fn build_runtime_health_status(
     disk: &Value,
     shutdown: &Value,
     budget: &Value,
+    outbound_delivery: &Value,
 ) -> Value {
     let mut issues = Vec::new();
     let mut max_severity = Severity::Ok;
@@ -77,6 +80,7 @@ pub fn build_runtime_health_status(
     add_disk_issue(&mut issues, &mut max_severity, disk);
     add_shutdown_issue(&mut issues, &mut max_severity, shutdown);
     add_provider_quota_issue(&mut issues, &mut max_severity, budget);
+    add_outbound_delivery_issue(&mut issues, &mut max_severity, outbound_delivery);
 
     let actions = unique_actions(&issues);
     serde_json::json!({
@@ -85,6 +89,35 @@ pub fn build_runtime_health_status(
         "issues": issues,
         "operator_actions": actions,
     })
+}
+
+fn add_outbound_delivery_issue(
+    issues: &mut Vec<Value>,
+    max_severity: &mut Severity,
+    delivery: &Value,
+) {
+    let pending = delivery["pending"].as_u64().unwrap_or(0);
+    let attempting = delivery["attempting"].as_u64().unwrap_or(0);
+    let dead = delivery["dead"].as_u64().unwrap_or(0);
+    let ambiguous = delivery["possible_duplicates"].as_u64().unwrap_or(0);
+    if pending == 0 && attempting == 0 && dead == 0 && ambiguous == 0 {
+        return;
+    }
+    let severity = if dead > 0 {
+        Severity::Warn
+    } else {
+        Severity::Watch
+    };
+    push_issue(
+        issues,
+        max_severity,
+        severity,
+        "outbound_delivery",
+        &format!(
+            "{pending} pending response(s), {attempting} attempting, {dead} dead, {ambiguous} ambiguous."
+        ),
+        "Inspect `captain status --json | jq '.outbound_delivery'` and channel connectivity.",
+    );
 }
 
 fn add_provider_quota_issue(issues: &mut Vec<Value>, max_severity: &mut Severity, budget: &Value) {
@@ -301,7 +334,7 @@ fn unique_actions(issues: &[Value]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn clean_inputs() -> (Value, Value, Value, Value, Value, Value, Value) {
+    fn clean_inputs() -> (Value, Value, Value, Value, Value, Value, Value, Value) {
         (
             serde_json::json!({"locked": []}),
             serde_json::json!({
@@ -335,12 +368,19 @@ mod tests {
                 "provider_subscriptions": {"state": "ok"},
                 "operator_actions": []
             }),
+            serde_json::json!({
+                "pending": 0,
+                "attempting": 0,
+                "dead": 0,
+                "possible_duplicates": 0
+            }),
         )
     }
 
     #[test]
     fn runtime_health_is_ok_when_core_signals_are_clean() {
-        let (channels, workload, agent_api, consciousness, disk, shutdown, budget) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, disk, shutdown, budget, outbound) =
+            clean_inputs();
         let status = build_runtime_health_status(
             true,
             &channels,
@@ -350,6 +390,7 @@ mod tests {
             &disk,
             &shutdown,
             &budget,
+            &outbound,
         );
 
         assert_eq!(status["state"], "ok");
@@ -358,7 +399,8 @@ mod tests {
 
     #[test]
     fn runtime_health_promotes_llm_failure_to_critical() {
-        let (channels, workload, agent_api, consciousness, disk, shutdown, budget) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, disk, shutdown, budget, outbound) =
+            clean_inputs();
         let status = build_runtime_health_status(
             false,
             &channels,
@@ -368,6 +410,7 @@ mod tests {
             &disk,
             &shutdown,
             &budget,
+            &outbound,
         );
 
         assert_eq!(status["state"], "critical");
@@ -376,8 +419,16 @@ mod tests {
 
     #[test]
     fn runtime_health_rolls_up_delivery_and_agent_api_issues() {
-        let (channels, mut workload, mut agent_api, consciousness, disk, shutdown, budget) =
-            clean_inputs();
+        let (
+            channels,
+            mut workload,
+            mut agent_api,
+            consciousness,
+            disk,
+            shutdown,
+            budget,
+            outbound,
+        ) = clean_inputs();
         workload["automation"]["delivery"]["redelivery_due"] = serde_json::json!(1);
         agent_api["egress_queue"]["pending"] = serde_json::json!(2);
         agent_api["egress_queue"]["dead_letters"] = serde_json::json!(1);
@@ -390,6 +441,7 @@ mod tests {
             &disk,
             &shutdown,
             &budget,
+            &outbound,
         );
 
         assert_eq!(status["state"], "warn");
@@ -398,7 +450,7 @@ mod tests {
 
     #[test]
     fn runtime_health_warns_when_disk_cleanup_is_recommended() {
-        let (channels, workload, agent_api, consciousness, mut disk, shutdown, budget) =
+        let (channels, workload, agent_api, consciousness, mut disk, shutdown, budget, outbound) =
             clean_inputs();
         disk["available_gib"] = serde_json::json!(14.9);
         disk["cleanup_recommended"] = serde_json::json!(true);
@@ -411,6 +463,7 @@ mod tests {
             &disk,
             &shutdown,
             &budget,
+            &outbound,
         );
 
         assert_eq!(status["state"], "warn");
@@ -419,7 +472,8 @@ mod tests {
 
     #[test]
     fn runtime_health_watches_shutdown_drain() {
-        let (channels, workload, agent_api, consciousness, disk, _, budget) = clean_inputs();
+        let (channels, workload, agent_api, consciousness, disk, _, budget, outbound) =
+            clean_inputs();
         let shutdown = serde_json::json!({
             "status": "draining",
             "trigger": "SIGTERM",
@@ -437,6 +491,7 @@ mod tests {
             &disk,
             &shutdown,
             &budget,
+            &outbound,
         );
 
         assert_eq!(status["state"], "watch");
@@ -445,7 +500,7 @@ mod tests {
 
     #[test]
     fn runtime_health_promotes_exhausted_provider_quota_to_critical() {
-        let (channels, workload, agent_api, consciousness, disk, shutdown, mut budget) =
+        let (channels, workload, agent_api, consciousness, disk, shutdown, mut budget, outbound) =
             clean_inputs();
         budget["provider_subscriptions"]["state"] = serde_json::json!("exhausted");
         budget["operator_actions"] = serde_json::json!([
@@ -461,6 +516,7 @@ mod tests {
             &disk,
             &shutdown,
             &budget,
+            &outbound,
         );
 
         assert_eq!(status["state"], "critical");
@@ -469,5 +525,27 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("2026-07-18T18:00:00Z"));
+    }
+
+    #[test]
+    fn runtime_health_warns_for_dead_outbound_response() {
+        let (channels, workload, agent_api, consciousness, disk, shutdown, budget, mut outbound) =
+            clean_inputs();
+        outbound["dead"] = serde_json::json!(1);
+
+        let status = build_runtime_health_status(
+            true,
+            &channels,
+            &workload,
+            &agent_api,
+            &consciousness,
+            &disk,
+            &shutdown,
+            &budget,
+            &outbound,
+        );
+
+        assert_eq!(status["state"], "warn");
+        assert_eq!(status["issues"][0]["kind"], "outbound_delivery");
     }
 }

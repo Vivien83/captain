@@ -113,7 +113,6 @@ async fn test_full_daemon_lifecycle() {
         bridge_manager: tokio::sync::Mutex::new(None),
         channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         ask_user_channels: dashmap::DashMap::new(),
         provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
     });
@@ -239,7 +238,6 @@ async fn test_server_immediate_responsiveness() {
         bridge_manager: tokio::sync::Mutex::new(None),
         channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         ask_user_channels: dashmap::DashMap::new(),
         provider_probe_cache: captain_runtime::provider_health::ProbeCache::new(),
     });

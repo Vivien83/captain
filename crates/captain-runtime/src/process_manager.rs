@@ -247,7 +247,7 @@ impl ProcessManager {
         if let Some((_, mut proc)) = self.processes.remove(process_id) {
             if let Some(pid) = proc.child.id().or(proc.pid) {
                 debug!(process_id, pid, "Killing persistent process");
-                let _ = crate::subprocess_sandbox::kill_process_tree(pid, 3000).await;
+                let _ = crate::subprocess_guard::kill_process_tree(pid, 3000).await;
             }
             let _ = proc.child.kill().await;
             self.persist_registry_best_effort();
@@ -257,7 +257,7 @@ impl ProcessManager {
         if let Some((_, proc)) = self.recovered.remove(process_id) {
             let pid = proc.pid;
             debug!(process_id, pid, "Killing persistent process");
-            let _ = crate::subprocess_sandbox::kill_process_tree(pid, 3000).await;
+            let _ = crate::subprocess_guard::kill_process_tree(pid, 3000).await;
             self.persist_registry_best_effort();
             return Ok(());
         }

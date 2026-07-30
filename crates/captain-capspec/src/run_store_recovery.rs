@@ -33,25 +33,21 @@ impl RunStore {
         run_id: &str,
         error: Option<&str>,
     ) -> Result<CapabilityRunStatus, ExecutorError> {
-        let (uncertain, failed, pending, running): (usize, usize, usize, usize) =
-            self.connection.query_row(
-                "SELECT
+        let (uncertain, failed, running): (usize, usize, usize) = self.connection.query_row(
+            "SELECT
                     SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END)
                  FROM capspec_run_nodes WHERE run_id = ?1",
-                [run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?;
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
         let status = if uncertain > 0 {
             CapabilityRunStatus::WaitingDecision
         } else if failed > 0 {
             CapabilityRunStatus::Failed
         } else if running > 0 {
             CapabilityRunStatus::Running
-        } else if pending > 0 {
-            CapabilityRunStatus::Interrupted
         } else {
             CapabilityRunStatus::Interrupted
         };

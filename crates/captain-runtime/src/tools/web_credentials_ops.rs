@@ -65,7 +65,7 @@ fn parse_web_credentials_update(input: &serde_json::Value) -> Result<WebCredenti
     if let Some(password) = &password {
         validate_web_password(password, username.as_deref())?;
     }
-    let password_hash = password.as_deref().map(hash_web_password);
+    let password_hash = password.as_deref().map(hash_web_password).transpose()?;
 
     let session_ttl_hours = match input.get("session_ttl_hours").and_then(|v| v.as_i64()) {
         Some(ttl) if (1..=8760).contains(&ttl) => Some(ttl),
@@ -148,9 +148,9 @@ fn generate_web_password() -> String {
     )
 }
 
-pub(crate) fn hash_web_password(password: &str) -> String {
-    use sha2::Digest;
-    hex::encode(sha2::Sha256::digest(password.as_bytes()))
+pub(crate) fn hash_web_password(password: &str) -> Result<String, String> {
+    captain_types::config::hash_web_password(password)
+        .map_err(|error| format!("Unable to hash the web password securely: {error}"))
 }
 
 pub(crate) fn write_web_credentials_config(
@@ -160,6 +160,9 @@ pub(crate) fn write_web_credentials_config(
     session_ttl_hours: Option<i64>,
 ) -> Result<PathBuf, String> {
     let config_path = web_credentials_config_path(home)?;
+    let mut auth = captain_types::config::AuthConfig::default();
+    captain_types::config::ensure_session_signing_state(&config_path, &mut auth)
+        .map_err(|error| format!("Managed web session signing state is unavailable: {error}"))?;
     let raw = read_web_credentials_config(&config_path)?;
     let old_size = raw.len();
     let mut doc = parse_web_credentials_config(&raw)?;
@@ -235,11 +238,35 @@ fn apply_web_credentials_auth_table(
         auth.insert("username", toml_edit::value(username));
     }
     if let Some(password_hash) = password_hash {
+        increment_session_epoch_for_password_change(auth, password_hash)?;
         auth.insert("password_hash", toml_edit::value(password_hash));
     }
     if let Some(ttl) = session_ttl_hours {
         auth.insert("session_ttl_hours", toml_edit::value(ttl));
     }
+    Ok(())
+}
+
+fn increment_session_epoch_for_password_change(
+    auth: &mut toml_edit::Table,
+    new_password_hash: &str,
+) -> Result<(), String> {
+    let current_password_hash = auth
+        .get("password_hash")
+        .and_then(toml_edit::Item::as_str)
+        .unwrap_or_default();
+    if current_password_hash.is_empty() || current_password_hash == new_password_hash {
+        return Ok(());
+    }
+
+    let current_epoch = auth
+        .get("session_epoch")
+        .and_then(toml_edit::Item::as_integer)
+        .ok_or("auth.session_epoch is missing or invalid")?;
+    let next_epoch = current_epoch
+        .checked_add(1)
+        .ok_or("auth.session_epoch cannot be incremented")?;
+    auth.insert("session_epoch", toml_edit::value(next_epoch));
     Ok(())
 }
 
@@ -348,8 +375,11 @@ mod tests {
 
         assert_eq!(update.username.as_deref(), Some("owner"));
         assert_eq!(
-            update.password_hash.as_deref(),
-            Some(hash_web_password("new-password-123").as_str())
+            update
+                .password_hash
+                .as_deref()
+                .map(|hash| captain_types::config::verify_web_password("new-password-123", hash)),
+            Some(captain_types::config::WebPasswordVerification::Argon2id)
         );
         assert_eq!(update.generated_password, None);
         assert_eq!(update.session_ttl_hours, Some(24));

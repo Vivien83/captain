@@ -21,6 +21,7 @@ pub(super) fn in_process_runtime_health(
         "active_run_count": 0,
         "active_process_count": 0
     });
+    let outbound_delivery = serde_json::json!({});
     captain_api::status_runtime_health::build_runtime_health_status(
         llm_driver_ready,
         &channels,
@@ -30,6 +31,7 @@ pub(super) fn in_process_runtime_health(
         disk,
         &shutdown,
         budget,
+        &outbound_delivery,
     )
 }
 

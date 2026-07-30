@@ -86,6 +86,15 @@ const TOOL_HINTS: &[(&str, &str)] = &[
     ("agent_spawn", "create a new agent"),
     ("agent_list", "list running agents"),
     ("agent_kill", "terminate an agent"),
+    ("agent_delegate", "start a durable detached sub-agent job"),
+    ("agent_job_status", "inspect one durable sub-agent job"),
+    ("agent_job_result", "read a completed sub-agent result"),
+    ("agent_job_list", "list durable sub-agent jobs"),
+    ("agent_job_cancel", "cancel a durable sub-agent job"),
+    (
+        "agent_job_resume",
+        "explicitly replay a failed or uncertain job",
+    ),
     // Media
     ("image_describe", "describe an image"),
     ("image_generate", "generate an image from a prompt"),

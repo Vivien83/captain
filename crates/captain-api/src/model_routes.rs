@@ -55,6 +55,7 @@ pub async fn list_models(
                     provider.auth_status != captain_types::model_catalog::AuthStatus::Missing
                 })
                 .unwrap_or(model.tier == captain_types::model_catalog::ModelTier::Custom);
+            let reasoning = model_reasoning_capabilities(&model.provider, &model.id);
             serde_json::json!({
                 "id": model.id,
                 "display_name": model.display_name,
@@ -67,6 +68,7 @@ pub async fn list_models(
                 "supports_tools": model.supports_tools,
                 "supports_vision": model.supports_vision,
                 "supports_streaming": model.supports_streaming,
+                "reasoning": reasoning,
                 "available": available,
             })
         })
@@ -131,6 +133,7 @@ pub async fn get_model(
                     provider.auth_status != captain_types::model_catalog::AuthStatus::Missing
                 })
                 .unwrap_or(model.tier == captain_types::model_catalog::ModelTier::Custom);
+            let reasoning = model_reasoning_capabilities(&model.provider, &model.id);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -145,6 +148,7 @@ pub async fn get_model(
                     "supports_tools": model.supports_tools,
                     "supports_vision": model.supports_vision,
                     "supports_streaming": model.supports_streaming,
+                    "reasoning": reasoning,
                     "aliases": model.aliases,
                     "available": available,
                 })),
@@ -154,6 +158,34 @@ pub async fn get_model(
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("Model '{}' not found", id)})),
         ),
+    }
+}
+
+fn model_reasoning_capabilities(provider: &str, model: &str) -> serde_json::Value {
+    if !matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "codex" | "openai-codex"
+    ) {
+        return serde_json::json!({
+            "supported": false,
+            "reported_by_provider": false,
+            "default_effort": null,
+            "supported_efforts": [],
+        });
+    }
+    match captain_runtime::model_catalog::codex_reasoning_capabilities(model) {
+        Some(capabilities) => serde_json::json!({
+            "supported": !capabilities.supported_efforts.is_empty(),
+            "reported_by_provider": capabilities.reported_by_provider,
+            "default_effort": capabilities.default_effort,
+            "supported_efforts": capabilities.supported_efforts,
+        }),
+        None => serde_json::json!({
+            "supported": false,
+            "reported_by_provider": false,
+            "default_effort": null,
+            "supported_efforts": [],
+        }),
     }
 }
 

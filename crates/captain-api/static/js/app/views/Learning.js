@@ -16,6 +16,34 @@ const STATE_LABELS = {
 const KIND_LABELS = { skill: 'Skill', capspec: 'CapSpec', automation: 'Automation', refinement: 'Amélioration' };
 const ACTION_LABELS = { activate: 'Activer', test: 'Tester', later: 'Reporter', ignore: 'Ignorer' };
 const MUTATING_ACTIONS = new Set(['activate', 'test']);
+const RUNTIME_LABELS = {
+  disabled: 'Désactivé', starting: 'Démarrage', healthy: 'Opérationnel', active: 'Actif',
+  recovering: 'Reprise automatique', degraded: 'Dégradé', stalled: 'Worker bloqué',
+};
+const RECOVERY_LABELS = {
+  disabled: 'désactivée', starting: 'démarrage', in_sync: 'synchronisée',
+  automatic_retry_active: 'retry automatique', operator_attention: 'attention requise',
+};
+
+function relativeAge(now, at) {
+  if (!Number.isFinite(now) || !Number.isFinite(at)) return 'en attente';
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < 60) return `il y a ${seconds}s`;
+  if (seconds < 3600) return `il y a ${Math.floor(seconds / 60)}min`;
+  return `il y a ${Math.floor(seconds / 3600)}h`;
+}
+
+function retryDelay(now, at) {
+  if (!Number.isFinite(now) || !Number.isFinite(at)) return 'en attente';
+  const seconds = Math.max(0, Math.ceil((at - now) / 1000));
+  if (seconds < 60) return `dans ${seconds}s`;
+  if (seconds < 3600) return `dans ${Math.ceil(seconds / 60)}min`;
+  return `dans ${Math.ceil(seconds / 3600)}h`;
+}
+
+function modelLabel(model) {
+  return model ? `${model.provider}:${model.model}` : 'pas encore lié';
+}
 
 function workflowName(workflow) {
   return workflow.card?.name || workflow.name || 'Workflow en construction';
@@ -50,19 +78,21 @@ export function Learning() {
   const [committed, setCommitted] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [workflows, setWorkflows] = useState(null);
+  const [runtimeStatus, setRuntimeStatus] = useState(null);
   const [workflowFilter, setWorkflowFilter] = useState('decisions');
   const [expandedId, setExpandedId] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const [rev, com, met, learned] = await Promise.all([
-        api.learningReview(), api.learningCommitted(), api.learningMetrics(), api.workflowLearning(),
+      const [rev, com, met, learned, runtime] = await Promise.all([
+        api.learningReview(), api.learningCommitted(), api.learningMetrics(), api.workflowLearning(), api.learningStatus(),
       ]);
       setPending(rev.pending || []);
       setCommitted(com.committed || []);
       setMetrics(met);
       setWorkflows(learned.workflows || []);
+      setRuntimeStatus(runtime);
     } catch (e) {
       toast(`Chargement impossible : ${e.message}`, 'err');
     }
@@ -114,6 +144,37 @@ export function Learning() {
       <div class="page-inner">
         <h1 class="page-title">Learning</h1>
         <p class="page-sub">Mémoire durable et workflows réutilisables appris à partir de l'usage réel.</p>
+
+        ${runtimeStatus === null && html`<div class="skeleton learning-runtime-skeleton"></div>`}
+        ${runtimeStatus && html`
+          <section class=${`learning-runtime-strip state-${runtimeStatus.state}`} data-learning-state=${runtimeStatus.state} aria-label="État opérationnel Learning">
+            <div class="learning-runtime-heading">
+              <span class="learning-runtime-state-dot" aria-hidden="true"></span>
+              <strong>${RUNTIME_LABELS[runtimeStatus.state] || runtimeStatus.state}</strong>
+              <span>mode ${runtimeStatus.mode}</span>
+            </div>
+            <div class="learning-runtime-cell">
+              <span>Modèle lié</span>
+              <strong>${modelLabel(runtimeStatus.worker?.bound_model)}</strong>
+              <small>attendu ${modelLabel(runtimeStatus.expected_model)}</small>
+            </div>
+            <div class="learning-runtime-cell">
+              <span>Worker</span>
+              <strong>${runtimeStatus.worker ? `heartbeat ${relativeAge(runtimeStatus.generated_at_unix_ms, runtimeStatus.worker.heartbeat_at_unix_ms)}` : 'absent'}</strong>
+              <small>${runtimeStatus.worker?.last_scan_at_unix_ms ? `scan ${relativeAge(runtimeStatus.generated_at_unix_ms, runtimeStatus.worker.last_scan_at_unix_ms)}` : 'scan en attente'}${runtimeStatus.worker?.last_error_scope ? ` · erreur ${runtimeStatus.worker.last_error_scope}` : ''}</small>
+            </div>
+            <div class="learning-runtime-cell">
+              <span>Files</span>
+              <strong>${runtimeStatus.jobs.pending}/${runtimeStatus.jobs.running}/${runtimeStatus.jobs.retry_wait + runtimeStatus.jobs.uncertain + runtimeStatus.jobs.dead} jobs</strong>
+              <small>${runtimeStatus.notifications.pending}/${runtimeStatus.notifications.delivering}/${runtimeStatus.notifications.retry_wait + runtimeStatus.notifications.dead} notifications</small>
+            </div>
+            <div class="learning-runtime-cell">
+              <span>Reprise</span>
+              <strong>${RECOVERY_LABELS[runtimeStatus.recovery] || runtimeStatus.recovery}</strong>
+              <small>${runtimeStatus.jobs.next_retry_at_unix_ms ? `prochain retry ${retryDelay(runtimeStatus.generated_at_unix_ms, runtimeStatus.jobs.next_retry_at_unix_ms)}` : 'aucun retry planifié'}</small>
+            </div>
+          </section>
+        `}
 
         <h2 class="section-title">Workflows appris</h2>
         ${workflows === null && html`<div class="skeleton" style="height:90px;margin-bottom:18px"></div>`}

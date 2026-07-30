@@ -338,6 +338,31 @@ mod tests {
     }
 
     #[test]
+    fn typed_api_policy_coexists_with_legacy_root_field_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+            [api]
+            api_key = "legacy-location-key"
+            api_listen = "127.0.0.1:50123"
+            allowed_origins = ["https://console.example.com"]
+            "#,
+        )
+        .unwrap();
+
+        let config = load_config(Some(&config_path));
+
+        assert_eq!(config.api_key, "legacy-location-key");
+        assert_eq!(config.api_listen, "127.0.0.1:50123");
+        assert_eq!(
+            config.api.allowed_origins,
+            vec!["https://console.example.com"]
+        );
+    }
+
+    #[test]
     fn test_deep_merge_simple() {
         let mut base: toml::Value = toml::from_str(
             r#"

@@ -61,7 +61,7 @@ impl CaptainKernel {
             .map(|s| {
                 let mut input = 0u64;
                 let mut output = 0u64;
-                // Keep this rough estimator aligned with Hermes: one token per four chars.
+                // This rough estimator uses one token per four characters.
                 for msg in &s.messages {
                     let tokens = msg.content.text_content().len() as u64 / 4;
                     match msg.role {

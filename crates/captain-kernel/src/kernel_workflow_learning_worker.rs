@@ -6,12 +6,16 @@ use std::time::{Duration, Instant};
 
 use captain_memory::workflow_learning::WorkflowEpisodeStore;
 use captain_memory::workflow_learning_control::WorkflowLearningStore;
+use captain_memory::workflow_learning_status::WorkflowLearningWorkerHeartbeat;
 use captain_runtime::workflow_learning_engine::{
     WorkflowJobRunOutcome, WorkflowLearningEngine, WorkflowLearningEngineConfig,
 };
 use captain_runtime::workflow_learning_proposer::ActiveModelIdentity;
 use captain_runtime::workflow_learning_staging::WorkflowStagingRoot;
 use captain_types::config::LearningMode;
+use captain_types::workflow_learning::{
+    WorkflowLearningModelIdentity, WorkflowLearningWorkerPhase,
+};
 use tracing::{debug, info, warn};
 
 use super::CaptainKernel;
@@ -21,6 +25,7 @@ const RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_DELAY: Duration = Duration::from_secs(2);
 const ACTIVE_DELAY: Duration = Duration::from_millis(25);
 const ERROR_DELAY: Duration = Duration::from_secs(15);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub(super) fn spawn_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
     if !workflow_learning_enabled(kernel.config.skills.enabled, kernel.config.skills.mode) {
@@ -45,6 +50,13 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
         }
     };
     let engine_config = worker_config(kernel.config.skills.rate_limit_per_day);
+    let started_at_unix_ms = chrono::Utc::now().timestamp_millis();
+    let mut health = WorkerHealthReporter::new(
+        control.clone(),
+        engine_config.worker_id.clone(),
+        started_at_unix_ms,
+    );
+    health.persist_starting(started_at_unix_ms);
     let mut engine: Option<(ActiveModelIdentity, WorkflowLearningEngine)> = None;
     let mut next_scan = Instant::now();
     let mut next_recovery = Instant::now();
@@ -54,9 +66,10 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
         let requested_model = kernel.workflow_learning_active_model();
         let model_changed = engine
             .as_ref()
-            .map_or(true, |(active_model, _)| active_model != &requested_model);
+            .is_none_or(|(active_model, _)| active_model != &requested_model);
         if model_changed {
             engine = None;
+            health.mark_starting(chrono::Utc::now().timestamp_millis());
             match build_engine(&kernel, &episodes, &control, &staging, &engine_config) {
                 Ok((active_model, built)) => {
                     errors.clear("model");
@@ -65,10 +78,16 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
                         model = %active_model.model,
                         "workflow learning V2 worker bound to active model"
                     );
+                    health.bind_model(
+                        &active_model,
+                        &errors,
+                        chrono::Utc::now().timestamp_millis(),
+                    );
                     engine = Some((active_model, built));
                 }
                 Err(error) => {
                     errors.report("model", error);
+                    health.persist(&errors, chrono::Utc::now().timestamp_millis(), true);
                     tokio::time::sleep(ERROR_DELAY).await;
                     continue;
                 }
@@ -88,10 +107,12 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
             match active_engine.scan_once(now_unix_ms) {
                 Ok(summary) => {
                     errors.clear("scan");
+                    health.mark_scan(now_unix_ms);
                     if summary.proposals_created > 0
                         || summary.linked_existing > 0
                         || summary.rejected > 0
                     {
+                        health.mark_progress(now_unix_ms);
                         info!(
                             episodes_seen = summary.episodes_seen,
                             rejected = summary.rejected,
@@ -113,6 +134,7 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
             next_scan = Instant::now() + SCAN_INTERVAL;
         }
 
+        let mut force_heartbeat = false;
         let delay = match active_engine.run_next_job(now_unix_ms).await {
             Ok(WorkflowJobRunOutcome::Idle) => {
                 errors.clear("job");
@@ -124,6 +146,8 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
                 proposal_id,
             }) => {
                 errors.clear("job");
+                health.mark_progress(now_unix_ms);
+                force_heartbeat = true;
                 info!(
                     job_kind = kind.as_str(),
                     job_id, proposal_id, "workflow learning V2 job advanced"
@@ -136,6 +160,8 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
                 proposal_id,
             }) => {
                 errors.clear("job");
+                health.mark_progress(now_unix_ms);
+                force_heartbeat = true;
                 warn!(
                     job_kind = kind.as_str(),
                     job_id, proposal_id, "workflow learning V2 job scheduled a bounded retry"
@@ -148,6 +174,8 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
                 proposal_id,
             }) => {
                 errors.clear("job");
+                health.mark_progress(now_unix_ms);
+                force_heartbeat = true;
                 info!(
                     job_kind = kind.as_str(),
                     job_id, proposal_id, "workflow learning V2 candidate rejected"
@@ -156,9 +184,15 @@ async fn run_workflow_learning_worker(kernel: Arc<CaptainKernel>) {
             }
             Err(error) => {
                 errors.report("job", error);
+                force_heartbeat = true;
                 ERROR_DELAY
             }
         };
+        health.persist(
+            &errors,
+            chrono::Utc::now().timestamp_millis(),
+            force_heartbeat,
+        );
         tokio::time::sleep(delay).await;
     }
 }
@@ -264,11 +298,113 @@ impl ErrorLatch {
             info!(scope = scope, "workflow learning V2 worker recovered");
         }
     }
+
+    fn primary_scope(&self) -> Option<&'static str> {
+        self.messages.keys().next().copied()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+}
+
+struct WorkerHealthReporter {
+    control: WorkflowLearningStore,
+    heartbeat: WorkflowLearningWorkerHeartbeat,
+    next_write: Instant,
+    write_error_latched: bool,
+}
+
+impl WorkerHealthReporter {
+    fn new(control: WorkflowLearningStore, worker_id: String, started_at_unix_ms: i64) -> Self {
+        Self {
+            control,
+            heartbeat: WorkflowLearningWorkerHeartbeat {
+                worker_id,
+                phase: WorkflowLearningWorkerPhase::Starting,
+                bound_model: None,
+                started_at_unix_ms,
+                heartbeat_at_unix_ms: started_at_unix_ms,
+                last_scan_at_unix_ms: None,
+                last_progress_at_unix_ms: None,
+                last_error_scope: None,
+            },
+            next_write: Instant::now(),
+            write_error_latched: false,
+        }
+    }
+
+    fn persist_starting(&mut self, now_unix_ms: i64) {
+        self.heartbeat.phase = WorkflowLearningWorkerPhase::Starting;
+        self.heartbeat.bound_model = None;
+        self.heartbeat.last_error_scope = None;
+        self.write(now_unix_ms);
+    }
+
+    fn mark_starting(&mut self, now_unix_ms: i64) {
+        self.heartbeat.phase = WorkflowLearningWorkerPhase::Starting;
+        self.heartbeat.bound_model = None;
+        self.heartbeat.last_error_scope = None;
+        self.write(now_unix_ms);
+    }
+
+    fn bind_model(&mut self, model: &ActiveModelIdentity, errors: &ErrorLatch, now_unix_ms: i64) {
+        self.heartbeat.bound_model = Some(WorkflowLearningModelIdentity {
+            provider: model.provider.clone(),
+            model: model.model.clone(),
+        });
+        self.persist(errors, now_unix_ms, true);
+    }
+
+    fn mark_scan(&mut self, now_unix_ms: i64) {
+        self.heartbeat.last_scan_at_unix_ms = Some(now_unix_ms);
+    }
+
+    fn mark_progress(&mut self, now_unix_ms: i64) {
+        self.heartbeat.last_progress_at_unix_ms = Some(now_unix_ms);
+    }
+
+    fn persist(&mut self, errors: &ErrorLatch, now_unix_ms: i64, force: bool) {
+        if !force && Instant::now() < self.next_write {
+            return;
+        }
+        self.heartbeat.phase = if errors.is_empty() {
+            WorkflowLearningWorkerPhase::Running
+        } else {
+            WorkflowLearningWorkerPhase::Degraded
+        };
+        self.heartbeat.last_error_scope = errors.primary_scope().map(str::to_string);
+        self.write(now_unix_ms);
+    }
+
+    fn write(&mut self, now_unix_ms: i64) {
+        self.heartbeat.heartbeat_at_unix_ms = now_unix_ms
+            .max(self.heartbeat.started_at_unix_ms)
+            .max(self.heartbeat.last_scan_at_unix_ms.unwrap_or_default())
+            .max(self.heartbeat.last_progress_at_unix_ms.unwrap_or_default());
+        match self.control.record_worker_heartbeat(&self.heartbeat) {
+            Ok(()) => {
+                if self.write_error_latched {
+                    info!("workflow learning V2 heartbeat persistence recovered");
+                }
+                self.write_error_latched = false;
+            }
+            Err(error) => {
+                if !self.write_error_latched {
+                    warn!(error = %error, "workflow learning V2 heartbeat persistence failed");
+                }
+                self.write_error_latched = true;
+            }
+        }
+        self.next_write = Instant::now() + HEARTBEAT_INTERVAL;
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{worker_config, workflow_learning_enabled};
+    use super::{worker_config, workflow_learning_enabled, WorkerHealthReporter};
+    use captain_memory::workflow_learning_control::WorkflowLearningStore;
+    use captain_memory::MemorySubstrate;
     use captain_types::config::LearningMode;
 
     #[test]
@@ -287,5 +423,20 @@ mod tests {
             .worker_id
             .starts_with("captain:workflow-learning-v2:"));
         assert_eq!(config.lease_duration_ms, 120_000);
+    }
+
+    #[test]
+    fn heartbeat_remains_consistent_when_wall_clock_moves_backwards() {
+        let memory = MemorySubstrate::open_in_memory(0.01).unwrap();
+        let store = WorkflowLearningStore::new(memory.usage_conn());
+        let mut reporter = WorkerHealthReporter::new(store.clone(), "worker:test".into(), 1_000);
+        reporter.mark_scan(2_000);
+        reporter.mark_progress(2_500);
+        reporter.write(1_500);
+
+        let heartbeat = store.operational_snapshot().unwrap().worker.unwrap();
+        assert_eq!(heartbeat.heartbeat_at_unix_ms, 2_500);
+        assert_eq!(heartbeat.last_scan_at_unix_ms, Some(2_000));
+        assert_eq!(heartbeat.last_progress_at_unix_ms, Some(2_500));
     }
 }

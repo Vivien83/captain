@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_matches_are_grouped_and_capped_like_hermes() {
+    fn graph_matches_are_grouped_and_capped_by_contract() {
         let mut matches = Vec::new();
         for idx in 0..205 {
             matches.push(graph_match(

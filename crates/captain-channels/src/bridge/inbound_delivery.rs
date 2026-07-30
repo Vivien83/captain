@@ -24,26 +24,6 @@ pub(super) async fn record_inbound_delivery_success(
         .await;
 }
 
-pub(super) async fn record_inbound_delivery_failure(
-    handle: &Arc<dyn ChannelBridgeHandle>,
-    agent_id: AgentId,
-    channel_type: &str,
-    message: &ChannelMessage,
-    error: &str,
-    thread_id: Option<&str>,
-) {
-    handle
-        .record_delivery(
-            agent_id,
-            channel_type,
-            &message.sender.platform_id,
-            false,
-            Some(error),
-            thread_id,
-        )
-        .await;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,35 +136,6 @@ mod tests {
                 true,
                 None,
                 Some("topic-7".to_string())
-            )]
-        );
-    }
-
-    #[tokio::test]
-    async fn failure_records_error_payload_from_caller() {
-        let mock_handle = handle();
-        let handle: Arc<dyn ChannelBridgeHandle> = mock_handle.clone();
-        let agent_id = AgentId::new();
-
-        record_inbound_delivery_failure(
-            &handle,
-            agent_id,
-            "discord",
-            &test_message(),
-            "Backend unavailable",
-            None,
-        )
-        .await;
-
-        assert_eq!(
-            mock_handle.deliveries.lock().unwrap().as_slice(),
-            &[(
-                agent_id,
-                "discord".to_string(),
-                "1001".to_string(),
-                false,
-                Some("Backend unavailable".to_string()),
-                None
             )]
         );
     }
