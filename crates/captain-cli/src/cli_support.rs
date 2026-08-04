@@ -137,6 +137,10 @@ pub(crate) fn test_api_key(provider: &str, env_var: &str) -> bool {
 }
 
 pub(crate) fn test_api_key_value(provider: &str, key: &str) -> bool {
+    if provider.eq_ignore_ascii_case("xai") {
+        return test_xai_bearer_value(key);
+    }
+
     let client = match reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -182,6 +186,32 @@ pub(crate) fn test_api_key_value(provider: &str, key: &str) -> bool {
         }
         Err(_) => true,
     }
+}
+
+fn test_xai_bearer_value(bearer: &str) -> bool {
+    let bearer = zeroize::Zeroizing::new(bearer.to_string());
+    std::thread::Builder::new()
+        .name("captain-xai-auth-probe".to_string())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(_) => return false,
+            };
+            runtime
+                .block_on(captain_runtime::xai_auth::probe_xai_auth(
+                    captain_types::model_catalog::XAI_BASE_URL,
+                    bearer.as_str(),
+                    None,
+                ))
+                .map(|probe| probe.inference_ready)
+                .unwrap_or(false)
+        })
+        .ok()
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or(false)
 }
 
 pub(crate) fn captain_home() -> PathBuf {

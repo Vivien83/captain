@@ -34,7 +34,13 @@ pub mod capspec_routes;
 mod channel_audit;
 pub mod channel_bridge;
 mod channel_config_store;
+mod channel_email_routes;
+pub use channel_config_store::{
+    email_account_password_key, parse_email_channel_config, upsert_email_channel_account,
+    upsert_email_channel_account_transactional,
+};
 mod channel_readiness;
+mod channel_readiness_email;
 mod channel_registry;
 mod channel_registry_email;
 pub mod channel_routes;

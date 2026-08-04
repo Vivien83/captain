@@ -34,9 +34,11 @@ ARG CODEGEN_UNITS=8
 # Without this every container reports the bare crate version (0.1.0),
 # making it impossible to know which build a beta tester actually runs.
 ARG CAPTAIN_BUILD_VERSION=""
+ARG CAPTAIN_GOOGLE_OAUTH_CLIENT_ID=""
 ENV CARGO_PROFILE_RELEASE_LTO=${LTO} \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CODEGEN_UNITS} \
-    CAPTAIN_BUILD_VERSION=${CAPTAIN_BUILD_VERSION}
+    CAPTAIN_BUILD_VERSION=${CAPTAIN_BUILD_VERSION} \
+    CAPTAIN_GOOGLE_OAUTH_CLIENT_ID=${CAPTAIN_GOOGLE_OAUTH_CLIENT_ID}
 
 RUN cargo build --release -p captain-cli
 

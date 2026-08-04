@@ -503,9 +503,17 @@ impl CaptainKernel {
             ));
         }
         let now = chrono::Utc::now().timestamp_millis();
+        let id = uuid::Uuid::new_v4().to_string();
+        let lineage = super::kernel_agent_delegation::delegation_lineage_for_new_job(
+            &id,
+            &caller.to_string(),
+        )?;
         let request = NewAgentDelegationJob {
-            id: uuid::Uuid::new_v4().to_string(),
+            id,
             idempotency_key: idempotency_key.to_string(),
+            root_job_id: lineage.root_job_id,
+            parent_job_id: lineage.parent_job_id,
+            depth: lineage.depth,
             caller_agent_id: caller.to_string(),
             target_agent_id: target.to_string(),
             title: title.to_string(),

@@ -54,6 +54,7 @@ counts when validating an installed runtime.
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
 | [Release provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
 | [Repository governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.11 release notes](releases/v0.1.0-alpha.11.md) | Native email, durable integrations, audit closure, and local CI |
 | [0.1.0-alpha.10 release notes](releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |
 | [0.1.0-alpha.9 release notes](releases/v0.1.0-alpha.9.md) | Durable workflow learning and native release updates |
 | [0.1.0-alpha.8 release notes](releases/v0.1.0-alpha.8.md) | Captain Forge native capabilities and truthful live subscription quotas |
@@ -99,6 +100,7 @@ captain start
 | Per-agent external API contract | `captain agent api <agent> --manifest` |
 | Documentation coherence | `scripts/docs-global-audit.sh && scripts/docs-release-audit.sh` |
 | Control web contract | `scripts/control-web-audit.sh` |
+| Control CSP/XSS browser contract | `scripts/control-xss-smoke.mjs` |
 | Release workflow contract | `scripts/release-workflow-audit.sh` |
 
 ### Important Paths

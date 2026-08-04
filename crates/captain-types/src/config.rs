@@ -559,7 +559,13 @@ impl std::fmt::Debug for KernelConfig {
                 &format!("{} mapping(s)", self.provider_api_keys.len()),
             )
             .field("checkpoints", &self.checkpoints)
-            .field("auth", &format!("enabled={}", self.auth.enabled))
+            .field(
+                "auth",
+                &format!(
+                    "enabled={}, unauthenticated_loopback={}",
+                    self.auth.enabled, self.auth.allow_unauthenticated_loopback
+                ),
+            )
             .finish()
     }
 }
@@ -674,6 +680,39 @@ mod tests {
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Discord"));
+    }
+
+    #[test]
+    fn test_validate_email_accounts_checks_only_enabled_secret_refs() {
+        let mut config = KernelConfig::default();
+        config.channels.email = Some(EmailConfig {
+            accounts: vec![
+                EmailAccountConfig {
+                    alias: "work".to_string(),
+                    imap_host: "imap.example.com".to_string(),
+                    smtp_host: "smtp.example.com".to_string(),
+                    username: "captain@example.com".to_string(),
+                    password_env: "CAPTAIN_TEST_EMAIL_WORK_PASSWORD_MISSING_1210".to_string(),
+                    ..Default::default()
+                },
+                EmailAccountConfig {
+                    alias: "archive".to_string(),
+                    enabled: false,
+                    imap_host: "imap.example.com".to_string(),
+                    smtp_host: "smtp.example.com".to_string(),
+                    username: "archive@example.com".to_string(),
+                    password_env: "CAPTAIN_TEST_EMAIL_ARCHIVE_PASSWORD_MISSING_1210".to_string(),
+                    ..Default::default()
+                },
+            ],
+            default_account: Some("work".to_string()),
+            ..Default::default()
+        });
+
+        let warnings = config.validate().join("\n");
+        assert!(warnings.contains("Email account 'work'"));
+        assert!(!warnings.contains("Email account 'archive'"));
+        assert!(!warnings.contains("Email configuration invalid"));
     }
 
     #[test]

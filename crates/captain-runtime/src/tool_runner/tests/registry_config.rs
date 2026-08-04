@@ -77,6 +77,41 @@ fn test_builtin_tool_definitions() {
     assert!(names.contains(&"canvas_present"));
 }
 
+#[test]
+fn email_native_tools_are_registered_strict_and_deferred() {
+    let tools = builtin_tool_definitions();
+    for name in [
+        "email_accounts",
+        "email_search",
+        "email_read",
+        "email_compose",
+        "email_reply",
+        "email_labels",
+        "email_update",
+        "email_attachment_save",
+        "email_automation_rules",
+        "email_automation_rule_save",
+        "email_automation_rule_set_enabled",
+        "email_automation_rule_remove",
+        "email_automation_deliveries",
+        "email_automation_delivery_requeue",
+    ] {
+        let definition = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} must be registered"));
+        assert_eq!(
+            definition.input_schema["additionalProperties"],
+            serde_json::json!(false),
+            "{name} must reject unknown input fields"
+        );
+        assert!(
+            !crate::core_tools::is_core_tool(name),
+            "{name} must remain deferred and discoverable on demand"
+        );
+    }
+}
+
 /// R.3.1 — `config_setup` tool is registered with the expected schema.
 #[test]
 fn r31_config_setup_in_tool_registry() {

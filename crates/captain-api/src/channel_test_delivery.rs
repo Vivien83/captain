@@ -1,6 +1,15 @@
 //! Live test-message delivery helpers for active channel setup checks.
 
+use captain_channels::email::{email_address_is_valid, EmailConnectivityReport};
 use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelUser};
+use captain_types::config::EmailAccountConfig;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct EmailChannelTestOutcome {
+    pub(crate) connectivity: EmailConnectivityReport,
+    pub(crate) message_sent: bool,
+}
 
 pub(crate) async fn send_channel_test_message(
     channel_name: &str,
@@ -81,7 +90,7 @@ async fn send_email_test_message(
     config_values: Option<&serde_json::Value>,
     resolve: &(dyn Fn(&str) -> Option<String> + Send + Sync),
 ) -> Result<(), String> {
-    if !target_id.contains('@') || !target_id.contains('.') {
+    if !email_address_is_valid(target_id) {
         return Err(format!("Invalid email address: '{target_id}'"));
     }
     let values = config_values
@@ -89,20 +98,58 @@ async fn send_email_test_message(
         .ok_or_else(|| "Email config not found".to_string())?;
     let password_env = string_field(values, "password_env").unwrap_or("EMAIL_PASSWORD");
     let password = resolve(password_env).ok_or_else(|| format!("{password_env} not set"))?;
-    let adapter = captain_channels::email::EmailAdapter::new(
-        required_string_field(values, "imap_host")?.to_string(),
-        u16_field(values, "imap_port", 993)?,
-        required_string_field(values, "smtp_host")?.to_string(),
-        u16_field(values, "smtp_port", 587)?,
-        required_string_field(values, "username")?.to_string(),
+    let account = EmailAccountConfig {
+        alias: "default".to_string(),
+        imap_host: required_string_field(values, "imap_host")?.to_string(),
+        imap_port: u16_field(values, "imap_port", 993)?,
+        smtp_host: required_string_field(values, "smtp_host")?.to_string(),
+        smtp_port: u16_field(values, "smtp_port", 587)?,
+        username: required_string_field(values, "username")?.to_string(),
+        password_env: password_env.to_string(),
+        poll_interval_secs: u64_field(values, "poll_interval_secs", 30)?,
+        folders: string_array_field(values, "folders"),
+        allowed_senders: string_array_field(values, "allowed_senders"),
+        ..EmailAccountConfig::default()
+    };
+    test_email_account(&account, password, Some(target_id), text)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn test_email_account(
+    account: &EmailAccountConfig,
+    password: String,
+    recipient: Option<&str>,
+    text: &str,
+) -> Result<EmailChannelTestOutcome, String> {
+    if let Some(recipient) = recipient {
+        if !email_address_is_valid(recipient) {
+            return Err(format!("Invalid email address: '{recipient}'"));
+        }
+    }
+    let adapter = captain_channels::email::EmailAdapter::new_named(
+        format!("email:{}", account.alias),
+        account.alias.clone(),
+        account.imap_host.clone(),
+        account.imap_port,
+        account.smtp_host.clone(),
+        account.smtp_port,
+        account.username.clone(),
         password,
-        u64_field(values, "poll_interval_secs", 30)?,
-        string_array_field(values, "folders"),
-        string_array_field(values, "allowed_senders"),
+        account.poll_interval_secs,
+        account.folders.clone(),
+        account.allowed_senders.clone(),
     );
+    let connectivity = adapter.test_connectivity().await?;
+    let Some(recipient) = recipient else {
+        return Ok(EmailChannelTestOutcome {
+            connectivity,
+            message_sent: false,
+        });
+    };
     let user = ChannelUser {
-        platform_id: target_id.to_string(),
-        display_name: target_id.to_string(),
+        platform_id: recipient.to_string(),
+        display_name: recipient.to_string(),
         captain_user: None,
     };
     adapter
@@ -111,7 +158,11 @@ async fn send_email_test_message(
             ChannelContent::Text(format!("Subject: Captain channel test\n\n{text}")),
         )
         .await
-        .map_err(|e| format!("Email SMTP send failed: {e}"))
+        .map_err(|e| format!("Email SMTP send failed: {e}"))?;
+    Ok(EmailChannelTestOutcome {
+        connectivity,
+        message_sent: true,
+    })
 }
 
 fn required_string_field<'a>(

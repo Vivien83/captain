@@ -10,11 +10,14 @@
 pub mod bundled;
 pub mod credentials;
 pub mod external_secret_sources;
+pub mod gmail_api;
+pub mod gmail_oauth;
 pub mod health;
 pub mod installer;
 pub mod oauth;
 pub mod registry;
 pub mod vault;
+mod vault_keyring;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -36,7 +39,9 @@ pub enum ExtensionError {
     Vault(String),
     #[error("External secret source error: {0}")]
     SecretSource(String),
-    #[error("Vault locked — unlock with vault key or CAPTAIN_VAULT_KEY env var")]
+    #[error(
+        "Vault locked — unlock the OS credential store or set CAPTAIN_VAULT_KEY for headless/CI"
+    )]
     VaultLocked,
     #[error("OAuth error: {0}")]
     OAuth(String),

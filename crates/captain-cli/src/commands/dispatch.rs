@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use crate::{
     AgentCommands, ApprovalsCommands, AuthCommands, AutonomyCommands, ChannelCommands,
     ChannelDeadLetterCommands, ChannelInboundCommands, Commands, ConfigCommands, CronCommands,
-    DevicesCommands, EmbeddingsCommands, GatewayCommands, HandCommands, IntegrationCommands,
-    KnownHostsCommands, LoginCommands, MemoryCommands, ModelsCommands, ProcessCommands,
-    SecurityCommands, ServiceCommands, SkillCommands, SnapshotCommands, SshCommands,
-    SystemCommands, TriggerCommands, VaultCommands, VoiceCommands, WebhooksCommands,
+    DevicesCommands, EmailCommands, EmbeddingsCommands, GatewayCommands, HandCommands,
+    IntegrationCommands, KnownHostsCommands, LoginCommands, MemoryCommands, ModelsCommands,
+    ProcessCommands, SecurityCommands, ServiceCommands, SkillCommands, SnapshotCommands,
+    SshCommands, SystemCommands, TriggerCommands, VaultCommands, VoiceCommands, WebhooksCommands,
     WorkflowCommands,
 };
 
@@ -72,6 +72,7 @@ fn command_family(command: &Commands) -> DispatchFamily {
         | Commands::Webhooks(_) => DispatchFamily::Work,
         Commands::Skill(_)
         | Commands::Channel(_)
+        | Commands::Email(_)
         | Commands::Hand(_)
         | Commands::Integration(_)
         | Commands::Voice(_)
@@ -98,7 +99,7 @@ fn dispatch_command(config: Option<PathBuf>, command: Commands) {
     match command_family(&command) {
         DispatchFamily::Core => dispatch_core_command(config, command),
         DispatchFamily::Work => dispatch_work_command(config, command),
-        DispatchFamily::Capability => dispatch_capability_command(command),
+        DispatchFamily::Capability => dispatch_capability_command(config, command),
         DispatchFamily::Lifecycle => dispatch_lifecycle_command(command),
     }
 }
@@ -339,10 +340,11 @@ fn dispatch_webhooks_command(sub: WebhooksCommands) {
     }
 }
 
-fn dispatch_capability_command(command: Commands) {
+fn dispatch_capability_command(config: Option<PathBuf>, command: Commands) {
     match command {
         Commands::Skill(sub) => dispatch_skill_command(sub),
         Commands::Channel(sub) => dispatch_channel_command(sub),
+        Commands::Email(sub) => dispatch_email_command(config, sub),
         Commands::Hand(sub) => dispatch_hand_command(sub),
         Commands::Integration(sub) => dispatch_integration_command(sub),
         Commands::Voice(sub) => dispatch_voice_command(sub),
@@ -367,6 +369,10 @@ fn dispatch_capability_command(command: Commands) {
     }
 }
 
+fn dispatch_email_command(config: Option<PathBuf>, sub: EmailCommands) {
+    super::email::cmd_email(config, sub);
+}
+
 fn dispatch_skill_command(sub: SkillCommands) {
     match sub {
         SkillCommands::Install { source } => super::skill::cmd_skill_install(&source),
@@ -383,8 +389,6 @@ fn dispatch_channel_command(sub: ChannelCommands) {
         ChannelCommands::List => super::channel::cmd_channel_list(),
         ChannelCommands::Setup { channel } => super::channel::cmd_channel_setup(channel.as_deref()),
         ChannelCommands::Test { channel } => super::channel::cmd_channel_test(&channel),
-        ChannelCommands::Enable { channel } => super::channel::cmd_channel_toggle(&channel, true),
-        ChannelCommands::Disable { channel } => super::channel::cmd_channel_toggle(&channel, false),
         ChannelCommands::Inbound { command } => dispatch_channel_inbound_command(command),
     }
 }

@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.10}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.11}"
 CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
@@ -204,7 +204,9 @@ start_candidate_smoke_daemon() {
     local port="$2"
     local home_dir="$SMOKE_TMP/home"
     local config="$home_dir/config.toml"
+    local secrets="$home_dir/secrets.env"
     local log="$SMOKE_TMP/daemon.log"
+    local api_key
 
     if curl -sS --connect-timeout 1 --max-time 2 \
         "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
@@ -212,6 +214,13 @@ start_candidate_smoke_daemon() {
     fi
 
     mkdir -p "$home_dir/data"
+    api_key="$(openssl rand -hex 32)" \
+        || fail "could not generate isolated daemon API key"
+    [ "${#api_key}" -eq 64 ] \
+        || fail "isolated daemon API key has an invalid length"
+    (umask 077; printf 'CAPTAIN_DAEMON_API_KEY=%s\n' "$api_key" >"$secrets") \
+        || fail "could not write isolated daemon API key"
+    chmod 600 "$secrets"
     cat >"$config" <<EOF
 home_dir = "$home_dir"
 data_dir = "$home_dir/data"
@@ -316,6 +325,7 @@ docs_audit() {
 
 release_workflow_audit() {
     run "$ROOT_DIR/scripts/release-workflow-audit.sh"
+    run "$ROOT_DIR/scripts/local-pr-gate-test.sh"
 }
 
 dependency_audit() {
@@ -398,6 +408,7 @@ need_cmd mktemp
 need_cmd curl
 need_cmd jq
 need_cmd pgrep
+need_cmd openssl
 
 case "$CARGO_PROFILE" in
     dev|release) ;;

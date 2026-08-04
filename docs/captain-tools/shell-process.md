@@ -224,17 +224,22 @@ Sub-commands: `install, list, freeze, show, check, search, download`. Package se
 - **One guarded boundary** — `guarded_exec` is the mandatory subprocess entry
   point for `shell_exec`, `execute_code`, package wrappers, goal checks and
   recovery, skill syntax checks and execution, workflow shell actions, Hand
-  installation, and WASM host execution. It applies policy, content guards,
+  installation, WASM host execution, and `process_start`. It applies policy, content guards,
   workspace, timeout/output bounds, process-tree cleanup, and structured audit.
 - **Content-bound permit** — a reviewed command or program receives an opaque
   permit bound to its SHA-256 digest and execution surface. A caller cannot
   reuse that permit after changing the content or for a different sink.
+  Direct programs separate their readable escaped review string from the
+  authorization preimage: the latter is domain/version tagged and uses
+  big-endian `u64` lengths plus an explicit argument count, so NUL bytes and
+  argument boundaries cannot alias.
 - **env_clear (B.1, B.2)** — every guarded spawn clears the parent environment
   and re-attaches only `PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`, `LANG`,
   `LC_ALL`, and `TERM` when present, plus Windows platform essentials.
   Surface-specific allowlisted variables and explicit values are added only
-  afterwards. `process_start` retains its dedicated sandbox with the same
-  clear-first rule. API keys held by the daemon never reach an ordinary child.
+  afterwards. `process_start` receives an exact-program permit before its
+  dedicated supervisor spawns the clear-first child. API keys held by the
+  daemon never reach an ordinary child.
 - **Per-skill secrets (B.3)** — when the spawn runs a skill, the manifest's `[requirements.env_inject]` map decides which entries from `~/.captain/secrets.env` cross over (and under which target name). Other skills' secrets stay invisible.
 - **No raw secrets.env sourcing** — `~/.captain/secrets.env` is not a shell profile. Do not run `source ~/.captain/secrets.env`, `. ~/.captain/secrets.env`, or `set -a` around it: some entries can be logical Captain identifiers rather than shell-safe variable names. Use `secret_read`, a native integration, or skill `env_inject`.
 - **Critical patterns** — destructive commands (`rm -rf /`, `mkfs`, `:(){:|:&};:`, `dd of=/dev/sda`, …) are matched and rejected before spawn (`critical_patterns`) on every guarded surface. The block also covers shell snippets that contain those patterns inside `eval` / `bash -c` payloads.
@@ -245,7 +250,11 @@ Sub-commands: `install, list, freeze, show, check, search, download`. Package se
 - **Command-free audit** — lifecycle events identify the surface, decision,
   duration and outcome but never copy the command, script, arguments, or
   explicit environment values into telemetry.
-- **Docker isolation** — `docker_exec` adds another layer: read-only rootfs, dropped capabilities, no `--privileged`, optional network namespace.
+- **Docker isolation** — `docker_exec` is an explicit rail with read-only
+  rootfs/workspace, dropped capabilities, no `--privileged`, finite resources,
+  and configurable networking. Under `untrusted_execution`, networking must be
+  `none`. A disabled, invalid, or unavailable Docker rail never falls back to
+  host execution.
 - **Per-agent quota** — `process_*` is capped at 5 concurrent processes per agent.
 - **CWD** — one-shot spawns run with `current_dir` set to the agent's workspace root (or the skill dir for `skill_execute`). `process_start` may override this with its `cwd` field for supervised project processes. `..` escapes are rejected upstream (`validate_path`) where a workspace-relative path is expected.
 
@@ -253,10 +262,12 @@ The ordinary host backend is `host_process`, with isolation level
 `environment_scrub` and `os_isolation: false`. Environment clearing, command
 classification, workspace validation, process-tree cleanup, and bounded
 runtime/output do not create a namespace, seccomp, Landlock, chroot, or
-container boundary. New installations use `full`/`safe`: routine commands are
-available and recognized catastrophic commands fail closed. `open` requires an
-explicit operator opt-in and content-bound approval. Use `docker_exec` or the
-WASM backend for untrusted code that requires real isolation.
+container boundary. The structural default is `allowlist`. Guided local setup
+records an explicit `personal_workstation`/`full` choice; `remote_operator`
+cannot exceed effective allowlist and `untrusted_execution` denies host starts.
+Daemon and per-agent policies are intersected before tools are shown or run.
+Use the explicit `docker_exec` or WASM rail for untrusted code that requires
+real isolation.
 
 ## Limites
 

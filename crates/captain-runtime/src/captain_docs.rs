@@ -29,6 +29,7 @@ pub fn normalize_family_filter(family: &str, query: &str) -> Option<&'static str
     }
 
     match normalized.as_str() {
+        "gmail" | "mail" | "email-automation" | "gmail-automation" => Some("email"),
         "changelog" | "runtime" | "release-notes" | "release-note" | "releases" | "updates" => {
             Some("runtime-changelog")
         }

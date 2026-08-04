@@ -31,8 +31,20 @@ pub(super) async fn try_handle_inbound_reresolution_retry(
     ctx: InboundReresolutionRetryContext<'_>,
     initial_error: &str,
 ) -> bool {
-    let Some(new_id) =
-        try_reresolution(initial_error, ctx.channel_key, ctx.handle, ctx.router).await
+    let account_id = ctx
+        .message
+        .metadata
+        .get("account_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|account| !account.is_empty());
+    let Some(new_id) = try_reresolution(
+        initial_error,
+        ctx.channel_key,
+        account_id,
+        ctx.handle,
+        ctx.router,
+    )
+    .await
     else {
         return false;
     };

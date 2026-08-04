@@ -45,10 +45,18 @@ pub(crate) fn cmd_channel_list() {
     });
 
     println!("Channel Integrations:\n");
-    println!("{:<12} {:<10} STATUS", "CHANNEL", "ENV VAR");
-    println!("{}", "-".repeat(50));
+    println!("{:<12} {:<24} STATUS", "CHANNEL", "CREDENTIAL");
+    println!("{}", "-".repeat(64));
 
     for &(name, env_var, _) in ACTIVE_CHANNELS {
+        if name == "email" {
+            let email = email_channel_list_status(&config_str, |key| resolver.has_credential(key));
+            println!(
+                "{:<12} {:<24} {}",
+                name, email.credential_summary, email.status
+            );
+            continue;
+        }
         let configured = config_str.contains(&format!("[channels.{name}]"));
         let credential_ready = env_var.is_empty() || resolver.has_credential(env_var);
 
@@ -70,6 +78,65 @@ pub(crate) fn cmd_channel_list() {
     println!("\nUse `captain channel setup <channel>` to configure a channel.");
 }
 
+struct EmailChannelListStatus {
+    credential_summary: String,
+    status: String,
+}
+
+fn email_channel_list_status(
+    config_str: &str,
+    has_credential: impl Fn(&str) -> bool,
+) -> EmailChannelListStatus {
+    let email = match super::channel_email_setup::email_config_from_raw(config_str) {
+        Ok(Some(email)) => email,
+        Ok(None) => {
+            return EmailChannelListStatus {
+                credential_summary: "-".to_string(),
+                status: "Not configured".to_string(),
+            }
+        }
+        Err(_) => {
+            return EmailChannelListStatus {
+                credential_summary: "-".to_string(),
+                status: "Invalid config".to_string(),
+            }
+        }
+    };
+    let validation_errors = email.validation_errors();
+    let accounts = email.effective_accounts();
+    let enabled = accounts
+        .iter()
+        .filter(|account| account.enabled)
+        .collect::<Vec<_>>();
+    let ready = enabled
+        .iter()
+        .filter(|account| {
+            !account.allowed_senders.is_empty() && has_credential(&account.password_env)
+        })
+        .count();
+    let credential_summary = format!("{ready}/{} mailbox secret(s)", enabled.len());
+    let status = if !validation_errors.is_empty() {
+        "Invalid config".to_string()
+    } else if enabled.is_empty() {
+        "Disabled".to_string()
+    } else if ready == enabled.len() {
+        "Ready".to_string()
+    } else if ready > 0 {
+        "Partial".to_string()
+    } else if enabled
+        .iter()
+        .any(|account| account.allowed_senders.is_empty())
+    {
+        "Locked allowlist".to_string()
+    } else {
+        "Missing credential".to_string()
+    };
+    EmailChannelListStatus {
+        credential_summary,
+        status,
+    }
+}
+
 pub(crate) fn cmd_channel_setup(channel: Option<&str>) {
     let channel = channel
         .map(ToOwned::to_owned)
@@ -78,7 +145,7 @@ pub(crate) fn cmd_channel_setup(channel: Option<&str>) {
     match channel.as_str() {
         "telegram" => setup_telegram(),
         "discord" => setup_discord(),
-        "email" => setup_email(),
+        "email" => super::channel_email_setup::setup_email(),
         "signal" => setup_signal(),
         frozen if FROZEN_CHANNELS.contains(&frozen) => {
             ui::error_with_fix(
@@ -174,35 +241,6 @@ fn setup_discord() {
     notify_daemon_restart();
 }
 
-fn setup_email() {
-    ui::section("Setting up Email");
-    ui::blank();
-    println!("  For Gmail, use an App Password:");
-    println!("  https://myaccount.google.com/apppasswords");
-    ui::blank();
-
-    let username = prompt_input("  Email address: ");
-    if username.is_empty() {
-        ui::error("No email provided. Setup cancelled.");
-        return;
-    }
-
-    let password = prompt_secret("  App password (or Enter to set later): ");
-    let config_block = email_config_block(&username);
-    if !password.is_empty() {
-        if !save_channel_secret("EMAIL_PASSWORD", &password) {
-            return;
-        }
-    } else {
-        ui::hint("Set later: captain config set-key email (or export EMAIL_PASSWORD=...)");
-    }
-    maybe_write_channel_config("email", &config_block);
-
-    ui::blank();
-    ui::success("Email configured");
-    notify_daemon_restart();
-}
-
 fn setup_signal() {
     ui::section("Setting up Signal");
     ui::blank();
@@ -258,13 +296,6 @@ fn maybe_write_channel_config(channel: &str, config_block: &str) {
     }
 }
 
-fn email_config_block(username: &str) -> String {
-    let username = toml::Value::String(username.to_string());
-    format!(
-        "\n[channels.email]\nimap_host = \"imap.gmail.com\"\nimap_port = 993\nsmtp_host = \"smtp.gmail.com\"\nsmtp_port = 587\nusername = {username}\npassword_env = \"EMAIL_PASSWORD\"\npoll_interval = 30\ndefault_agent = \"captain\"\n"
-    )
-}
-
 fn signal_config_block(phone: &str) -> String {
     let phone = toml::Value::String(phone.to_string());
     format!(
@@ -307,18 +338,19 @@ fn notify_daemon_restart() {
 pub(crate) fn cmd_channel_test(channel: &str) {
     if let Some(base) = find_daemon() {
         let client = daemon_client();
-        let body = daemon_json(
-            client
-                .post(format!("{base}/api/channels/{channel}/test"))
-                .send(),
-        );
-        if body.get("status").is_some() {
-            println!("Test message sent to {channel}!");
+        let response = client
+            .post(format!("{base}/api/channels/{channel}/test"))
+            .send();
+        let http_success = response
+            .as_ref()
+            .is_ok_and(|response| response.status().is_success());
+        let body = daemon_json(response);
+        let (success, message) =
+            crate::commands::channel_response::channel_test_outcome(http_success, &body);
+        if success {
+            println!("{message}");
         } else {
-            eprintln!(
-                "Failed: {}",
-                body["error"].as_str().unwrap_or("Unknown error")
-            );
+            eprintln!("Failed: {message}");
         }
     } else {
         eprintln!("Channel test requires a running daemon. Start with: captain start");
@@ -326,34 +358,10 @@ pub(crate) fn cmd_channel_test(channel: &str) {
     }
 }
 
-pub(crate) fn cmd_channel_toggle(channel: &str, enable: bool) {
-    let action = if enable { "enabled" } else { "disabled" };
-    if let Some(base) = find_daemon() {
-        let client = daemon_client();
-        let endpoint = if enable { "enable" } else { "disable" };
-        let body = daemon_json(
-            client
-                .post(format!("{base}/api/channels/{channel}/{endpoint}"))
-                .send(),
-        );
-        if body.get("status").is_some() {
-            println!("Channel {channel} {action}.");
-        } else {
-            eprintln!(
-                "Failed: {}",
-                body["error"].as_str().unwrap_or("Unknown error")
-            );
-        }
-    } else {
-        println!("Note: Channel {channel} will be {action} when the daemon starts.");
-        println!("Edit ~/.captain/config.toml to persist this change.");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        email_config_block, signal_config_block, store_channel_secret_at, ACTIVE_CHANNELS,
+        email_channel_list_status, signal_config_block, store_channel_secret_at, ACTIVE_CHANNELS,
         FROZEN_CHANNELS, SIGNAL_PHONE_PROMPT,
     };
 
@@ -414,18 +422,35 @@ mod tests {
     #[test]
     fn active_channel_config_blocks_use_runtime_fields_and_escape_values() {
         let signal: toml::Value = signal_config_block("+12345678900").parse().unwrap();
-        let email: toml::Value = email_config_block("operator\"@example.org")
-            .parse()
-            .unwrap();
-
         assert_eq!(
             signal["channels"]["signal"]["phone_number"].as_str(),
             Some("+12345678900")
         );
         assert!(signal["channels"]["signal"].get("phone_env").is_none());
-        assert_eq!(
-            email["channels"]["email"]["username"].as_str(),
-            Some("operator\"@example.org")
-        );
+    }
+
+    #[test]
+    fn channel_list_reports_named_email_accounts_without_assuming_email_password() {
+        let config = r#"
+[[channels.email.accounts]]
+alias = "work"
+imap_host = "imap.example.com"
+smtp_host = "smtp.example.com"
+username = "captain@example.com"
+password_env = "CAPTAIN_EMAIL_WORK_PASSWORD"
+allowed_senders = ["operator@example.com"]
+
+[[channels.email.accounts]]
+alias = "personal"
+imap_host = "imap.example.com"
+smtp_host = "smtp.example.com"
+username = "captain2@example.com"
+password_env = "CAPTAIN_EMAIL_PERSONAL_PASSWORD"
+allowed_senders = ["operator@example.com"]
+"#;
+        let status = email_channel_list_status(config, |key| key == "CAPTAIN_EMAIL_WORK_PASSWORD");
+
+        assert_eq!(status.credential_summary, "1/2 mailbox secret(s)");
+        assert_eq!(status.status, "Partial");
     }
 }

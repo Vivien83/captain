@@ -232,14 +232,42 @@ fn check_kernel_config(report: &mut DoctorReport, cfg: captain_types::config::Ke
     }
     report.push(serde_json::json!({"check": "config_deser", "status": "ok"}));
 
+    if cfg.auth.allow_unauthenticated_loopback {
+        if !report.json {
+            ui::check_warn(
+                "Auth permits credentialless direct-loopback access by explicit operator opt-out",
+            );
+        }
+        report.push(serde_json::json!({
+            "check": "auth_policy",
+            "status": "warn",
+            "mode": "unauthenticated_loopback",
+            "remediation": "Run `captain setup` or set auth.allow_unauthenticated_loopback=false"
+        }));
+    } else {
+        if !report.json {
+            ui::check_ok("Auth policy fails closed when no credential is configured");
+        }
+        report.push(serde_json::json!({
+            "check": "auth_policy",
+            "status": "ok",
+            "mode": if cfg.auth.enabled { "session" } else { "fail_closed" }
+        }));
+    }
+
     let posture = cfg.exec_policy.host_execution_posture();
     let mode = posture.policy_mode.as_str();
+    let configured_mode = posture.configured_policy_mode.as_str();
+    let profile = posture.profile.as_str();
     let critical_mode = posture.critical_mode.as_str();
     let safe_bins_count = cfg.exec_policy.safe_bins.len();
     if !report.json {
         ui::check_ok(&format!(
-            "Exec policy: {mode}/{critical_mode}, backend={}, isolation={}, os_isolation={}",
-            posture.backend, posture.isolation_level, posture.os_isolation
+            "Exec policy: profile={profile}, configured={configured_mode}, effective={mode}/{critical_mode}, backend={}, isolation={}, host_allowed={}, os_isolation={}",
+            posture.backend,
+            posture.isolation_level,
+            posture.host_execution_allowed,
+            posture.os_isolation
         ));
         if posture.critical_mode == captain_types::config::CriticalMode::Open {
             ui::check_warn(
@@ -250,6 +278,8 @@ fn check_kernel_config(report: &mut DoctorReport, cfg: captain_types::config::Ke
     report.push(serde_json::json!({
         "check": "exec_policy",
         "status": "ok",
+        "profile": profile,
+        "configured_mode": configured_mode,
         "mode": mode,
         "critical_mode": critical_mode,
         "safe_bins": safe_bins_count,
@@ -257,6 +287,47 @@ fn check_kernel_config(report: &mut DoctorReport, cfg: captain_types::config::Ke
         "isolation_level": posture.isolation_level,
         "os_isolation": posture.os_isolation,
         "dangerous_command_guard": posture.dangerous_command_guard,
+    }));
+    let docker_posture = cfg.docker.isolation_posture(cfg.exec_policy.profile);
+    let docker_violations = docker_posture.violations.clone();
+    let docker_status = if docker_violations.is_empty() {
+        "ok"
+    } else if cfg.exec_policy.profile == captain_types::config::ExecutionProfile::UntrustedExecution
+    {
+        report.fail();
+        "fail"
+    } else {
+        "warn"
+    };
+    if !report.json {
+        if docker_violations.is_empty() {
+            ui::check_ok(&format!(
+                "Docker rail: {}; explicit only; runtime checked on invocation",
+                if docker_posture.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ));
+        } else {
+            for violation in &docker_violations {
+                if docker_status == "fail" {
+                    ui::check_fail(violation);
+                } else {
+                    ui::check_warn(violation);
+                }
+            }
+        }
+    }
+    report.push(serde_json::json!({
+        "check": "docker_isolation",
+        "status": docker_status,
+        "posture": docker_posture,
+        "remediation": if docker_status == "fail" {
+            Some("Enable the strict explicit Docker rail or choose a less restrictive deployment profile")
+        } else {
+            None
+        },
     }));
     check_includes(report, &cfg);
     check_mcp_servers(report, &cfg);

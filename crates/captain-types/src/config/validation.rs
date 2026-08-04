@@ -1,4 +1,6 @@
-use super::{ChannelsConfig, KernelConfig, SearchProvider, WebConfig};
+use super::{
+    ChannelsConfig, ExecSecurityMode, ExecutionProfile, KernelConfig, SearchProvider, WebConfig,
+};
 
 impl KernelConfig {
     /// Validate the configuration, returning a list of warnings.
@@ -13,6 +15,26 @@ impl KernelConfig {
         warn_wave_four_channel_envs(&mut warnings, &self.channels);
         warn_wave_five_channel_envs(&mut warnings, &self.channels);
         warn_search_provider_envs(&mut warnings, &self.web);
+        if self.auth.allow_unauthenticated_loopback {
+            warnings.push(
+                "Credentialless API/web access is explicitly enabled for direct loopback clients"
+                    .to_string(),
+            );
+        }
+        if self.exec_policy.profile == ExecutionProfile::RemoteOperator
+            && self.exec_policy.mode == ExecSecurityMode::Full
+        {
+            warnings.push(
+                "execution profile remote_operator constrains configured mode=full to effective mode=allowlist"
+                    .to_string(),
+            );
+        }
+        warnings.extend(
+            self.docker
+                .profile_violations(self.exec_policy.profile)
+                .into_iter()
+                .map(str::to_string),
+        );
 
         warnings
     }
@@ -66,7 +88,20 @@ fn warn_primary_channel_envs(warnings: &mut Vec<String>, channels: &ChannelsConf
         warn_missing(warnings, "Matrix", &mx.access_token_env);
     }
     if let Some(em) = &channels.email {
-        warn_missing(warnings, "Email", &em.password_env);
+        for error in em.validation_errors() {
+            warnings.push(format!("Email configuration invalid: {error}"));
+        }
+        for account in em
+            .effective_accounts()
+            .into_iter()
+            .filter(|account| account.enabled)
+        {
+            warn_missing(
+                warnings,
+                &format!("Email account '{}'", account.alias),
+                &account.password_env,
+            );
+        }
     }
     if let Some(t) = &channels.teams {
         warn_missing(warnings, "Teams", &t.app_password_env);
@@ -260,6 +295,18 @@ mod tests {
     }
 
     #[test]
+    fn validation_surfaces_the_explicit_credentialless_loopback_mode() {
+        let mut config = KernelConfig::default();
+        config.auth.allow_unauthenticated_loopback = true;
+
+        let warnings = config.validate();
+
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("Credentialless API/web access") && warning.contains("direct loopback")
+        }));
+    }
+
+    #[test]
     fn validation_preserves_channel_warning_order() {
         let envs = [
             "CAPTAIN_TEST_VALIDATION_ORDER_TELEGRAM",
@@ -330,5 +377,25 @@ mod tests {
         assert_eq!(config.browser.max_sessions, 3);
         assert_eq!(config.web.fetch.max_response_bytes, 50_000_000);
         assert_eq!(config.web.fetch.timeout_secs, 30);
+    }
+
+    #[test]
+    fn validation_exposes_profile_constraints_without_silent_fallback() {
+        let mut config = KernelConfig::default();
+        config.exec_policy.profile = ExecutionProfile::RemoteOperator;
+        config.exec_policy.mode = ExecSecurityMode::Full;
+        let warnings = config.validate();
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("remote_operator") && warning.contains("effective mode=allowlist")
+        }));
+
+        config.exec_policy.profile = ExecutionProfile::UntrustedExecution;
+        config.docker.enabled = true;
+        config.docker.network = "bridge".to_string();
+        let warnings = config.validate();
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("docker.network must be \"none\"")));
+        assert!(!warnings.iter().any(|warning| warning.contains("fallback")));
     }
 }

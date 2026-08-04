@@ -512,7 +512,7 @@ pub fn detect_available_provider() -> Option<(&'static str, &'static str, &'stat
             "accounts/fireworks/models/llama-v3p1-70b-instruct",
             "FIREWORKS_API_KEY",
         ),
-        ("xai", "grok-2", "XAI_API_KEY"),
+        ("xai", "grok-4.5", "XAI_API_KEY"),
         (
             "perplexity",
             "llama-3.1-sonar-large-128k-online",

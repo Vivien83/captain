@@ -128,10 +128,148 @@ impl Default for SignalConfig {
     }
 }
 
-/// Email (IMAP/SMTP) channel adapter configuration.
+/// One named IMAP/SMTP mailbox used by the Email channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EmailAccountConfig {
+    /// Stable lowercase alias used in adapter names (`email:<alias>`).
+    pub alias: String,
+    /// Whether this account should start with the channel bridge.
+    pub enabled: bool,
+    /// IMAP server host. Connections always use implicit TLS.
+    pub imap_host: String,
+    /// IMAP TLS port.
+    pub imap_port: u16,
+    /// SMTP server host. Port 465 uses implicit TLS; others require STARTTLS.
+    pub smtp_host: String,
+    /// SMTP TLS/STARTTLS port.
+    pub smtp_port: u16,
+    /// Email address or provider login used for IMAP and SMTP authentication.
+    pub username: String,
+    /// Canonical Captain secret key holding the password or app password.
+    pub password_env: String,
+    /// Poll interval in seconds.
+    pub poll_interval_secs: u64,
+    /// IMAP folders to monitor.
+    #[serde(
+        default = "default_email_folders",
+        deserialize_with = "deserialize_string_or_int_vec"
+    )]
+    pub folders: Vec<String>,
+    /// Only process emails from these senders (empty = deny all,
+    /// `["*"]` = allow all).
+    #[serde(default, deserialize_with = "deserialize_string_or_int_vec")]
+    pub allowed_senders: Vec<String>,
+    /// Default agent name to route inbound messages to.
+    pub default_agent: Option<String>,
+}
+
+impl Default for EmailAccountConfig {
+    fn default() -> Self {
+        Self {
+            alias: String::new(),
+            enabled: true,
+            imap_host: String::new(),
+            imap_port: 993,
+            smtp_host: String::new(),
+            smtp_port: 587,
+            username: String::new(),
+            password_env: String::new(),
+            poll_interval_secs: 30,
+            folders: default_email_folders(),
+            allowed_senders: vec![],
+            default_agent: None,
+        }
+    }
+}
+
+impl EmailAccountConfig {
+    pub fn validation_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !is_valid_email_account_alias(&self.alias) {
+            errors.push(
+                "alias must be 1-32 lowercase ASCII letters, digits, '.', '_' or '-', starting with a letter or digit"
+                    .to_string(),
+            );
+        }
+        validate_email_host(&mut errors, "imap_host", &self.imap_host);
+        validate_email_host(&mut errors, "smtp_host", &self.smtp_host);
+        if self.imap_port == 0 {
+            errors.push("imap_port must be non-zero".to_string());
+        }
+        if self.smtp_port == 0 {
+            errors.push("smtp_port must be non-zero".to_string());
+        }
+        if self.username.is_empty()
+            || self.username.len() > 320
+            || self.username.contains(char::is_whitespace)
+        {
+            errors
+                .push("username must be a non-empty address/login without whitespace".to_string());
+        }
+        if !valid_secret_key(&self.password_env) {
+            errors
+                .push("password_env must be a canonical environment-style secret key".to_string());
+        }
+        if !(5..=3600).contains(&self.poll_interval_secs) {
+            errors.push("poll_interval_secs must be between 5 and 3600".to_string());
+        }
+        if self.folders.is_empty()
+            || self.folders.len() > 32
+            || self
+                .folders
+                .iter()
+                .any(|folder| folder.is_empty() || folder.len() > 255 || folder.contains('\0'))
+        {
+            errors.push("folders must contain 1-32 bounded non-empty IMAP names".to_string());
+        }
+        errors
+    }
+}
+
+/// Return whether an Email account alias is safe for config and
+/// `email:<alias>` adapter addressing.
+pub fn is_valid_email_account_alias(alias: &str) -> bool {
+    let bytes = alias.as_bytes();
+    (1..=32).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn validate_email_host(errors: &mut Vec<String>, field: &str, value: &str) {
+    if value.len() > 253 || url::Host::parse(value).is_err() {
+        errors.push(format!("{field} must be a valid hostname or IP address"));
+    }
+}
+
+fn valid_secret_key(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && value.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn default_email_folders() -> Vec<String> {
+    vec!["INBOX".to_string()]
+}
+
+/// Email (IMAP/SMTP) channel configuration.
+///
+/// `accounts` is the current multi-account contract. The scalar fields remain
+/// readable for backward compatibility with pre-multi-account installations
+/// and are projected as one account named `default` when `accounts` is empty.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmailConfig {
+    /// Named IMAP/SMTP accounts.
+    pub accounts: Vec<EmailAccountConfig>,
+    /// Account alias used by bare `email` sends. The first enabled account is
+    /// used when omitted.
+    pub default_account: Option<String>,
     /// IMAP server host.
     pub imap_host: String,
     /// IMAP port (993 for TLS).
@@ -147,7 +285,10 @@ pub struct EmailConfig {
     /// Poll interval in seconds.
     pub poll_interval_secs: u64,
     /// IMAP folders to monitor.
-    #[serde(default, deserialize_with = "deserialize_string_or_int_vec")]
+    #[serde(
+        default = "default_email_folders",
+        deserialize_with = "deserialize_string_or_int_vec"
+    )]
     pub folders: Vec<String>,
     /// Only process emails from these senders (empty = deny all,
     /// `["*"]` = allow all).
@@ -163,6 +304,8 @@ pub struct EmailConfig {
 impl Default for EmailConfig {
     fn default() -> Self {
         Self {
+            accounts: vec![],
+            default_account: None,
             imap_host: String::new(),
             imap_port: 993,
             smtp_host: String::new(),
@@ -170,11 +313,92 @@ impl Default for EmailConfig {
             username: String::new(),
             password_env: "EMAIL_PASSWORD".to_string(),
             poll_interval_secs: 30,
-            folders: vec!["INBOX".to_string()],
+            folders: default_email_folders(),
             allowed_senders: vec![],
             default_agent: None,
             overrides: ChannelOverrides::default(),
         }
+    }
+}
+
+impl EmailConfig {
+    pub fn effective_accounts(&self) -> Vec<EmailAccountConfig> {
+        if !self.accounts.is_empty() {
+            return self.accounts.clone();
+        }
+        if !self.legacy_account_is_configured() {
+            return Vec::new();
+        }
+        vec![EmailAccountConfig {
+            alias: "default".to_string(),
+            enabled: true,
+            imap_host: self.imap_host.clone(),
+            imap_port: self.imap_port,
+            smtp_host: self.smtp_host.clone(),
+            smtp_port: self.smtp_port,
+            username: self.username.clone(),
+            password_env: self.password_env.clone(),
+            poll_interval_secs: self.poll_interval_secs,
+            folders: self.folders.clone(),
+            allowed_senders: self.allowed_senders.clone(),
+            default_agent: self.default_agent.clone(),
+        }]
+    }
+
+    pub fn effective_default_account(&self) -> Option<String> {
+        let accounts = self.effective_accounts();
+        self.default_account.clone().or_else(|| {
+            accounts
+                .iter()
+                .find(|account| account.enabled)
+                .map(|account| account.alias.clone())
+        })
+    }
+
+    pub fn validation_errors(&self) -> Vec<String> {
+        let accounts = self.effective_accounts();
+        let mut errors = Vec::new();
+        if accounts.is_empty() {
+            errors.push("at least one Email account must be configured".to_string());
+        }
+        if !self.accounts.is_empty() && self.legacy_account_is_configured() {
+            errors.push(
+                "multi-account entries cannot be mixed with legacy scalar Email fields".to_string(),
+            );
+        }
+        let mut aliases = std::collections::HashSet::new();
+        for account in &accounts {
+            for error in account.validation_errors() {
+                errors.push(format!("account '{}': {error}", account.alias));
+            }
+            if !aliases.insert(account.alias.as_str()) {
+                errors.push(format!("duplicate account alias '{}'", account.alias));
+            }
+        }
+        if let Some(default_account) = &self.default_account {
+            if !accounts
+                .iter()
+                .any(|account| account.enabled && &account.alias == default_account)
+            {
+                errors.push(format!(
+                    "default_account '{default_account}' does not name an enabled account"
+                ));
+            }
+        }
+        errors
+    }
+
+    fn legacy_account_is_configured(&self) -> bool {
+        !self.imap_host.is_empty()
+            || !self.smtp_host.is_empty()
+            || !self.username.is_empty()
+            || self.password_env != "EMAIL_PASSWORD"
+            || self.imap_port != 993
+            || self.smtp_port != 587
+            || self.poll_interval_secs != 30
+            || self.folders != ["INBOX"]
+            || !self.allowed_senders.is_empty()
+            || self.default_agent.is_some()
     }
 }
 
@@ -248,5 +472,127 @@ mod tests {
         assert_eq!(discord.allowed_users, vec!["7"]);
         assert_eq!(email.folders, vec!["2026"]);
         assert_eq!(email.allowed_senders, vec!["99"]);
+    }
+
+    #[test]
+    fn legacy_email_config_projects_to_one_compatible_account() {
+        let config: EmailConfig = toml::from_str(
+            r#"
+            imap_host = "imap.example.com"
+            smtp_host = "smtp.example.com"
+            username = "captain@example.com"
+            password_env = "EMAIL_PASSWORD"
+            allowed_senders = ["@example.com"]
+            "#,
+        )
+        .unwrap();
+
+        let accounts = config.effective_accounts();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].alias, "default");
+        assert_eq!(accounts[0].username, "captain@example.com");
+        assert_eq!(
+            config.effective_default_account().as_deref(),
+            Some("default")
+        );
+        let errors = config.validation_errors();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn multi_account_email_config_is_named_and_defaulted_explicitly() {
+        let config: EmailConfig = toml::from_str(
+            r#"
+            default_account = "work"
+
+            [[accounts]]
+            alias = "personal"
+            imap_host = "imap.example.com"
+            smtp_host = "smtp.example.com"
+            username = "personal@example.com"
+            password_env = "EMAIL_PERSONAL_PASSWORD"
+            allowed_senders = ["friend@example.com"]
+
+            [[accounts]]
+            alias = "work"
+            imap_host = "imap.work.example"
+            smtp_host = "smtp.work.example"
+            username = "captain@work.example"
+            password_env = "EMAIL_WORK_PASSWORD"
+            allowed_senders = ["@work.example"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.effective_accounts().len(), 2);
+        assert_eq!(config.effective_default_account().as_deref(), Some("work"));
+        let errors = config.validation_errors();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn multi_account_email_config_rejects_ambiguous_or_unsafe_entries() {
+        let config = EmailConfig {
+            accounts: vec![
+                EmailAccountConfig {
+                    alias: "Work".to_string(),
+                    imap_host: "https://imap.example.com".to_string(),
+                    smtp_host: "smtp.example.com".to_string(),
+                    username: "captain@example.com".to_string(),
+                    password_env: "bad-key".to_string(),
+                    poll_interval_secs: 0,
+                    ..Default::default()
+                },
+                EmailAccountConfig {
+                    alias: "Work".to_string(),
+                    imap_host: "imap.example.com".to_string(),
+                    smtp_host: "smtp.example.com".to_string(),
+                    username: "captain@example.com".to_string(),
+                    password_env: "EMAIL_WORK_PASSWORD".to_string(),
+                    ..Default::default()
+                },
+            ],
+            default_account: Some("missing".to_string()),
+            ..Default::default()
+        };
+        let errors = config.validation_errors().join("\n");
+
+        assert!(errors.contains("alias must"));
+        assert!(errors.contains("imap_host"));
+        assert!(errors.contains("password_env"));
+        assert!(errors.contains("poll_interval_secs"));
+        assert!(errors.contains("duplicate account alias"));
+        assert!(errors.contains("default_account 'missing'"));
+    }
+
+    #[test]
+    fn multi_account_email_config_cannot_mix_legacy_fields() {
+        let config = EmailConfig {
+            accounts: vec![EmailAccountConfig {
+                alias: "work".to_string(),
+                imap_host: "imap.example.com".to_string(),
+                smtp_host: "smtp.example.com".to_string(),
+                username: "captain@example.com".to_string(),
+                password_env: "EMAIL_WORK_PASSWORD".to_string(),
+                ..Default::default()
+            }],
+            username: "legacy@example.com".to_string(),
+            ..Default::default()
+        };
+
+        assert!(config
+            .validation_errors()
+            .iter()
+            .any(|error| error.contains("cannot be mixed")));
+    }
+
+    #[test]
+    fn empty_email_channel_config_is_not_ready() {
+        let errors = EmailConfig::default().validation_errors();
+
+        assert_eq!(
+            errors,
+            vec!["at least one Email account must be configured"]
+        );
     }
 }

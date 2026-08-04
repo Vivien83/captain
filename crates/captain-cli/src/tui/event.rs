@@ -25,7 +25,7 @@ use super::event_memory::memory_event_from_json;
 use super::event_stream::{daemon_stream_events_from_sse_line, DaemonStreamState};
 use super::screens::{
     audit::AuditEntry,
-    channels::{ChannelInfo, ChannelStatus},
+    channels::ChannelInfo,
     comms::{CommsEdge, CommsEventItem, CommsNode},
     dashboard::{AuditRow, StatusSnapshot},
     extensions::{ExtensionHealthInfo, ExtensionInfo},
@@ -131,72 +131,6 @@ mod mouse_capture_tests {
     }
 }
 
-fn channel_status_from_api(ch: &serde_json::Value) -> ChannelStatus {
-    let configured = ch["configured"].as_bool().unwrap_or(false);
-    let has_token = ch["has_token"].as_bool().unwrap_or(true);
-    let ready = ch["ready"].as_bool();
-    match ch["status"].as_str() {
-        Some("ready") => ChannelStatus::Ready,
-        Some("missing_env") => ChannelStatus::MissingEnv,
-        Some(_) => ChannelStatus::NotConfigured,
-        None if ready == Some(true) => ChannelStatus::Ready,
-        None if ready == Some(false) && configured => ChannelStatus::MissingEnv,
-        None if configured && has_token => ChannelStatus::Ready,
-        None if configured => ChannelStatus::MissingEnv,
-        None => ChannelStatus::NotConfigured,
-    }
-}
-
-#[cfg(test)]
-mod channel_status_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn explicit_status_takes_precedence() {
-        assert!(
-            channel_status_from_api(&json!({"status": "ready", "ready": false}))
-                == ChannelStatus::Ready
-        );
-        assert!(
-            channel_status_from_api(&json!({"status": "missing_env", "ready": true}))
-                == ChannelStatus::MissingEnv
-        );
-        assert!(
-            channel_status_from_api(&json!({"status": "frozen", "configured": true}))
-                == ChannelStatus::NotConfigured
-        );
-    }
-
-    #[test]
-    fn ready_field_is_used_when_legacy_status_is_absent() {
-        assert!(channel_status_from_api(&json!({"ready": true})) == ChannelStatus::Ready);
-        assert!(
-            channel_status_from_api(&json!({"ready": false, "configured": true}))
-                == ChannelStatus::MissingEnv
-        );
-        assert!(
-            channel_status_from_api(&json!({"ready": false, "configured": false}))
-                == ChannelStatus::NotConfigured
-        );
-    }
-
-    #[test]
-    fn legacy_configured_token_fields_still_work() {
-        assert!(
-            channel_status_from_api(&json!({"configured": true, "has_token": true}))
-                == ChannelStatus::Ready
-        );
-        assert!(
-            channel_status_from_api(&json!({"configured": true, "has_token": false}))
-                == ChannelStatus::MissingEnv
-        );
-        assert!(
-            channel_status_from_api(&json!({"configured": false})) == ChannelStatus::NotConfigured
-        );
-    }
-}
-
 // ── BackendRef ──────────────────────────────────────────────────────────────
 
 /// Lightweight reference to the active backend, for passing to spawn functions.
@@ -272,6 +206,8 @@ pub enum AppEvent {
     ChannelListLoaded(Vec<ChannelInfo>),
     /// Channel test result.
     ChannelTestResult { success: bool, message: String },
+    /// Channel configuration persistence and reload result.
+    ChannelConfigureResult { success: bool, message: String },
     /// Workflow list loaded.
     WorkflowListLoaded(Vec<WorkflowInfo>),
     /// Workflow runs loaded for a specific workflow.
@@ -1315,43 +1251,27 @@ pub fn spawn_fetch_channels(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
-            if let Ok(resp) = client.get(format!("{base_url}/api/channels")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let channels: Vec<ChannelInfo> = body
-                        .as_array()
-                        .or_else(|| {
-                            body.get("channels")
-                                .and_then(|channels| channels.as_array())
+            let channels = client
+                .get(format!("{base_url}/api/channels"))
+                .send()
+                .ok()
+                .filter(|response| response.status().is_success())
+                .and_then(|response| response.json::<serde_json::Value>().ok())
+                .and_then(|body| {
+                    body.as_array()
+                        .or_else(|| body.get("channels").and_then(serde_json::Value::as_array))
+                        .map(|channels| {
+                            channels
+                                .iter()
+                                .filter_map(ChannelInfo::from_api)
+                                .collect::<Vec<_>>()
                         })
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|ch| {
-                                    let configured = ch["configured"].as_bool().unwrap_or(false);
-                                    let status = channel_status_from_api(ch);
-                                    ChannelInfo {
-                                        name: ch["name"].as_str().unwrap_or("?").to_string(),
-                                        display_name: ch["display_name"]
-                                            .as_str()
-                                            .unwrap_or(ch["name"].as_str().unwrap_or("?"))
-                                            .to_string(),
-                                        category: ch["category"]
-                                            .as_str()
-                                            .unwrap_or("messaging")
-                                            .to_string(),
-                                        status,
-                                        env_vars: Vec::new(),
-                                        enabled: ch["enabled"].as_bool().unwrap_or(configured),
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::ChannelListLoaded(channels));
-                }
-            }
+                })
+                .unwrap_or_default();
+            let _ = tx.send(AppEvent::ChannelListLoaded(channels));
         }
         BackendRef::InProcess(_kernel) => {
-            // In-process: fall back to default channel detection
+            // In-process: fall back to the active core list.
             let _ = tx.send(AppEvent::ChannelListLoaded(Vec::new()));
         }
     });
@@ -1362,7 +1282,7 @@ pub fn spawn_test_channel(backend: BackendRef, channel: String, tx: mpsc::Sender
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
                 .default_headers(crate::daemon_auth_headers())
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
@@ -1372,22 +1292,18 @@ pub fn spawn_test_channel(backend: BackendRef, channel: String, tx: mpsc::Sender
                 .send()
             {
                 Ok(resp) => {
-                    let success = resp.status().is_success();
-                    let msg = resp
-                        .json::<serde_json::Value>()
-                        .ok()
-                        .and_then(|b| b["message"].as_str().map(String::from))
-                        .unwrap_or_else(|| {
-                            if success {
-                                "Test passed".to_string()
-                            } else {
-                                "Test failed".to_string()
-                            }
-                        });
-                    let _ = tx.send(AppEvent::ChannelTestResult {
-                        success,
-                        message: msg,
-                    });
+                    let http_success = resp.status().is_success();
+                    let (success, message) = match resp.json::<serde_json::Value>() {
+                        Ok(body) => crate::commands::channel_response::channel_test_outcome(
+                            http_success,
+                            &body,
+                        ),
+                        Err(error) => (
+                            false,
+                            format!("Daemon returned an invalid channel test response: {error}"),
+                        ),
+                    };
+                    let _ = tx.send(AppEvent::ChannelTestResult { success, message });
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::ChannelTestResult {
@@ -1401,6 +1317,56 @@ pub fn spawn_test_channel(backend: BackendRef, channel: String, tx: mpsc::Sender
             let _ = tx.send(AppEvent::ChannelTestResult {
                 success: false,
                 message: "Channel test not available in in-process mode".to_string(),
+            });
+        }
+    });
+}
+
+/// Persist channel configuration and report the daemon's actual outcome.
+pub fn spawn_configure_channel(
+    backend: BackendRef,
+    channel: String,
+    body: serde_json::Value,
+    tx: mpsc::Sender<AppEvent>,
+) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(45))
+                .default_headers(crate::daemon_auth_headers())
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            match client
+                .post(format!("{base_url}/api/channels/{channel}/configure"))
+                .json(&body)
+                .send()
+            {
+                Ok(response) => {
+                    let http_success = response.status().is_success();
+                    let (success, message) = match response.json::<serde_json::Value>() {
+                        Ok(body) => crate::commands::channel_response::channel_configure_outcome(
+                            http_success,
+                            &body,
+                        ),
+                        Err(error) => (
+                            false,
+                            format!("Daemon returned an invalid channel setup response: {error}"),
+                        ),
+                    };
+                    let _ = tx.send(AppEvent::ChannelConfigureResult { success, message });
+                }
+                Err(error) => {
+                    let _ = tx.send(AppEvent::ChannelConfigureResult {
+                        success: false,
+                        message: error.to_string(),
+                    });
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::ChannelConfigureResult {
+                success: false,
+                message: "Channel setup requires the Captain daemon.".to_string(),
             });
         }
     });
@@ -4155,15 +4121,24 @@ fn security_features_from_status(body: &serde_json::Value) -> Vec<SecurityFeatur
     let Some(policy_mode) = execution["policy_mode"].as_str() else {
         return Vec::new();
     };
+    let profile = execution["profile"].as_str().unwrap_or("unknown");
+    let configured_policy_mode = execution["configured_policy_mode"]
+        .as_str()
+        .unwrap_or(policy_mode);
     let critical_mode = execution["critical_mode"].as_str().unwrap_or("unknown");
     let isolation_level = execution["isolation_level"].as_str().unwrap_or("unknown");
     let os_isolation = execution["os_isolation"].as_bool().unwrap_or(false);
+    let docker = &execution["docker"];
 
     super::screens::security::features_for_execution_summary(
+        profile,
+        configured_policy_mode,
         policy_mode,
         critical_mode,
         isolation_level,
         os_isolation,
+        docker["enabled"].as_bool().unwrap_or(false),
+        docker["untrusted_profile_ready"].as_bool().unwrap_or(false),
     )
 }
 
@@ -4183,11 +4158,19 @@ pub fn spawn_fetch_security(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
         }
         BackendRef::InProcess(kernel) => {
             let posture = kernel.config.exec_policy.host_execution_posture();
+            let docker = kernel
+                .config
+                .docker
+                .isolation_posture(kernel.config.exec_policy.profile);
             let features = super::screens::security::features_for_execution_summary(
+                posture.profile.as_str(),
+                posture.configured_policy_mode.as_str(),
                 posture.policy_mode.as_str(),
                 posture.critical_mode.as_str(),
                 posture.isolation_level,
                 posture.os_isolation,
+                docker.enabled,
+                docker.untrusted_profile_ready,
             );
             let _ = tx.send(AppEvent::SecurityLoaded(features));
         }
@@ -4202,10 +4185,16 @@ mod security_status_tests {
     fn structured_security_status_exposes_host_boundary_without_os_claim() {
         let features = security_features_from_status(&serde_json::json!({
             "execution": {
-                "policy_mode": "full",
+                "profile": "remote_operator",
+                "configured_policy_mode": "full",
+                "policy_mode": "allowlist",
                 "critical_mode": "safe",
                 "isolation_level": "environment_scrub",
-                "os_isolation": false
+                "os_isolation": false,
+                "docker": {
+                    "enabled": true,
+                    "untrusted_profile_ready": false
+                }
             }
         }));
 
@@ -4214,8 +4203,10 @@ mod security_status_tests {
             .find(|feature| feature.name == "Host Subprocess Boundary")
             .expect("host boundary feature");
         assert!(boundary.active);
+        assert!(boundary.description.contains("remote_operator"));
         assert!(boundary.description.contains("environment_scrub"));
-        assert!(boundary.description.contains("full/safe"));
+        assert!(boundary.description.contains("configured full"));
+        assert!(boundary.description.contains("effective allowlist/safe"));
 
         let os = features
             .iter()
@@ -4223,6 +4214,13 @@ mod security_status_tests {
             .expect("OS isolation feature");
         assert!(!os.active);
         assert!(os.description.contains("None for shell_exec"));
+
+        let docker = features
+            .iter()
+            .find(|feature| feature.name == "Explicit Docker Rail")
+            .expect("Docker feature");
+        assert!(docker.active);
+        assert!(docker.description.contains("no host fallback"));
     }
 }
 

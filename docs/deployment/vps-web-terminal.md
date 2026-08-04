@@ -43,6 +43,7 @@ reverse_proxy = "caddy"
 
 [auth]
 enabled = true
+allow_unauthenticated_loopback = false
 username = "admin"
 session_ttl_hours = 72
 session_cookie_secure = "always"
@@ -74,6 +75,9 @@ Before opening WebSocket or SSE, the browser exchanges its authenticated
 cookie for a path/IP/session-epoch-bound ticket that expires after 30 seconds
 and works once. Technical clients may still send API-key auth in headers.
 Captain never accepts an API key or session token from a URL query string.
+Do not enable `allow_unauthenticated_loopback` on a VPS. That escape hatch is
+limited to the actual client IP and a declared local reverse proxy does not
+make remote traffic eligible.
 
 `/config` follows the same web-session rule. It edits the full `config.toml`
 instead of a partial form, creates timestamped backups, validates before save,
@@ -99,6 +103,15 @@ Recommended VPS shape:
 ```text
 Internet -> Caddy/Nginx TLS reverse proxy -> Captain on 127.0.0.1:50051
 ```
+
+Captain's built-in login limiter is bounded and process-local. It preserves
+active blocks under capacity pressure and briefly fails closed when every slot
+is active, but it resets on daemon restart. Add an upstream login request limit
+at the reverse proxy, firewall, WAF, or equivalent edge; TLS and Captain
+authentication alone are not a distributed brute-force control.
+The proxy must preserve Captain's `Content-Security-Policy` header instead of
+replacing it: every browser script is an embedded same-origin asset and inline
+or evaluated JavaScript is intentionally denied.
 
 Caddy example:
 

@@ -169,8 +169,8 @@ async fn channel_send_recipient(
         .await
         .ok_or_else(|| {
             format!(
-                "Missing 'recipient' parameter. Set default_chat_id in [channels.{channel}] config \
-                 or pass recipient explicitly."
+                "Missing 'recipient' parameter for channel '{channel}'. Configure a default \
+                 recipient for that channel or pass recipient explicitly."
             )
         })
 }

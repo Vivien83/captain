@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT_DIR"
 
+if grep -Fq "RUSTSEC-2023-0086" "$ROOT_DIR/.cargo/audit.toml"; then
+  echo "removed lexical-core advisory remains ignored in .cargo/audit.toml" >&2
+  exit 1
+fi
+
 if ! command -v cargo-audit >/dev/null 2>&1; then
   echo "cargo-audit is required: cargo install cargo-audit --locked" >&2
   exit 1
@@ -132,7 +137,6 @@ jq -e '
     {"kind":"unmaintained","advisory":"RUSTSEC-2025-0098","package":"unic-ucd-version","version":"0.9.0"},
     {"kind":"unmaintained","advisory":"RUSTSEC-2025-0100","package":"unic-ucd-ident","version":"0.9.0"},
     {"kind":"unmaintained","advisory":"RUSTSEC-2025-0119","package":"number_prefix","version":"0.4.0"},
-    {"kind":"unsound","advisory":"RUSTSEC-2023-0086","package":"lexical-core","version":"0.7.6"},
     {"kind":"unsound","advisory":"RUSTSEC-2024-0429","package":"glib","version":"0.18.5"},
     {"kind":"unsound","advisory":"RUSTSEC-2026-0002","package":"lru","version":"0.12.5"},
     {"kind":"unsound","advisory":"RUSTSEC-2026-0097","package":"rand","version":"0.7.3"}
@@ -152,6 +156,13 @@ jq -e '
     and (versions("rsa") == [])
     and (versions("pkcs1") == [])
     and (versions("num-bigint-dig") == [])
+    and (versions("lexical-core") == [])
+    and (versions("oauth2") == ["5.0.0"])
+    and (versions("keyring") == ["3.6.3"])
+    and (versions("event-listener") == ["5.4.2"])
+    and (versions("wasmtime") == ["46.0.2"])
+    and (versions("imap") == ["3.0.0-alpha.15"])
+    and (versions("imap-proto") == ["0.16.7"])
     and (versions("fastembed") == ["5.13.2"])
     and (versions("ort") == ["2.0.0-rc.11"])
     and (versions("ort-sys") == ["2.0.0-rc.11"])
@@ -165,6 +176,57 @@ jq -e '
     and (versions("time") == ["0.3.54"])
     and (versions("number_prefix") == ["0.4.0"])
     and (versions("spin") == ["0.9.8"])
+    and (
+      ($root.packages[]
+        | select(.name == "oauth2" and .version == "5.0.0")
+        | .id) as $target
+      | ($root.resolve.nodes[] | select(.id == $target) | .features | sort)
+        == ["reqwest", "rustls-tls"]
+    )
+    and (
+      ($root.packages[]
+        | select(.name == "keyring" and .version == "3.6.3")
+        | .id) as $target
+      | ($root.resolve.nodes[] | select(.id == $target) | .features | sort)
+        == [
+          "apple-native",
+          "crypto-rust",
+          "linux-native",
+          "linux-native-sync-persistent",
+          "sync-secret-service",
+          "vendored",
+          "windows-native"
+        ]
+    )
+    and (
+      ($root.packages[]
+        | select(.name == "imap" and .version == "3.0.0-alpha.15")
+        | .id) as $target
+      | ($root.resolve.nodes[] | select(.id == $target) | .features | sort)
+        == ["default", "native-tls"]
+    )
+    and (
+      ($root.packages[]
+        | select(.name == "imap-proto" and .version == "0.16.7")
+        | .id) as $target
+      | [
+          $root.resolve.nodes[]
+          | select(any(.deps[]?; .pkg == $target))
+          | .id as $parent
+          | $root.packages[]
+          | select(.id == $parent)
+          | "\(.name)@\(.version)"
+        ]
+        | unique
+        | sort
+    ) == ["imap@3.0.0-alpha.15"]
+    and (
+      ($root.packages[]
+        | select(.name == "native-tls" and .version == "0.2.18")
+        | .id) as $target
+      | ($root.resolve.nodes[] | select(.id == $target) | .features | index("vendored"))
+        != null
+    )
     and (
       ($root.packages[]
         | select(.name == "russh" and .version == "0.62.4")
@@ -236,4 +298,4 @@ jq -e '
   exit 1
 }
 
-printf 'dependency baseline passed: no unreviewed vulnerabilities; 2 unreachable quick-xml advisories and exact informational warnings reviewed\n'
+printf 'dependency baseline passed: no unreviewed vulnerabilities; OAuth, vault, IMAP, SSH and reviewed transitive chains are pinned\n'

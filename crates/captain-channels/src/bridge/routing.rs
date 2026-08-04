@@ -1,6 +1,6 @@
 //! Pure agent routing decisions for inbound channel dispatch.
 
-use crate::router::AgentRouter;
+use crate::router::{channel_type_to_str, AgentRouter, BindingContext};
 use crate::types::ChannelMessage;
 use captain_types::agent::AgentId;
 
@@ -11,16 +11,29 @@ pub(crate) fn resolve_inbound_agent(
     topic_agent: Option<AgentId>,
     mention_override: Option<AgentId>,
 ) -> Option<AgentId> {
+    let account_id = message
+        .metadata
+        .get("account_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|account| !account.is_empty());
     topic_agent.or(mention_override).or_else(|| {
         if thread_id.is_some() {
             // In a forum topic without mapping: skip user_default, use channel default only.
             // This prevents one topic's agent from "leaking" to all topics via user_default.
-            router.resolve_channel_default(&message.channel)
+            router.resolve_channel_default_for_account(&message.channel, account_id)
         } else {
-            router.resolve(
+            let context = BindingContext {
+                channel: channel_type_to_str(&message.channel).to_string(),
+                account_id: account_id.map(str::to_string),
+                peer_id: message.sender.platform_id.clone(),
+                guild_id: None,
+                roles: Vec::new(),
+            };
+            router.resolve_with_context(
                 &message.channel,
                 &message.sender.platform_id,
                 message.sender.captain_user.as_deref(),
+                &context,
             )
         }
     })
@@ -115,5 +128,33 @@ mod tests {
         );
 
         assert_eq!(resolved, Some(user_agent));
+    }
+
+    #[test]
+    fn email_account_default_is_scoped_by_message_metadata() {
+        let router = AgentRouter::new();
+        let work_agent = AgentId::new();
+        let personal_agent = AgentId::new();
+        router.set_account_default_with_name(
+            "Email".to_string(),
+            "work".to_string(),
+            work_agent,
+            "work-agent".to_string(),
+        );
+        router.set_account_default_with_name(
+            "Email".to_string(),
+            "personal".to_string(),
+            personal_agent,
+            "personal-agent".to_string(),
+        );
+        let mut work_message = message("alice@example.com", None);
+        work_message.channel = ChannelType::Email;
+        work_message
+            .metadata
+            .insert("account_id".to_string(), serde_json::json!("work"));
+
+        let resolved = resolve_inbound_agent(&router, &work_message, None, None, None);
+
+        assert_eq!(resolved, Some(work_agent));
     }
 }

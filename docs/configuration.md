@@ -43,6 +43,7 @@ backend = "mempalace"
 
 [auth]
 enabled = true
+allow_unauthenticated_loopback = false
 username = "admin"
 password_hash = ""
 session_cookie_secure = "auto"
@@ -109,6 +110,14 @@ to an externally managed key are refused; rotate the mounted file instead.
 This applies to fixed provider/channel names and to the deterministic
 per-agent API token/callback keys shown by that agent's API manifest.
 
+The encrypted vault keeps its master key in the native platform credential
+store and verifies every new write by reading it back. It never prints a
+generated key. Hosts without an unlocked credential store must inject an
+explicit base64 32-byte `CAPTAIN_VAULT_KEY`; otherwise vault initialization or
+unlock fails closed. The obsolete obfuscated `.keyring` file is migrated only
+after the native copy is verified, then removed. Conflicting copies require
+operator intervention.
+
 Never commit or paste:
 
 - API keys and OAuth tokens;
@@ -148,6 +157,7 @@ api_listen = "0.0.0.0:50051"
 
 [auth]
 enabled = true
+allow_unauthenticated_loopback = false
 username = "admin"
 session_ttl_hours = 72
 session_cookie_secure = "auto"
@@ -172,6 +182,17 @@ address, these configured origins, and `deployment.public_url`; every other or
 malformed `Host` is rejected with `400` before routing. Changing this policy
 requires a daemon restart.
 
+If both browser auth and the daemon API key are absent, protected routes return
+an actionable authentication error instead of becoming public. The only
+credentialless mode is the explicit
+`auth.allow_unauthenticated_loopback = true` development escape hatch. It
+accepts only the actual loopback client; a local reverse proxy declared for a
+public deployment does not turn remote clients into loopback requests.
+`captain setup` and `web_credentials_update` always reset this flag to `false`.
+Older configurations that explicitly contained `auth.enabled = false` are
+migrated once to the explicit loopback flag so upgrades preserve intentional
+local-only behavior without preserving an implicit fail-open default.
+
 The password hash and daemon API key are provisioned by setup and stored in the
 secret path, not copied into this example. Browser session signatures use only
 the independent Captain-managed `session_secret`, never the daemon API key or
@@ -185,7 +206,11 @@ Passwords are stored as salted Argon2id PHC strings. A legacy SHA-256 hash is
 accepted only for one successful compatibility login, then atomically replaced
 by Argon2id without changing the session epoch. Login failures are tracked
 separately per client IP and normalized username; exponential backoff starts
-after five failures and is capped at 15 minutes.
+after five failures and is capped at 15 minutes. The two in-memory maps retain
+at most 4,096 keys each and never evict an entry while its block is active. If
+all slots are actively blocked, Captain applies a logged five-second global
+backoff instead of forgetting one. This process-local defense resets on daemon
+restart; public deployments still need upstream login rate limiting.
 
 `session_cookie_secure = "auto"` adds `Secure` when `deployment.public_url`
 uses HTTPS or a trusted loopback reverse proxy supplies
@@ -259,6 +284,23 @@ allowed_users = ["123456789"]
 dm_policy = "allowed_only"
 group_policy = "mention_only"
 rate_limit_per_user = 10
+
+[channels.email]
+default_account = "work"
+
+[[channels.email.accounts]]
+alias = "work"
+enabled = true
+imap_host = "imap.example.com"
+imap_port = 993
+smtp_host = "smtp.example.com"
+smtp_port = 587
+username = "captain@example.com"
+password_env = "CAPTAIN_EMAIL_WORK_12AB34CD_PASSWORD"
+poll_interval_secs = 30
+folders = ["INBOX"]
+allowed_senders = ["me@example.com", "@example.org"]
+default_agent = "captain"
 ```
 
 An empty inbound allowlist is deny-by-default. Use `allowed_users = ["*"]`
@@ -266,30 +308,61 @@ only for a deliberate public bot. Long-tail channel sections can remain in old
 config files for compatibility but are frozen and are not documented as ready
 setup paths.
 
+Use `captain channel setup email` or the schema-driven Channels screen instead
+of constructing the Email table manually. Guided setup derives an injective
+credential key per alias and writes the password through the credential
+resolver, never into TOML. Re-running setup for another alias preserves the
+existing accounts. Hosts must not contain a URL scheme; IMAP always uses
+implicit TLS, SMTP port 465 uses implicit TLS, and other SMTP ports require
+STARTTLS. Account aliases are stable lowercase identifiers used by
+`email:<alias>`.
+
+`allowed_senders` accepts only `*`, an exact address, or an explicit
+`@domain`. Empty means locked. `folders` defaults to `INBOX`, and the poll
+interval is bounded from 5 to 3600 seconds. A legacy scalar `[channels.email]`
+block remains readable as one account named `default`; all new writes use
+`[[channels.email.accounts]]`.
+
 ## Execution and Approvals
 
 Execution policy controls command availability, timeouts, output limits, and
-critical-command handling. New installations use `mode = "full"` with
-`critical_mode = "safe"`: routine host commands are available, while
-recognized catastrophic commands fail closed. `critical_mode = "open"` is an
-explicit opt-in that allows a recognized command only after content-bound
-operator approval; `paranoid` requests approval for every shell-affecting
-operation.
+critical-command handling. The typed default is
+`profile = "personal_workstation"` with `mode = "allowlist"`. Guided local
+setup deliberately writes `personal_workstation` plus `full` for a trusted
+single-user workstation; this is visible configuration, not an inferred
+fallback. Set the deployment profile explicitly for remotely operated or
+untrusted workloads. `critical_mode = "open"` is an opt-in that allows a
+recognized command only after content-bound operator approval; `paranoid`
+requests approval for every shell-affecting operation.
 
 ```toml
 [exec_policy]
-mode = "full"
+profile = "remote_operator" # personal_workstation | remote_operator | untrusted_execution
+mode = "allowlist"          # deny | allowlist | full
 critical_mode = "safe"
 ```
+
+Profiles only remove authority:
+
+- `personal_workstation` applies the configured mode;
+- `remote_operator` constrains both `allowlist` and legacy `full` settings to
+  effective allowlist semantics;
+- `untrusted_execution` denies agent-controlled host processes. Explicit
+  `docker_exec` and WASM agents remain available when configured.
+
+The daemon policy and each per-agent policy are intersected before tools are
+advertised or executed. An agent manifest cannot broaden the deployment
+profile, command mode, allowlists, blocklists, limits, or critical policy.
 
 Host execution clears and reconstructs the child environment, but it is not an
 operating-system sandbox. `captain status`, `captain security`, full doctor,
 `GET /api/status`, `GET /api/health/detail`, and `GET /api/security` report
+the profile, configured and effective policy, host permission,
 `backend = "host_process"`, `isolation_level = "environment_scrub"`, and
-`os_isolation = false`. Use the explicit Docker or WASM backend when untrusted
-code requires OS-level isolation. Keep destructive actions behind explicit
-human control and inspect the effective agent capabilities before broadening
-them.
+`os_isolation = false`. Docker routing is always `explicit_only`. A failed or
+disabled Docker rail never falls back to host execution. When Docker is enabled
+under `untrusted_execution`, Captain requires network `none`, a read-only root,
+no added capabilities, and finite CPU, memory, and PID limits.
 
 ```bash
 captain agent caps <agent>

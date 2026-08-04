@@ -233,6 +233,16 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
             "base_url": provider.base_url,
         });
 
+        if provider.id == "xai" {
+            entry["auth_methods"] = serde_json::json!(["api_key"]);
+            entry["oauth"] = serde_json::json!({
+                "bearer_recognized_by_api": true,
+                "captain_login_available": false,
+                "status": "external_only",
+                "reason": "xAI does not publish third-party OAuth client registration for api.x.ai",
+            });
+        }
+
         if let Some(probe) = probe_map.remove(&index) {
             entry["is_local"] = serde_json::json!(true);
             entry["reachable"] = serde_json::json!(probe.reachable);

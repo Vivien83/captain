@@ -36,6 +36,21 @@ pub(crate) fn xai_models() -> Vec<ModelCatalogEntry> {
 
 const XAI_MODEL_ROWS: &[XaiModelRow] = &[
     XaiModelRow {
+        id: "grok-4.5",
+        display_name: "Grok 4.5",
+        tier: ModelTier::Frontier,
+        context_window: 500_000,
+        // xAI does not publish a separate output ceiling; keep Captain's
+        // conservative generation cap instead of presenting the context size
+        // as an output allowance.
+        max_output_tokens: 32_768,
+        input_cost_per_m: 2.0,
+        output_cost_per_m: 6.0,
+        supports_tools: true,
+        supports_vision: true,
+        aliases: &["grok", "grok-latest"],
+    },
+    XaiModelRow {
         id: "grok-4-0709",
         display_name: "Grok 4",
         tier: ModelTier::Frontier,
@@ -45,7 +60,7 @@ const XAI_MODEL_ROWS: &[XaiModelRow] = &[
         output_cost_per_m: 15.0,
         supports_tools: true,
         supports_vision: true,
-        aliases: &["grok", "grok-4"],
+        aliases: &["grok-4"],
     },
     XaiModelRow {
         id: "grok-4-fast-reasoning",
@@ -160,7 +175,7 @@ mod tests {
     fn xai_models_count_is_stable() {
         let models = xai_models();
 
-        assert_eq!(models.len(), 9);
+        assert_eq!(models.len(), 10);
         assert!(models.iter().all(|model| model.provider == "xai"));
         assert!(models.iter().all(|model| model.supports_tools));
         assert!(models.iter().all(|model| model.supports_streaming));
@@ -173,6 +188,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "grok-4.5",
                 "grok-4-0709",
                 "grok-4-fast-reasoning",
                 "grok-4-fast-non-reasoning",
@@ -191,8 +207,12 @@ mod tests {
         let models = xai_models();
 
         assert_eq!(
+            model(&models, "grok-4.5").aliases,
+            vec!["grok".to_string(), "grok-latest".to_string()]
+        );
+        assert_eq!(
             model(&models, "grok-4-0709").aliases,
-            vec!["grok".to_string(), "grok-4".to_string()]
+            vec!["grok-4".to_string()]
         );
         assert_eq!(
             model(&models, "grok-4-1-fast-reasoning").aliases,
@@ -207,8 +227,15 @@ mod tests {
     #[test]
     fn xai_frontier_models_keep_pricing_and_vision() {
         let models = xai_models();
+        let grok_45 = model(&models, "grok-4.5");
         let grok_4 = model(&models, "grok-4-0709");
         let grok_3 = model(&models, "grok-3");
+
+        assert_eq!(grok_45.tier, ModelTier::Frontier);
+        assert_eq!(grok_45.context_window, 500_000);
+        assert_eq!(grok_45.input_cost_per_m, 2.0);
+        assert_eq!(grok_45.output_cost_per_m, 6.0);
+        assert!(grok_45.supports_vision);
 
         assert_eq!(grok_4.tier, ModelTier::Frontier);
         assert_eq!(grok_4.context_window, 256_000);

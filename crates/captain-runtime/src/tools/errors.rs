@@ -264,6 +264,14 @@ pub(crate) fn is_write_tool_that_must_not_be_masked(name: &str) -> bool {
             | "knowledge_add_entity"
             | "knowledge_add_relation"
             | "model_switch_apply"
+            | "email_compose"
+            | "email_reply"
+            | "email_update"
+            | "email_attachment_save"
+            | "email_automation_rule_save"
+            | "email_automation_rule_set_enabled"
+            | "email_automation_rule_remove"
+            | "email_automation_delivery_requeue"
     )
 }
 
@@ -278,6 +286,18 @@ mod tests {
         assert!(is_retryable_tool("secret_read"));
         assert!(!is_write_tool_that_must_not_be_masked("secret_read"));
         assert!(!is_retryable_tool("shell_exec"));
+        assert!(is_write_tool_that_must_not_be_masked("email_compose"));
+        assert!(is_write_tool_that_must_not_be_masked("email_reply"));
+        assert!(is_write_tool_that_must_not_be_masked("email_update"));
+        assert!(is_write_tool_that_must_not_be_masked(
+            "email_attachment_save"
+        ));
+        assert!(is_write_tool_that_must_not_be_masked(
+            "email_automation_rule_save"
+        ));
+        assert!(is_write_tool_that_must_not_be_masked(
+            "email_automation_delivery_requeue"
+        ));
     }
 
     #[test]

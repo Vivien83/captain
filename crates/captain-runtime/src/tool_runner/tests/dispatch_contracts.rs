@@ -69,7 +69,7 @@ impl crate::kernel_handle::KernelHandle for DenyApprovalKernel {
     }
 
     fn requires_approval(&self, tool_name: &str) -> bool {
-        matches!(tool_name, "file_write" | "shell_exec")
+        matches!(tool_name, "file_write" | "shell_exec" | "email_compose")
     }
 
     async fn request_approval(
@@ -110,6 +110,17 @@ impl crate::kernel_handle::KernelHandle for DenyApprovalKernel {
 
     async fn task_complete(&self, _task_id: &str, _result: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    fn email_accounts(&self) -> Result<Vec<captain_types::email::GmailAccountSummary>, String> {
+        Ok(Vec::new())
+    }
+
+    fn email_automation_rules(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationRuleQuery,
+    ) -> Result<Vec<captain_types::email_automation::GmailAutomationRuleView>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -221,6 +232,64 @@ async fn approval_preview_blocks_shell_exec_before_run() {
     assert!(summary.contains("no command executed yet"));
     assert!(summary.contains("Command list before run"));
     assert!(summary.contains("touch"));
+}
+
+#[tokio::test]
+async fn email_accounts_reaches_native_dispatch() {
+    let kernel = std::sync::Arc::new(DenyApprovalKernel::default());
+
+    let result = execute_with_kernel("email_accounts", &serde_json::json!({}), &kernel, None).await;
+
+    assert!(!result.is_error, "{}", result.content);
+    assert!(result.content.contains("\"accounts\": []"));
+}
+
+#[tokio::test]
+async fn email_automation_rules_reach_native_dispatch() {
+    let kernel = std::sync::Arc::new(DenyApprovalKernel::default());
+
+    let result = execute_with_kernel(
+        "email_automation_rules",
+        &serde_json::json!({}),
+        &kernel,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "{}", result.content);
+    assert!(result.content.contains("\"rules\": []"));
+}
+
+#[tokio::test]
+async fn email_approval_blocks_send_without_exposing_body_or_attachment_paths() {
+    let kernel = std::sync::Arc::new(DenyApprovalKernel::default());
+
+    let result = execute_with_kernel(
+        "email_compose",
+        &serde_json::json!({
+            "account": "work",
+            "to": ["recipient@example.com"],
+            "subject": "Production status",
+            "text_body": "PRIVATE BODY MUST NOT LEAK",
+            "attachments": [{"path": "private-report.txt"}],
+            "delivery": "send",
+            "confirm_send": true
+        }),
+        &kernel,
+        None,
+    )
+    .await;
+
+    assert!(result.is_error);
+    assert!(result.content.contains("requires human approval"));
+    let summaries = kernel.summaries();
+    assert_eq!(summaries.len(), 1);
+    let summary = &summaries[0];
+    assert!(summary.contains("recipient@example.com"));
+    assert!(summary.contains("Production status"));
+    assert!(summary.contains("delivery=send"));
+    assert!(!summary.contains("PRIVATE BODY"));
+    assert!(!summary.contains("private-report.txt"));
 }
 
 #[tokio::test]

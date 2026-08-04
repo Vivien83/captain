@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::ExecutionProfile;
+
 /// Docker container sandbox configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -48,6 +50,74 @@ pub struct DockerSandboxConfig {
     /// Paths blocked from bind mounting.
     #[serde(default)]
     pub blocked_mounts: Vec<String>,
+}
+
+/// Honest configuration posture for Captain's explicit Docker rail.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DockerIsolationPosture {
+    pub enabled: bool,
+    pub routing: &'static str,
+    pub runtime_availability: &'static str,
+    pub network: String,
+    pub read_only_root: bool,
+    pub capabilities_dropped: bool,
+    pub workspace_mount: &'static str,
+    pub untrusted_profile_ready: bool,
+    pub violations: Vec<&'static str>,
+}
+
+impl DockerSandboxConfig {
+    /// Return static configuration violations for a deployment profile.
+    ///
+    /// Docker daemon availability is deliberately checked at invocation time;
+    /// Captain never falls back to host execution when that live check fails.
+    pub fn profile_violations(&self, profile: ExecutionProfile) -> Vec<&'static str> {
+        let mut violations = Vec::new();
+        if self.mode != DockerSandboxMode::Off {
+            violations.push(
+                "docker.mode auto-routing is unsupported; keep mode=\"off\" and call docker_exec explicitly",
+            );
+        }
+        if profile != ExecutionProfile::UntrustedExecution || !self.enabled {
+            return violations;
+        }
+        if self.network != "none" {
+            violations.push("docker.network must be \"none\" for untrusted_execution");
+        }
+        if !self.read_only_root {
+            violations.push("docker.read_only_root must be true for untrusted_execution");
+        }
+        if !self.cap_add.is_empty() {
+            violations.push("docker.cap_add must be empty for untrusted_execution");
+        }
+        if self.pids_limit == 0 {
+            violations.push("docker.pids_limit must be greater than zero");
+        }
+        if self.memory_limit.trim().is_empty() {
+            violations.push("docker.memory_limit must be set");
+        }
+        if !self.cpu_limit.is_finite() || self.cpu_limit <= 0.0 {
+            violations.push("docker.cpu_limit must be finite and greater than zero");
+        }
+        violations
+    }
+
+    pub fn isolation_posture(&self, profile: ExecutionProfile) -> DockerIsolationPosture {
+        let violations = self.profile_violations(profile);
+        DockerIsolationPosture {
+            enabled: self.enabled,
+            routing: "explicit_only",
+            runtime_availability: "checked_on_invocation",
+            network: self.network.clone(),
+            read_only_root: self.read_only_root,
+            capabilities_dropped: self.cap_add.is_empty(),
+            workspace_mount: "read_only",
+            untrusted_profile_ready: profile == ExecutionProfile::UntrustedExecution
+                && self.enabled
+                && violations.is_empty(),
+            violations,
+        }
+    }
 }
 
 fn default_reuse_cool_secs() -> u64 {
@@ -180,5 +250,50 @@ scope = "shared"
 
         assert_eq!(config.mode, DockerSandboxMode::NonMain);
         assert_eq!(config.scope, DockerScope::Shared);
+    }
+
+    #[test]
+    fn untrusted_profile_requires_the_strict_explicit_docker_contract() {
+        let mut config = DockerSandboxConfig::default();
+        let posture = config.isolation_posture(ExecutionProfile::UntrustedExecution);
+        assert!(!posture.untrusted_profile_ready);
+        assert!(posture.violations.is_empty());
+
+        config.enabled = true;
+        let posture = config.isolation_posture(ExecutionProfile::UntrustedExecution);
+        assert!(posture.untrusted_profile_ready);
+        assert!(posture.violations.is_empty());
+        assert_eq!(posture.routing, "explicit_only");
+        assert_eq!(posture.runtime_availability, "checked_on_invocation");
+        assert_eq!(posture.workspace_mount, "read_only");
+    }
+
+    #[test]
+    fn enabled_untrusted_docker_rejects_unsafe_networking() {
+        let config = DockerSandboxConfig {
+            enabled: true,
+            network: "bridge".to_string(),
+            ..DockerSandboxConfig::default()
+        };
+
+        let posture = config.isolation_posture(ExecutionProfile::UntrustedExecution);
+
+        assert!(!posture.untrusted_profile_ready);
+        assert!(posture
+            .violations
+            .contains(&"docker.network must be \"none\" for untrusted_execution"));
+    }
+
+    #[test]
+    fn legacy_docker_auto_modes_are_never_treated_as_routing_authority() {
+        let config = DockerSandboxConfig {
+            enabled: true,
+            mode: DockerSandboxMode::All,
+            ..DockerSandboxConfig::default()
+        };
+        let posture = config.isolation_posture(ExecutionProfile::PersonalWorkstation);
+
+        assert!(!posture.violations.is_empty());
+        assert_eq!(posture.routing, "explicit_only");
     }
 }

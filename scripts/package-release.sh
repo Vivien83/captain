@@ -10,6 +10,7 @@
 #   CAPTAIN_SKIP_BUILD — 1/true/yes to reuse target/release/captain
 #   CAPTAIN_DIST_PLATFORM — package as this platform instead of host platform
 #   CAPTAIN_BIN_PATH   — binary to package (default: target/release/captain)
+#   CAPTAIN_GOOGLE_OAUTH_CLIENT_ID — optional verified Captain Desktop client
 
 set -euo pipefail
 

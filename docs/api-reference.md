@@ -86,6 +86,12 @@ New passwords use salted Argon2id PHC strings. A successful login against a
 legacy SHA-256 hash atomically migrates the persisted value before Captain
 issues the session. Five failed attempts arm a dedicated per-IP and
 per-username exponential backoff; an immediate sixth attempt returns `429`.
+Each process retains at most 4,096 IP and 4,096 normalized-username records.
+Capacity cleanup may reuse only a record whose retry delay is no longer active.
+If every slot is actively blocked, Captain keeps those blocks and applies a
+logged five-second global `429` backoff with `Retry-After`. This bounded state
+resets with the daemon, so Internet-facing deployments must enforce an
+additional login limit at the reverse proxy, firewall, or edge.
 
 The browser exchanges its HttpOnly cookie for a 30-second single-use ticket
 before opening WebSocket or SSE. Tickets are bound to the exact path, effective
@@ -922,6 +928,11 @@ surface is Telegram, Discord, Signal, and Email. Other channel adapters may
 remain compiled or configurable for compatibility, but they are frozen out of
 normal setup and bridge startup until the core is production-grade.
 
+The response is also the authoritative guided-client schema. `fields` describes
+generic channel forms. Email uses `setup_type: "email_accounts"`,
+`account_fields`, and an `account_summary` with public-safe per-account
+readiness. Secret values and credential references are never returned.
+
 **Response** `200 OK`:
 
 ```json
@@ -929,18 +940,106 @@ normal setup and bridge startup until the core is production-grade.
   "channels": [
     {
       "name": "telegram",
-      "enabled": true,
-      "has_token": true
+      "display_name": "Telegram",
+      "setup_type": "form",
+      "configured": true,
+      "ready": true,
+      "has_required_secrets": true,
+      "missing_required_fields": [],
+      "operator_actions": [],
+      "fields": []
     },
     {
-      "name": "discord",
-      "enabled": true,
-      "has_token": false
+      "name": "email",
+      "display_name": "Email",
+      "setup_type": "email_accounts",
+      "configured": true,
+      "ready": false,
+      "operational_state": "partial",
+      "account_summary": {
+        "total_accounts": 2,
+        "ready_accounts": 1,
+        "default_account": "work"
+      },
+      "account_fields": []
     }
   ],
-  "total": 2
+  "total": 4,
+  "configured_count": 2,
+  "active_only": true
 }
 ```
+
+Readiness states are `ready`, `partial`, `locked`, `disabled`, `invalid`, and
+`not_configured`. A client must use the returned field keys and types rather
+than translating environment-variable labels back into request properties.
+
+### POST /api/channels/{name}/configure
+
+Configure a generic active channel with the exact fields returned by the list
+schema:
+
+```json
+{
+  "fields": {
+    "bot_token_env": "<secret>",
+    "allowed_users": "123456789"
+  }
+}
+```
+
+Email patches one named mailbox and preserves every omitted field plus all
+other accounts:
+
+```json
+{
+  "account": {
+    "alias": "work",
+    "username": "captain@example.com",
+    "password": "<app-password>",
+    "imap_host": "imap.example.com",
+    "smtp_host": "smtp.example.com",
+    "folders": ["INBOX"],
+    "allowed_senders": ["me@example.com", "@example.org"]
+  },
+  "make_default": true
+}
+```
+
+`password` is accepted only as request input, zeroized after use, and persisted
+through the credential resolver. It is never written to TOML or returned. An
+existing account with a ready credential can be patched without sending the
+password again. The success status is `configured`; if persistence succeeded
+but hot reload failed it is `configured_reload_failed` with an actionable
+`note`. Both are persisted outcomes, but only `activated: true` proves the live
+adapter started.
+
+### POST /api/channels/{name}/test
+
+Test configuration and optionally send a transport message. Email accepts the
+default as `email` or a named path `email:<alias>` and also accepts
+`account_alias` in the body. Path and body aliases must agree.
+
+```json
+{
+  "recipient": "operator@example.com"
+}
+```
+
+The Email probe performs real IMAP login/folder checks and SMTP authentication;
+a recipient additionally requests one real delivery. Network work is bounded,
+but can take longer than token-only channel tests. This endpoint retains HTTP
+200 for a completed negative probe and returns `{"status":"error",...}`;
+clients must inspect the JSON status rather than treating HTTP success alone as
+channel readiness.
+
+### DELETE /api/channels/{name}/configure
+
+Remove one active channel configuration and its locally managed credentials,
+then hot reload. Externally managed secret sources are not deleted. Email
+removal is serialized with account updates and removes every local per-account
+credential after the channel block is removed. The response reports
+`cleanup_warning_count`; a nonzero count requires operator inspection.
 
 ---
 
@@ -1101,7 +1200,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.10"
+  "version": "0.1.0-alpha.11"
 }
 ```
 
@@ -1118,7 +1217,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0-alpha.11",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -1198,7 +1297,7 @@ historical failures alone do not keep operational awareness in warning state.
     "next_check_at": "2026-07-20T20:00:00Z",
     "last_error": null,
     "consecutive_failures": 0,
-    "pending_version": "0.1.0-alpha.10",
+    "pending_version": "0.1.0-alpha.11",
     "update_in_progress": false,
     "undelivered_notifications": 1,
     "dead_notifications": 0
@@ -1246,7 +1345,17 @@ historical failures alone do not keep operational awareness in warning state.
           "alert_level": "normal",
           "stale": false
         }
-      ]
+      ],
+      "reset_notifications": {
+        "state": "active",
+        "pending": 1,
+        "delivering": 0,
+        "retry_wait": 0,
+        "delivered": 3,
+        "suppressed": 0,
+        "dead": 0,
+        "uncertain": 0
+      }
     }
   },
   "agents": []
@@ -1258,6 +1367,12 @@ not Captain defaults. With no official observation,
 `budget.provider_subscriptions.state` is `unavailable` and
 `reported_by_provider` is `false`; Captain never turns absence into an
 "unlimited" claim. Observations older than 900 seconds are marked `stale`.
+`reset_notifications` is a content-free projection of the durable Telegram
+reset outbox. Its state is `ok`, `active`, `attention`, or `unavailable`.
+`active` means at least one row is pending, delivering, or waiting for retry;
+`attention` means a `dead` or `uncertain` delivery requires operator review.
+An uncertain delivery is never automatically replayed because Telegram may
+already have accepted it before Captain lost the receipt.
 
 ### GET /api/version
 
@@ -1654,7 +1769,7 @@ List all model aliases. Aliases provide short names that resolve to full model I
     "gpt4": "gpt-4o",
     "llama": "llama-3.3-70b-versatile",
     "deepseek": "deepseek-chat",
-    "grok": "grok-2",
+    "grok": "grok-4.5",
     "jamba": "jamba-1.5-large"
   },
   "total": 23
@@ -1671,26 +1786,36 @@ List all known LLM providers and their authentication status. Auth status is det
 {
   "providers": [
     {
-      "name": "anthropic",
+      "id": "anthropic",
       "display_name": "Anthropic",
       "auth_status": "configured",
-      "env_var": "ANTHROPIC_API_KEY",
+      "api_key_env": "ANTHROPIC_API_KEY",
       "base_url": "https://api.anthropic.com",
+      "key_required": true,
       "model_count": 3
     },
     {
-      "name": "groq",
-      "display_name": "Groq",
+      "id": "xai",
+      "display_name": "xAI",
       "auth_status": "configured",
-      "env_var": "GROQ_API_KEY",
-      "base_url": "https://api.groq.com/openai",
-      "model_count": 4
+      "api_key_env": "XAI_API_KEY",
+      "base_url": "https://api.x.ai/v1",
+      "key_required": true,
+      "model_count": 10,
+      "auth_methods": ["api_key"],
+      "oauth": {
+        "bearer_recognized_by_api": true,
+        "captain_login_available": false,
+        "status": "external_only"
+      }
     },
     {
-      "name": "ollama",
+      "id": "ollama",
       "display_name": "Ollama",
-      "auth_status": "no_key_needed",
+      "auth_status": "not_required",
+      "api_key_env": "OLLAMA_API_KEY",
       "base_url": "http://localhost:11434",
+      "key_required": false,
       "model_count": 0
     }
   ],
@@ -1712,7 +1837,7 @@ Set an API key for a provider. The key is stored securely and takes effect immed
 
 ```json
 {
-  "api_key": "sk-..."
+  "key": "sk-..."
 }
 ```
 
@@ -1720,7 +1845,7 @@ Set an API key for a provider. The key is stored securely and takes effect immed
 
 ```json
 {
-  "status": "configured",
+  "status": "saved",
   "provider": "anthropic"
 }
 ```
@@ -1740,7 +1865,11 @@ Remove the API key for a provider. Agents using this provider will fall back to 
 
 ### POST /api/providers/{name}/test
 
-Test provider connectivity by making a minimal API call. Verifies that the configured API key is valid and the provider endpoint is reachable.
+Test provider connectivity. Most providers make a one-token completion. xAI
+instead uses the non-billable `/v1/me` identity endpoint and, for API keys,
+`/v1/api-key` to verify blocked/disabled state plus chat and selected-model
+ACLs. An externally issued xAI OAuth bearer is identified by `/v1/me`, but
+Captain does not expose an xAI OAuth login flow.
 
 **Response** `200 OK`:
 
@@ -1748,20 +1877,25 @@ Test provider connectivity by making a minimal API call. Verifies that the confi
 {
   "status": "ok",
   "provider": "anthropic",
-  "latency_ms": 245,
-  "model_tested": "claude-sonnet-4-20250514"
+  "latency_ms": 245
 }
 ```
 
-**Response** `401 Unauthorized`:
+Provider authentication failures retain HTTP `200` so every provider test has
+the same result envelope:
 
 ```json
 {
-  "status": "failed",
+  "status": "error",
   "provider": "anthropic",
   "error": "Invalid API key"
 }
 ```
+
+An xAI success additionally returns `auth_method`, `credential_active`,
+`inference_ready`, `zdr_status`, `permissions_verified`,
+`chat_endpoint_allowed`, and `selected_model_allowed`. It never returns user,
+team, key, or OAuth client identifiers.
 
 ---
 
@@ -2168,13 +2302,29 @@ Security status overview showing the state of runtime security systems.
     "subprocess_os_isolation": false
   },
   "execution": {
+    "profile": "remote_operator",
     "backend": "host_process",
     "isolation_level": "environment_scrub",
     "os_isolation": false,
     "environment_scrub": true,
     "dangerous_command_guard": "normalized_lexical_heuristic",
-    "policy_mode": "full",
-    "critical_mode": "safe"
+    "configured_policy_mode": "full",
+    "policy_mode": "allowlist",
+    "critical_mode": "safe",
+    "host_execution_allowed": true,
+    "isolation_routing": "explicit_only",
+    "explicit_isolation_backends": ["docker_exec", "wasm_agent"],
+    "docker": {
+      "enabled": true,
+      "routing": "explicit_only",
+      "runtime_availability": "checked_on_invocation",
+      "network": "none",
+      "read_only_root": true,
+      "capabilities_dropped": true,
+      "workspace_mount": "read_only",
+      "untrusted_profile_ready": false,
+      "violations": []
+    }
   },
   "monitoring": {
     "audit_trail": {
@@ -2193,9 +2343,12 @@ Security status overview showing the state of runtime security systems.
 ```
 
 The `execution` object is also present in authenticated
-`GET /api/health/detail` and `GET /api/status`. It reports the live
-`[exec_policy]` values. `environment_scrub` is a host-process protection, not
-an operating-system isolation claim.
+`GET /api/health/detail` and `GET /api/status`. `configured_policy_mode` is
+operator intent; `policy_mode` is the profile-constrained effective mode.
+`runtime_availability = "checked_on_invocation"` does not claim the Docker
+daemon is currently reachable. `environment_scrub` is a host-process
+protection, not an operating-system isolation claim, and explicit isolation
+never falls back to the host.
 
 ---
 
@@ -2290,6 +2443,13 @@ provider-reported values. `used_percent` remains the official observation;
 is labelled `derived_from_provider_used_percent`. Codex `spend_control` keeps
 the provider-reported limit, used amount, remaining amount, percentages, and
 reset without converting them into a guessed subscription allowance.
+
+The nested `reset_notifications` object reports the durable reset-card queue
+without exposing its payload. Its counters are `pending`, `delivering`,
+`retry_wait`, `delivered`, `suppressed`, `dead`, and `uncertain`; its derived
+state is `ok`, `active`, `attention`, or `unavailable`. Reset detection requires
+an advanced provider reset identity plus reported capacity replenishment. It is
+not derived from a local countdown.
 
 Ratatui Chat, the xterm Web terminal, Control web, and its retained desktop
 compatibility wrapper poll this authenticated local endpoint every five
@@ -2928,9 +3088,10 @@ Every response includes security headers:
 
 | Header | Value |
 |--------|-------|
-| `Content-Security-Policy` | `default-src 'self'` (with appropriate directives) |
+| `Content-Security-Policy` | Same-origin scripts only; inline/evaluated JavaScript, script attributes, objects, base mutation, and framing denied |
 | `X-Frame-Options` | `DENY` |
 | `X-Content-Type-Options` | `nosniff` |
+| `X-XSS-Protection` | `0` (legacy mutation filter disabled; CSP and sanitization are authoritative) |
 | `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` |
 | `X-Request-Id` | Unique UUID per request |
 
@@ -3021,6 +3182,10 @@ as source of truth when validating exact route availability.
 | DELETE | `/api/memory/agents/{id}/kv/{key}` | Delete KV value |
 | **Channels** | | |
 | GET | `/api/channels` | List active channels and frozen compatibility status |
+| POST | `/api/channels/{name}/configure` | Configure or patch one active channel |
+| DELETE | `/api/channels/{name}/configure` | Remove channel config and local credentials |
+| POST | `/api/channels/{name}/test` | Run a live transport probe or test delivery |
+| POST | `/api/channels/reload` | Reload channel config from disk |
 | **Templates** | | |
 | GET | `/api/templates` | List templates |
 | GET | `/api/templates/{name}` | Get template |

@@ -76,7 +76,7 @@ const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         name: "xai",
         env_var: "XAI_API_KEY",
-        default_model: "grok-4-0709",
+        default_model: "grok-4.5",
         needs_key: true,
     },
     ProviderInfo {
@@ -417,6 +417,7 @@ model = "{model}"
 decay_rate = 0.05
 
 [exec_policy]
+profile = "personal_workstation"
 mode = "full"
 critical_mode = "safe"
 

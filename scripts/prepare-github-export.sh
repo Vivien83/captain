@@ -3,19 +3,26 @@
 
 set -euo pipefail
 
-ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
+SCRIPT_ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+SOURCE_ROOT="$SCRIPT_ROOT"
 EXPORT_YES="${CAPTAIN_EXPORT_YES:-}"
 ALLOW_DIRTY="${CAPTAIN_EXPORT_ALLOW_DIRTY:-0}"
 INIT_GIT="${CAPTAIN_INIT_GIT:-1}"
+SKIP_AUDIT=0
 DEST=""
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/prepare-github-export.sh [--yes] [--allow-dirty] [--no-git] [destination]
+Usage: scripts/prepare-github-export.sh [--yes] [--allow-dirty] [--no-git]
+       [--source-root PATH] [--skip-audit] [destination]
 
 The normal path requires a clean worktree and exports committed HEAD through
 git archive. --allow-dirty exists only for pre-commit audit rehearsal: it reads
 tracked working-tree files and must never be used for publication.
+
+--source-root and --skip-audit are internal composition controls for the local
+PR gate. Skipping the audit also requires --yes and --no-git; the trusted caller
+must run public-release-audit.sh separately against the sealed result.
 USAGE
 }
 
@@ -39,6 +46,14 @@ while [ "$#" -gt 0 ]; do
     --no-git)
       INIT_GIT=0
       ;;
+    --source-root)
+      shift
+      [ "$#" -gt 0 ] || fail "--source-root requires a path"
+      SOURCE_ROOT="$1"
+      ;;
+    --skip-audit)
+      SKIP_AUDIT=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -57,13 +72,21 @@ done
 need_cmd git
 need_cmd tar
 
+SOURCE_ROOT=$(cd "$SOURCE_ROOT" && pwd -P)
+[ "$(git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree 2>/dev/null || true)" = "true" ] \
+  || fail "source root is not a Git checkout: $SOURCE_ROOT"
+if [ "$SKIP_AUDIT" = "1" ]; then
+  [ "$EXPORT_YES" = "1" ] || fail "--skip-audit requires --yes"
+  [ "$INIT_GIT" = "0" ] || fail "--skip-audit requires --no-git"
+fi
+
 DEST="${DEST:-$HOME/Desktop/captain-public}"
 mkdir -p "$(dirname "$DEST")"
 DEST_PARENT=$(cd "$(dirname "$DEST")" && pwd -P)
 DEST="$DEST_PARENT/$(basename "$DEST")"
 
 case "$DEST" in
-  "$ROOT_DIR"|"$ROOT_DIR"/*)
+  "$SOURCE_ROOT"|"$SOURCE_ROOT"/*)
     fail "destination must be outside the source checkout"
     ;;
 esac
@@ -72,17 +95,17 @@ if [ -e "$DEST" ] && [ -n "$(find "$DEST" -mindepth 1 -print -quit 2>/dev/null)"
   fail "destination must be absent or empty: $DEST"
 fi
 
-dirty=$(git -C "$ROOT_DIR" status --porcelain)
+dirty=$(git -C "$SOURCE_ROOT" status --porcelain)
 if [ -n "$dirty" ] && [ "$ALLOW_DIRTY" != "1" ]; then
-  git -C "$ROOT_DIR" status --short >&2
+  git -C "$SOURCE_ROOT" status --short >&2
   fail "source worktree must be clean; --allow-dirty is for audit rehearsal only"
 fi
 
-SOURCE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
+SOURCE_COMMIT=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
 
 printf '\n  Captain Public Source Export\n'
 printf '  ============================\n'
-printf '  Source:      %s\n' "$ROOT_DIR"
+printf '  Source:      %s\n' "$SOURCE_ROOT"
 printf '  Commit:      %s\n' "$SOURCE_COMMIT"
 printf '  Destination: %s\n' "$DEST"
 if [ "$ALLOW_DIRTY" = "1" ]; then
@@ -102,16 +125,16 @@ fi
 
 mkdir -p "$DEST"
 if [ "$ALLOW_DIRTY" = "1" ]; then
-  git -C "$ROOT_DIR" ls-files --cached --others --exclude-standard -z \
+  git -C "$SOURCE_ROOT" ls-files --cached --others --exclude-standard -z \
     | while IFS= read -r -d '' relative; do
-        if [ -e "$ROOT_DIR/$relative" ]; then
+        if [ -e "$SOURCE_ROOT/$relative" ]; then
           printf '%s\0' "$relative"
         fi
       done \
-    | tar -C "$ROOT_DIR" --null -T - -cf - \
+    | tar -C "$SOURCE_ROOT" --null -T - -cf - \
     | tar -xf - -C "$DEST"
 else
-  git -C "$ROOT_DIR" archive --format=tar HEAD | tar -xf - -C "$DEST"
+  git -C "$SOURCE_ROOT" archive --format=tar HEAD | tar -xf - -C "$DEST"
 fi
 
 # Defense in depth for dirty rehearsals and older Git archive implementations.
@@ -159,7 +182,11 @@ for relative in "${private_paths[@]}"; do
 done
 find "$DEST/docs" -maxdepth 1 -type f -name 'v3*.md' -delete
 
-"$DEST/scripts/public-release-audit.sh" "$DEST"
+if [ "$SKIP_AUDIT" = "0" ]; then
+  "$DEST/scripts/public-release-audit.sh" "$DEST"
+else
+  printf '  Audit:       deferred to trusted sealed-tree caller\n'
+fi
 
 if [ "$INIT_GIT" = "1" ]; then
   git -C "$DEST" init -q -b main

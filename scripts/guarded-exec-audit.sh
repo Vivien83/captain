@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT_DIR="${1:-$SCRIPT_ROOT}"
+[ "$#" -le 1 ] || {
+  printf 'Usage: %s [source-root]\n' "$0" >&2
+  exit 2
+}
+ROOT_DIR="$(cd "$ROOT_DIR" && pwd -P)"
 cd "$ROOT_DIR"
 
 CONTROLLED_SINKS=(
@@ -11,6 +17,8 @@ CONTROLLED_SINKS=(
   crates/captain-runtime/src/tools/code_execution.rs
   crates/captain-runtime/src/tools/skill_check.rs
   crates/captain-runtime/src/tools/package_ops.rs
+  crates/captain-runtime/src/process_manager.rs
+  crates/captain-runtime/src/tools/process_ops.rs
   crates/captain-runtime/src/host_functions.rs
   crates/captain-kernel/src/workflow.rs
   crates/captain-api/src/hand_install_routes.rs

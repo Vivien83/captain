@@ -104,6 +104,10 @@ fn tool_run_event_to_sse(event: ToolRunEvent) -> Event {
 fn agent_delegation_event_fields(event: AgentDelegationEvent) -> serde_json::Value {
     serde_json::json!({
         "job_id": event.job_id,
+        "root_job_id": event.root_job_id,
+        "parent_job_id": event.parent_job_id,
+        "depth": event.depth,
+        "lineage_reserved_tokens": event.lineage_reserved_tokens,
         "title": event.title,
         "target_agent_id": event.target_agent_id,
         "status": event.status,
@@ -303,6 +307,10 @@ mod tests {
     fn delegation_event_fields_are_bounded_operator_metadata() {
         let data = agent_delegation_event_fields(AgentDelegationEvent {
             job_id: "job-123".to_string(),
+            root_job_id: "job-root".to_string(),
+            parent_job_id: Some("job-parent".to_string()),
+            depth: 3,
+            lineage_reserved_tokens: 12_000,
             title: "Review release".to_string(),
             target_agent_id: "agent-reviewer".to_string(),
             status: "running".to_string(),
@@ -312,6 +320,10 @@ mod tests {
             error_code: None,
         });
         assert_eq!(data["job_id"], "job-123");
+        assert_eq!(data["root_job_id"], "job-root");
+        assert_eq!(data["parent_job_id"], "job-parent");
+        assert_eq!(data["depth"], 3);
+        assert_eq!(data["lineage_reserved_tokens"], 12_000);
         assert_eq!(data["status"], "running");
         assert_eq!(data["attempt_count"], 2);
         assert_eq!(data["used_tokens"], 800);

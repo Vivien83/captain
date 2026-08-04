@@ -5,8 +5,12 @@ use captain_types::quota::{ProviderQuotaSnapshot, QuotaAlertLevel};
 use rusqlite::{Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 
+use crate::provider_quota_reset::{
+    confirmed_reset_notification, enqueue_reset_notification, ProviderQuotaResetWindow,
+};
+
 /// Why a provider quota observation is worth announcing and journaling.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuotaChange {
     pub first_seen: bool,
     pub alert_changed: bool,
@@ -14,16 +18,23 @@ pub struct ProviderQuotaChange {
     pub metadata_changed: bool,
     pub previous_alert: Option<QuotaAlertLevel>,
     pub current_alert: QuotaAlertLevel,
+    pub confirmed_resets: Vec<ProviderQuotaResetWindow>,
 }
 
 impl ProviderQuotaChange {
     /// True when this observation should produce a structured log/event.
     pub fn should_announce(&self) -> bool {
-        self.first_seen || self.alert_changed || self.reset_changed || self.metadata_changed
+        self.first_seen
+            || self.alert_changed
+            || self.reset_changed
+            || self.metadata_changed
+            || !self.confirmed_resets.is_empty()
     }
 
     fn kind(&self) -> &'static str {
-        if self.first_seen {
+        if !self.confirmed_resets.is_empty() {
+            "allowance_reset"
+        } else if self.first_seen {
             "first_seen"
         } else if self.alert_changed {
             "alert_changed"
@@ -38,7 +49,7 @@ impl ProviderQuotaChange {
 /// SQLite-backed provider quota state.
 #[derive(Clone)]
 pub struct ProviderQuotaStore {
-    conn: Arc<Mutex<Connection>>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
 }
 
 impl ProviderQuotaStore {
@@ -65,6 +76,8 @@ impl ProviderQuotaStore {
             .as_deref()
             .and_then(|json| serde_json::from_str::<ProviderQuotaSnapshot>(json).ok());
         let effective_snapshot = merge_static_metadata(snapshot, previous.as_ref());
+        let reset_notification =
+            confirmed_reset_notification(previous.as_ref(), &effective_snapshot);
         let current_alert = effective_snapshot.alert_level();
         let previous_alert = previous.as_ref().map(ProviderQuotaSnapshot::alert_level);
         let change = ProviderQuotaChange {
@@ -81,6 +94,10 @@ impl ProviderQuotaStore {
             }),
             previous_alert,
             current_alert,
+            confirmed_resets: reset_notification
+                .as_ref()
+                .map(|notification| notification.windows.clone())
+                .unwrap_or_default(),
         };
         let snapshot_json = serde_json::to_string(&effective_snapshot)
             .map_err(|error| CaptainError::Serialization(error.to_string()))?;
@@ -123,6 +140,9 @@ impl ProviderQuotaStore {
                     ],
                 )
                 .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        }
+        if let Some(notification) = reset_notification.as_ref() {
+            enqueue_reset_notification(&transaction, notification)?;
         }
         transaction
             .commit()
@@ -185,7 +205,7 @@ fn merge_static_metadata(
     effective
 }
 
-fn reset_fingerprint(snapshot: &ProviderQuotaSnapshot) -> (Option<i64>, Option<i64>) {
+fn reset_fingerprint(snapshot: &ProviderQuotaSnapshot) -> (Option<i64>, Option<i64>, Option<i64>) {
     (
         snapshot
             .primary
@@ -196,6 +216,12 @@ fn reset_fingerprint(snapshot: &ProviderQuotaSnapshot) -> (Option<i64>, Option<i
             .secondary
             .as_ref()
             .and_then(|window| window.resets_at)
+            .map(|value| value.timestamp()),
+        snapshot
+            .spend_control
+            .as_ref()
+            .and_then(|control| control.individual_limit.as_ref())
+            .and_then(|limit| limit.resets_at)
             .map(|value| value.timestamp()),
     )
 }
@@ -252,12 +278,11 @@ mod tests {
         assert_eq!(warning.current_alert, QuotaAlertLevel::Warning);
         assert_eq!(store.event_count(), 2);
 
-        assert!(
-            store
-                .record(&snapshot(76.0, reset + Duration::hours(1)))
-                .unwrap()
-                .reset_changed
-        );
+        let schedule_change = store
+            .record(&snapshot(76.0, reset + Duration::hours(1)))
+            .unwrap();
+        assert!(schedule_change.reset_changed);
+        assert!(schedule_change.confirmed_resets.is_empty());
         assert_eq!(store.event_count(), 3);
         assert_eq!(store.list_current().unwrap().len(), 1);
     }

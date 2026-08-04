@@ -10,6 +10,7 @@ pub const REALTIME_TICKET_TTL: Duration = Duration::from_secs(30);
 const LOGIN_BACKOFF_AFTER_FAILURES: u32 = 5;
 const LOGIN_BACKOFF_MAX: Duration = Duration::from_secs(15 * 60);
 const LOGIN_STATE_RETENTION: Duration = Duration::from_secs(60 * 60);
+const LOGIN_SATURATION_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_LOGIN_STATE_KEYS: usize = 4096;
 const MAX_REALTIME_TICKETS: usize = 4096;
 
@@ -42,29 +43,38 @@ impl WebAuthSecurity {
             .by_user
             .get(&user_key)
             .and_then(|entry| entry.retry_after(now));
-        match (ip_retry, user_retry) {
-            (Some(left), Some(right)) => Some(left.max(right)),
-            (Some(retry), None) | (None, Some(retry)) => Some(retry),
-            (None, None) => None,
-        }
+        [ip_retry, user_retry, state.saturation_retry_after(now)]
+            .into_iter()
+            .flatten()
+            .max()
     }
 
     pub fn record_login_failure(&self, ip: IpAddr, username: &str, now: Instant) {
         let mut state = self.login.lock().unwrap_or_else(|error| error.into_inner());
         state.prune(now);
-        ensure_map_capacity(&mut state.by_ip, ip, now);
-        state
-            .by_ip
-            .entry(ip)
-            .or_insert_with(|| AttemptRecord::new(now))
-            .record_failure(now);
+        let mut saturated = false;
+        if ensure_map_capacity(&mut state.by_ip, ip, now) {
+            state
+                .by_ip
+                .entry(ip)
+                .or_insert_with(|| AttemptRecord::new(now))
+                .record_failure(now);
+        } else {
+            saturated = true;
+        }
         let user_key = username_key(username);
-        ensure_map_capacity(&mut state.by_user, user_key, now);
-        state
-            .by_user
-            .entry(user_key)
-            .or_insert_with(|| AttemptRecord::new(now))
-            .record_failure(now);
+        if ensure_map_capacity(&mut state.by_user, user_key, now) {
+            state
+                .by_user
+                .entry(user_key)
+                .or_insert_with(|| AttemptRecord::new(now))
+                .record_failure(now);
+        } else {
+            saturated = true;
+        }
+        if saturated {
+            state.activate_saturation(now);
+        }
     }
 
     pub fn record_login_success(&self, ip: IpAddr, username: &str) {
@@ -150,6 +160,7 @@ impl WebAuthSecurity {
 struct LoginAttemptState {
     by_ip: HashMap<IpAddr, AttemptRecord>,
     by_user: HashMap<[u8; 32], AttemptRecord>,
+    saturated_until: Option<Instant>,
 }
 
 impl LoginAttemptState {
@@ -160,6 +171,27 @@ impl LoginAttemptState {
         self.by_user.retain(|_, entry| {
             now.saturating_duration_since(entry.last_seen) < LOGIN_STATE_RETENTION
         });
+        if self.saturated_until.is_some_and(|until| until <= now) {
+            self.saturated_until = None;
+        }
+    }
+
+    fn saturation_retry_after(&self, now: Instant) -> Option<Duration> {
+        self.saturated_until
+            .and_then(|until| until.checked_duration_since(now))
+            .filter(|duration| !duration.is_zero())
+    }
+
+    fn activate_saturation(&mut self, now: Instant) {
+        let was_active = self.saturation_retry_after(now).is_some();
+        self.saturated_until = Some(now + LOGIN_SATURATION_BACKOFF);
+        if !was_active {
+            tracing::warn!(
+                max_keys = MAX_LOGIN_STATE_KEYS,
+                retry_after_seconds = LOGIN_SATURATION_BACKOFF.as_secs(),
+                "Web login limiter saturated; applying global fail-closed backoff"
+            );
+        }
     }
 }
 
@@ -200,20 +232,23 @@ impl AttemptRecord {
     }
 }
 
-fn ensure_map_capacity<K>(map: &mut HashMap<K, AttemptRecord>, key: K, now: Instant)
+fn ensure_map_capacity<K>(map: &mut HashMap<K, AttemptRecord>, key: K, now: Instant) -> bool
 where
     K: Copy + Eq + std::hash::Hash,
 {
     if map.contains_key(&key) || map.len() < MAX_LOGIN_STATE_KEYS {
-        return;
+        return true;
     }
     if let Some(oldest) = map
         .iter()
+        .filter(|(_, entry)| entry.retry_after(now).is_none())
         .max_by_key(|(_, entry)| now.saturating_duration_since(entry.last_seen))
         .map(|(key, _)| *key)
     {
         map.remove(&oldest);
+        return true;
     }
+    false
 }
 
 fn username_key(username: &str) -> [u8; 32] {
@@ -284,6 +319,31 @@ pub fn request_client_ip(
         }
     }
     peer_ip
+}
+
+/// Return whether the actual client is loopback.
+///
+/// A local reverse proxy configured for a public deployment must provide a
+/// loopback `X-Forwarded-For` client too; its own loopback peer address is not
+/// sufficient to enable credentialless access.
+pub fn request_client_is_loopback(
+    peer: Option<SocketAddr>,
+    headers: &HeaderMap,
+    deployment: &DeploymentConfig,
+) -> bool {
+    let Some(peer_ip) = peer.map(|address| address.ip()) else {
+        return false;
+    };
+    if trusted_reverse_proxy(peer_ip, deployment) {
+        return headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.contains(','))
+            .and_then(|value| value.parse::<IpAddr>().ok())
+            .is_some_and(|client| client.is_loopback());
+    }
+    peer_ip.is_loopback()
 }
 
 pub fn session_cookie_is_secure(
@@ -388,6 +448,47 @@ mod tests {
     }
 
     #[test]
+    fn loopback_auth_bypass_uses_the_actual_client_behind_a_public_proxy() {
+        let peer = Some("127.0.0.1:8443".parse().unwrap());
+        let deployment = DeploymentConfig {
+            public_url: "https://captain.example".to_string(),
+            reverse_proxy: "caddy".to_string(),
+            ..Default::default()
+        };
+        let mut headers = HeaderMap::new();
+
+        assert!(!request_client_is_loopback(peer, &headers, &deployment));
+
+        headers.insert("x-forwarded-for", "203.0.113.8".parse().unwrap());
+        assert!(!request_client_is_loopback(peer, &headers, &deployment));
+
+        headers.insert("x-forwarded-for", "127.0.0.1".parse().unwrap());
+        assert!(request_client_is_loopback(peer, &headers, &deployment));
+
+        headers.insert("x-forwarded-for", "127.0.0.1, 203.0.113.8".parse().unwrap());
+        assert!(!request_client_is_loopback(peer, &headers, &deployment));
+    }
+
+    #[test]
+    fn loopback_auth_bypass_requires_peer_metadata() {
+        assert!(!request_client_is_loopback(
+            None,
+            &HeaderMap::new(),
+            &DeploymentConfig::default(),
+        ));
+        assert!(request_client_is_loopback(
+            Some("127.0.0.1:50051".parse().unwrap()),
+            &HeaderMap::new(),
+            &DeploymentConfig::default(),
+        ));
+        assert!(!request_client_is_loopback(
+            Some("203.0.113.8:50051".parse().unwrap()),
+            &HeaderMap::new(),
+            &DeploymentConfig::default(),
+        ));
+    }
+
+    #[test]
     fn login_backoff_never_exceeds_fifteen_minutes() {
         let now = Instant::now();
         let mut record = AttemptRecord::new(now);
@@ -395,6 +496,105 @@ mod tests {
             record.record_failure(now);
         }
         assert_eq!(record.retry_after(now), Some(LOGIN_BACKOFF_MAX));
+    }
+
+    #[test]
+    fn capacity_pressure_never_evicts_an_active_login_block() {
+        let now = Instant::now();
+        let mut map = HashMap::new();
+        for key in 0..MAX_LOGIN_STATE_KEYS {
+            map.insert(
+                key,
+                AttemptRecord {
+                    failures: LOGIN_BACKOFF_AFTER_FAILURES,
+                    blocked_until: now + LOGIN_BACKOFF_MAX,
+                    last_seen: now,
+                },
+            );
+        }
+
+        assert!(!ensure_map_capacity(
+            &mut map,
+            MAX_LOGIN_STATE_KEYS + 1,
+            now
+        ));
+        assert_eq!(map.len(), MAX_LOGIN_STATE_KEYS);
+        assert!(map.contains_key(&0));
+    }
+
+    #[test]
+    fn capacity_pressure_reuses_only_a_non_blocked_login_slot() {
+        let now = Instant::now();
+        let mut map = HashMap::new();
+        for key in 0..MAX_LOGIN_STATE_KEYS {
+            map.insert(
+                key,
+                AttemptRecord {
+                    failures: LOGIN_BACKOFF_AFTER_FAILURES,
+                    blocked_until: now + LOGIN_BACKOFF_MAX,
+                    last_seen: now,
+                },
+            );
+        }
+        map.insert(
+            7,
+            AttemptRecord {
+                failures: LOGIN_BACKOFF_AFTER_FAILURES,
+                blocked_until: now,
+                last_seen: now.checked_sub(Duration::from_secs(30)).unwrap_or(now),
+            },
+        );
+
+        assert!(ensure_map_capacity(&mut map, MAX_LOGIN_STATE_KEYS + 1, now));
+        assert_eq!(map.len(), MAX_LOGIN_STATE_KEYS - 1);
+        assert!(!map.contains_key(&7));
+        assert!(map.contains_key(&8));
+    }
+
+    #[test]
+    fn saturated_login_maps_apply_a_short_global_fail_closed_backoff() {
+        let security = WebAuthSecurity::default();
+        let now = Instant::now();
+        {
+            let mut state = security.login.lock().unwrap();
+            for index in 0..MAX_LOGIN_STATE_KEYS {
+                let ip = IpAddr::V6(std::net::Ipv6Addr::from(index as u128));
+                let user = Sha256::digest(format!("blocked-user-{index}").as_bytes()).into();
+                let record = || AttemptRecord {
+                    failures: LOGIN_BACKOFF_AFTER_FAILURES,
+                    blocked_until: now + LOGIN_BACKOFF_MAX,
+                    last_seen: now,
+                };
+                state.by_ip.insert(ip, record());
+                state.by_user.insert(user, record());
+            }
+        }
+
+        let fresh_ip = IpAddr::V6(std::net::Ipv6Addr::from(
+            u128::try_from(MAX_LOGIN_STATE_KEYS).unwrap() + 1,
+        ));
+        security.record_login_failure(fresh_ip, "fresh-user", now);
+
+        assert_eq!(
+            security.login_retry_after(fresh_ip, "fresh-user", now),
+            Some(LOGIN_SATURATION_BACKOFF)
+        );
+        assert!(security
+            .login_retry_after(
+                IpAddr::V6(std::net::Ipv6Addr::from(
+                    u128::try_from(MAX_LOGIN_STATE_KEYS).unwrap() + 2
+                )),
+                "another-fresh-user",
+                now
+            )
+            .is_some());
+        assert!(security
+            .login_retry_after(fresh_ip, "fresh-user", now + LOGIN_SATURATION_BACKOFF)
+            .is_none());
+
+        let state = security.login.lock().unwrap();
+        assert_eq!(state.by_ip.len(), MAX_LOGIN_STATE_KEYS);
+        assert_eq!(state.by_user.len(), MAX_LOGIN_STATE_KEYS);
     }
 
     #[test]

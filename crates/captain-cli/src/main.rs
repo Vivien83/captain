@@ -38,7 +38,8 @@ pub(crate) use cli_args_config::{
     HandCommands, IntegrationCommands, KnownHostsCommands, SkillCommands, SshCommands,
 };
 pub(crate) use cli_args_ops::{
-    AgentCommands, ApprovalsCommands, AuthCommands, CronCommands, DevicesCommands, GatewayCommands,
+    AgentCommands, ApprovalsCommands, AuthCommands, CronCommands, DevicesCommands, EmailCommands,
+    EmailProviderArg, GatewayCommands, GmailAccessArg, GmailDeliveryCommands, GmailRuleCommands,
     LoginCommands, MemoryCommands, ModelsCommands, ProcessCommands, SecurityCommands,
     ServiceCommands, ServiceManagerArg, SystemCommands, TriggerCommands, WebhooksCommands,
     WorkflowCommands,

@@ -37,6 +37,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
@@ -156,21 +157,25 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.10"
+  "### 0.1.0-alpha.11"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.10'
+  '0.1.0-alpha.11'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.10'
+  '0.1.0-alpha.11'
 require_contains \
-  "public changelog exposes the current alpha" \
+  "public changelog exposes the candidate alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.10] - 2026-07-30'
+  '## [0.1.0-alpha.11] - 2026-08-04'
 require_contains \
-  "reviewed public alpha notes exist" \
+  "reviewed candidate alpha notes exist" \
+  docs/releases/v0.1.0-alpha.11.md \
+  '# Captain 0.1.0-alpha.11'
+require_contains \
+  "historical alpha.10 notes remain available" \
   docs/releases/v0.1.0-alpha.10.md \
   '# Captain 0.1.0-alpha.10'
 require_contains \
@@ -317,6 +322,30 @@ require_contains \
   "published alpha.10 notes record the zero-Actions proof" \
   docs/releases/v0.1.0-alpha.10.md \
   'GitHub Actions API returned zero runs'
+require_not_contains \
+  "alpha.11 candidate notes do not copy the alpha.10 source commit" \
+  docs/releases/v0.1.0-alpha.11.md \
+  '48f898a9e4d38e8b8c7627644b66e22076a39364'
+require_not_contains \
+  "alpha.11 candidate notes do not copy the alpha.10 OCI digest" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477'
+require_contains \
+  "alpha.11 candidate notes keep live provenance unset" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'unset until the live release has'
+require_contains \
+  "alpha.11 candidate notes pin the 22-asset contract" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'exactly 22 host assets'
+require_contains \
+  "alpha.11 candidate notes pin sequential host builds" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'one target at a time'
+require_contains \
+  "alpha.11 candidate notes pin sequential Docker builds" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'strictly one after the other'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \
@@ -378,6 +407,18 @@ require_contains \
   docs/releases/v0.1.0-alpha.10.md \
   '## Durable operation and continuity'
 require_contains \
+  "alpha.11 notes expose the audit closure" \
+  docs/releases/v0.1.0-alpha.11.md \
+  '## Audit closure and execution boundary'
+require_contains \
+  "alpha.11 notes expose native email" \
+  docs/releases/v0.1.0-alpha.11.md \
+  '## Email accounts and automation'
+require_contains \
+  "alpha.11 notes expose external authorization honestly" \
+  docs/releases/v0.1.0-alpha.11.md \
+  '## External authorization boundary'
+require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
   'scripts/release-workflow-audit.sh'
@@ -413,24 +454,24 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.10/install.sh'
+    'releases/download/v0.1.0-alpha.11/install.sh'
   require_contains \
     "$readme pins the immutable prerelease image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
     'releases/latest/download/install.sh'
 done
 require_contains \
-  "security policy supports alpha.10" \
+  "security policy supports alpha.11" \
   SECURITY.md \
-  '| 0.1.0-alpha.10 | :white_check_mark: |'
+  '| 0.1.0-alpha.11 | :white_check_mark: |'
 require_contains \
-  "security policy retires alpha.9" \
+  "security policy retires alpha.10" \
   SECURITY.md \
-  '| 0.1.0-alpha.9 | :x: |'
+  '| 0.1.0-alpha.10 | :x: |'
 require_contains \
   "local publisher derives prerelease channels" \
   scripts/publish-release-local.sh \

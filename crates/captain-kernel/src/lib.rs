@@ -28,6 +28,7 @@ pub mod ephemeral_agents;
 pub mod error;
 pub mod event_bus;
 pub mod fleet_autoscale;
+pub mod gmail_persistence;
 pub mod goals;
 pub mod graph_memory;
 pub mod graph_seed;

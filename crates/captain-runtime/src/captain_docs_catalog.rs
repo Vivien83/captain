@@ -27,6 +27,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("project", "D.15"),
     ("multimedia", "D.16"),
     ("document", "D.19"),
+    ("email", "D.20"),
     ("runtime-changelog", "D.18"),
 ];
 
@@ -335,6 +336,25 @@ pub const MULTIMEDIA_FAMILY_TOOLS: &[&str] = &[
 pub const DOCUMENT_FAMILY_TOOLS: &[&str] =
     &["document_pipeline", "document_create", "document_extract"];
 
+/// D.20 — Native Gmail access and durable Gmail-to-agent automations.
+/// Audit prose lives in `docs/captain-tools/email.md`.
+pub const EMAIL_FAMILY_TOOLS: &[&str] = &[
+    "email_accounts",
+    "email_search",
+    "email_read",
+    "email_compose",
+    "email_reply",
+    "email_labels",
+    "email_update",
+    "email_attachment_save",
+    "email_automation_rules",
+    "email_automation_rule_save",
+    "email_automation_rule_set_enabled",
+    "email_automation_rule_remove",
+    "email_automation_deliveries",
+    "email_automation_delivery_requeue",
+];
+
 /// D.18 — Agent-facing runtime changelog. No builtin tool belongs to this
 /// family; it is the canonical public-safe release note surface Captain
 /// reads after a real runtime update notice.
@@ -406,6 +426,10 @@ pub const FAMILY_DOCS: &[(&str, &str)] = &[
         include_str!("../../../docs/captain-tools/document.md"),
     ),
     (
+        "email",
+        include_str!("../../../docs/captain-tools/email.md"),
+    ),
+    (
         "runtime-changelog",
         include_str!("../../../docs/captain-tools/runtime-changelog.md"),
     ),
@@ -436,6 +460,7 @@ pub fn family_tools(slug: &str) -> Option<&'static [&'static str]> {
         "project" => Some(PROJECT_FAMILY_TOOLS),
         "multimedia" => Some(MULTIMEDIA_FAMILY_TOOLS),
         "document" => Some(DOCUMENT_FAMILY_TOOLS),
+        "email" => Some(EMAIL_FAMILY_TOOLS),
         "runtime-changelog" => Some(RUNTIME_CHANGELOG_FAMILY_TOOLS),
         _ => None,
     }

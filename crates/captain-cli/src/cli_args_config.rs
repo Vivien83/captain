@@ -45,16 +45,6 @@ pub(crate) enum ChannelCommands {
         /// Channel name.
         channel: String,
     },
-    /// Enable a channel.
-    Enable {
-        /// Channel name.
-        channel: String,
-    },
-    /// Disable a channel without removing its configuration.
-    Disable {
-        /// Channel name.
-        channel: String,
-    },
     /// Manage inbound channel queue operations.
     #[command(alias = "inbound-queue")]
     Inbound {

@@ -13,6 +13,17 @@ LOCAL_PUBLISHER="$ROOT_DIR/scripts/publish-release-local.sh"
 RELEASE_PROVENANCE="$ROOT_DIR/scripts/release-provenance.sh"
 RELEASE_PROVENANCE_TEST="$ROOT_DIR/scripts/release-provenance-test.sh"
 GITHUB_GOVERNANCE="$ROOT_DIR/scripts/github-governance.sh"
+GITHUB_DISCOVERABILITY="$ROOT_DIR/scripts/github-discoverability.sh"
+LOCAL_PR_GATE="$ROOT_DIR/scripts/local-pr-gate.sh"
+LOCAL_PR_WORKER="$ROOT_DIR/scripts/local-pr-gate-worker.sh"
+LOCAL_PR_BOOTSTRAP="$ROOT_DIR/scripts/local-pr-vm-bootstrap.sh"
+LOCAL_PR_PORTAL="$ROOT_DIR/scripts/local-pr-portal.sh"
+LOCAL_PR_TEST="$ROOT_DIR/scripts/local-pr-gate-test.sh"
+LOCAL_PR_LIMA_SMOKE="$ROOT_DIR/scripts/local-pr-lima-smoke.sh"
+PUBLIC_EXPORT="$ROOT_DIR/scripts/prepare-github-export.sh"
+PUBLIC_AUDIT="$ROOT_DIR/scripts/public-release-audit.sh"
+GUARDED_EXEC_AUDIT="$ROOT_DIR/scripts/guarded-exec-audit.sh"
+SOURCE_DOCKERFILE="$ROOT_DIR/Dockerfile"
 LOCAL_DOCKERFILE="$ROOT_DIR/Dockerfile.release"
 DOCKER_EMBEDDING_CACHE="$ROOT_DIR/scripts/prepare-docker-embedding-cache.sh"
 RELEASE_READINESS="$ROOT_DIR/scripts/release-readiness.sh"
@@ -34,6 +45,18 @@ require_file_literal() {
     else
         printf '   FAIL %s: missing %s in %s\n' "$label" "$literal" "$file" >&2
         exit 1
+    fi
+}
+
+require_file_absent_literal() {
+    local label="$1"
+    local file="$2"
+    local literal="$3"
+    if rg -Fq -- "$literal" "$file"; then
+        printf '   FAIL %s: unexpected %s in %s\n' "$label" "$literal" "$file" >&2
+        exit 1
+    else
+        pass "$label"
     fi
 }
 
@@ -173,11 +196,26 @@ require_file_literal "Windows platform manifest records the real build start" "$
 require_file_literal "aggregate manifest rejects mixed source provenance" "$PACKAGE_RELEASE" 'platform manifests contain mixed source provenance'
 require_file_literal "provenance test rejects mixed source revisions" "$RELEASE_PROVENANCE_TEST" 'mixed source revisions were accepted'
 require_file_literal "branch protection requires review" "$GITHUB_GOVERNANCE" 'required_approving_review_count: 1'
-require_file_literal "branch protection keeps hosted checks optional" "$GITHUB_GOVERNANCE" 'required_status_checks: null'
+require_file_literal "branch protection requires the local exact-SHA gate" "$GITHUB_GOVERNANCE" 'contexts: ["captain/local-pr-gate"]'
+require_file_literal "branch protection requires an up-to-date base" "$GITHUB_GOVERNANCE" 'strict: true'
 require_file_literal "personal-repository protection omits organization-only bypass allowances" "$GITHUB_GOVERNANCE" 'has("bypass_pull_request_allowances") | not'
 require_file_literal "branch protection rejects force pushes" "$GITHUB_GOVERNANCE" 'allow_force_pushes: false'
 require_file_literal "branch protection rejects branch deletion" "$GITHUB_GOVERNANCE" 'allow_deletions: false'
-require_file_literal "cross propagates compile-time version" "$CROSS_CONFIG" 'passthrough = ["CAPTAIN_BUILD_VERSION"]'
+require_file_literal "repository discovery names self-hosted autonomous AI" "$GITHUB_DISCOVERABILITY" 'Self-hosted autonomous AI agent OS in Rust'
+require_file_literal "repository discovery pins the product homepage" "$GITHUB_DISCOVERABILITY" 'HOMEPAGE="https://captainagent.fr/"'
+require_file_literal "repository discovery classifies the public project" "$GITHUB_DISCOVERABILITY" '"workflow-automation"'
+require_file_literal "local gate verifies policies at the exact base SHA" "$LOCAL_PR_GATE" 'contents/$relative?ref=$BASE_SHA'
+require_file_literal "local gate installs a root-owned trusted bundle" "$LOCAL_PR_GATE" 'captain-pr-install-trusted'
+require_file_literal "local worker uses the root-owned toolchain" "$LOCAL_PR_WORKER" 'TOOLCHAIN_ROOT="/opt/captain-pr-toolchain"'
+require_file_literal "local worker audits a sealed source tree" "$LOCAL_PR_WORKER" 'SEALED_ROOT="/var/lib/captain-pr-job"'
+require_file_literal "local VM grants one seal-and-lock helper" "$LOCAL_PR_BOOTSTRAP" 'captain-pr-seal-and-lock'
+require_file_literal "local portal snapshots the trusted public auditor" "$LOCAL_PR_PORTAL" 'scripts/public-release-audit.sh'
+require_file_literal "public exporter supports an explicit source root" "$PUBLIC_EXPORT" '--source-root'
+require_file_literal "public auditor supports a trusted policy root" "$PUBLIC_AUDIT" '--policy-root'
+require_file_literal "guarded exec audit supports a sealed source root" "$GUARDED_EXEC_AUDIT" 'ROOT_DIR="${1:-$SCRIPT_ROOT}"'
+require_file_literal "cross propagates compile-time version" "$CROSS_CONFIG" '"CAPTAIN_BUILD_VERSION"'
+require_file_literal "cross propagates official Google OAuth identity" "$CROSS_CONFIG" '"CAPTAIN_GOOGLE_OAUTH_CLIENT_ID"'
+require_file_literal "Docker source build accepts official Google OAuth identity" "$SOURCE_DOCKERFILE" 'ARG CAPTAIN_GOOGLE_OAUTH_CLIENT_ID=""'
 require_file_literal "ARM Cross bounds the primary Ubuntu Ports probe" "$CROSS_CONFIG" 'curl -fsS --connect-timeout 5 --max-time 15 http://ports.ubuntu.com'
 require_file_literal "ARM Cross has a registered Ubuntu Ports fallback" "$CROSS_CONFIG" 'http://mirrors.ocf.berkeley.edu/ubuntu-ports'
 require_file_literal "x86 Cross skips the irrelevant Ubuntu ports mirror" "$CROSS_CONFIG" 'rm -f /etc/apt/sources.list.d/ports.list'
@@ -206,12 +244,19 @@ require_file_literal "release readiness rejects unknown Cargo profiles" "$RELEAS
 require_file_literal "release readiness resolves the built candidate" "$RELEASE_READINESS" 'release_candidate_bin'
 require_file_literal "release readiness isolates the candidate home" "$RELEASE_READINESS" 'captain-release-smoke.XXXXXX'
 require_file_literal "release readiness provisions native MemPalace" "$RELEASE_READINESS" 'CAPTAIN_MEMPALACE_INSTALL=1 CAPTAIN_HOME="$home_dir"'
+require_file_literal "release readiness generates an isolated daemon API key" "$RELEASE_READINESS" 'api_key="$(openssl rand -hex 32)"'
+require_file_literal "release readiness stores isolated auth outside TOML" "$RELEASE_READINESS" "printf 'CAPTAIN_DAEMON_API_KEY=%s\\n'"
+require_file_literal "release readiness protects isolated auth material" "$RELEASE_READINESS" 'chmod 600 "$secrets"'
 require_file_literal "release readiness requires process-tree discovery" "$RELEASE_READINESS" 'need_cmd pgrep'
 require_file_literal "release readiness captures smoke descendants before the parent" "$RELEASE_READINESS" 'descendants="$(collect_process_descendants "$SMOKE_PID")"'
 require_file_literal "release readiness terminates smoke descendants first" "$RELEASE_READINESS" 'signal_process_list TERM "$descendants"'
 require_file_literal "release readiness verifies candidate HTTP version" "$RELEASE_READINESS" 'isolated release candidate health version mismatch'
 require_file_literal "release smoke requires only the principal agent" "$EXCELLENCE_SMOKE" 'fresh release starts with only the captain agent'
 require_file_literal "release smoke keeps header arguments nonempty on Bash 3.2" "$EXCELLENCE_SMOKE" 'AUTH_HEADER_ARGS=(-H "Accept: application/json")'
+require_file_literal "release smoke authenticates with the resolved daemon key" "$EXCELLENCE_SMOKE" 'Authorization: Bearer $api_key'
+require_file_literal "release smoke rejects protected HTTP errors" "$EXCELLENCE_SMOKE" 'curl -sS --fail --max-time "$TIMEOUT"'
+require_file_absent_literal "release smoke never forges sessions from password hashes" "$EXCELLENCE_SMOKE" 'password_hash'
+require_file_absent_literal "release smoke never signs obsolete session tokens" "$EXCELLENCE_SMOKE" 'openssl dgst'
 require_file_literal "release smoke preserves absolute artifact roots" "$EXCELLENCE_SMOKE" '/*) doc_path="$WORKDIR/excellence-smoke.md"'
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
 require_shell_syntax "$RELEASE_ALL"
@@ -219,6 +264,16 @@ require_shell_syntax "$LOCAL_PUBLISHER"
 require_shell_syntax "$RELEASE_PROVENANCE"
 require_shell_syntax "$RELEASE_PROVENANCE_TEST"
 require_shell_syntax "$GITHUB_GOVERNANCE"
+require_shell_syntax "$GITHUB_DISCOVERABILITY"
+require_shell_syntax "$LOCAL_PR_GATE"
+require_shell_syntax "$LOCAL_PR_WORKER"
+require_shell_syntax "$LOCAL_PR_BOOTSTRAP"
+require_shell_syntax "$LOCAL_PR_PORTAL"
+require_shell_syntax "$LOCAL_PR_TEST"
+require_shell_syntax "$LOCAL_PR_LIMA_SMOKE"
+require_shell_syntax "$PUBLIC_EXPORT"
+require_shell_syntax "$PUBLIC_AUDIT"
+require_shell_syntax "$GUARDED_EXEC_AUDIT"
 require_shell_syntax "$DOCKER_EMBEDDING_CACHE"
 require_shell_syntax "$RELEASE_READINESS"
 require_shell_syntax "$EXCELLENCE_SMOKE"
@@ -227,5 +282,6 @@ CAPTAIN_RELEASE_POLICY_TEST=1 "$LOCAL_PUBLISHER" >/dev/null
 pass "local release channel policy"
 require_command_success "release provenance contract" "$RELEASE_PROVENANCE_TEST"
 require_command_success "GitHub governance policy" "$GITHUB_GOVERNANCE" --policy-test
+require_command_success "GitHub discoverability policy" "$GITHUB_DISCOVERABILITY" --policy-test
 
 printf '\nRelease workflow audit passed: %s checks.\n' "$PASS"

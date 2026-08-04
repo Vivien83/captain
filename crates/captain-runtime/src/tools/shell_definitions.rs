@@ -75,7 +75,7 @@ fn shell_exec_tool_definition() -> ToolDefinition {
 fn docker_exec_tool_definition() -> ToolDefinition {
     tool_definition(
         "docker_exec",
-        "Exécute une commande dans un conteneur Docker sandboxé avec isolation réseau, limites de ressources et suppression de capabilities. Utiliser pour exécuter du code non fiable ou des commandes potentiellement dangereuses en toute sécurité. Nécessite Docker installé et docker.enabled=true dans la config. Pour des commandes sûres, préférer shell_exec qui est plus rapide. Si timeout_secs est explicitement défini, c'est une fenêtre de réévaluation renouvelable: un processus encore vivant n'est pas tué à l'échéance. Retourne stdout/stderr de la commande.",
+        "Exécute une commande via le rail Docker explicite avec workspace monté en lecture seule, limites de ressources et suppression de capabilities selon la configuration. Captain ne route jamais automatiquement vers Docker et ne retombe jamais sur l'hôte si Docker est indisponible. Le profil untrusted_execution exige docker.enabled=true, network=none, read_only_root=true et cap_add vide. Nécessite un daemon Docker disponible. Si timeout_secs est explicitement défini, c'est une fenêtre de réévaluation renouvelable: un processus encore vivant n'est pas tué à l'échéance. Retourne stdout/stderr de la commande.",
         serde_json::json!({
             "type": "object",
             "properties": {

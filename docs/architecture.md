@@ -168,7 +168,18 @@ When the daemon wraps the kernel in `Arc`, additional steps occur:
 
 18. Start background agent loops (continuous, periodic, proactive)
 
-19. Start the durable Captain release monitor
+19. Start the provider-subscription quota monitor
+    - Refresh official Codex account usage after startup and every five minutes
+    - Compare durable provider reset identities and replenished usage; never
+      infer a reset from a local countdown alone
+    - Commit the new snapshot, transition event, and reset-notification outbox
+      row atomically
+    - Deliver mobile Rich Telegram cards through leased bounded retries; an
+      expired in-flight lease becomes `uncertain` instead of being replayed
+    - Respect proactive-notification silent mode by suppressing pending cards
+      without deleting their audit rows
+
+20. Start the durable Captain release monitor
     - Reconcile any detached installer result before release discovery
     - Check the compatible official channel after startup and every 12 hours
     - Persist the candidate, exact decision version, deferral/refusal history,
@@ -178,9 +189,9 @@ When the daemon wraps the kernel in `Arc`, additional steps occur:
     - Route button callbacks before session restoration or model dispatch and
       require the exact configured Telegram chat plus an explicit numeric user
 
-20. Publish release-monitor state through `/api/status`; `captain status`, TUI,
-    Control Web, and the retained Desktop wrapper consume this local projection
-    and never query GitHub themselves
+21. Publish release-monitor and provider-quota state through `/api/status`;
+    `captain status`, TUI, Control Web, and the retained Desktop wrapper consume
+    this local projection and never query GitHub or a provider themselves
 ```
 
 Host installation is a detached, checksum-required operation. The child writes
@@ -531,7 +542,7 @@ Three driver families cover the runtime model catalog:
 | `cerebras` | OpenAI-compat | `https://api.cerebras.ai` | Yes |
 | `sambanova` | OpenAI-compat | `https://api.sambanova.ai` | Yes |
 | `huggingface` | OpenAI-compat | `https://api-inference.huggingface.co` | Yes |
-| `xai` | OpenAI-compat | `https://api.x.ai` | Yes |
+| `xai` | OpenAI-compat | `https://api.x.ai/v1` | Yes |
 | `replicate` | OpenAI-compat | `https://api.replicate.com` | Yes |
 | `ollama` | OpenAI-compat | `http://localhost:11434` | No |
 | `vllm` | OpenAI-compat | `http://localhost:8000` | No |
@@ -675,6 +686,10 @@ combines execution policy and critical-pattern review with `env_clear()`,
 selective host variables, explicit per-call injection, workspace, timeout,
 bounded output, and command-free structured audit events. Interactive shell
 approval yields a content-bound permit; unattended surfaces fail closed.
+Direct-program review text is presentation-only. Its permit uses a versioned,
+domain-separated SHA-256 preimage with big-endian `u64` lengths, an explicit
+argument count, and every argument encoded separately, so executable and
+argument boundaries are unambiguous even when a Rust string contains NUL.
 
 `scripts/guarded-exec-audit.sh` mechanically rejects raw process construction
 or environment mutation in those sinks and is run by every tranche gate and
@@ -687,12 +702,21 @@ The ordinary host backend is deliberately reported as `host_process` with
 isolation level `environment_scrub` and `os_isolation: false`. Clearing the
 environment, bounding output and time, validating workspaces, and recognizing
 dangerous commands reduce risk but do not create a namespace, seccomp,
-Landlock, chroot, or container boundary. New installations use execution policy
-`full` with critical mode `safe`: routine host commands remain available while
-recognized catastrophic commands fail closed. `open` is an explicit operator
-opt-in that permits a recognized command only after content-bound approval.
-Docker and WASM remain separate explicit backends when real isolation is
-required.
+Landlock, chroot, or container boundary.
+
+`ExecPolicy` has a structural `allowlist` default and one deployment profile.
+`personal_workstation` applies the configured mode, `remote_operator` imposes
+an allowlist floor, and `untrusted_execution` denies agent-controlled host
+processes. The daemon and agent policies are intersected before tool discovery
+and again before dispatch, so a stale or crafted manifest cannot widen global
+authority. `process_start` is covered by the same exact-program permit and
+environment boundary as one-shot subprocesses.
+
+Docker and WASM are separate explicit rails. Captain does not select one
+automatically and never falls back to host execution when an isolated rail is
+disabled, misconfigured, unavailable, or fails. The Docker posture reports
+configuration readiness separately from runtime availability, which is
+checked at invocation.
 
 ### SSRF Protection
 
@@ -727,7 +751,21 @@ Wire protocol authentication uses `hmac_sign(secret, nonce + node_id)` on both h
 
 ### Security Headers Middleware
 
-CSP, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, and Permissions-Policy headers on all API responses.
+CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, and HSTS headers
+are applied to all API responses. The legacy `X-XSS-Protection` mutation filter
+is explicitly disabled with `0`; modern browsers are constrained by CSP and
+output sanitization instead.
+
+Control, Terminal, and Config contain no inline script. Their JavaScript is
+compiled into the Captain binary and served through a finite same-origin asset
+map; Control's ES modules use canonical `/assets/app/vendor/...` URLs and need
+no import map. `script-src 'self'` plus `script-src-attr 'none'` therefore
+requires neither `unsafe-inline` nor `unsafe-eval`. Static and dynamic
+first-party layout still uses inline CSS, which is the deliberately retained
+`style-src 'unsafe-inline'` boundary. Markdown is the only deliberate HTML
+rendering sink: Marked output passes through a fixed DOMPurify tag/attribute
+allowlist and protocol check before Preact inserts it. Tool and session fields
+are rendered as text nodes.
 
 ### GCRA Rate Limiter
 
@@ -758,9 +796,13 @@ New browser passwords are salted Argon2id PHC strings. A successful legacy
 SHA-256 verification performs an atomic in-place migration before issuing a
 session. A bounded login-specific limiter tracks IP and normalized username
 independently, starts exponential backoff after five failures, and caps it at
-15 minutes. Cookie `Secure` policy is explicit (`auto`, `always`, `never`);
-automatic mode trusts configured HTTPS or HTTPS forwarded by a declared
-loopback reverse proxy.
+15 minutes. Each 4,096-key map evicts only records without an active retry
+delay. When no such slot exists, one shared five-second saturation backoff
+fails closed instead of dropping an active block. This state is intentionally
+process-local; an exposed deployment still needs an upstream edge limiter.
+Cookie `Secure` policy is explicit (`auto`, `always`, `never`); automatic mode
+trusts configured HTTPS or HTTPS forwarded by a declared loopback reverse
+proxy.
 
 Browser WebSocket and SSE transports use CSPRNG one-time tickets with a
 30-second lifetime. The server binds each ticket to path, effective client IP,

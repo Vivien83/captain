@@ -3,6 +3,9 @@ pub(crate) const ACTIVE_CHANNELS_TEXT: &str = "telegram, discord, signal, email"
 
 pub(crate) fn is_active_channel(name: &str) -> bool {
     ACTIVE_CHANNELS.contains(&name)
+        || name
+            .strip_prefix("email:")
+            .is_some_and(captain_types::config::is_valid_email_account_alias)
 }
 
 pub(crate) fn ensure_active_channel(name: &str) -> Result<(), String> {
@@ -33,5 +36,14 @@ mod tests {
         assert!(err.contains("matrix"));
         assert!(err.contains(ACTIVE_CHANNELS_TEXT));
         assert!(err.contains("frozen"));
+    }
+
+    #[test]
+    fn named_email_accounts_are_active_but_unsafe_aliases_are_not() {
+        assert!(is_active_channel("email:work"));
+        assert!(is_active_channel("email:personal.mail"));
+        assert!(!is_active_channel("email:"));
+        assert!(!is_active_channel("email:Work"));
+        assert!(!is_active_channel("email:../../work"));
     }
 }

@@ -107,6 +107,12 @@ pub trait KernelHandle: Send + Sync {
         Vec::new()
     }
 
+    /// Global execution policy floor. Per-agent policies may narrow ordinary
+    /// command authority, but they cannot weaken this deployment profile.
+    fn global_exec_policy(&self) -> captain_types::config::ExecPolicy {
+        captain_types::config::ExecPolicy::default()
+    }
+
     /// Hard per-agent tool blocklist. This is enforced again at dispatch so
     /// hidden or composed calls cannot bypass catalog visibility.
     fn tool_is_blocked_for_agent(&self, _caller_agent_id: Option<&str>, _tool_name: &str) -> bool {
@@ -752,6 +758,115 @@ pub trait KernelHandle: Send + Sync {
     fn get_a2a_agent_url(&self, name: &str) -> Option<String> {
         let _ = name;
         None
+    }
+
+    /// List public-safe metadata for natively connected Gmail accounts.
+    fn email_accounts(&self) -> Result<Vec<captain_types::email::GmailAccountSummary>, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// Search one connected Gmail mailbox with bounded metadata output.
+    async fn email_search(
+        &self,
+        _request: captain_types::email::GmailSearchRequest,
+    ) -> Result<captain_types::email::GmailSearchResult, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// Read one Gmail message. Attachment bodies require a separate call.
+    async fn email_read(
+        &self,
+        _request: captain_types::email::GmailReadRequest,
+    ) -> Result<captain_types::email::GmailMessageContent, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// Create a Gmail draft or explicitly send a message.
+    async fn email_compose(
+        &self,
+        _request: captain_types::email::GmailComposeRequest,
+    ) -> Result<captain_types::email::GmailComposeResult, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// Reply within an existing Gmail thread.
+    async fn email_reply(
+        &self,
+        _request: captain_types::email::GmailReplyRequest,
+    ) -> Result<captain_types::email::GmailComposeResult, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// List and filter labels in one connected Gmail mailbox.
+    async fn email_labels(
+        &self,
+        _request: captain_types::email::GmailLabelListRequest,
+    ) -> Result<captain_types::email::GmailLabelListResult, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// Apply one reversible Gmail message mutation.
+    async fn email_update(
+        &self,
+        _request: captain_types::email::GmailUpdateRequest,
+    ) -> Result<captain_types::email::GmailUpdateResult, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// Download one Gmail attachment into bounded in-memory bytes.
+    async fn email_attachment(
+        &self,
+        _request: captain_types::email::GmailAttachmentRequest,
+    ) -> Result<captain_types::email::GmailAttachmentData, String> {
+        Err("Native email access is not available on this kernel".to_string())
+    }
+
+    /// List or inspect durable Gmail-to-agent automation rules.
+    fn email_automation_rules(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationRuleQuery,
+    ) -> Result<Vec<captain_types::email_automation::GmailAutomationRuleView>, String> {
+        Err("Native Gmail automation is not available on this kernel".to_string())
+    }
+
+    /// Create or compare-and-swap update one Gmail automation rule.
+    fn email_automation_rule_save(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationRuleSaveRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationRuleView, String> {
+        Err("Native Gmail automation is not available on this kernel".to_string())
+    }
+
+    /// Enable or disable one Gmail automation rule using its reviewed version.
+    fn email_automation_rule_set_enabled(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationRuleStateRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationRuleView, String> {
+        Err("Native Gmail automation is not available on this kernel".to_string())
+    }
+
+    /// Remove one unused Gmail automation rule. Audited rules remain durable.
+    fn email_automation_rule_remove(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationRuleRemoveRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationRuleView, String> {
+        Err("Native Gmail automation is not available on this kernel".to_string())
+    }
+
+    /// List or inspect crash-safe Gmail automation deliveries.
+    fn email_automation_deliveries(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationDeliveryQuery,
+    ) -> Result<Vec<captain_types::email_automation::GmailAutomationDeliveryView>, String> {
+        Err("Native Gmail automation is not available on this kernel".to_string())
+    }
+
+    /// Requeue a reviewed dead or uncertain delivery with explicit risk confirmation.
+    fn email_automation_delivery_requeue(
+        &self,
+        _request: captain_types::email_automation::GmailAutomationDeliveryRequeueRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationDeliveryView, String> {
+        Err("Native Gmail automation is not available on this kernel".to_string())
     }
 
     /// Get the default recipient for a channel (e.g. default_chat_id for Telegram).

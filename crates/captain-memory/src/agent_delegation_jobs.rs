@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use captain_types::agent_delegation::{
     AgentDelegationEffectState, AgentDelegationJobRecord, AgentDelegationRecoverySummary,
     AgentDelegationStatus, NewAgentDelegationJob, AGENT_DELEGATION_MAX_ACTIVE_PER_CALLER,
-    AGENT_DELEGATION_MAX_ATTEMPTS, AGENT_DELEGATION_MAX_DEPENDENCIES,
-    AGENT_DELEGATION_MAX_RESULT_BYTES, AGENT_DELEGATION_MAX_TASK_BYTES,
-    AGENT_DELEGATION_MAX_TOKENS,
+    AGENT_DELEGATION_MAX_ATTEMPTS, AGENT_DELEGATION_MAX_DEPENDENCIES, AGENT_DELEGATION_MAX_DEPTH,
+    AGENT_DELEGATION_MAX_LINEAGE_TOKENS, AGENT_DELEGATION_MAX_RESULT_BYTES,
+    AGENT_DELEGATION_MAX_TASK_BYTES, AGENT_DELEGATION_MAX_TOKENS,
 };
 use captain_types::error::{CaptainError, CaptainResult};
 use rusqlite::{
@@ -23,7 +23,10 @@ const JOB_SELECT: &str = "SELECT id, idempotency_key, caller_agent_id, target_ag
     title, task, max_tokens, status, state_version, attempt_count, lease_owner,
     lease_expires_at, effect_state, result, result_truncated, used_tokens,
     error_code, error_message, cancel_requested_at, started_at, completed_at,
-    created_at, updated_at FROM agent_delegation_jobs";
+    created_at, updated_at, root_job_id, parent_job_id, depth,
+    (SELECT reserved_tokens FROM agent_delegation_lineages
+     WHERE root_job_id = agent_delegation_jobs.root_job_id)
+    FROM agent_delegation_jobs";
 
 #[derive(Clone)]
 pub struct AgentDelegationJobStore {
@@ -77,13 +80,18 @@ impl AgentDelegationJobStore {
             )));
         }
 
+        validate_and_reserve_lineage(&tx, input)?;
         let initial_status = dependency_status(&tx, &input.caller_agent_id, &dependencies)?;
         tx.execute(
             "INSERT INTO agent_delegation_jobs (
                  id, idempotency_key, caller_agent_id, target_agent_id, title,
                  task, max_tokens, status, error_code, error_message,
-                 completed_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                 completed_at, created_at, updated_at, root_job_id,
+                 parent_job_id, depth
+             ) VALUES (
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12,
+                 ?13, ?14, ?15
+             )",
             params![
                 input.id,
                 input.idempotency_key,
@@ -101,6 +109,9 @@ impl AgentDelegationJobStore {
                     .is_terminal()
                     .then_some(input.created_at_unix_ms),
                 input.created_at_unix_ms,
+                input.root_job_id,
+                input.parent_job_id,
+                input.depth,
             ],
         )
         .map_err(memory_error)?;
@@ -711,10 +722,16 @@ impl AgentDelegationJobStore {
     }
 
     /// Bound terminal history while preserving every live job and every job
-    /// still referenced by another delegation dependency.
+    /// still referenced by another delegation dependency or lineage child. A
+    /// lineage budget is removed only after its final job is gone, so partially
+    /// retained or resumable lineages never regain already-reserved tokens.
     pub fn prune_terminal_history(&self, keep: usize) -> CaptainResult<usize> {
-        let conn = self.lock_conn()?;
-        conn.execute(
+        let mut conn = self.lock_conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(memory_error)?;
+        let deleted = tx
+            .execute(
             "DELETE FROM agent_delegation_jobs
              WHERE status IN ('succeeded', 'failed', 'cancelled', 'uncertain', 'dependency_failed')
                AND id NOT IN (
@@ -725,10 +742,25 @@ impl AgentDelegationJobStore {
                AND NOT EXISTS (
                    SELECT 1 FROM agent_delegation_dependencies dependencies
                    WHERE dependencies.depends_on_job_id = agent_delegation_jobs.id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM agent_delegation_jobs children
+                   WHERE children.parent_job_id = agent_delegation_jobs.id
                )",
             params![keep.clamp(100, 20_000) as i64],
         )
-        .map_err(memory_error)
+        .map_err(memory_error)?;
+        tx.execute(
+            "DELETE FROM agent_delegation_lineages
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM agent_delegation_jobs jobs
+                 WHERE jobs.root_job_id = agent_delegation_lineages.root_job_id
+             )",
+            [],
+        )
+        .map_err(memory_error)?;
+        tx.commit().map_err(memory_error)?;
+        Ok(deleted)
     }
 
     fn reconcile(
@@ -999,9 +1031,15 @@ fn row_to_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentDelegationJobRec
     let attempt_count = nonnegative_u32(row, 9, "attempt_count")?;
     let effect_value: String = row.get(12)?;
     let used_tokens = optional_nonnegative_u64(row, 15, "used_tokens")?;
+    let depth = nonnegative_u32(row, 25, "depth")?;
+    let lineage_reserved_tokens = nonnegative_u64(row, 26, "lineage_reserved_tokens")?;
     Ok(AgentDelegationJobRecord {
         id: row.get(0)?,
         idempotency_key: row.get(1)?,
+        root_job_id: row.get(23)?,
+        parent_job_id: row.get(24)?,
+        depth,
+        lineage_reserved_tokens,
         caller_agent_id: row.get(2)?,
         target_agent_id: row.get(3)?,
         title: row.get(4)?,
@@ -1071,6 +1109,31 @@ fn corrupt_column(column: usize, message: String) -> rusqlite::Error {
 fn validate_new_job(input: &NewAgentDelegationJob) -> CaptainResult<()> {
     validate_token("delegation job id", &input.id, 96)?;
     validate_token("delegation idempotency key", &input.idempotency_key, 192)?;
+    validate_token("delegation root job id", &input.root_job_id, 96)?;
+    if let Some(parent_job_id) = input.parent_job_id.as_deref() {
+        validate_token("delegation parent job id", parent_job_id, 96)?;
+    }
+    if !(1..=AGENT_DELEGATION_MAX_DEPTH).contains(&input.depth) {
+        return Err(CaptainError::InvalidInput(format!(
+            "delegation depth must be between 1 and {AGENT_DELEGATION_MAX_DEPTH}"
+        )));
+    }
+    match input.parent_job_id.as_deref() {
+        None if input.root_job_id != input.id || input.depth != 1 => {
+            return Err(CaptainError::InvalidInput(
+                "a root delegation must use its own id as root_job_id and depth 1".to_string(),
+            ));
+        }
+        Some(parent_job_id)
+            if parent_job_id == input.id || input.root_job_id == input.id || input.depth <= 1 =>
+        {
+            return Err(CaptainError::InvalidInput(
+                "a nested delegation must reference a different parent and root at depth 2 or greater"
+                    .to_string(),
+            ));
+        }
+        _ => {}
+    }
     validate_token("caller agent id", &input.caller_agent_id, 96)?;
     validate_token("target agent id", &input.target_agent_id, 96)?;
     if input.caller_agent_id == input.target_agent_id {
@@ -1098,6 +1161,116 @@ fn validate_new_job(input: &NewAgentDelegationJob) -> CaptainResult<()> {
     Ok(())
 }
 
+fn validate_and_reserve_lineage(
+    tx: &Transaction<'_>,
+    input: &NewAgentDelegationJob,
+) -> CaptainResult<()> {
+    let requested = to_i64("delegation max_tokens", input.max_tokens)?;
+    let Some(parent_job_id) = input.parent_job_id.as_deref() else {
+        let existing: bool = tx
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM agent_delegation_lineages WHERE root_job_id = ?1
+                 )",
+                params![input.root_job_id],
+                |row| row.get(0),
+            )
+            .map_err(memory_error)?;
+        if existing {
+            return Err(CaptainError::InvalidInput(format!(
+                "agent delegation lineage already exists: {}",
+                input.root_job_id
+            )));
+        }
+        tx.execute(
+            "INSERT INTO agent_delegation_lineages (
+                 root_job_id, reserved_tokens, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?3)",
+            params![input.root_job_id, requested, input.created_at_unix_ms],
+        )
+        .map_err(memory_error)?;
+        return Ok(());
+    };
+
+    let parent = job_by_id(tx, parent_job_id)?.ok_or_else(|| {
+        CaptainError::InvalidInput(format!("delegation parent does not exist: {parent_job_id}"))
+    })?;
+    if parent.target_agent_id != input.caller_agent_id {
+        return Err(CaptainError::AuthDenied(format!(
+            "delegation parent {parent_job_id} did not run as the caller agent"
+        )));
+    }
+    if parent.root_job_id != input.root_job_id {
+        return Err(CaptainError::InvalidInput(format!(
+            "delegation parent {parent_job_id} belongs to another lineage"
+        )));
+    }
+    let expected_depth = parent
+        .depth
+        .checked_add(1)
+        .ok_or_else(|| CaptainError::InvalidInput("delegation depth overflowed".to_string()))?;
+    if input.depth != expected_depth || input.depth > AGENT_DELEGATION_MAX_DEPTH {
+        return Err(CaptainError::InvalidInput(format!(
+            "delegation depth {} does not follow parent depth {} or exceeds maximum {}",
+            input.depth, parent.depth, AGENT_DELEGATION_MAX_DEPTH
+        )));
+    }
+    if parent.status != AgentDelegationStatus::Running
+        || parent.effect_state != AgentDelegationEffectState::Started
+    {
+        return Err(CaptainError::InvalidState {
+            current: format!(
+                "{} / {}",
+                parent.status.as_str(),
+                parent.effect_state.as_str()
+            ),
+            operation: "create a nested delegation from an actively running parent".to_string(),
+        });
+    }
+
+    let reserved: i64 = tx
+        .query_row(
+            "SELECT reserved_tokens FROM agent_delegation_lineages
+             WHERE root_job_id = ?1",
+            params![input.root_job_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(memory_error)?
+        .ok_or_else(|| {
+            CaptainError::Internal(format!(
+                "delegation lineage budget is missing: {}",
+                input.root_job_id
+            ))
+        })?;
+    let reserved = u64::try_from(reserved).map_err(|_| {
+        CaptainError::Internal(format!(
+            "delegation lineage budget is corrupt: {}",
+            input.root_job_id
+        ))
+    })?;
+    let next_reserved = reserved.checked_add(input.max_tokens).ok_or_else(|| {
+        CaptainError::InvalidInput("delegation lineage token budget overflowed".to_string())
+    })?;
+    if next_reserved > AGENT_DELEGATION_MAX_LINEAGE_TOKENS {
+        return Err(CaptainError::InvalidInput(format!(
+            "delegation lineage token budget exceeded: {next_reserved} / {AGENT_DELEGATION_MAX_LINEAGE_TOKENS}"
+        )));
+    }
+    tx.execute(
+        "UPDATE agent_delegation_lineages
+         SET reserved_tokens = ?1, updated_at = MAX(updated_at, ?2)
+         WHERE root_job_id = ?3",
+        params![
+            to_i64("delegation lineage reserved tokens", next_reserved)?,
+            input.created_at_unix_ms,
+            input.root_job_id
+        ],
+    )
+    .map_err(memory_error)?;
+    Ok(())
+}
+
 fn normalized_dependencies(dependencies: &[String]) -> CaptainResult<Vec<String>> {
     let mut normalized = BTreeSet::new();
     for dependency in dependencies {
@@ -1116,7 +1289,15 @@ fn same_job_input(
     input: &NewAgentDelegationJob,
     dependencies: &[String],
 ) -> bool {
-    existing.caller_agent_id == input.caller_agent_id
+    let same_root = if existing.parent_job_id.is_none() && input.parent_job_id.is_none() {
+        existing.root_job_id == existing.id && input.root_job_id == input.id
+    } else {
+        existing.root_job_id == input.root_job_id
+    };
+    same_root
+        && existing.parent_job_id == input.parent_job_id
+        && existing.depth == input.depth
+        && existing.caller_agent_id == input.caller_agent_id
         && existing.target_agent_id == input.target_agent_id
         && existing.title == input.title
         && existing.task == input.task
@@ -1199,6 +1380,9 @@ mod tests {
         NewAgentDelegationJob {
             id: id.to_string(),
             idempotency_key: format!("idem:{id}"),
+            root_job_id: id.to_string(),
+            parent_job_id: None,
+            depth: 1,
             caller_agent_id: caller.to_string(),
             target_agent_id: target.to_string(),
             title: format!("Job {id}"),
@@ -1212,6 +1396,32 @@ mod tests {
         }
     }
 
+    fn nested_job(
+        id: &str,
+        root_job_id: &str,
+        parent_job_id: &str,
+        depth: u32,
+        caller: &str,
+        target: &str,
+    ) -> NewAgentDelegationJob {
+        let mut job = new_job(id, caller, target, &[]);
+        job.root_job_id = root_job_id.to_string();
+        job.parent_job_id = Some(parent_job_id.to_string());
+        job.depth = depth;
+        job
+    }
+
+    fn start_effect(store: &AgentDelegationJobStore, job_id: &str, worker: &str, now_unix_ms: i64) {
+        let claimed = store
+            .claim_ready(worker, now_unix_ms, 60_000)
+            .unwrap()
+            .expect("delegation should be ready");
+        assert_eq!(claimed.id, job_id);
+        store
+            .mark_effect_started(job_id, worker, now_unix_ms + 1)
+            .unwrap();
+    }
+
     #[test]
     fn enqueue_is_exactly_idempotent_and_owner_scoped() {
         let store = setup();
@@ -1223,6 +1433,7 @@ mod tests {
 
         let mut regenerated = job.clone();
         regenerated.id = "new-candidate-id".to_string();
+        regenerated.root_job_id = regenerated.id.clone();
         assert_eq!(store.enqueue(&regenerated).unwrap(), first);
 
         let mut changed = job.clone();
@@ -1237,6 +1448,194 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("another agent"));
+    }
+
+    #[test]
+    fn nested_delegation_persists_lineage_depth_and_reserved_budget() {
+        let store = setup();
+        let root = store
+            .enqueue(&new_job("lineage-root", "captain", "worker-a", &[]))
+            .unwrap();
+        assert_eq!(root.root_job_id, root.id);
+        assert_eq!(root.parent_job_id, None);
+        assert_eq!(root.depth, 1);
+        assert_eq!(root.lineage_reserved_tokens, 5_000);
+        start_effect(&store, "lineage-root", "scheduler-root", 2_000);
+
+        let child = store
+            .enqueue(&nested_job(
+                "lineage-child",
+                "lineage-root",
+                "lineage-root",
+                2,
+                "worker-a",
+                "worker-b",
+            ))
+            .unwrap();
+        assert_eq!(child.root_job_id, "lineage-root");
+        assert_eq!(child.parent_job_id.as_deref(), Some("lineage-root"));
+        assert_eq!(child.depth, 2);
+        assert_eq!(child.lineage_reserved_tokens, 10_000);
+        assert_eq!(
+            store
+                .get("lineage-root")
+                .unwrap()
+                .unwrap()
+                .lineage_reserved_tokens,
+            10_000
+        );
+    }
+
+    #[test]
+    fn nested_delegation_requires_the_running_parent_target_as_caller() {
+        let store = setup();
+        store
+            .enqueue(&new_job("lineage-root", "captain", "worker-a", &[]))
+            .unwrap();
+
+        let before_effect = store
+            .enqueue(&nested_job(
+                "too-early",
+                "lineage-root",
+                "lineage-root",
+                2,
+                "worker-a",
+                "worker-b",
+            ))
+            .unwrap_err();
+        assert!(before_effect
+            .to_string()
+            .contains("actively running parent"));
+
+        start_effect(&store, "lineage-root", "scheduler-root", 2_000);
+        let wrong_caller = store
+            .enqueue(&nested_job(
+                "wrong-caller",
+                "lineage-root",
+                "lineage-root",
+                2,
+                "intruder",
+                "worker-b",
+            ))
+            .unwrap_err();
+        assert!(wrong_caller
+            .to_string()
+            .contains("did not run as the caller agent"));
+    }
+
+    #[test]
+    fn nested_delegation_enforces_depth_and_cumulative_lineage_budget() {
+        let store = setup();
+        let mut root = new_job("lineage-root", "captain", "worker-a", &[]);
+        root.max_tokens = AGENT_DELEGATION_MAX_LINEAGE_TOKENS - 1_000;
+        store.enqueue(&root).unwrap();
+        start_effect(&store, "lineage-root", "scheduler-root", 2_000);
+
+        let too_deep = nested_job(
+            "too-deep",
+            "lineage-root",
+            "lineage-root",
+            AGENT_DELEGATION_MAX_DEPTH + 1,
+            "worker-a",
+            "worker-b",
+        );
+        assert!(store
+            .enqueue(&too_deep)
+            .unwrap_err()
+            .to_string()
+            .contains("depth"));
+
+        let mut over_budget = nested_job(
+            "over-budget",
+            "lineage-root",
+            "lineage-root",
+            2,
+            "worker-a",
+            "worker-b",
+        );
+        over_budget.max_tokens = 1_001;
+        let error = store.enqueue(&over_budget).unwrap_err();
+        assert!(error.to_string().contains("lineage token budget exceeded"));
+        assert_eq!(
+            store
+                .get("lineage-root")
+                .unwrap()
+                .unwrap()
+                .lineage_reserved_tokens,
+            AGENT_DELEGATION_MAX_LINEAGE_TOKENS - 1_000
+        );
+    }
+
+    #[test]
+    fn nested_idempotency_replay_survives_parent_completion() {
+        let store = setup();
+        store
+            .enqueue(&new_job("lineage-root", "captain", "worker-a", &[]))
+            .unwrap();
+        start_effect(&store, "lineage-root", "scheduler-root", 2_000);
+        let child = nested_job(
+            "lineage-child",
+            "lineage-root",
+            "lineage-root",
+            2,
+            "worker-a",
+            "worker-b",
+        );
+        let first = store.enqueue(&child).unwrap();
+        store
+            .complete("lineage-root", "scheduler-root", "done", 50, 2_002)
+            .unwrap();
+
+        let mut replay = child;
+        replay.id = "regenerated-child-id".to_string();
+        assert_eq!(store.enqueue(&replay).unwrap(), first);
+        assert_eq!(first.lineage_reserved_tokens, 10_000);
+    }
+
+    #[test]
+    fn pruning_keeps_a_terminal_parent_while_its_lineage_child_exists() {
+        let store = setup();
+        store
+            .enqueue(&new_job("lineage-root", "captain", "worker-a", &[]))
+            .unwrap();
+        start_effect(&store, "lineage-root", "scheduler-root", 2_000);
+
+        store
+            .enqueue(&new_job("child-gate", "worker-a", "gate-worker", &[]))
+            .unwrap();
+        start_effect(&store, "child-gate", "scheduler-gate", 2_002);
+
+        let mut child = nested_job(
+            "lineage-child",
+            "lineage-root",
+            "lineage-root",
+            2,
+            "worker-a",
+            "worker-b",
+        );
+        child.depends_on = vec!["child-gate".to_string()];
+        assert_eq!(
+            store.enqueue(&child).unwrap().status,
+            AgentDelegationStatus::Blocked
+        );
+        store
+            .complete("lineage-root", "scheduler-root", "root done", 50, 2_004)
+            .unwrap();
+
+        for index in 0..101 {
+            let id = format!("terminal-{index:03}");
+            store
+                .enqueue(&new_job(&id, "filler-caller", "filler-worker", &[]))
+                .unwrap();
+            start_effect(&store, &id, "scheduler-filler", 3_000 + index * 3);
+            store
+                .complete(&id, "scheduler-filler", "done", 1, 3_002 + index * 3)
+                .unwrap();
+        }
+
+        assert_eq!(store.prune_terminal_history(100).unwrap(), 1);
+        assert!(store.get("lineage-root").unwrap().is_some());
+        assert!(store.get("lineage-child").unwrap().is_some());
     }
 
     #[test]

@@ -108,6 +108,7 @@ pub(crate) fn spawn_integration_hot_reload(state: Arc<AppState>) {
                         if let Some(b) = guard.as_mut() {
                             b.stop().await;
                         }
+                        kernel.channel_adapters.clear();
                         let (new_bridge, names) = channel_bridge::start_channel_bridge_with_config(
                             kernel.clone(),
                             &fresh.channels,

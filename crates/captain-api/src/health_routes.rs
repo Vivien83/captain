@@ -65,7 +65,10 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
         "agent_count": state.kernel.registry.count(),
         "database": if db_ok { "connected" } else { "error" },
         "audit": audit,
-        "execution": state.kernel.config.exec_policy.host_execution_posture(),
+        "execution": crate::security_routes::execution_status(
+            &state.kernel.config.exec_policy,
+            &state.kernel.config.docker,
+        ),
         "config_warnings": config_warnings,
     }))
 }
@@ -306,8 +309,13 @@ mod tests {
         assert_eq!(payload["execution"]["backend"], "host_process");
         assert_eq!(payload["execution"]["isolation_level"], "environment_scrub");
         assert_eq!(payload["execution"]["os_isolation"], false);
-        assert_eq!(payload["execution"]["policy_mode"], "full");
+        assert_eq!(payload["execution"]["profile"], "personal_workstation");
+        assert_eq!(payload["execution"]["configured_policy_mode"], "allowlist");
+        assert_eq!(payload["execution"]["policy_mode"], "allowlist");
         assert_eq!(payload["execution"]["critical_mode"], "safe");
+        assert_eq!(payload["execution"]["host_execution_allowed"], true);
+        assert_eq!(payload["execution"]["isolation_routing"], "explicit_only");
+        assert_eq!(payload["execution"]["docker"]["enabled"], false);
         kernel.shutdown();
     }
 }

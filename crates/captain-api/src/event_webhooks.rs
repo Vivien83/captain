@@ -1069,6 +1069,10 @@ mod tests {
             EventTarget::Broadcast,
             EventPayload::AgentDelegation(AgentDelegationEvent {
                 job_id: "job-7".to_string(),
+                root_job_id: "job-root".to_string(),
+                parent_job_id: Some("job-parent".to_string()),
+                depth: 2,
+                lineage_reserved_tokens: 9_000,
                 title: "Check migration".to_string(),
                 target_agent_id: "agent-2".to_string(),
                 status: "succeeded".to_string(),

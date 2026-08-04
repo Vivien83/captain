@@ -76,15 +76,15 @@ pub(crate) fn validate_command(command: &str) -> Result<(), String> {
 
 /// Check if Docker is available on this system.
 pub async fn is_docker_available() -> bool {
-    match tokio::process::Command::new("docker")
+    let mut command = tokio::process::Command::new("docker");
+    command
         .arg("version")
         .arg("--format")
         .arg("{{.Server.Version}}")
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await
-    {
+        .stderr(std::process::Stdio::piped());
+    crate::guarded_exec::configure_tokio_command(&mut command, None, &[], &[]);
+    match command.output().await {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
@@ -150,6 +150,7 @@ pub async fn create_sandbox(
 
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    crate::guarded_exec::configure_tokio_command(&mut cmd, None, &[], &[]);
 
     debug!(container = %container_name, image = %config.image, "Creating Docker sandbox");
 
@@ -189,6 +190,7 @@ pub async fn exec_in_sandbox(
 
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    crate::guarded_exec::configure_tokio_command(&mut cmd, None, &[], &[]);
 
     debug!(container = %container.container_id, "Executing in Docker sandbox");
 
@@ -227,12 +229,15 @@ pub async fn exec_in_sandbox(
 pub async fn destroy_sandbox(container: &SandboxContainer) -> Result<(), String> {
     debug!(container = %container.container_id, "Destroying Docker sandbox");
 
-    let output = tokio::process::Command::new("docker")
+    let mut command = tokio::process::Command::new("docker");
+    command
         .arg("rm")
         .arg("-f")
         .arg(&container.container_id)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    crate::guarded_exec::configure_tokio_command(&mut command, None, &[], &[]);
+    let output = command
         .output()
         .await
         .map_err(|e| format!("Failed to destroy container: {e}"))?;

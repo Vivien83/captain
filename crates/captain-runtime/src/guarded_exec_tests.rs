@@ -1,4 +1,4 @@
-use captain_types::config::{CriticalMode, ExecPolicy, ExecSecurityMode};
+use captain_types::config::{CriticalMode, ExecPolicy, ExecSecurityMode, ExecutionProfile};
 
 use super::*;
 
@@ -14,6 +14,7 @@ fn every_unattended_surface_blocks_critical_content() {
         ExecSurface::SkillCheck,
         ExecSurface::HandInstall,
         ExecSurface::WasmHost,
+        ExecSurface::ProcessTool,
     ] {
         let error = review_script(surface, "bash", "rm -rf /", Some(&policy))
             .expect_err("critical content must be blocked");
@@ -63,7 +64,71 @@ fn deny_policy_blocks_direct_programs() {
         Some(&policy),
     )
     .unwrap_err();
-    assert!(error.contains("mode = deny"));
+    assert!(error.contains("effective policy `deny`"), "{error}");
+}
+
+#[test]
+fn remote_operator_constrains_legacy_full_mode_to_allowlist() {
+    let policy = ExecPolicy {
+        profile: ExecutionProfile::RemoteOperator,
+        mode: ExecSecurityMode::Full,
+        safe_bins: vec!["echo".to_string()],
+        ..ExecPolicy::default()
+    };
+
+    review_program(
+        ExecSurface::CodeExecution,
+        "echo",
+        &["ok".to_string()],
+        Some(&policy),
+    )
+    .expect("listed program should remain available");
+    let error = review_program(
+        ExecSurface::CodeExecution,
+        "python3",
+        &["-c".to_string(), "print('no')".to_string()],
+        Some(&policy),
+    )
+    .expect_err("remote operator must not retain full host execution");
+
+    assert!(error.contains("not in the exec allowlist"), "{error}");
+}
+
+#[test]
+fn untrusted_execution_blocks_host_programs_even_when_configured_full() {
+    let policy = ExecPolicy {
+        profile: ExecutionProfile::UntrustedExecution,
+        mode: ExecSecurityMode::Full,
+        ..ExecPolicy::default()
+    };
+
+    let error = review_program(
+        ExecSurface::ProcessTool,
+        "echo",
+        &["unreachable".to_string()],
+        Some(&policy),
+    )
+    .expect_err("untrusted execution must deny host programs");
+
+    assert!(error.contains("untrusted_execution"), "{error}");
+    assert!(error.contains("docker_exec"), "{error}");
+}
+
+#[test]
+fn personal_workstation_keeps_explicit_full_mode() {
+    let policy = ExecPolicy {
+        profile: ExecutionProfile::PersonalWorkstation,
+        mode: ExecSecurityMode::Full,
+        ..ExecPolicy::default()
+    };
+
+    review_program(
+        ExecSurface::CodeExecution,
+        "python3",
+        &["-c".to_string(), "print('ok')".to_string()],
+        Some(&policy),
+    )
+    .expect("personal workstation should preserve an explicit full policy");
 }
 
 #[test]
@@ -83,15 +148,34 @@ fn direct_program_permit_covers_executable_and_every_argument() {
     let args = vec!["-c".to_string(), "print('ok')".to_string()];
     let permit = review_program(ExecSurface::CodeExecution, "python3", &args, None).unwrap();
     let exact = program_review_content("python3", &args);
-    let changed = program_review_content(
+
+    assert_eq!(exact, "python3 -c \"print('ok')\"");
+    assert!(!exact.contains('\0'));
+    assert!(permit.authorizes_program(ExecSurface::CodeExecution, "python3", &args));
+    assert!(!permit.authorizes_program(
+        ExecSurface::CodeExecution,
         "python3",
-        &["-c".to_string(), "print('changed')".to_string()],
+        &["-c".to_string(), "print('changed')".to_string()]
+    ));
+    assert!(!permit.authorizes_program(ExecSurface::WasmHost, "python3", &args));
+}
+
+#[test]
+fn direct_program_authorization_encoding_is_injective() {
+    let nul_in_executable = program_authorization_digest("a\0b", &[]);
+    let executable_and_arg = program_authorization_digest("a", &["b".to_string()]);
+    assert_ne!(nul_in_executable, executable_and_arg);
+
+    let nul_in_arg = vec!["b\0c".to_string()];
+    let split_args = vec!["b".to_string(), "c".to_string()];
+    assert_ne!(
+        program_authorization_digest("a", &nul_in_arg),
+        program_authorization_digest("a", &split_args)
     );
 
-    assert!(permit.authorizes(ExecSurface::CodeExecution, &exact));
-    assert!(permit.authorizes_program(ExecSurface::CodeExecution, "python3", &args));
-    assert!(!permit.authorizes(ExecSurface::CodeExecution, &changed));
-    assert!(!permit.authorizes(ExecSurface::WasmHost, &exact));
+    let permit = review_program(ExecSurface::CodeExecution, "a", &nul_in_arg, None).unwrap();
+    assert!(permit.authorizes_program(ExecSurface::CodeExecution, "a", &nul_in_arg));
+    assert!(!permit.authorizes_program(ExecSurface::CodeExecution, "a", &split_args));
 }
 
 #[test]

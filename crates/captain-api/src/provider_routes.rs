@@ -304,6 +304,16 @@ pub async fn test_provider(
         );
     }
 
+    if name == "xai" {
+        return test_xai_provider(
+            &name,
+            api_key.as_deref().unwrap_or_default(),
+            &base_url,
+            &default_model,
+        )
+        .await;
+    }
+
     let start = std::time::Instant::now();
     let driver_config = captain_runtime::llm_driver::DriverConfig {
         provider: name.clone(),
@@ -355,6 +365,60 @@ pub async fn test_provider(
                 "status": "error",
                 "provider": name,
                 "error": format!("Failed to create driver: {e}"),
+            })),
+        ),
+    }
+}
+
+async fn test_xai_provider(
+    provider: &str,
+    bearer: &str,
+    base_url: &str,
+    model: &str,
+) -> ApiJsonResponse {
+    let started = std::time::Instant::now();
+    let result = captain_runtime::xai_auth::probe_xai_auth(base_url, bearer, Some(model)).await;
+    xai_probe_response(provider, model, result, started.elapsed().as_millis())
+}
+
+fn xai_probe_response(
+    provider: &str,
+    model: &str,
+    result: Result<
+        captain_runtime::xai_auth::XaiAuthProbe,
+        captain_runtime::xai_auth::XaiAuthProbeError,
+    >,
+    fallback_latency_ms: u128,
+) -> ApiJsonResponse {
+    match result {
+        Ok(probe) => {
+            let error = probe.readiness_error(Some(model));
+            let mut body = serde_json::json!({
+                "status": if probe.inference_ready { "ok" } else { "error" },
+                "provider": provider,
+                "model": model,
+                "latency_ms": probe.latency_ms,
+                "auth_method": probe.auth_method,
+                "credential_active": probe.active,
+                "inference_ready": probe.inference_ready,
+                "zdr_status": probe.zdr_status,
+                "permissions_verified": probe.permissions_verified,
+                "chat_endpoint_allowed": probe.chat_endpoint_allowed,
+                "selected_model_allowed": probe.selected_model_allowed,
+            });
+            if let Some(error) = error {
+                body["error"] = serde_json::json!(error);
+            }
+            (StatusCode::OK, Json(body))
+        }
+        Err(error) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "error",
+                "provider": provider,
+                "model": model,
+                "latency_ms": fallback_latency_ms,
+                "error": error.to_string(),
             })),
         ),
     }
@@ -462,8 +526,9 @@ fn upsert_provider_url(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_provider_key, provider_key_saved_response};
+    use super::{parse_provider_key, provider_key_saved_response, xai_probe_response};
     use axum::http::StatusCode;
+    use captain_runtime::xai_auth::{XaiAuthMethod, XaiAuthProbe, XaiAuthProbeError};
 
     #[test]
     fn parse_provider_key_trims_and_rejects_empty_values() {
@@ -496,5 +561,47 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Default provider was not changed automatically"));
+    }
+
+    #[test]
+    fn xai_probe_response_is_public_safe_and_reports_acl_failure() {
+        let probe = XaiAuthProbe {
+            auth_method: XaiAuthMethod::ApiKey,
+            active: true,
+            inference_ready: false,
+            latency_ms: 42,
+            zdr_status: "zdr".to_string(),
+            team_blocked: false,
+            credential_blocked: false,
+            credential_disabled: false,
+            permissions_verified: true,
+            chat_endpoint_allowed: Some(true),
+            selected_model_allowed: Some(false),
+        };
+
+        let response = xai_probe_response("xai", "grok-4.5", Ok(probe), 999);
+        let body = response.1 .0;
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(body["status"], "error");
+        assert_eq!(body["latency_ms"], 42);
+        assert_eq!(body["auth_method"], "api_key");
+        assert_eq!(body["selected_model_allowed"], false);
+        assert!(body["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("grok-4.5")));
+        for private_field in ["user_id", "team_id", "api_key_id", "client_id"] {
+            assert!(body.get(private_field).is_none());
+        }
+    }
+
+    #[test]
+    fn xai_probe_response_keeps_transport_errors_categorical() {
+        let response = xai_probe_response("xai", "grok-4.5", Err(XaiAuthProbeError::Rejected), 17);
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1 .0["status"], "error");
+        assert_eq!(response.1 .0["latency_ms"], 17);
+        assert_eq!(response.1 .0["error"], "xAI rejected the credential");
     }
 }

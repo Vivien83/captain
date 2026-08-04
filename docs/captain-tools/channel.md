@@ -24,7 +24,7 @@ Send a message to a specific channel. The default outbound verb whenever the use
 
 | Field | Required | Notes |
 |---|---|---|
-| `channel` | yes | Active channel name as it appears in `[channels.<name>]` (`telegram`, `discord`, `signal`, `email`). |
+| `channel` | yes | Active adapter name (`telegram`, `discord`, `signal`, bare `email`, or a named mailbox such as `email:work`). |
 | `recipient` | no | Recipient platform-id. Omit or pass an empty string to use the channel default when configured. |
 | `message` | yes | Plain text. The bridge auto-selects the channel's output format (`TelegramHtml`, Discord/plain, Email subject/body) so cross-platform pasting works. |
 | `file_path` | no | Optional attachment relative to the workspace; the bridge handles MIME detection. |
@@ -59,6 +59,14 @@ Captain can wire a channel that was **never booted** (no `[channels.<name>]` sec
 
 The same flow brings up Discord, Signal, or Email. Non-core channels such as Slack, Matrix, IRC, and WhatsApp are intentionally frozen from the active setup surface and normal bridge startup for now. If an old `config.toml` still contains those sections, Captain logs them as frozen and does not start them by default.
 
+Email is multi-account. Prefer the authenticated Channels form/API or
+`captain channel setup email` to create or patch
+`[[channels.email.accounts]]`; those paths serialize config and credential
+writes, preserve sibling mailboxes, and roll back TOML when secret persistence
+fails. The account selected by `default_account` registers as bare `email` for
+compatibility. Every other active account registers as `email:<alias>`. Do not
+create those per-account credential keys by guessing their names.
+
 ### Channel readiness API
 
 `GET /api/channels` is the operator status surface for channel setup. For each active core channel it returns:
@@ -67,6 +75,13 @@ The same flow brings up Discord, Signal, or Email. Non-core channels such as Sla
 - `missing_required_fields`: missing env/config fields such as `TELEGRAM_BOT_TOKEN` or `allowed_users`.
 - `operator_actions`: concrete setup steps to make the channel ready.
 - `security_state`: `locked`, `allowlist`, or `allow_all_explicit`.
+
+Email additionally returns `setup_type: "email_accounts"`, a typed
+`account_fields` schema and `account_summary`. Each account reports its alias,
+adapter, default marker, credential readiness and bounded operator actions, but
+never its password or credential reference. The aggregate
+`operational_state` is `ready`, `partial`, `locked`, `disabled`, `invalid`, or
+`not_configured`. Schema-driven clients must preserve those distinctions.
 
 Telegram, Discord, Signal, and Email are deny-by-default. A token, API URL, or mailbox password alone is not enough: set `allowed_users` for Telegram/Discord/Signal, set `allowed_senders` for Email, or use `["*"]` only when intentionally allowing everyone.
 

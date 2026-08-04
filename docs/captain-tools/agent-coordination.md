@@ -186,6 +186,20 @@ with a bounded worker pool. A job with `depends_on` remains `blocked` until all
 listed jobs owned by the same caller have succeeded; dependency results are
 injected as bounded, explicitly untrusted evidence.
 
+When a running delegated agent calls `agent_delegate`, Captain records the new
+job as a child of that active job. The root ID, parent ID and depth are carried
+through the executing task and verified again inside the same immediate SQLite
+transaction that reserves the new budget. A caller cannot forge another
+parent: the parent must be `running`, its model effect must have started, and
+its target agent must be the child job's caller. Root jobs start at depth 1;
+the maximum durable depth is 10.
+
+Every root owns a durable 500000-token reservation ledger shared by all of its
+descendants. Each job's `max_tokens` is charged when it is enqueued, regardless
+of eventual status or use. Completion, restart, retry and partial history
+pruning do not return that reservation. This bounds a complete detached
+delegation tree rather than only each isolated turn.
+
 `wait_for_result=true` is an explicit compatibility mode for a result needed in
 the current reasoning step. It waits only up to `timeout_seconds` and returns
 the live record on timeout; the durable job continues in the background.
@@ -195,7 +209,7 @@ the live record on timeout; the durable job continues in the background.
 | `agent_id` | yes | Target. |
 | `task` | yes | Task description. |
 | `title` | no | Short operator label; derived from the first task line when absent. |
-| `max_tokens` | no | Scoped run budget, default 5000 and maximum 500000. One LLM call can still overshoot before Captain can interrupt the next step. |
+| `max_tokens` | no | Scoped run reservation, default 5000 and maximum 500000. It is also charged to the root lineage's durable 500000-token ledger. One LLM call can still overshoot before Captain can interrupt the next step. |
 | `depends_on` | no | Up to 16 prior job IDs owned by this same caller. Use only for real data dependencies. |
 | `wait_for_result` | no | Default `false`. Set only when the current turn cannot proceed without the result. |
 | `timeout_seconds` | no | Wait window for compatibility mode, clamped to 1–600 seconds. |
@@ -208,8 +222,9 @@ worker or daemon stopped: it becomes `uncertain` and requires an explicit
 
 #### Durable delegation control
 
-- `agent_job_status({job_id})` — inspect current state, attempts, dependencies,
-  budget, usage, error code and next actions without returning the raw task.
+- `agent_job_status({job_id})` — inspect current state, root/parent lineage,
+  depth, attempts, dependencies, per-job and reserved lineage budgets, usage,
+  error code and next actions without returning the raw task.
 - `agent_job_result({job_id})` — retrieve the bounded terminal result. Active
   jobs return their current state without blocking.
 - `agent_job_list({status?,limit?})` — list the caller's recent jobs after a
@@ -299,11 +314,13 @@ the corresponding tool completion event so chat/TUI/web surfaces must clear the
   can be traced and killed by the Manager.
 - **Depth-aware tool policy** — lineaged sub-agents do not see or execute
   admin/scheduling tools reserved for principal agents. Leaf-depth workers also
-  lose spawn/kill tools to prevent deep delegation chains.
+  lose spawn/delegate/kill tools to prevent deep delegation chains.
 - **Budget gating** — `agent_delegate` applies `max_tokens` as a scoped run
-  budget. It no longer mutates the worker's hourly quota. The budget can stop
+  budget and an irreversible reservation in the root job's durable lineage
+  ledger. It does not mutate the worker's hourly quota. The run budget can stop
   further tool steps once reached, and the returned JSON includes
-  `used_tokens` plus `budget_exceeded`.
+  `used_tokens`, `budget_exceeded`, lineage IDs/depth, and reserved/remaining
+  lineage budget.
 - **Approval surface** — `ask_user` queues onto the same approval system used by sensitive tools. It's not a security boundary, but it's auditable: the question and answer end up in the session log.
 - **Cross-agent message authority** — agents can `agent_send` to each other; the receiver enforces its own `allowed_tools` (B.4) so no privilege escalation by routing through a sibling.
 
@@ -315,6 +332,10 @@ the corresponding tool completion event so chat/TUI/web surfaces must clear the
 - `agent_delegate` budget is scoped to the delegated run, but it is still not a
   hard pre-call meter: a single LLM request can overshoot before Captain can
   observe usage and interrupt the next tool step.
+- The lineage ledger reserves requested budgets rather than reconciling actual
+  use. This is intentionally conservative: unused reservation is not reclaimed
+  because doing so across retries, uncertain effects, pruning and crashes would
+  make the tree limit ambiguous.
 - Cancellation after an effect starts is cooperative. If Captain cannot prove
   whether the effect completed, it reports `uncertain` rather than claiming a
   clean cancellation or replaying automatically.

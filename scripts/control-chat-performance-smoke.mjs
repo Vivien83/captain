@@ -9,6 +9,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const staticRoot = join(repoRoot, 'crates/captain-api/static');
+const controlVendorAliases = new Map([
+  ['/assets/app/vendor/preact.module.js', 'vendor/preact/preact.module.js'],
+  ['/assets/app/vendor/hooks.module.js', 'vendor/preact/hooks.module.js'],
+  ['/assets/app/vendor/htm.module.js', 'vendor/preact/htm.module.js'],
+  ['/assets/app/vendor/marked.esm.js', 'vendor/marked/marked.esm.js'],
+  ['/assets/app/vendor/purify.es.mjs', 'vendor/dompurify/purify.es.mjs'],
+]);
 
 async function importPlaywright() {
   const candidates = [process.env.CAPTAIN_PLAYWRIGHT_MODULE, 'playwright'].filter(Boolean);
@@ -39,11 +46,11 @@ const appHtml = `<!doctype html>
   <link rel="stylesheet" href="/static/css/app.css">
   <script type="importmap">
   {"imports":{
-    "preact":"/static/vendor/preact/preact.module.js",
-    "preact/hooks":"/static/vendor/preact/hooks.module.js",
-    "htm":"/static/vendor/preact/htm.module.js",
-    "marked":"/static/vendor/marked/marked.esm.js",
-    "dompurify":"/static/vendor/dompurify/purify.es.mjs"
+    "preact":"/assets/app/vendor/preact.module.js",
+    "preact/hooks":"/assets/app/vendor/hooks.module.js",
+    "htm":"/assets/app/vendor/htm.module.js",
+    "marked":"/assets/app/vendor/marked.esm.js",
+    "dompurify":"/assets/app/vendor/purify.es.mjs"
   }}
   </script>
 </head>
@@ -134,6 +141,10 @@ function contentType(path) {
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url || '/', 'http://127.0.0.1').pathname;
   if (pathname === '/') return send(response, 200, 'text/html; charset=utf-8', appHtml);
+  if (controlVendorAliases.has(pathname)) {
+    const target = resolve(staticRoot, controlVendorAliases.get(pathname));
+    return send(response, 200, contentType(target), await readFile(target));
+  }
   if (!pathname.startsWith('/static/')) return send(response, 404, 'text/plain', 'not found');
   const relative = normalize(decodeURIComponent(pathname.slice('/static/'.length)));
   const target = resolve(staticRoot, relative);
@@ -163,9 +174,31 @@ try {
   ]) {
     const page = await browser.newPage({ viewport: surface.viewport });
     const pageErrors = [];
+    const browserDiagnostics = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') browserDiagnostics.push(`console: ${message.text()}`);
+    });
+    page.on('requestfailed', (request) => {
+      browserDiagnostics.push(
+        `request: ${request.url()} (${request.failure()?.errorText || 'failed'})`,
+      );
+    });
     await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => document.querySelectorAll('.msg').length === 240);
+    try {
+      await page.waitForFunction(
+        () => document.querySelectorAll('.msg').length === 240,
+        null,
+        { timeout: 30_000 },
+      );
+    } catch (error) {
+      throw new Error(
+        `${surface.name}: Control did not hydrate 240 messages: ${[
+          ...pageErrors,
+          ...browserDiagnostics,
+        ].join(' | ') || error.message}`,
+      );
+    }
 
     const hydration = await page.evaluate(() => ({
       elapsedMs: performance.now() - window.__captainPerfStartedAt,

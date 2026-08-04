@@ -26,7 +26,8 @@ pub(crate) fn builtin_aliases() -> HashMap<String, String> {
         ("deepseek-r1", "deepseek-reasoner"),
         ("mistral-nemo", "open-mistral-nemo"),
         ("pixtral", "pixtral-large-latest"),
-        ("grok", "grok-4-0709"),
+        ("grok", "grok-4.5"),
+        ("grok-latest", "grok-4.5"),
         ("grok-4", "grok-4-0709"),
         ("grok-mini", "grok-2-mini"),
         ("grok3", "grok-3"),
@@ -89,7 +90,7 @@ mod tests {
 
     #[test]
     fn builtin_alias_count_is_stable() {
-        assert_eq!(builtin_aliases().len(), 71);
+        assert_eq!(builtin_aliases().len(), 72);
     }
 
     #[test]
@@ -98,7 +99,8 @@ mod tests {
         assert_eq!(aliases.get("sonnet").unwrap(), "claude-sonnet-4-6");
         assert_eq!(aliases.get("gpt5").unwrap(), "gpt-5.2");
         assert_eq!(aliases.get("gemini-pro").unwrap(), "gemini-3.1-pro-preview");
-        assert_eq!(aliases.get("grok").unwrap(), "grok-4-0709");
+        assert_eq!(aliases.get("grok").unwrap(), "grok-4.5");
+        assert_eq!(aliases.get("grok-latest").unwrap(), "grok-4.5");
         assert_eq!(aliases.get("jamba").unwrap(), "jamba-1.5-large");
     }
 

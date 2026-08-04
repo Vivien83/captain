@@ -148,6 +148,7 @@ require_approval = []
 
 [auth]
 enabled = true
+allow_unauthenticated_loopback = false
 username = "$CONTROL_USERNAME"
 password_hash = "$password_hash"
 session_ttl_hours = 1

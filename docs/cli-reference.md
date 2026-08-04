@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
 ```
 
 ## Global Options
@@ -248,7 +248,7 @@ captain update [--check] [--yes] [--version <release-tag>]
 |---|---|
 | `--check` | Resolve the compatible release channel without installing. |
 | `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
-| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.10`. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.11`. |
 
 Stable installations do not opt into prereleases. An existing prerelease may
 advance to a newer prerelease or the corresponding stable version. The archive
@@ -876,13 +876,15 @@ List configured channels and their status.
 captain channel list
 ```
 
-**Output columns:** CHANNEL, ENV VAR, STATUS.
+**Output columns:** CHANNEL, CREDENTIAL, STATUS.
 
 Checks `config.toml` for channel configuration sections and the centralized
 credential resolver for required tokens. Status is one of: `Ready`,
-`Missing credential`, `Not configured`. External file sources, `secrets.env`,
-the vault, legacy `.env`, and process environment use the same precedence as
-the daemon.
+`Partial`, `Locked allowlist`, `Disabled`, `Invalid config`,
+`Missing credential`, or `Not configured`. External file sources,
+`secrets.env`, the vault, legacy `.env`, and process environment use the same
+precedence as the daemon. Email reports ready active mailboxes as a fraction
+instead of assuming one global `EMAIL_PASSWORD`.
 
 The command reports configured active channels and can also show frozen
 compatibility entries retained by an older configuration. A listed
@@ -909,11 +911,17 @@ captain channel setup [<CHANNEL>]
 Each wizard:
 1. Displays step-by-step instructions for obtaining credentials.
 2. Prompts for tokens/credentials.
-3. Saves local tokens to `~/.captain/secrets.env` with owner-only permissions.
-   An externally managed key is refused and must be rotated at its mounted
-   source.
-4. Appends the channel configuration block to `config.toml` (prompts for confirmation).
-5. Warns to restart the daemon if one is running.
+3. Saves local tokens through the canonical credential resolver. An externally
+   managed key is refused and must be rotated at its mounted source.
+4. Writes the channel configuration transactionally.
+5. Reloads a running daemon when possible and reports a restart requirement
+   without claiming activation if reload fails.
+
+Email setup creates or patches one named IMAP/SMTP account, preserves its
+siblings, derives a canonical per-account credential key, and can select the
+default mailbox. Gmail receives host presets; other providers require explicit
+IMAP and SMTP hosts. An enabled account must have at least one exact address,
+`@domain`, or deliberate `*` sender rule.
 
 **Example:**
 
@@ -942,7 +950,7 @@ captain channel test <CHANNEL>
 
 | Argument | Description |
 |---|---|
-| `<CHANNEL>` | Channel name to test. |
+| `<CHANNEL>` | Channel name to test. Email accepts `email` or `email:<alias>`. |
 
 Requires a running daemon. Sends `POST /api/channels/<channel>/test`.
 
@@ -950,43 +958,185 @@ Requires a running daemon. Sends `POST /api/channels/<channel>/test`.
 
 ```bash
 captain channel test telegram
+captain channel test email:work
 ```
+
+Channel enable/disable commands are intentionally absent because active generic
+channel configs do not share a durable enable flag. Use guided configuration or
+the authenticated removal endpoint. Named Email accounts have their own typed
+`enabled` field and can be patched through the Channels screen or API.
 
 ---
 
-### captain channel enable
+## Email Account Commands
 
-Enable a channel integration.
+These commands manage native Gmail OAuth accounts. They are separate from
+`captain channel setup email`, which configures the IMAP/SMTP conversation
+channel. Account metadata is stored in Captain's SQLite database; Google
+client credentials and OAuth tokens remain only in the encrypted vault.
 
+### captain email connect
+
+Connect or reconnect one Gmail account with the minimum selected access.
+
+```text
+captain email connect [gmail] [--alias <ALIAS>]
+  [--access <send|read|assistant>] [--client-json <PATH>]
+  [--login-hint <EMAIL>] [--default] [--no-browser]
+  [--callback-port <PORT>] [--json]
 ```
-captain channel enable <CHANNEL>
-```
 
-**Arguments:**
+Official Captain builds can carry Captain's verified Google OAuth **Desktop
+app** identity, so the normal first connection is simply
+`captain email connect`. A community/development build without that identity
+fails closed and asks for `--client-json`; the flag is also an explicit BYO
+override for organizations that must use their own Google Cloud project.
+Later connections can reuse the client already bound to the account.
 
-| Argument | Description |
+Desktop OAuth credentials identify the application but cannot remain secret
+inside a distributed native binary. Captain embeds only the public client ID
+and relies on PKCE, random state, an exact loopback callback and encrypted token
+storage. A client secret present in an operator's BYO JSON stays encrypted in
+the local vault and is never treated as the authorization security boundary.
+
+Access profiles are least-privilege:
+
+| Profile | Gmail permission |
 |---|---|
-| `<CHANNEL>` | Channel name to enable. |
+| `send` | Send only; no mailbox reads |
+| `read` | Read only; no send or label changes |
+| `assistant` | Read, send, and modify labels |
 
-In daemon mode: sends `POST /api/channels/<channel>/enable`. Without a daemon: prints a note that the change will take effect on next start.
+The default callback binds a random loopback port. Over SSH, choose a fixed
+port and create the tunnel before starting Captain:
+
+```bash
+ssh -L 49152:127.0.0.1:49152 user@server
+captain email connect \
+  --no-browser --callback-port 49152
+```
+
+Progress and the consent URL use stderr; `--json` keeps the final public-safe
+account result on stdout. No token, client secret, or vault entry name is
+printed.
 
 ---
 
-### captain channel disable
+### captain email accounts
 
-Disable a channel without removing its configuration.
+List connected accounts and local credential readiness.
 
+```bash
+captain email accounts
+captain email accounts --json
 ```
-captain channel disable <CHANNEL>
+
+The default account is marked with `*`. `credential_status` is `ready`,
+`missing`, or `invalid`; a missing or malformed encrypted grant moves the
+account to `reauth_required` instead of failing later during agent work.
+
+---
+
+### captain email status
+
+Inspect durable local status without making a Google network request.
+
+```bash
+captain email status [<ALIAS>] [--json]
 ```
 
-**Arguments:**
+Omitting the alias reports every account.
 
-| Argument | Description |
-|---|---|
-| `<CHANNEL>` | Channel name to disable. |
+---
 
-In daemon mode: sends `POST /api/channels/<channel>/disable`. Without a daemon: prints a note to edit `config.toml`.
+### captain email test
+
+Verify one account live. Captain uses the default account when the alias is
+omitted, refreshes an access token only when needed, verifies the Google
+identity, and persists a replacement token through the crash-safe Gmail
+transaction.
+
+```bash
+captain email test [<ALIAS>] [--json]
+```
+
+A transient live-check failure is recorded but does not falsely disable an
+otherwise valid account. Missing or invalid local credentials require
+reconnection.
+
+---
+
+### captain email default
+
+```bash
+captain email default <ALIAS>
+```
+
+Select the account used when a command or future agent action omits an alias.
+
+---
+
+### captain email disconnect
+
+Remove one account from Captain.
+
+```bash
+captain email disconnect <ALIAS> [--revoke] [--yes] [--json]
+```
+
+Without `--revoke`, only Captain's local metadata and unreferenced encrypted
+secrets are removed. Google revocation can affect other scopes granted to the
+same OAuth project, so `--revoke` requires interactive confirmation or
+`--yes` in non-interactive mode.
+
+---
+
+### captain email rules
+
+Manage durable deterministic Gmail-to-agent rules. If `--account` is omitted,
+the connected default Gmail account is used; if `--agent` is omitted, the
+target is `captain`.
+
+```text
+captain email rules add --name <NAME>
+  [--account <ALIAS>] [--agent <EXACT_NAME_OR_UUID>]
+  [--from-contains <TEXT>] [--recipient-contains <TEXT>]
+  [--subject-contains <TEXT>] [--all-label <ID>]...
+  [--any-label <ID>]... --instruction <TEXT>
+  [--include-body] [--max-body-bytes <N>]
+  [--max-fires-per-hour <N>] [--max-delivery-attempts <N>]
+  [--disabled] --yes [--json]
+
+captain email rules list [--account <ALIAS>] [--limit <N>] [--json]
+captain email rules show <RULE_ID> [--json]
+captain email rules enable <RULE_ID> --version <N> --yes [--json]
+captain email rules disable <RULE_ID> --version <N> --yes [--json]
+captain email rules remove <RULE_ID> --version <N> --yes [--json]
+```
+
+At least one deterministic sender, recipient, subject or label condition is
+required. Mutations use the exact `version` returned by list/show. A rule that
+already has delivery audit history cannot be removed; disable it instead.
+
+---
+
+### captain email deliveries
+
+Inspect and recover crash-safe Gmail automation deliveries.
+
+```text
+captain email deliveries list [--status <STATE>] [--limit <N>] [--json]
+captain email deliveries show <DELIVERY_ID> [--json]
+captain email deliveries requeue <DELIVERY_ID>
+  --expected-status <dead|uncertain> --yes [--json]
+```
+
+Inventory output never includes email payload or message metadata. Exact
+inspection marks bounded metadata as external and untrusted and returns the
+deterministic session identifier. Before requeueing `uncertain`, inspect that
+session: the agent turn may have completed before a crash, so requeue can
+duplicate side effects. Requeue resets bounded retry state but keeps audit
+history.
 
 ---
 
@@ -1095,6 +1245,8 @@ captain config set-key <PROVIDER>
 - Prompts interactively for the API key.
 - Saves to `~/.captain/secrets.env` as `<PROVIDER_NAME>_API_KEY=<value>`.
 - Runs a live validation test against the provider's API.
+- For `xai`, validation uses the non-billable `/v1/me` and `/v1/api-key`
+  endpoints and refuses blocked, disabled, or insufficiently scoped keys.
 - File permissions are restricted to owner-only on Unix.
 - Refuses the operation when that key is authoritative in
   `secret-sources.toml`; rotate the mounted file instead.
@@ -1107,6 +1259,11 @@ captain config set-key groq
 # [ok] Saved GROQ_API_KEY to ~/.captain/secrets.env
 # Testing key... OK
 ```
+
+`captain auth login xai` is the guided alias for the same xAI API-key path.
+Captain recognizes an externally issued xAI OAuth bearer, but cannot initiate
+or refresh xAI OAuth because xAI has not published a third-party OAuth client
+contract for `api.x.ai`.
 
 ---
 
@@ -1173,6 +1330,17 @@ Initialize the encrypted compatibility vault at `~/.captain/vault.enc`.
 ```bash
 captain vault init
 ```
+
+Captain generates a 256-bit master key and verifies it after writing it to
+macOS Keychain, Windows Credential Manager, or Linux Secret Service. The key
+is never printed. Initialization fails closed when the native credential store
+is unavailable; headless and CI deployments must provide a valid base64
+32-byte key through `CAPTAIN_VAULT_KEY` before running the command.
+
+Older Captain versions used an obfuscated local `.keyring` file. On first
+unlock, Captain validates that key, writes and reads it back through the native
+store, and only then removes the obsolete file. A conflicting copy is never
+overwritten or deleted automatically.
 
 ### captain vault set, list, remove
 
@@ -1502,10 +1670,7 @@ captain channel list
 
 # Test a channel
 captain channel test telegram
-
-# Enable/disable channels
-captain channel enable discord
-captain channel disable signal
+captain channel test email:work
 ```
 
 ### Configuration

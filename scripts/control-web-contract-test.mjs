@@ -79,6 +79,23 @@ const snapshot = statusSnapshot({
   disk: { available_gib: 12.5, cleanup_recommended: true },
   native_embeddings: { ready: true },
   native_voice: { stt_ready: true, tts_ready: false },
+  execution: {
+    profile: 'remote_operator',
+    backend: 'host_process',
+    isolation_level: 'environment_scrub',
+    configured_policy_mode: 'full',
+    policy_mode: 'allowlist',
+    critical_mode: 'safe',
+    host_execution_allowed: true,
+    os_isolation: false,
+    isolation_routing: 'explicit_only',
+    docker: {
+      enabled: true,
+      runtime_availability: 'checked_on_invocation',
+      untrusted_profile_ready: false,
+      violations: [],
+    },
+  },
   budget: {
     total_tokens_used: 12345,
     limited_agents: 4,
@@ -115,6 +132,12 @@ assert.equal(snapshot.agentApi.due, 1);
 assert.equal(snapshot.streaming.firstTokenMs, 1250);
 assert.equal(snapshot.workload.projectAttention, 1);
 assert.equal(snapshot.native.tts, false);
+assert.equal(snapshot.execution.profile, 'remote_operator');
+assert.equal(snapshot.execution.configuredMode, 'full');
+assert.equal(snapshot.execution.effectiveMode, 'allowlist');
+assert.equal(snapshot.execution.hostAllowed, true);
+assert.equal(snapshot.execution.docker.enabled, true);
+assert.equal(snapshot.execution.docker.availability, 'checked_on_invocation');
 assert.equal(snapshot.budget.provider.state, 'warning');
 assert.equal(snapshot.budget.provider.reported, true);
 assert.equal(snapshot.budget.provider.items[0].primary.windowSeconds, 18000);

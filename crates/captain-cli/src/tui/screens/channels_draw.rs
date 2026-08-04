@@ -1,6 +1,6 @@
 //! Drawing helpers for the channel setup screen.
 
-use super::{ChannelState, ChannelStatus, ChannelSubScreen, CATEGORIES, CHANNEL_DEFS};
+use super::{ChannelFieldType, ChannelState, ChannelStatus, ChannelSubScreen, CATEGORIES};
 use crate::tui::theme;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -34,7 +34,7 @@ fn draw_list(f: &mut Frame, area: Rect, state: &mut ChannelState) {
         Constraint::Length(1),
         Constraint::Length(2),
         Constraint::Min(3),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .split(area);
 
@@ -60,7 +60,7 @@ fn draw_list(f: &mut Frame, area: Rect, state: &mut ChannelState) {
         Paragraph::new(Line::from(vec![Span::styled(
             format!(
                 "  {:<18} {:<14} {:<16} {}",
-                "Channel", "Category", "Status", "Env Vars"
+                "Channel", "Category", "Status", "Details"
             ),
             theme::table_header(),
         )])),
@@ -81,12 +81,7 @@ fn draw_list(f: &mut Frame, area: Rect, state: &mut ChannelState) {
             .filtered_channels()
             .iter()
             .map(|ch| {
-                let (badge, badge_style) = match ch.status {
-                    ChannelStatus::Ready => ("[Ready]", theme::channel_ready()),
-                    ChannelStatus::MissingEnv => ("[Missing env]", theme::channel_missing()),
-                    ChannelStatus::NotConfigured => ("[Not configured]", theme::channel_off()),
-                };
-                let env_summary = channel_env_summary(ch);
+                let (badge, badge_style) = channel_status_presentation(ch.status);
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:<18}", ch.display_name),
@@ -94,7 +89,7 @@ fn draw_list(f: &mut Frame, area: Rect, state: &mut ChannelState) {
                     ),
                     Span::styled(format!("{:<14}", ch.category), theme::dim_style()),
                     Span::styled(format!(" {:<16}", badge), badge_style),
-                    Span::styled(format!(" {env_summary}"), theme::dim_style()),
+                    Span::styled(format!(" {}", ch.summary), theme::dim_style()),
                 ]))
             })
             .collect();
@@ -105,27 +100,35 @@ fn draw_list(f: &mut Frame, area: Rect, state: &mut ChannelState) {
         f.render_stateful_widget(list, chunks[2], &mut state.list_state);
     }
 
+    let status = if state.status_msg.is_empty() {
+        Line::from("")
+    } else {
+        Line::from(vec![Span::styled(
+            format!("  {}", state.status_msg),
+            Style::default().fg(theme::YELLOW),
+        )])
+    };
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  [\u{2191}\u{2193}] Navigate  [Tab] Category  [Enter] Setup  [t] Test  [e/d] Enable/Disable  [r] Refresh",
-            theme::hint_style(),
-        )])),
+        Paragraph::new(vec![
+            status,
+            Line::from(vec![Span::styled(
+                "  [\u{2191}\u{2193}] Navigate  [Tab] Category  [Enter] Setup  [t] Test  [r] Refresh",
+                theme::hint_style(),
+            )]),
+        ]),
         chunks[3],
     );
 }
 
-fn channel_env_summary(ch: &super::ChannelInfo) -> String {
-    ch.env_vars
-        .iter()
-        .map(|(v, set)| {
-            if *set {
-                format!("\u{2714}{v}")
-            } else {
-                format!("\u{2718}{v}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+fn channel_status_presentation(status: ChannelStatus) -> (&'static str, Style) {
+    match status {
+        ChannelStatus::Ready => ("[Ready]", theme::channel_ready()),
+        ChannelStatus::Partial => ("[Partial]", theme::channel_missing()),
+        ChannelStatus::Locked => ("[Locked]", theme::channel_missing()),
+        ChannelStatus::Disabled => ("[Disabled]", theme::channel_off()),
+        ChannelStatus::Invalid => ("[Invalid]", Style::default().fg(theme::RED)),
+        ChannelStatus::NotConfigured => ("[Not configured]", theme::channel_off()),
+    }
 }
 
 fn draw_setup(f: &mut Frame, area: Rect, state: &ChannelState) {
@@ -136,10 +139,17 @@ fn draw_setup(f: &mut Frame, area: Rect, state: &ChannelState) {
         Constraint::Length(1),
         Constraint::Min(2),
         Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .split(area);
 
-    let (ch_name, ch_display, ch_desc, env_vars) = setup_channel_details(state);
+    let channel = setup_channel(state);
+    let ch_display = channel
+        .map(|channel| channel.display_name.as_str())
+        .unwrap_or("?");
+    let ch_desc = channel
+        .map(|channel| channel.description.as_str())
+        .unwrap_or("");
 
     f.render_widget(
         Paragraph::new(vec![
@@ -163,55 +173,58 @@ fn draw_setup(f: &mut Frame, area: Rect, state: &ChannelState) {
         chunks[1],
     );
 
-    draw_setup_field(f, chunks[2], state, env_vars);
+    draw_setup_field(f, chunks[2], state);
     draw_setup_input(f, chunks[3], state);
-    draw_setup_preview(f, chunks[4], ch_name, env_vars);
+    draw_setup_preview(f, chunks[4], state);
+    if !state.status_msg.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                format!("  {}", state.status_msg),
+                Style::default().fg(theme::YELLOW),
+            )])),
+            chunks[5],
+        );
+    }
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             "  [Enter] Next field / Save  [Esc] Back",
             theme::hint_style(),
         )])),
-        chunks[5],
+        chunks[6],
     );
 }
 
-fn setup_channel_details(
-    state: &ChannelState,
-) -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static [&'static str],
-) {
-    if let Some(idx) = state.setup_channel_idx {
-        if let Some(def) = CHANNEL_DEFS
-            .iter()
-            .find(|d| idx < state.channels.len() && d.name == state.channels[idx].name)
-        {
-            return (def.name, def.display_name, def.description, def.env_vars);
-        }
-    }
-    ("?", "?", "", &[])
+fn setup_channel(state: &ChannelState) -> Option<&super::ChannelInfo> {
+    state
+        .setup_channel_idx
+        .and_then(|index| state.channels.get(index))
 }
 
-fn draw_setup_field(f: &mut Frame, area: Rect, state: &ChannelState, env_vars: &[&str]) {
-    if env_vars.is_empty() {
+fn draw_setup_field(f: &mut Frame, area: Rect, state: &ChannelState) {
+    let Some(channel) = setup_channel(state) else {
+        return;
+    };
+    if channel.setup_fields.is_empty() {
         f.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                "  This channel has no secret env vars - configure via config.toml",
+                format!("  Run `captain channel setup {}`", channel.name),
                 theme::dim_style(),
             )])),
             area,
         );
-    } else if state.setup_field_idx < env_vars.len() {
-        let var = env_vars[state.setup_field_idx];
+    } else if let Some(field) = channel.setup_fields.get(state.setup_field_idx) {
         let field_num = state.setup_field_idx + 1;
-        let total = env_vars.len();
+        let total = channel.setup_fields.len();
+        let required = if state.field_requires_input(field) {
+            " · required"
+        } else {
+            " · optional"
+        };
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::raw(format!("  [{field_num}/{total}] Set ")),
-                Span::styled(var, Style::default().fg(theme::YELLOW)),
-                Span::raw(":"),
+                Span::raw(format!("  [{field_num}/{total}] ")),
+                Span::styled(&field.label, Style::default().fg(theme::YELLOW)),
+                Span::styled(required, theme::dim_style()),
             ])),
             area,
         );
@@ -219,10 +232,18 @@ fn draw_setup_field(f: &mut Frame, area: Rect, state: &ChannelState, env_vars: &
 }
 
 fn draw_setup_input(f: &mut Frame, area: Rect, state: &ChannelState) {
+    let field =
+        setup_channel(state).and_then(|channel| channel.setup_fields.get(state.setup_field_idx));
     let display = if state.setup_input.is_empty() {
-        "paste value here..."
+        field
+            .map(|field| field.placeholder.as_str())
+            .filter(|placeholder| !placeholder.is_empty())
+            .unwrap_or("enter value")
+            .to_string()
+    } else if field.is_some_and(|field| field.field_type == ChannelFieldType::Secret) {
+        "*".repeat(state.setup_input.chars().count())
     } else {
-        &state.setup_input
+        state.setup_input.clone()
     };
     let style = if state.setup_input.is_empty() {
         theme::dim_style()
@@ -244,22 +265,29 @@ fn draw_setup_input(f: &mut Frame, area: Rect, state: &ChannelState) {
     );
 }
 
-fn draw_setup_preview(f: &mut Frame, area: Rect, ch_name: &str, env_vars: &[&str]) {
-    let mut toml_lines = vec![Line::from(Span::styled(
-        "  Add to config.toml:",
+fn draw_setup_preview(f: &mut Frame, area: Rect, state: &ChannelState) {
+    let Some(channel) = setup_channel(state) else {
+        return;
+    };
+    let mut lines = vec![Line::from(Span::styled(
+        format!("  {} configuration", channel.display_name),
         theme::dim_style(),
     ))];
-    toml_lines.push(Line::from(Span::styled(
-        format!("  [channels.{ch_name}]"),
-        Style::default().fg(theme::YELLOW),
-    )));
-    for var in env_vars {
-        toml_lines.push(Line::from(Span::styled(
-            format!("  # {var} = \"...\""),
-            Style::default().fg(theme::YELLOW),
-        )));
+    for (key, value) in &state.setup_values {
+        let secret = channel
+            .setup_fields
+            .iter()
+            .find(|field| field.key == *key)
+            .is_some_and(|field| field.field_type == ChannelFieldType::Secret);
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {key}: "), theme::dim_style()),
+            Span::styled(
+                if secret { "********" } else { value.as_str() },
+                Style::default().fg(theme::YELLOW),
+            ),
+        ]));
     }
-    f.render_widget(Paragraph::new(toml_lines), area);
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_testing(f: &mut Frame, area: Rect, state: &ChannelState) {

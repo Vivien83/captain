@@ -256,6 +256,11 @@ fn setup_access_config_patches(access: &ResolvedAccess) -> Vec<ConfigPatch> {
         },
         ConfigPatch {
             path: vec!["auth".to_string()],
+            key: "allow_unauthenticated_loopback".to_string(),
+            value: toml_edit::value(false),
+        },
+        ConfigPatch {
+            path: vec!["auth".to_string()],
             key: "username".to_string(),
             value: toml_edit::value(access.username.as_str()),
         },
@@ -447,5 +452,26 @@ mod tests {
     #[test]
     fn setup_refuses_malformed_existing_session_secret() {
         assert!(setup_resolve_session_secret(Some("not-base64")).is_err());
+    }
+
+    #[test]
+    fn setup_always_closes_the_credentialless_loopback_escape_hatch() {
+        let access = ResolvedAccess {
+            username: "admin".to_string(),
+            generated_password: None,
+            password_hash: "hash".to_string(),
+            session_secret: captain_types::config::generate_session_secret().unwrap(),
+            session_epoch: 0,
+            api_key: "api-key".to_string(),
+            generated_api_key: false,
+        };
+
+        let patches = setup_access_config_patches(&access);
+        let opt_out = patches
+            .iter()
+            .find(|patch| patch.key == "allow_unauthenticated_loopback")
+            .expect("setup must write the explicit fail-closed policy");
+
+        assert_eq!(opt_out.value.as_bool(), Some(false));
     }
 }

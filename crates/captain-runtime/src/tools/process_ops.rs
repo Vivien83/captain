@@ -9,6 +9,7 @@ pub(crate) async fn tool_process_start(
     input: &serde_json::Value,
     pm: Option<&ProcessManager>,
     caller_agent_id: Option<&str>,
+    exec_policy: Option<&captain_types::config::ExecPolicy>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
     let agent_id = caller_agent_id.unwrap_or("default");
@@ -33,9 +34,15 @@ pub(crate) async fn tool_process_start(
     if let Some(cwd) = cwd {
         ensure_no_secret_literal("process_start", "cwd", cwd)?;
     }
+    let permit = crate::guarded_exec::review_program(
+        crate::guarded_exec::ExecSurface::ProcessTool,
+        command,
+        &args,
+        exec_policy,
+    )?;
 
     let proc_id = pm
-        .start_in_dir(agent_id, command, &args, cwd.map(Path::new))
+        .start_in_dir_with_permit(agent_id, command, &args, cwd.map(Path::new), permit)
         .await?;
     Ok(serde_json::json!({
         "process_id": proc_id,
@@ -114,4 +121,32 @@ pub(crate) async fn tool_process_list(
         })
         .collect();
     Ok(serde_json::Value::Array(list).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use captain_types::config::{ExecPolicy, ExecSecurityMode, ExecutionProfile};
+
+    #[tokio::test]
+    async fn process_start_cannot_bypass_untrusted_execution_profile() {
+        let manager = ProcessManager::new(1);
+        let policy = ExecPolicy {
+            profile: ExecutionProfile::UntrustedExecution,
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+
+        let error = tool_process_start(
+            &serde_json::json!({"command": "echo", "args": ["hello"]}),
+            Some(&manager),
+            Some("captain"),
+            Some(&policy),
+        )
+        .await
+        .expect_err("untrusted profile must block process_start before spawn");
+
+        assert!(error.contains("untrusted_execution"), "{error}");
+        assert!(manager.list("captain").is_empty());
+    }
 }

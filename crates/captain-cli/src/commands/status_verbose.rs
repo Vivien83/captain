@@ -7,14 +7,12 @@ pub(super) fn print_verbose_runtime(body: &serde_json::Value) {
     ui::kv("Version", body["version"].as_str().unwrap_or("?"));
     ui::kv("Timezone", body["timezone"].as_str().unwrap_or("?"));
     ui::kv("Log level", body["log_level"].as_str().unwrap_or("?"));
-    ui::kv(
-        "Auth",
-        if body["auth_enabled"].as_bool().unwrap_or(false) {
-            "enabled"
-        } else {
-            "disabled"
-        },
-    );
+    let auth_mode = body["auth_mode"].as_str().unwrap_or("unknown");
+    if matches!(auth_mode, "unconfigured" | "unauthenticated_loopback") {
+        ui::kv_warn("Auth", auth_mode);
+    } else {
+        ui::kv("Auth", auth_mode);
+    }
     ui::kv(
         "Network",
         if body["network_enabled"].as_bool().unwrap_or(false) {

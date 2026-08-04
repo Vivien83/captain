@@ -34,6 +34,38 @@ pub async fn list_channels(State(state): State<Arc<AppState>>) -> impl IntoRespo
     for meta in CHANNEL_REGISTRY {
         let configured = is_channel_configured(&live_channels, meta.name);
         configured_count += u32::from(configured);
+        if meta.name == "email" {
+            let readiness = crate::channel_readiness_email::email_channel_readiness(
+                live_channels.email.as_ref(),
+                &resolve,
+            );
+            channels.push(serde_json::json!({
+                "name": meta.name,
+                "display_name": meta.display_name,
+                "icon": meta.icon,
+                "description": meta.description,
+                "category": "messaging",
+                "difficulty": meta.difficulty,
+                "setup_time": meta.setup_time,
+                "quick_setup": meta.quick_setup,
+                "setup_type": "email_accounts",
+                "configured": configured,
+                "ready": readiness.ready,
+                "has_token": readiness.has_required_secrets,
+                "has_required_secrets": readiness.has_required_secrets,
+                "operational_state": readiness.operational_state,
+                "missing_required_fields": readiness.missing_required_fields,
+                "operator_actions": readiness.operator_actions,
+                "security_state": readiness.security_state,
+                "fields": [],
+                "account_fields": crate::channel_email_routes::email_account_fields_json(),
+                "account_summary": readiness,
+                "setup_steps": meta.setup_steps,
+                "operator_notes": meta.operator_notes,
+                "config_template": meta.config_template,
+            }));
+            continue;
+        }
         let config_values = channel_config_values(&live_channels, meta.name);
         let fields: Vec<serde_json::Value> = meta
             .fields
@@ -91,6 +123,9 @@ pub async fn configure_channel(
         Some(meta) => meta,
         None => return unknown_channel(&name),
     };
+    if name == "email" {
+        return crate::channel_email_routes::configure_email_channel_account(&state, body).await;
+    }
     let fields = match body.get("fields").and_then(|value| value.as_object()) {
         Some(fields) => fields,
         None => return bad_request("Missing 'fields' object"),
@@ -147,21 +182,38 @@ pub async fn remove_channel(
     };
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
     let config_path = state.kernel.config.home_dir.join("config.toml");
-
-    for field in meta.fields {
-        if let Some(env_var) = field.env_var {
-            if state.kernel.credential_is_externally_managed(env_var) {
-                continue;
-            }
-            let _ = remove_secret_env(&secrets_path, env_var);
-            unsafe {
-                std::env::remove_var(env_var);
+    let cleanup_warning_count = if name == "email" {
+        let kernel = state.kernel.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::channel_email_routes::remove_email_channel_persisted(
+                kernel.as_ref(),
+                &config_path,
+                &secrets_path,
+            )
+        })
+        .await
+        {
+            Ok(Ok(warning_count)) => warning_count,
+            Ok(Err(error)) => return server_error(error),
+            Err(error) => {
+                return server_error(format!("Email removal task failed: {error}"));
             }
         }
-    }
-    if let Err(e) = remove_channel_config(&config_path, &name) {
-        return server_error(format!("Failed to remove config: {e}"));
-    }
+    } else {
+        for key in meta.fields.iter().filter_map(|field| field.env_var) {
+            if state.kernel.credential_is_externally_managed(key) {
+                continue;
+            }
+            let _ = remove_secret_env(&secrets_path, key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+        if let Err(error) = remove_channel_config(&config_path, &name) {
+            return server_error(format!("Failed to remove config: {error}"));
+        }
+        0
+    };
 
     match crate::channel_bridge::reload_channels_from_disk(&state).await {
         Ok(started) => (
@@ -170,6 +222,7 @@ pub async fn remove_channel(
                 "status": "removed",
                 "channel": name,
                 "remaining_channels": started,
+                "cleanup_warning_count": cleanup_warning_count,
             })),
         ),
         Err(e) => {
@@ -179,6 +232,7 @@ pub async fn remove_channel(
                 Json(serde_json::json!({
                     "status": "removed",
                     "channel": name,
+                    "cleanup_warning_count": cleanup_warning_count,
                     "note": format!("Removed, but hot-reload failed: {e}. Restart daemon to fully deactivate.")
                 })),
             )
@@ -192,12 +246,33 @@ pub async fn test_channel(
     Path(name): Path<String>,
     raw_body: Bytes,
 ) -> impl IntoResponse {
-    let meta = match find_channel_meta(&name) {
+    let email_alias_from_path = name.strip_prefix("email:").and_then(|alias| {
+        captain_types::config::is_valid_email_account_alias(alias).then_some(alias.to_string())
+    });
+    let registry_name = if email_alias_from_path.is_some() {
+        "email"
+    } else {
+        name.as_str()
+    };
+    let meta = match find_channel_meta(registry_name) {
         Some(meta) => meta,
         None => return unknown_channel_status(&name),
     };
+    let body: serde_json::Value = if raw_body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&raw_body).unwrap_or(serde_json::Value::Null)
+    };
+    if registry_name == "email" {
+        return crate::channel_email_routes::test_email_channel_account(
+            &state,
+            email_alias_from_path,
+            &body,
+        )
+        .await;
+    }
     let live_channels = state.channels_config.read().await;
-    let config_values = channel_config_values(&live_channels, &name);
+    let config_values = channel_config_values(&live_channels, registry_name);
     let resolve = |key: &str| state.kernel.resolve_credential(key);
     let missing = meta
         .fields
@@ -217,11 +292,6 @@ pub async fn test_channel(
         );
     }
 
-    let body: serde_json::Value = if raw_body.is_empty() {
-        serde_json::Value::Null
-    } else {
-        serde_json::from_slice(&raw_body).unwrap_or(serde_json::Value::Null)
-    };
     let target = body
         .get("channel_id")
         .or_else(|| body.get("chat_id"))
@@ -229,8 +299,13 @@ pub async fn test_channel(
         .and_then(|value| value.as_str());
 
     if let Some(target_id) = target {
-        return match send_channel_test_message(&name, target_id, config_values.as_ref(), &resolve)
-            .await
+        return match send_channel_test_message(
+            registry_name,
+            target_id,
+            config_values.as_ref(),
+            &resolve,
+        )
+        .await
         {
             Ok(()) => (
                 StatusCode::OK,
@@ -447,53 +522,6 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["error"], "Unknown channel");
-    }
-
-    #[test]
-    fn email_config_stores_password_as_secret_env_pointer() {
-        let meta = find_channel_meta("email").unwrap();
-        let temp = tempfile::tempdir().unwrap();
-        let secrets_path = temp.path().join("secrets.env");
-        let kernel = test_kernel(temp.path());
-        let fields = serde_json::json!({
-            "username": "captain@example.com",
-            "password_env": "app-secret",
-            "imap_host": "imap.example.com",
-            "smtp_host": "smtp.example.com",
-            "allowed_senders": "operator@example.com"
-        });
-        let fields = fields.as_object().unwrap();
-
-        let config_fields = collect_channel_config_fields(meta, fields, &kernel).expect("fields");
-
-        assert_eq!(
-            config_fields.get("password_env"),
-            Some(&(String::from("EMAIL_PASSWORD"), FieldType::Text))
-        );
-        assert_eq!(
-            config_fields.get("username"),
-            Some(&(String::from("captain@example.com"), FieldType::Text))
-        );
-        let secrets = std::fs::read_to_string(secrets_path).unwrap();
-        assert!(secrets.contains("EMAIL_PASSWORD=app-secret"));
-        unsafe {
-            std::env::remove_var("EMAIL_PASSWORD");
-        }
-    }
-
-    #[test]
-    fn email_config_rejects_multiline_secret() {
-        let meta = find_channel_meta("email").unwrap();
-        let temp = tempfile::tempdir().unwrap();
-        let kernel = test_kernel(temp.path());
-        let fields = serde_json::json!({
-            "password_env": "app-secret\nINJECTED=value"
-        });
-        let fields = fields.as_object().unwrap();
-
-        let err = collect_channel_config_fields(meta, fields, &kernel).unwrap_err();
-
-        assert!(err.contains("single-line"), "{err}");
     }
 
     fn external_telegram_kernel(home: &std::path::Path) -> captain_kernel::CaptainKernel {

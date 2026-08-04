@@ -19,6 +19,7 @@
 #   CAPTAIN_RELEASE_TARGETS  — space-separated subset of targets to build
 #   CAPTAIN_DIST_DIR         — output root (default: dist/releases)
 #   CARGO_TARGET_DIR         — shared Cargo output root (default: target)
+#   CAPTAIN_GOOGLE_OAUTH_CLIENT_ID — optional verified Captain Desktop client
 #
 # Output: dist/releases/$VERSION/captain-<target>.tar.gz (+ .sha256,
 # manifests, install scripts) and dist/releases/latest.txt — the exact layout

@@ -1,6 +1,6 @@
-import { h } from 'preact';
-import { useState, useEffect, useCallback } from 'preact/hooks';
-import htm from 'htm';
+import { h } from '/assets/app/vendor/preact.module.js';
+import { useState, useEffect, useCallback } from '/assets/app/vendor/hooks.module.js';
+import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
 import { toast } from '../store.js';
 import { formatDuration, formatLatency, stateTone, statusSnapshot } from '../status_model.mjs';
@@ -93,6 +93,17 @@ export function Status() {
 
           <${StatusSection} title="Execution">
             <div class="status-grid">
+              <${StatusMetric} label="Profil" value=${snapshot.execution.profile}
+                meta=${'hôte ' + (snapshot.execution.hostAllowed ? 'autorisé' : 'bloqué') + ' · ' + snapshot.execution.backend}
+                tone=${snapshot.execution.hostAllowed ? 'neutral' : 'ok'} />
+              <${StatusMetric} label="Politique hôte" value=${snapshot.execution.effectiveMode + ' / ' + snapshot.execution.criticalMode}
+                meta=${snapshot.execution.configuredMode === snapshot.execution.effectiveMode
+                  ? snapshot.execution.isolation + ' · sans isolation OS'
+                  : 'configuré ' + snapshot.execution.configuredMode + ' · ' + snapshot.execution.isolation}
+                tone=${snapshot.execution.effectiveMode === 'full' ? 'warn' : 'ok'} />
+              <${StatusMetric} label="Rail Docker" value=${snapshot.execution.docker.enabled ? 'activé' : 'désactivé'}
+                meta=${snapshot.execution.routing + ' · runtime ' + snapshot.execution.docker.availability + ' · aucun repli hôte'}
+                tone=${snapshot.execution.docker.violations.length > 0 ? 'warn' : (snapshot.execution.docker.enabled ? 'ok' : 'neutral')} />
               <${StatusMetric} label="Tool runs" value=${snapshot.toolRuns.running} meta=${snapshot.toolRuns.completed + ' terminés · ' + snapshot.toolRuns.failed + ' échecs · ' + snapshot.toolRuns.interrupted + ' interrompus'}
                 tone=${snapshot.toolRuns.failed + snapshot.toolRuns.interrupted > 0 ? 'warn' : (snapshot.toolRuns.running > 0 ? 'ok' : 'neutral')} />
               <${StatusMetric} label="Streaming" value=${snapshot.streaming.active} meta=${snapshot.streaming.completed + ' flux terminés'} tone=${snapshot.streaming.active > 0 ? 'ok' : 'neutral'} />

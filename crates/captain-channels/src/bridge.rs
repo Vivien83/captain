@@ -61,13 +61,16 @@ mod sender_identity;
 
 use crate::inbound_queue::InboundSessionQueue;
 use crate::inbound_queue_types::{
-    InboundStart, INBOUND_DEAD_LETTER_RETENTION_SECS, MAX_RECOVERED_INBOUND_ATTEMPTS,
+    InboundStart, DURABLE_INGRESS_ID_METADATA_KEY, INBOUND_DEAD_LETTER_RETENTION_SECS,
+    MAX_RECOVERED_INBOUND_ATTEMPTS,
 };
 use crate::outbound_delivery::{
     OutboundDeliveryClaim, OutboundDeliveryIntent, OutboundDeliveryPreparation,
 };
 use crate::router::AgentRouter;
-use crate::types::{ChannelAdapter, ChannelContent, ChannelMessage};
+use crate::types::{
+    ChannelAdapter, ChannelContent, ChannelMessage, INTERNAL_ADAPTER_NAME_METADATA_KEY,
+};
 use async_trait::async_trait;
 use captain_types::agent::AgentId;
 use captain_types::config::ChannelOverrides;
@@ -1051,7 +1054,8 @@ impl AdapterDispatchLoop {
 
     fn handle_next_message(&self, message: Option<ChannelMessage>) -> bool {
         match message {
-            Some(message) => {
+            Some(mut message) => {
+                stamp_inbound_adapter_name(&mut message, self.adapter.name());
                 self.spawn_dispatch(message, None);
                 true
             }
@@ -1075,6 +1079,13 @@ impl AdapterDispatchLoop {
             self.semaphore.clone(),
         );
     }
+}
+
+fn stamp_inbound_adapter_name(message: &mut ChannelMessage, adapter_name: &str) {
+    message.metadata.insert(
+        INTERNAL_ADAPTER_NAME_METADATA_KEY.to_string(),
+        serde_json::Value::String(adapter_name.to_string()),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1176,11 +1187,13 @@ impl ChannelDispatchTask {
         }
 
         if let Some(key) = self.recovered_key.clone() {
+            self.acknowledge_durable_inbound().await;
             self.dispatch_started_message(self.message.clone(), key)
                 .await;
             return;
         }
-        if self.try_dispatch_active_session_bypass().await {
+        let durable_ingress = has_durable_ingress_id(&self.message);
+        if !durable_ingress && self.try_dispatch_active_session_bypass().await {
             return;
         }
 
@@ -1188,7 +1201,7 @@ impl ChannelDispatchTask {
         let key = self
             .inbound_sessions
             .session_key(&self.message, &sender_user_id);
-        if self.try_forward_active_interjection(&key).await {
+        if !durable_ingress && self.try_forward_active_interjection(&key).await {
             return;
         }
         self.start_or_queue_inbound_session(key).await;
@@ -1659,17 +1672,57 @@ impl ChannelDispatchTask {
             .start_or_queue(key.clone(), self.message.clone())
         {
             InboundStart::Started { key } => {
+                self.acknowledge_durable_inbound().await;
                 self.dispatch_started_message(self.message.clone(), key)
                     .await;
             }
             InboundStart::Queued(summary) => {
+                self.acknowledge_durable_inbound().await;
                 if summary.ack_recommended {
                     send_inbound_queued_ack(&self.message, &self.handle, self.adapter.as_ref())
                         .await;
                 }
             }
+            InboundStart::Duplicate { key } => {
+                debug!(
+                    channel = %self.adapter.name(),
+                    session_key = %key,
+                    message_id = %self.message.platform_message_id,
+                    "Acknowledging already accepted durable inbound message"
+                );
+                self.acknowledge_durable_inbound().await;
+            }
+            InboundStart::Rejected { reason } => {
+                warn!(
+                    channel = %self.adapter.name(),
+                    %reason,
+                    "Inbound message was not durably accepted; platform acknowledgement withheld"
+                );
+            }
         }
     }
+
+    async fn acknowledge_durable_inbound(&self) {
+        if !has_durable_ingress_id(&self.message) {
+            return;
+        }
+        if let Err(error) = self.adapter.acknowledge_inbound(&self.message).await {
+            warn!(
+                channel = %self.adapter.name(),
+                message_id = %self.message.platform_message_id,
+                %error,
+                "Durable inbound accepted locally but platform acknowledgement failed"
+            );
+        }
+    }
+}
+
+fn has_durable_ingress_id(message: &ChannelMessage) -> bool {
+    message
+        .metadata
+        .get(DURABLE_INGRESS_ID_METADATA_KEY)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|id| !id.is_empty())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2274,6 +2327,132 @@ mod tests {
         telegram: bool,
         sent: Mutex<Vec<String>>,
         edits: Mutex<Vec<(String, String)>>,
+    }
+
+    struct DurableAckAdapter {
+        acknowledged: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ChannelAdapter for DurableAckAdapter {
+        fn name(&self) -> &str {
+            "email"
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::Email
+        }
+
+        async fn start(
+            &self,
+        ) -> Result<
+            Pin<Box<dyn futures::Stream<Item = ChannelMessage> + Send>>,
+            Box<dyn std::error::Error>,
+        > {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn send(
+            &self,
+            _user: &ChannelUser,
+            _content: ChannelContent,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+
+        async fn acknowledge_inbound(
+            &self,
+            message: &ChannelMessage,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            self.acknowledged
+                .lock()
+                .unwrap()
+                .push(message.platform_message_id.clone());
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+    }
+
+    fn durable_ack_task(
+        queue: InboundSessionQueue,
+        adapter: Arc<DurableAckAdapter>,
+        message: ChannelMessage,
+    ) -> ChannelDispatchTask {
+        let agent_id = AgentId::new();
+        let handle: Arc<dyn ChannelBridgeHandle> = Arc::new(MockHandle {
+            agents: Mutex::new(vec![(agent_id, "captain".to_string())]),
+        });
+        let mut router = AgentRouter::new();
+        router.set_default(agent_id);
+        ChannelDispatchTask {
+            message,
+            recovered_key: None,
+            handle,
+            router: Arc::new(router),
+            adapter,
+            rate_limiter: ChannelRateLimiter::default(),
+            pending_model_switches: test_pending_model_switches(),
+            inbound_sessions: queue,
+            semaphore: Arc::new(Semaphore::new(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn durable_platform_ack_follows_local_acceptance_and_retries_duplicates() {
+        let root = std::env::temp_dir().join(format!(
+            "captain-bridge-durable-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let queue = InboundSessionQueue::with_persistence(root.join("queue.json"));
+        let adapter = Arc::new(DurableAckAdapter {
+            acknowledged: Mutex::new(Vec::new()),
+        });
+        let mut message = test_message(ChannelContent::Text("hello".to_string()));
+        message.channel = ChannelType::Email;
+        message.platform_message_id = "email:work:INBOX:7:42".to_string();
+        message.metadata.insert(
+            DURABLE_INGRESS_ID_METADATA_KEY.to_string(),
+            serde_json::json!("email:work:INBOX:7:42"),
+        );
+        let key = queue.session_key(&message, sender_user_id(&message));
+
+        durable_ack_task(queue.clone(), Arc::clone(&adapter), message.clone())
+            .start_or_queue_inbound_session(key.clone())
+            .await;
+        durable_ack_task(queue.clone(), Arc::clone(&adapter), message.clone())
+            .start_or_queue_inbound_session(key)
+            .await;
+
+        assert_eq!(
+            *adapter.acknowledged.lock().unwrap(),
+            vec![
+                "email:work:INBOX:7:42".to_string(),
+                "email:work:INBOX:7:42".to_string()
+            ]
+        );
+
+        let unavailable = InboundSessionQueue::default();
+        let unavailable_key = unavailable.session_key(&message, sender_user_id(&message));
+        durable_ack_task(unavailable, Arc::clone(&adapter), message)
+            .start_or_queue_inbound_session(unavailable_key)
+            .await;
+        assert_eq!(adapter.acknowledged.lock().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn inbound_messages_are_stamped_with_the_canonical_adapter_name() {
+        let mut message = test_message(ChannelContent::Text("hello".to_string()));
+        stamp_inbound_adapter_name(&mut message, "email:work");
+        assert_eq!(
+            message.metadata[INTERNAL_ADAPTER_NAME_METADATA_KEY],
+            serde_json::json!("email:work")
+        );
     }
 
     #[async_trait]

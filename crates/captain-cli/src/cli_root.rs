@@ -4,11 +4,12 @@ use clap::{Parser, Subcommand};
 
 use crate::{
     AgentCommands, ApprovalsCommands, AuthCommands, AutonomyCommands, ChannelCommands,
-    ConfigCommands, CronCommands, DevicesCommands, EmbeddingsCommands, GatewayCommands,
-    HandCommands, IntegrationCommands, LogTarget, LoginCommands, MemoryCommands, ModelsCommands,
-    ProcessCommands, ProjectCommands, ScaffoldKind, SecurityCommands, ServiceCommands,
-    SessionsCommands, SkillCommands, SnapshotCommands, SshCommands, SystemCommands,
-    TriggerCommands, VaultCommands, VoiceCommands, WebhooksCommands, WorkflowCommands,
+    ConfigCommands, CronCommands, DevicesCommands, EmailCommands, EmbeddingsCommands,
+    GatewayCommands, HandCommands, IntegrationCommands, LogTarget, LoginCommands, MemoryCommands,
+    ModelsCommands, ProcessCommands, ProjectCommands, ScaffoldKind, SecurityCommands,
+    ServiceCommands, SessionsCommands, SkillCommands, SnapshotCommands, SshCommands,
+    SystemCommands, TriggerCommands, VaultCommands, VoiceCommands, WebhooksCommands,
+    WorkflowCommands,
 };
 
 const AFTER_HELP: &str = "\
@@ -90,6 +91,9 @@ pub(crate) enum Commands {
     /// Manage channel integrations (setup, test, enable, disable) [*].
     #[command(subcommand, alias = "channels")]
     Channel(ChannelCommands),
+    /// Connect and operate native email accounts [*].
+    #[command(subcommand)]
+    Email(EmailCommands),
     /// Manage hands (list, activate, deactivate, info) [*].
     #[command(subcommand, hide = true)]
     Hand(HandCommands),
@@ -438,5 +442,100 @@ mod tests {
             cli.command,
             Some(Commands::Vault(VaultCommands::Sources { json: true }))
         ));
+    }
+
+    #[test]
+    fn email_connect_defaults_to_gmail_assistant_and_accepts_headless_port() {
+        let cli = Cli::try_parse_from([
+            "captain",
+            "email",
+            "connect",
+            "--client-json",
+            "google-client.json",
+            "--no-browser",
+            "--callback-port",
+            "49152",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Email(EmailCommands::Connect {
+                provider: crate::EmailProviderArg::Gmail,
+                access: crate::GmailAccessArg::Assistant,
+                callback_port: Some(49152),
+                no_browser: true,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn email_connect_rejects_zero_callback_port() {
+        assert!(
+            Cli::try_parse_from(["captain", "email", "connect", "--callback-port", "0"]).is_err()
+        );
+    }
+
+    #[test]
+    fn email_automation_rule_cli_parses_the_simple_default_path() {
+        let cli = Cli::try_parse_from([
+            "captain",
+            "email",
+            "rules",
+            "add",
+            "--name",
+            "Invoice review",
+            "--from-contains",
+            "billing@example.com",
+            "--instruction",
+            "Create a review task",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Email(EmailCommands::Rules {
+                command: crate::GmailRuleCommands::Add {
+                    include_body: false,
+                    max_delivery_attempts: 3,
+                    max_fires_per_hour: 20,
+                    ..
+                }
+            }))
+        ));
+    }
+
+    #[test]
+    fn email_automation_delivery_cli_requires_an_explicit_subcommand() {
+        assert!(Cli::try_parse_from(["captain", "email", "deliveries"]).is_err());
+        let cli = Cli::try_parse_from([
+            "captain",
+            "email",
+            "deliveries",
+            "list",
+            "--status",
+            "uncertain",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Email(EmailCommands::Deliveries {
+                command: crate::GmailDeliveryCommands::List {
+                    status: Some(_),
+                    limit: 50,
+                    ..
+                }
+            }))
+        ));
+    }
+
+    #[test]
+    fn channel_cli_exposes_only_daemon_backed_actions() {
+        assert!(Cli::try_parse_from(["captain", "channel", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["captain", "channel", "setup", "email"]).is_ok());
+        assert!(Cli::try_parse_from(["captain", "channel", "test", "email:work"]).is_ok());
+        assert!(Cli::try_parse_from(["captain", "channel", "enable", "telegram"]).is_err());
+        assert!(Cli::try_parse_from(["captain", "channel", "disable", "telegram"]).is_err());
     }
 }

@@ -509,6 +509,9 @@ impl App {
             AppEvent::ChannelTestResult { success, message } => {
                 self.handle_channel_test_result(success, message);
             }
+            AppEvent::ChannelConfigureResult { success, message } => {
+                self.handle_channel_configure_result(success, message);
+            }
             AppEvent::WorkflowListLoaded(list) => self.handle_workflow_list_loaded(list),
             AppEvent::WorkflowRunsLoaded(runs) => self.handle_workflow_runs_loaded(runs),
             AppEvent::WorkflowRunResult(result) => self.handle_workflow_run_result(result),
@@ -892,6 +895,13 @@ impl App {
 
     fn handle_channel_test_result(&mut self, success: bool, message: String) {
         self.channels.test_result = Some((success, message));
+    }
+
+    fn handle_channel_configure_result(&mut self, success: bool, message: String) {
+        self.channels.status_msg = message;
+        if success {
+            self.refresh_channels();
+        }
     }
 
     fn handle_workflow_list_loaded(&mut self, list: Vec<workflows::WorkflowInfo>) {
@@ -2347,7 +2357,7 @@ impl App {
             self.channels.loading = true;
             event::spawn_fetch_channels(backend, self.event_tx.clone());
         }
-        // Also build defaults from env detection
+        // Keep the active core list visible while daemon metadata is loading.
         if self.channels.channels.is_empty() {
             self.channels.build_default_channels();
         }
@@ -3195,38 +3205,12 @@ impl App {
                     event::spawn_test_channel(backend, name, self.event_tx.clone());
                 }
             }
-            channels::ChannelAction::ToggleChannel(_name, _enabled) => {
-                // Toggle is handled locally in the state; daemon toggle
-                // could be spawned here if the API supports it.
-            }
-            channels::ChannelAction::SaveChannel(name, values) => {
-                // Save channel credentials via daemon API
+            channels::ChannelAction::SaveChannel { name, body } => {
                 if let Some(backend) = self.backend.to_ref() {
-                    let tx = self.event_tx.clone();
-                    std::thread::spawn(move || {
-                        if let event::BackendRef::Daemon(base_url) = backend {
-                            let client = reqwest::blocking::Client::builder()
-                                .timeout(std::time::Duration::from_secs(10))
-                                .build()
-                                .ok();
-                            if let Some(client) = client {
-                                let mut fields = serde_json::Map::new();
-                                for (k, v) in &values {
-                                    fields.insert(k.clone(), serde_json::Value::String(v.clone()));
-                                }
-                                let body = serde_json::json!({ "fields": fields });
-                                let _ = client
-                                    .post(format!("{base_url}/api/channels/{name}/configure"))
-                                    .json(&body)
-                                    .send();
-                            }
-                        }
-                        // Signal tick so the UI refreshes next cycle
-                        let _ = tx.send(event::AppEvent::Tick);
-                    });
+                    event::spawn_configure_channel(backend, name, body, self.event_tx.clone());
+                } else {
+                    self.channels.status_msg = "Captain daemon is not connected.".to_string();
                 }
-                // Immediately trigger a refresh of the channel list
-                self.refresh_channels();
             }
         }
     }

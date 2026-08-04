@@ -5,7 +5,7 @@
 
 use captain_channels::bridge::{BridgeManager, ChannelBridgeHandle};
 use captain_channels::discord::DiscordAdapter;
-use captain_channels::email::EmailAdapter;
+use captain_channels::email::{email_allowlist_rule_is_valid, EmailAdapter};
 use captain_channels::google_chat::GoogleChatAdapter;
 use captain_channels::irc::IrcAdapter;
 use captain_channels::matrix::MatrixAdapter;
@@ -20,7 +20,7 @@ use captain_channels::slack::SlackAdapter;
 use captain_channels::teams::TeamsAdapter;
 use captain_channels::telegram::TelegramAdapter;
 use captain_channels::twitch::TwitchAdapter;
-use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelUser};
+use captain_channels::types::{ChannelAdapter, ChannelContent, ChannelType, ChannelUser};
 use captain_channels::whatsapp::WhatsAppAdapter;
 use captain_channels::xmpp::XmppAdapter;
 use captain_channels::zulip::ZulipAdapter;
@@ -3159,29 +3159,73 @@ fn push_email_adapter(
     let Some(em_config) = config.email.as_ref() else {
         return;
     };
-    let Some(password) = read_kernel_token(kernel, &em_config.password_env, "Email") else {
+    let validation_errors = em_config.validation_errors();
+    if !validation_errors.is_empty() {
+        for error in validation_errors {
+            warn!(error = %error, "Email configuration invalid, skipping all mailboxes");
+        }
         return;
-    };
-    if em_config.allowed_senders.is_empty() {
-        warn!(
-            "Email bridge will deny every inbound message: \
-             [channels.email] has no `allowed_senders`. Add \
-             `allowed_senders = [\"@example.org\"]` (or `[\"*\"]` to \
-             opt back into the legacy permissive default)."
-        );
     }
-    let adapter = Arc::new(EmailAdapter::new(
-        em_config.imap_host.clone(),
-        em_config.imap_port,
-        em_config.smtp_host.clone(),
-        em_config.smtp_port,
-        em_config.username.clone(),
-        password,
-        em_config.poll_interval_secs,
-        em_config.folders.clone(),
-        em_config.allowed_senders.clone(),
-    ));
-    adapters.push((adapter, em_config.default_agent.clone()));
+    let default_account = em_config.effective_default_account();
+    for account in em_config
+        .effective_accounts()
+        .into_iter()
+        .filter(|account| account.enabled)
+    {
+        let label = format!("Email account '{}'", account.alias);
+        if account
+            .allowed_senders
+            .iter()
+            .any(|rule| !email_allowlist_rule_is_valid(rule))
+        {
+            warn!(
+                account = %account.alias,
+                "Email mailbox has invalid allowed_senders and remains locked"
+            );
+            continue;
+        }
+        let Some(password) = read_kernel_token(kernel, &account.password_env, &label) else {
+            continue;
+        };
+        if account.allowed_senders.is_empty() {
+            warn!(
+                account = %account.alias,
+                "Email mailbox will deny every inbound message: allowed_senders is empty"
+            );
+        }
+        let adapter_name = if default_account.as_deref() == Some(account.alias.as_str()) {
+            "email".to_string()
+        } else {
+            format!("email:{}", account.alias)
+        };
+        let adapter = Arc::new(EmailAdapter::new_named(
+            adapter_name,
+            account.alias.clone(),
+            account.imap_host,
+            account.imap_port,
+            account.smtp_host,
+            account.smtp_port,
+            account.username,
+            password,
+            account.poll_interval_secs,
+            account.folders,
+            account.allowed_senders,
+        ));
+        adapters.push((adapter, account.default_agent));
+    }
+}
+
+fn email_account_alias_for_adapter(
+    email: Option<&captain_types::config::EmailConfig>,
+    adapter_name: &str,
+) -> Option<String> {
+    if adapter_name == "email" {
+        return email?.effective_default_account();
+    }
+    adapter_name
+        .strip_prefix("email:")
+        .filter(|alias| captain_types::config::is_valid_email_account_alias(alias))
+        .map(str::to_string)
 }
 
 fn push_frozen_channel_adapters(
@@ -4005,6 +4049,7 @@ fn push_linkedin_adapter(
 async fn build_channel_router(
     handle: &KernelBridgeAdapter,
     kernel: &Arc<CaptainKernel>,
+    config: &captain_types::config::ChannelsConfig,
     adapters: &[ChannelAdapterStartup],
 ) -> AgentRouter {
     let mut router = AgentRouter::new();
@@ -4027,11 +4072,28 @@ async fn build_channel_router(
             };
             if let Some(agent_id) = agent_id {
                 let channel_key = format!("{:?}", adapter.channel_type());
+                let account_id = if adapter.channel_type() == ChannelType::Email {
+                    email_account_alias_for_adapter(config.email.as_ref(), adapter.name())
+                } else {
+                    None
+                };
                 info!(
                     "{} default agent: {name} ({agent_id}) [channel: {channel_key}]",
                     adapter.name()
                 );
-                router.set_channel_default_with_name(channel_key, agent_id, name.clone());
+                if let Some(account_id) = account_id {
+                    router.set_account_default_with_name(
+                        channel_key.clone(),
+                        account_id,
+                        agent_id,
+                        name.clone(),
+                    );
+                    if adapter.name() == "email" {
+                        router.set_channel_default_with_name(channel_key, agent_id, name.clone());
+                    }
+                } else {
+                    router.set_channel_default_with_name(channel_key, agent_id, name.clone());
+                }
                 if !system_default_set {
                     router.set_default(agent_id);
                     system_default_set = true;
@@ -4061,9 +4123,15 @@ async fn start_channel_adapters(
     let mut started_names = Vec::new();
     for (adapter, _) in adapters {
         let name = adapter.name().to_string();
+        let registration_aliases = adapter.registration_aliases();
         kernel
             .channel_adapters
             .insert(name.clone(), adapter.clone());
+        for alias in &registration_aliases {
+            kernel
+                .channel_adapters
+                .insert(alias.clone(), adapter.clone());
+        }
         let started = match manager.start_adapter(adapter.clone()).await {
             Ok(()) => {
                 info!("{name} channel bridge started");
@@ -4071,6 +4139,9 @@ async fn start_channel_adapters(
             }
             Err(e) => {
                 kernel.channel_adapters.remove(&name);
+                for alias in &registration_aliases {
+                    kernel.channel_adapters.remove(alias);
+                }
                 error!("Failed to start {name} bridge: {e}");
                 false
             }
@@ -4124,7 +4195,7 @@ pub async fn start_channel_bridge_with_config(
         return (None, Vec::new());
     }
 
-    let router = build_channel_router(&handle, &kernel, &adapters).await;
+    let router = build_channel_router(&handle, &kernel, config, &adapters).await;
     let bridge_adapter = Arc::new(KernelBridgeAdapter::new(kernel.clone()));
     let bridge_started_at = bridge_adapter.started_at;
     let bridge_handle: Arc<dyn ChannelBridgeHandle> = bridge_adapter;
@@ -4158,6 +4229,7 @@ pub async fn reload_channels_from_disk(
         }
         *guard = None;
     }
+    state.kernel.channel_adapters.clear();
 
     reload_secrets_into_env(&state.kernel.config.home_dir);
 
@@ -4192,7 +4264,9 @@ mod tests {
 
     use captain_channels::bridge::ChannelBridgeHandle;
     use captain_channels::telegram::{TelegramAdapter, TelegramStreamTarget};
-    use captain_channels::types::ChannelType;
+    use captain_channels::types::{
+        ChannelAdapter, ChannelContent, ChannelMessage, ChannelType, ChannelUser,
+    };
     use captain_runtime::llm_driver::StreamEvent;
     use captain_types::agent::AgentId;
     use captain_types::message::{ContentBlock, Message, MessageContent, Role};
@@ -4307,6 +4381,89 @@ mod tests {
             Duration::from_secs(1),
             base_url,
         ))
+    }
+
+    struct AliasTestAdapter {
+        fail_start: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelAdapter for AliasTestAdapter {
+        fn name(&self) -> &str {
+            "email"
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::Email
+        }
+
+        fn registration_aliases(&self) -> Vec<String> {
+            vec!["email:work".to_string()]
+        }
+
+        async fn start(
+            &self,
+        ) -> Result<
+            std::pin::Pin<Box<dyn futures::Stream<Item = ChannelMessage> + Send>>,
+            Box<dyn std::error::Error>,
+        > {
+            if self.fail_start {
+                return Err(std::io::Error::other("start failed").into());
+            }
+            Ok(Box::pin(futures::stream::pending()))
+        }
+
+        async fn send(
+            &self,
+            _user: &ChannelUser,
+            _content: ChannelContent,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_registration_aliases_follow_start_outcome() {
+        let (_tmp, kernel) = test_kernel();
+        let bridge_adapter = Arc::new(super::KernelBridgeAdapter::new(kernel.clone()));
+        let bridge_started_at = bridge_adapter.started_at;
+        let bridge_handle: Arc<dyn ChannelBridgeHandle> = bridge_adapter;
+        let mut manager = captain_channels::bridge::BridgeManager::new(
+            bridge_handle,
+            Arc::new(captain_channels::router::AgentRouter::new()),
+        );
+        let live: Arc<dyn ChannelAdapter> = Arc::new(AliasTestAdapter { fail_start: false });
+
+        let started = super::start_channel_adapters(
+            &kernel,
+            &mut manager,
+            vec![(live, None)],
+            bridge_started_at,
+        )
+        .await;
+
+        assert_eq!(started, vec!["email"]);
+        assert!(kernel.channel_adapters.contains_key("email"));
+        assert!(kernel.channel_adapters.contains_key("email:work"));
+        manager.stop().await;
+        kernel.channel_adapters.clear();
+
+        let failed: Arc<dyn ChannelAdapter> = Arc::new(AliasTestAdapter { fail_start: true });
+        let started = super::start_channel_adapters(
+            &kernel,
+            &mut manager,
+            vec![(failed, None)],
+            bridge_started_at,
+        )
+        .await;
+
+        assert!(started.is_empty());
+        assert!(!kernel.channel_adapters.contains_key("email"));
+        assert!(!kernel.channel_adapters.contains_key("email:work"));
     }
 
     fn pending_telegram_ask(
@@ -5005,6 +5162,98 @@ mod tests {
                 (ChannelType::Email, Some("email-agent".to_string())),
             ]
         );
+    }
+
+    #[test]
+    fn active_email_accounts_get_stable_default_and_named_adapters() {
+        let _personal_password =
+            EnvVarGuard::set("CAPTAIN_TEST_EMAIL_PERSONAL_PASSWORD", "personal-password");
+        let _work_password = EnvVarGuard::set("CAPTAIN_TEST_EMAIL_WORK_PASSWORD", "work-password");
+        let (_tmp, kernel) = test_kernel();
+        let config = captain_types::config::ChannelsConfig {
+            email: Some(captain_types::config::EmailConfig {
+                accounts: vec![
+                    captain_types::config::EmailAccountConfig {
+                        alias: "personal".to_string(),
+                        imap_host: "imap.personal.example".to_string(),
+                        smtp_host: "smtp.personal.example".to_string(),
+                        username: "personal@example.com".to_string(),
+                        password_env: "CAPTAIN_TEST_EMAIL_PERSONAL_PASSWORD".to_string(),
+                        allowed_senders: vec!["@example.com".to_string()],
+                        default_agent: Some("personal-agent".to_string()),
+                        ..Default::default()
+                    },
+                    captain_types::config::EmailAccountConfig {
+                        alias: "work".to_string(),
+                        imap_host: "imap.work.example".to_string(),
+                        smtp_host: "smtp.work.example".to_string(),
+                        username: "work@example.com".to_string(),
+                        password_env: "CAPTAIN_TEST_EMAIL_WORK_PASSWORD".to_string(),
+                        allowed_senders: vec!["@example.com".to_string()],
+                        default_agent: Some("work-agent".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                default_account: Some("work".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut adapters = Vec::new();
+
+        super::push_active_channel_adapters(&kernel, &config, &mut adapters);
+
+        let collected = adapters
+            .iter()
+            .map(|(adapter, default_agent)| (adapter.name().to_string(), default_agent.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            collected,
+            vec![
+                (
+                    "email:personal".to_string(),
+                    Some("personal-agent".to_string())
+                ),
+                ("email".to_string(), Some("work-agent".to_string())),
+            ]
+        );
+        assert_eq!(
+            super::email_account_alias_for_adapter(config.email.as_ref(), "email").as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            super::email_account_alias_for_adapter(config.email.as_ref(), "email:personal")
+                .as_deref(),
+            Some("personal")
+        );
+    }
+
+    #[test]
+    fn email_account_with_invalid_allowlist_never_starts() {
+        let _password =
+            EnvVarGuard::set("CAPTAIN_TEST_EMAIL_INVALID_ALLOWLIST_PASSWORD", "password");
+        let (_tmp, kernel) = test_kernel();
+        let config = captain_types::config::ChannelsConfig {
+            email: Some(captain_types::config::EmailConfig {
+                accounts: vec![captain_types::config::EmailAccountConfig {
+                    alias: "work".to_string(),
+                    imap_host: "imap.work.example".to_string(),
+                    smtp_host: "smtp.work.example".to_string(),
+                    username: "work@example.com".to_string(),
+                    password_env: "CAPTAIN_TEST_EMAIL_INVALID_ALLOWLIST_PASSWORD".to_string(),
+                    allowed_senders: vec!["example.com".to_string()],
+                    ..Default::default()
+                }],
+                default_account: Some("work".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut adapters = Vec::new();
+
+        super::push_active_channel_adapters(&kernel, &config, &mut adapters);
+
+        assert!(adapters.is_empty());
     }
 
     #[test]

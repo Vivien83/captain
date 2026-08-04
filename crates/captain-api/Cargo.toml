@@ -30,6 +30,7 @@ tower-http = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
+fs2 = { workspace = true }
 governor = { workspace = true }
 tokio-stream = { workspace = true }
 subtle = { workspace = true }
@@ -40,6 +41,7 @@ hex = { workspace = true }
 socket2 = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
+zeroize = { workspace = true }
 
 [features]
 default = ["local-embeddings"]

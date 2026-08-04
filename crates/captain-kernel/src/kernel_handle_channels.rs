@@ -62,7 +62,7 @@ impl CaptainKernel {
 
     pub(super) async fn handle_get_channels_context(&self) -> Option<String> {
         build_channels_context(&self.config.channels, |key| {
-            self.channel_adapters.contains_key(key)
+            self.find_channel_adapter(key).is_some()
         })
     }
 
@@ -131,12 +131,7 @@ impl CaptainKernel {
         message: &str,
         metadata: &HashMap<String, serde_json::Value>,
     ) -> Result<String, String> {
-        let adapter = self
-            .channel_adapters
-            .get(channel)
-            .ok_or_else(|| format!("Channel '{}' not found", channel))?
-            .value()
-            .clone();
+        let adapter = self.require_channel_adapter(channel)?;
         let user = channel_user(recipient);
         let content = ChannelContent::Text(message.to_string());
         let target = crate::delivery_reliability::channel_target(channel, recipient);
@@ -270,10 +265,27 @@ impl CaptainKernel {
     }
 
     fn require_channel_adapter(&self, channel: &str) -> Result<Arc<dyn ChannelAdapter>, String> {
-        self.channel_adapters
-            .get(channel)
-            .map(|adapter| adapter.value().clone())
+        self.find_channel_adapter(channel)
             .ok_or_else(|| missing_channel_error(channel, self.available_channels()))
+    }
+
+    fn find_channel_adapter(&self, channel: &str) -> Option<Arc<dyn ChannelAdapter>> {
+        if let Some(adapter) = self.channel_adapters.get(channel) {
+            return Some(adapter.value().clone());
+        }
+        let requested_alias = channel.strip_prefix("email:")?;
+        let default_alias = self
+            .config
+            .channels
+            .email
+            .as_ref()?
+            .effective_default_account()?;
+        if requested_alias != default_alias {
+            return None;
+        }
+        self.channel_adapters
+            .get("email")
+            .map(|adapter| adapter.value().clone())
     }
 
     fn available_channels(&self) -> Vec<String> {
@@ -361,6 +373,32 @@ where
         lines.push(info);
     }
 
+    if let Some(email) = &channels.email {
+        let accounts = email.effective_accounts();
+        let default_account = email.effective_default_account();
+        if accounts.is_empty() {
+            lines.push(format!(
+                "- **email**: {}",
+                channel_status("email", &is_active)
+            ));
+        } else {
+            for account in accounts.into_iter().filter(|account| account.enabled) {
+                let explicit_key = format!("email:{}", account.alias);
+                if default_account.as_deref() == Some(account.alias.as_str()) {
+                    lines.push(format!(
+                        "- **email** / **{explicit_key}**: {} (default mailbox)",
+                        channel_status("email", &is_active)
+                    ));
+                } else {
+                    lines.push(format!(
+                        "- **{explicit_key}**: {}",
+                        channel_status(&explicit_key, &is_active)
+                    ));
+                }
+            }
+        }
+    }
+
     for (key, configured) in plain_channel_configured(channels) {
         if configured {
             lines.push(format!("- **{key}**: {}", channel_status(key, &is_active)));
@@ -384,13 +422,12 @@ where
     }
 }
 
-fn plain_channel_configured(channels: &ChannelsConfig) -> [(&'static str, bool); 40] {
+fn plain_channel_configured(channels: &ChannelsConfig) -> [(&'static str, bool); 39] {
     [
         ("slack", channels.slack.is_some()),
         ("whatsapp", channels.whatsapp.is_some()),
         ("signal", channels.signal.is_some()),
         ("matrix", channels.matrix.is_some()),
-        ("email", channels.email.is_some()),
         ("teams", channels.teams.is_some()),
         ("mattermost", channels.mattermost.is_some()),
         ("irc", channels.irc.is_some()),
@@ -431,7 +468,9 @@ fn plain_channel_configured(channels: &ChannelsConfig) -> [(&'static str, bool);
 
 #[cfg(test)]
 mod tests {
-    use captain_types::config::{ChannelsConfig, DiscordConfig, TelegramConfig};
+    use captain_types::config::{
+        ChannelsConfig, DiscordConfig, EmailAccountConfig, EmailConfig, TelegramConfig,
+    };
 
     use super::{build_channels_context, missing_channel_error, topic_suffix};
 
@@ -460,6 +499,36 @@ mod tests {
     #[test]
     fn channel_context_is_absent_without_configured_channels() {
         assert!(build_channels_context(&ChannelsConfig::default(), |_| false).is_none());
+    }
+
+    #[test]
+    fn channel_context_exposes_default_and_secondary_email_addresses() {
+        let channels = ChannelsConfig {
+            email: Some(EmailConfig {
+                accounts: vec![
+                    EmailAccountConfig {
+                        alias: "personal".to_string(),
+                        enabled: true,
+                        ..Default::default()
+                    },
+                    EmailAccountConfig {
+                        alias: "work".to_string(),
+                        enabled: true,
+                        ..Default::default()
+                    },
+                ],
+                default_account: Some("work".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let context =
+            build_channels_context(&channels, |key| matches!(key, "email" | "email:personal"))
+                .expect("email context");
+
+        assert!(context.contains("**email** / **email:work**: ACTIVE (default mailbox)"));
+        assert!(context.contains("**email:personal**: ACTIVE"));
     }
 
     #[test]

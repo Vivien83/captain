@@ -234,6 +234,7 @@ fn apply_web_credentials_auth_table(
         .and_then(|item| item.as_table_mut())
         .ok_or("[auth] exists but is not a TOML table")?;
     auth.insert("enabled", toml_edit::value(true));
+    auth.insert("allow_unauthenticated_loopback", toml_edit::value(false));
     if let Some(username) = username {
         auth.insert("username", toml_edit::value(username));
     }
@@ -416,5 +417,25 @@ mod tests {
         let err = ensure_no_top_level_keys_lost(&old, &new, Path::new("/tmp/backup.toml"))
             .expect_err("lost key should fail");
         assert!(err.contains("default_model"));
+    }
+
+    #[test]
+    fn credential_update_closes_legacy_unauthenticated_loopback_mode() {
+        let mut document = r#"
+[auth]
+enabled = false
+allow_unauthenticated_loopback = true
+"#
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+
+        apply_web_credentials_auth_table(&mut document, Some("owner"), None, None).unwrap();
+
+        let auth = document["auth"].as_table().unwrap();
+        assert_eq!(auth["enabled"].as_bool(), Some(true));
+        assert_eq!(
+            auth["allow_unauthenticated_loopback"].as_bool(),
+            Some(false)
+        );
     }
 }

@@ -26,6 +26,7 @@ pub(crate) struct StatusAuthSnapshot {
     pub(crate) auth_mode: &'static str,
     pub(crate) api_key_configured: bool,
     pub(crate) session_auth_enabled: bool,
+    pub(crate) unauthenticated_loopback_allowed: bool,
 }
 
 pub(crate) struct StatusMediaSnapshot {
@@ -313,17 +314,24 @@ pub(crate) fn status_workspace_dirs(config: &KernelConfig) -> (PathBuf, PathBuf)
 pub(crate) fn build_status_auth(config: &KernelConfig) -> StatusAuthSnapshot {
     let api_key_configured = !config.api_key.trim().is_empty();
     let session_auth_enabled = config.auth.enabled;
-    let auth_mode = match (api_key_configured, session_auth_enabled) {
-        (true, true) => "api_key+session",
-        (true, false) => "api_key",
-        (false, true) => "session",
-        (false, false) => "none",
+    let unauthenticated_loopback_allowed = config.auth.allow_unauthenticated_loopback;
+    let auth_mode = match (
+        api_key_configured,
+        session_auth_enabled,
+        unauthenticated_loopback_allowed,
+    ) {
+        (true, true, _) => "api_key+session",
+        (true, false, _) => "api_key",
+        (false, true, _) => "session",
+        (false, false, true) => "unauthenticated_loopback",
+        (false, false, false) => "unconfigured",
     };
     StatusAuthSnapshot {
         auth_enabled: api_key_configured || session_auth_enabled,
         auth_mode,
         api_key_configured,
         session_auth_enabled,
+        unauthenticated_loopback_allowed,
     }
 }
 
@@ -629,5 +637,26 @@ mod tests {
         assert!(actions[0].contains("Codex is exhausted"));
         assert!(actions[0].contains("2026-07-18T18:00:00Z"));
         assert!(actions[0].contains("cannot reset"));
+    }
+
+    #[test]
+    fn auth_status_distinguishes_unconfigured_from_explicit_local_opt_out() {
+        let mut config = KernelConfig::default();
+
+        let unconfigured = build_status_auth(&config);
+        assert_eq!(unconfigured.auth_mode, "unconfigured");
+        assert!(!unconfigured.auth_enabled);
+        assert!(!unconfigured.unauthenticated_loopback_allowed);
+
+        config.auth.allow_unauthenticated_loopback = true;
+        let local = build_status_auth(&config);
+        assert_eq!(local.auth_mode, "unauthenticated_loopback");
+        assert!(!local.auth_enabled);
+        assert!(local.unauthenticated_loopback_allowed);
+
+        config.api_key = "configured".to_string();
+        let protected = build_status_auth(&config);
+        assert_eq!(protected.auth_mode, "api_key");
+        assert!(protected.auth_enabled);
     }
 }

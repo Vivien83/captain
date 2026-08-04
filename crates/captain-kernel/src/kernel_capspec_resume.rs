@@ -8,7 +8,7 @@ use captain_capspec::{
 };
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_types::agent::{AgentEntry, AgentId, AgentMode, AgentState};
-use captain_types::config::{CriticalMode, ExecPolicy, ExecSecurityMode};
+use captain_types::config::ExecPolicy;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -251,100 +251,14 @@ fn intersect_exec_policies(
     match (original, current) {
         (None, None) => None,
         (Some(policy), None) | (None, Some(policy)) => Some(policy.clone()),
-        (Some(original), Some(current)) => {
-            let mode = stricter_exec_mode(original.mode, current.mode);
-            let safe_bins = policy_allow_values(
-                mode,
-                original.mode,
-                &original.safe_bins,
-                current.mode,
-                &current.safe_bins,
-            );
-            let allowed_commands = policy_allow_values(
-                mode,
-                original.mode,
-                &original.allowed_commands,
-                current.mode,
-                &current.allowed_commands,
-            );
-            let mut blocked_commands = original.blocked_commands.clone();
-            blocked_commands.extend(current.blocked_commands.iter().cloned());
-            blocked_commands.sort();
-            blocked_commands.dedup();
-            Some(ExecPolicy {
-                mode,
-                safe_bins,
-                allowed_commands,
-                blocked_commands,
-                timeout_secs: strict_positive_limit(original.timeout_secs, current.timeout_secs),
-                max_output_bytes: original.max_output_bytes.min(current.max_output_bytes),
-                no_output_timeout_secs: strict_positive_limit(
-                    original.no_output_timeout_secs,
-                    current.no_output_timeout_secs,
-                ),
-                critical_mode: stricter_critical_mode(
-                    original.critical_mode,
-                    current.critical_mode,
-                ),
-            })
-        }
-    }
-}
-
-fn stricter_exec_mode(left: ExecSecurityMode, right: ExecSecurityMode) -> ExecSecurityMode {
-    if left == ExecSecurityMode::Deny || right == ExecSecurityMode::Deny {
-        ExecSecurityMode::Deny
-    } else if left == ExecSecurityMode::Allowlist || right == ExecSecurityMode::Allowlist {
-        ExecSecurityMode::Allowlist
-    } else {
-        ExecSecurityMode::Full
-    }
-}
-
-fn policy_allow_values(
-    result_mode: ExecSecurityMode,
-    left_mode: ExecSecurityMode,
-    left: &[String],
-    right_mode: ExecSecurityMode,
-    right: &[String],
-) -> Vec<String> {
-    if result_mode != ExecSecurityMode::Allowlist {
-        return Vec::new();
-    }
-    match (
-        left_mode == ExecSecurityMode::Allowlist,
-        right_mode == ExecSecurityMode::Allowlist,
-    ) {
-        (true, true) => left
-            .iter()
-            .filter(|value| right.contains(value))
-            .cloned()
-            .collect(),
-        (true, false) => left.to_vec(),
-        (false, true) => right.to_vec(),
-        (false, false) => Vec::new(),
-    }
-}
-
-fn strict_positive_limit(left: u64, right: u64) -> u64 {
-    match (left, right) {
-        (0, value) | (value, 0) => value,
-        _ => left.min(right),
-    }
-}
-
-fn stricter_critical_mode(left: CriticalMode, right: CriticalMode) -> CriticalMode {
-    use CriticalMode::{Open, Paranoid, Safe};
-    match (left, right) {
-        (Paranoid, _) | (_, Paranoid) => Paranoid,
-        (Safe, _) | (_, Safe) => Safe,
-        _ => Open,
+        (Some(original), Some(current)) => Some(original.intersect(current)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_types::config::{CriticalMode, ExecSecurityMode};
 
     #[test]
     fn authority_lists_only_shrink() {
@@ -373,6 +287,7 @@ mod tests {
         };
         original.blocked_commands = vec!["old-block".to_string()];
         let current = ExecPolicy {
+            profile: captain_types::config::ExecutionProfile::RemoteOperator,
             mode: ExecSecurityMode::Allowlist,
             safe_bins: vec!["echo".to_string()],
             allowed_commands: vec!["cargo test".to_string()],
@@ -383,6 +298,10 @@ mod tests {
             critical_mode: CriticalMode::Safe,
         };
         let merged = intersect_exec_policies(Some(&original), Some(&current)).unwrap();
+        assert_eq!(
+            merged.profile,
+            captain_types::config::ExecutionProfile::RemoteOperator
+        );
         assert_eq!(merged.mode, ExecSecurityMode::Allowlist);
         assert_eq!(merged.allowed_commands, ["cargo test"]);
         assert_eq!(merged.timeout_secs, 20);

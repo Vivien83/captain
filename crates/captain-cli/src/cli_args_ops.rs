@@ -2,6 +2,275 @@ use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum EmailProviderArg {
+    /// Connect a Google Gmail account through OAuth.
+    Gmail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum GmailAccessArg {
+    /// Send messages only; mailbox reads are not permitted.
+    Send,
+    /// Read messages without sending or changing labels.
+    Read,
+    /// Read, send and modify labels.
+    Assistant,
+}
+
+impl GmailAccessArg {
+    pub(crate) fn profile(self) -> captain_types::email::GmailAccessProfile {
+        match self {
+            Self::Send => captain_types::email::GmailAccessProfile::Send,
+            Self::Read => captain_types::email::GmailAccessProfile::Read,
+            Self::Assistant => captain_types::email::GmailAccessProfile::Assistant,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum GmailDeliveryStatusArg {
+    Pending,
+    Delivering,
+    RetryWait,
+    Delivered,
+    Dead,
+    Uncertain,
+}
+
+impl GmailDeliveryStatusArg {
+    pub(crate) fn status(self) -> captain_memory::gmail_automation::GmailAutomationOutboxStatus {
+        use captain_memory::gmail_automation::GmailAutomationOutboxStatus as Status;
+        match self {
+            Self::Pending => Status::Pending,
+            Self::Delivering => Status::Delivering,
+            Self::RetryWait => Status::RetryWait,
+            Self::Delivered => Status::Delivered,
+            Self::Dead => Status::Dead,
+            Self::Uncertain => Status::Uncertain,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GmailRuleCommands {
+    /// Create a deterministic mailbox rule for an agent.
+    Add {
+        /// Stable rule ID. Derived from the name when omitted.
+        #[arg(long)]
+        id: Option<String>,
+        /// Connected Gmail account alias. Uses the default when omitted.
+        #[arg(long)]
+        account: Option<String>,
+        /// Human-readable rule name.
+        #[arg(long)]
+        name: String,
+        /// Match when the sender contains this text.
+        #[arg(long)]
+        from_contains: Option<String>,
+        /// Match when a To or Cc recipient contains this text.
+        #[arg(long)]
+        recipient_contains: Option<String>,
+        /// Match when the subject contains this text.
+        #[arg(long)]
+        subject_contains: Option<String>,
+        /// Gmail label required on every matching message. Repeatable.
+        #[arg(long = "all-label")]
+        all_label_ids: Vec<String>,
+        /// At least one of these Gmail labels must match. Repeatable.
+        #[arg(long = "any-label")]
+        any_label_ids: Vec<String>,
+        /// Agent ID, ID prefix or exact persisted name.
+        #[arg(long, default_value = "captain")]
+        agent: String,
+        /// Trusted operator instruction executed for each matching email.
+        #[arg(long)]
+        instruction: String,
+        /// Include bounded plain-text email body data in the agent turn.
+        #[arg(long)]
+        include_body: bool,
+        /// Maximum plain-text body bytes exposed to the agent.
+        #[arg(long, default_value_t = 32 * 1024)]
+        max_body_bytes: usize,
+        /// Maximum automatic delivery attempts before dead letter.
+        #[arg(long, default_value_t = 3)]
+        max_delivery_attempts: u8,
+        /// Maximum matches accepted per rolling hour.
+        #[arg(long, default_value_t = 20)]
+        max_fires_per_hour: u16,
+        /// Create the rule disabled.
+        #[arg(long)]
+        disabled: bool,
+        /// Output the created rule as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List durable Gmail automation rules.
+    List {
+        /// Filter by connected Gmail account alias.
+        #[arg(long)]
+        account: Option<String>,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect one durable Gmail automation rule.
+    Show {
+        /// Stable rule ID.
+        id: String,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enable one rule using compare-and-swap persistence.
+    Enable {
+        /// Stable rule ID.
+        id: String,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable one rule without deleting its audit history.
+    Disable {
+        /// Stable rule ID.
+        id: String,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete an unused rule. Rules with audit history must be disabled.
+    Remove {
+        /// Stable rule ID.
+        id: String,
+        /// Confirm deletion without an interactive prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GmailDeliveryCommands {
+    /// List recent Gmail automation deliveries without exposing message data.
+    List {
+        /// Filter by durable delivery state.
+        #[arg(long, value_enum)]
+        status: Option<GmailDeliveryStatusArg>,
+        /// Maximum records to return (1 to 1000).
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect one delivery and its recovery metadata.
+    Show {
+        /// Durable outbox ID.
+        id: String,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explicitly retry a reviewed dead or uncertain delivery.
+    Requeue {
+        /// Durable outbox ID.
+        id: String,
+        /// Accept duplicate-execution risk for an uncertain delivery.
+        #[arg(long)]
+        yes: bool,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum EmailCommands {
+    /// Connect or reconnect a Gmail account through Google OAuth.
+    Connect {
+        /// Email provider. Gmail is currently the native provider.
+        #[arg(value_enum, default_value_t = EmailProviderArg::Gmail)]
+        provider: EmailProviderArg,
+        /// Stable name used by Captain, for example personal or work.
+        #[arg(long)]
+        alias: Option<String>,
+        /// Least-privilege Gmail access profile.
+        #[arg(long, value_enum, default_value_t = GmailAccessArg::Assistant)]
+        access: GmailAccessArg,
+        /// Override the bundled OAuth identity with a Google Desktop app JSON.
+        #[arg(long, value_name = "PATH")]
+        client_json: Option<PathBuf>,
+        /// Suggest one Google account on the consent screen.
+        #[arg(long)]
+        login_hint: Option<String>,
+        /// Make this account the default after connection.
+        #[arg(long = "default")]
+        make_default: bool,
+        /// Print the authorization URL without opening a browser.
+        #[arg(long)]
+        no_browser: bool,
+        /// Fixed loopback port, useful with SSH local port forwarding.
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+        callback_port: Option<u16>,
+        /// Output the connected account as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List connected email accounts without exposing credentials.
+    Accounts {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show durable local readiness for one or all accounts.
+    Status {
+        /// Account alias. Uses all accounts when omitted.
+        alias: Option<String>,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify one account live and refresh its access token when needed.
+    Test {
+        /// Account alias. Uses the default account when omitted.
+        alias: Option<String>,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Select the default account used when no alias is specified.
+    Default {
+        /// Connected account alias.
+        alias: String,
+    },
+    /// Remove a local account and optionally revoke its Google grant.
+    Disconnect {
+        /// Connected account alias.
+        alias: String,
+        /// Revoke the Google grant before deleting local state.
+        #[arg(long)]
+        revoke: bool,
+        /// Confirm grant revocation without an interactive prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Output the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage deterministic Gmail-to-agent automation rules.
+    Rules {
+        #[command(subcommand)]
+        command: GmailRuleCommands,
+    },
+    /// Inspect and recover durable Gmail automation deliveries.
+    Deliveries {
+        #[command(subcommand)]
+        command: GmailDeliveryCommands,
+    },
+}
+
 #[derive(Subcommand)]
 pub(crate) enum AgentCommands {
     /// Spawn a new agent from a template (interactive or by name).

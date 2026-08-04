@@ -8,7 +8,9 @@ use std::time::Duration;
 use captain_memory::agent_delegation_jobs::AgentDelegationJobStore;
 use captain_runtime::agent_loop::with_turn_token_budget;
 use captain_types::agent::AgentId;
-use captain_types::agent_delegation::{AgentDelegationJobRecord, AgentDelegationStatus};
+use captain_types::agent_delegation::{
+    AgentDelegationJobRecord, AgentDelegationStatus, AGENT_DELEGATION_MAX_DEPTH,
+};
 use captain_types::event::{AgentDelegationEvent, Event, EventPayload, EventTarget};
 use futures::FutureExt;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
@@ -25,6 +27,60 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const DEPENDENCY_RESULT_BYTES: usize = 8 * 1024;
 const DEPENDENCY_CONTEXT_BYTES: usize = 32 * 1024;
 const PARENT_WAKE_RETRIES: usize = 120;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveAgentDelegation {
+    job_id: String,
+    root_job_id: String,
+    depth: u32,
+    target_agent_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NewAgentDelegationLineage {
+    pub root_job_id: String,
+    pub parent_job_id: Option<String>,
+    pub depth: u32,
+}
+
+tokio::task_local! {
+    static ACTIVE_AGENT_DELEGATION: ActiveAgentDelegation;
+}
+
+pub(super) fn delegation_lineage_for_new_job(
+    job_id: &str,
+    caller_agent_id: &str,
+) -> Result<NewAgentDelegationLineage, String> {
+    match ACTIVE_AGENT_DELEGATION.try_with(|parent| {
+        if parent.target_agent_id != caller_agent_id {
+            return Err(format!(
+                "nested delegation caller mismatch: active parent ran as {}, request came from {}",
+                parent.target_agent_id, caller_agent_id
+            ));
+        }
+        let depth = parent
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| "nested delegation depth overflowed".to_string())?;
+        if depth > AGENT_DELEGATION_MAX_DEPTH {
+            return Err(format!(
+                "nested delegation depth exceeded: {depth} / {AGENT_DELEGATION_MAX_DEPTH}"
+            ));
+        }
+        Ok(NewAgentDelegationLineage {
+            root_job_id: parent.root_job_id.clone(),
+            parent_job_id: Some(parent.job_id.clone()),
+            depth,
+        })
+    }) {
+        Ok(lineage) => lineage,
+        Err(_) => Ok(NewAgentDelegationLineage {
+            root_job_id: job_id.to_string(),
+            parent_job_id: None,
+            depth: 1,
+        }),
+    }
+}
 
 fn spawn_agent_delegation_worker(kernel: Arc<CaptainKernel>) {
     let store = kernel.agent_delegation_store();
@@ -223,7 +279,16 @@ async fn run_claimed_job(
         .mark_effect_started(&job.id, worker, chrono::Utc::now().timestamp_millis())
         .map_err(|error| error.to_string())?;
 
-    let turn = with_turn_token_budget(Some(job.max_tokens), kernel.send_message(target, &prompt));
+    let active_delegation = ActiveAgentDelegation {
+        job_id: job.id.clone(),
+        root_job_id: job.root_job_id.clone(),
+        depth: job.depth,
+        target_agent_id: job.target_agent_id.clone(),
+    };
+    let turn = ACTIVE_AGENT_DELEGATION.scope(
+        active_delegation,
+        with_turn_token_budget(Some(job.max_tokens), kernel.send_message(target, &prompt)),
+    );
     tokio::pin!(turn);
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -350,6 +415,10 @@ pub(super) fn publish_agent_delegation_event(
         EventTarget::Broadcast,
         EventPayload::AgentDelegation(AgentDelegationEvent {
             job_id: job.id.clone(),
+            root_job_id: job.root_job_id.clone(),
+            parent_job_id: job.parent_job_id.clone(),
+            depth: job.depth,
+            lineage_reserved_tokens: job.lineage_reserved_tokens,
             title: job.title.clone(),
             target_agent_id: job.target_agent_id.clone(),
             status: job.status.as_str().to_string(),
@@ -497,6 +566,10 @@ mod tests {
         AgentDelegationJobRecord {
             id: id.to_string(),
             idempotency_key: format!("idem:{id}"),
+            root_job_id: id.to_string(),
+            parent_job_id: None,
+            depth: 1,
+            lineage_reserved_tokens: 5_000,
             caller_agent_id: "caller".to_string(),
             target_agent_id: "target".to_string(),
             title: format!("Evidence {id}"),
@@ -547,6 +620,60 @@ mod tests {
         assert!(AgentDelegationStatus::Uncertain.is_terminal());
         assert!(!AgentDelegationStatus::Running.is_terminal());
         assert!(!AgentDelegationStatus::CancelRequested.is_terminal());
+    }
+
+    #[tokio::test]
+    async fn task_local_lineage_follows_only_the_active_delegated_agent() {
+        let root = delegation_lineage_for_new_job("root-job", "captain").unwrap();
+        assert_eq!(
+            root,
+            NewAgentDelegationLineage {
+                root_job_id: "root-job".to_string(),
+                parent_job_id: None,
+                depth: 1,
+            }
+        );
+
+        let active = ActiveAgentDelegation {
+            job_id: "root-job".to_string(),
+            root_job_id: "root-job".to_string(),
+            depth: 1,
+            target_agent_id: "worker-a".to_string(),
+        };
+        ACTIVE_AGENT_DELEGATION
+            .scope(active, async {
+                let child =
+                    delegation_lineage_for_new_job("child-job", "worker-a").expect("valid child");
+                assert_eq!(
+                    child,
+                    NewAgentDelegationLineage {
+                        root_job_id: "root-job".to_string(),
+                        parent_job_id: Some("root-job".to_string()),
+                        depth: 2,
+                    }
+                );
+                assert!(delegation_lineage_for_new_job("forged", "other-agent")
+                    .unwrap_err()
+                    .contains("caller mismatch"));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn task_local_lineage_rejects_children_beyond_the_durable_limit() {
+        let active = ActiveAgentDelegation {
+            job_id: "leaf-job".to_string(),
+            root_job_id: "root-job".to_string(),
+            depth: AGENT_DELEGATION_MAX_DEPTH,
+            target_agent_id: "leaf-agent".to_string(),
+        };
+        ACTIVE_AGENT_DELEGATION
+            .scope(active, async {
+                assert!(delegation_lineage_for_new_job("too-deep", "leaf-agent")
+                    .unwrap_err()
+                    .contains("depth exceeded"));
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -619,6 +746,9 @@ mod tests {
         let job_a = wait_for_terminal(&store, &job_a.id).await;
         let job_b = wait_for_terminal(&store, &job_b.id).await;
         let job_c = wait_for_terminal(&store, &job_c.id).await;
+        assert_eq!(job_a.root_job_id, job_a.id);
+        assert_eq!(job_a.depth, 1);
+        assert_eq!(job_a.lineage_reserved_tokens, 5_000);
 
         assert_eq!(
             job_a.status,

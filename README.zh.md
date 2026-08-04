@@ -39,6 +39,7 @@
 <tr><td><b>人类可读的原生能力</b></td><td>将审核过的 <code>*.captain</code> 文件放入全局或项目 <code>.captain/</code> 目录，Captain 会热加载为类型化的 <code>cap_*</code> 工具。Captain Forge 由内核统一控制依赖、权限、审批、持久化 DAG 执行、崩溃恢复、修订历史、回滚和精确的操作员决策。</td></tr>
 <tr><td><b>跟随对话的记忆</b></td><td>会话召回、持久化用户事实、项目状态、知识图谱以及可选的本地 ONNX embedding 提供有边界的上下文，而不会在每一轮重新注入全部历史。已接受的事实会先写入本地持久化连续性日志，在 MemPalace 不可用期间仍可召回，并通过有界退避自动重新同步。</td></tr>
 <tr><td><b>任意模型，无供应商锁定</b></td><td>Codex（使用你的 ChatGPT 订阅）、Anthropic、OpenAI、Mistral、Groq、Gemini、OpenRouter，以及通过 Ollama 使用的本地模型。Captain 根据实际配置发现模型目录和凭证，不依赖固定数量；上下文预算会跟随所选模型的实时窗口。每个代理都可以单独控制推理级别：Auto 保留模型默认值；当 Codex 公布 Ultra 时，Captain 会使用最大模型推理强度，并且只在根代理上启用有界的主动委派。对于 Codex，Captain 每小时刷新一次目录，并在 Control 以及已配置的 Telegram 中提示新模型；只有在你明确确认并选择会话策略后才会切换。</td></tr>
+<tr><td><b>面向真实工作的邮件</b></td><td>通过 OAuth 连接多个 Gmail 账户，或通过 IMAP/SMTP 连接多个与供应商无关的邮箱。可搜索、读取、起草、发送、标记、保存附件，并把确定性匹配路由到指定智能体。凭据不会进入公开配置；已接受任务、自动化游标和崩溃后的不确定结果都可持久化并检查。</td></tr>
 <tr><td><b>六个操作中心</b></td><td>Chat, Projects, Automation, Learning, Capabilities 和 Status 是 TUI 与 Control 共用的主界面。Automation 集中管理 Workflows、Triggers、Crons、审批和 Webhooks。</td></tr>
 <tr><td><b>智能体即服务</b></td><td>每个智能体都可以接收经过身份验证的外部 ingress，并发送带签名的 HTTP callback。Captain 会自动准备 ingress，并明确指出启用 egress 仍需提供的外部 callback URL。</td></tr>
 <tr><td><b>像真正的软件一样可运维</b></td><td><code>captain doctor</code> 会说明哪里出了问题以及如何修复。支持快照与恢复出厂设置（始终先备份）。哈希链式审计日志。健康检查端点。安装向导最终会以一个真正运行、已验证的守护进程收尾——而不是一堆待办事项。</td></tr>
@@ -48,16 +49,16 @@
 
 ## 快速安装
 
-当前公开预发布版本：
-[v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10)。
-不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10`；
+当前早期访问候选版本：
+[v0.1.0-alpha.11](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11)。
+不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11`；
 滚动 Alpha 通道：`ghcr.io/vivien83/captain-agent-os:alpha`。
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
 ```
 
 官方仓库、Release 资产、校验和与容器镜像均为公开内容，无需 GitHub token 或容器仓库登录。
@@ -84,8 +85,8 @@ Release 资产为 macOS 和 Linux 提供 `aarch64` 与 `x86_64`，并提供
 ```bash
 export ANTHROPIC_API_KEY=...       # 或任意受支持的提供商 API key
 export TELEGRAM_BOT_TOKEN=...      # 可选——见下文
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 `vps` 配置模式会安装一个 systemd
@@ -99,8 +100,8 @@ Codex 是 Captain 内置的默认提供商——不需要 `ANTHROPIC_API_KEY`
 会安装好一切（二进制文件、systemd 服务），但先不启动守护进程，这样下面的就绪检查就不会在你登录之前抢先运行：
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # 会显示一个 URL + 代码——在手机上打开即可，无需本地浏览器
 systemctl start captain    # 非 root 安装：systemctl --user start captain
@@ -116,7 +117,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 ```
 
 首次启动会生成守护进程 API key，并将其与全部状态一起持久化到命名卷中，该卷可在镜像更新后继续保留。本地
@@ -129,8 +130,8 @@ socket、PID namespace 或特权模式。运行不可变镜像：
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose up -d
 ```
 
 首次启动后再配置所选模型提供商。任何宿主机访问都必须是经过本地审查的显式部署变更；旧的广泛访问
@@ -219,6 +220,7 @@ Telegram 操作员聊天和显式用户白名单后，Rich 卡片会提供**立�
 | [VPS Deployment](docs/deployment/github-vps-install.md) | 无界面安装、反向代理、HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | 外部工具服务器与传输协议 |
 | [Troubleshooting](docs/troubleshooting.md) | 常见问题及其解决方法 |
+| [0.1.0-alpha.11 Release Notes](docs/releases/v0.1.0-alpha.11.md) | 原生邮件、持久集成、审计收尾与本地 CI |
 | [0.1.0-alpha.10 Release Notes](docs/releases/v0.1.0-alpha.10.md) | 生产级加固、持久运行与可验证的本地发布 |
 | [0.1.0-alpha.9 Release Notes](docs/releases/v0.1.0-alpha.9.md) | 持久工作流学习与原生更新监控 |
 | [0.1.0-alpha.7 Release Notes](docs/releases/v0.1.0-alpha.7.md) | 已提交状态持久化、受监督重启、真实上下文与 TUI 直接记忆写入 |

@@ -117,12 +117,18 @@ mod kernel_delivery_runtime;
 mod kernel_delivery_tracker;
 #[path = "kernel_driver_support.rs"]
 mod kernel_driver_support;
+#[path = "kernel_email_credentials.rs"]
+mod kernel_email_credentials;
 #[path = "kernel_first_use.rs"]
 mod kernel_first_use;
 #[path = "kernel_first_use_text.rs"]
 mod kernel_first_use_text;
 #[path = "kernel_fleet_autoscale.rs"]
 mod kernel_fleet_autoscale;
+#[path = "kernel_gmail_automation.rs"]
+mod kernel_gmail_automation;
+#[path = "kernel_gmail_delivery.rs"]
+mod kernel_gmail_delivery;
 #[path = "kernel_graph_snapshot.rs"]
 mod kernel_graph_snapshot;
 #[path = "kernel_hand_runtime.rs"]
@@ -139,6 +145,10 @@ mod kernel_handle_automation;
 mod kernel_handle_channels;
 #[path = "kernel_handle_config.rs"]
 mod kernel_handle_config;
+#[path = "kernel_handle_email.rs"]
+mod kernel_handle_email;
+#[path = "kernel_handle_email_automation.rs"]
+mod kernel_handle_email_automation;
 #[path = "kernel_handle_goals.rs"]
 mod kernel_handle_goals;
 #[path = "kernel_handle_hands.rs"]
@@ -1306,6 +1316,10 @@ impl KernelHandle for CaptainKernel {
         blocked
     }
 
+    fn global_exec_policy(&self) -> captain_types::config::ExecPolicy {
+        self.config.exec_policy.clone()
+    }
+
     fn tool_is_blocked_for_agent(&self, caller_agent_id: Option<&str>, tool_name: &str) -> bool {
         let Some(agent_id) = caller_agent_id.and_then(|value| value.parse::<AgentId>().ok()) else {
             return false;
@@ -1891,6 +1905,101 @@ impl KernelHandle for CaptainKernel {
 
     fn get_a2a_agent_url(&self, name: &str) -> Option<String> {
         self.handle_get_a2a_agent_url(name)
+    }
+
+    fn email_accounts(&self) -> Result<Vec<captain_types::email::GmailAccountSummary>, String> {
+        self.handle_email_accounts()
+    }
+
+    async fn email_search(
+        &self,
+        request: captain_types::email::GmailSearchRequest,
+    ) -> Result<captain_types::email::GmailSearchResult, String> {
+        self.handle_email_search(request).await
+    }
+
+    async fn email_read(
+        &self,
+        request: captain_types::email::GmailReadRequest,
+    ) -> Result<captain_types::email::GmailMessageContent, String> {
+        self.handle_email_read(request).await
+    }
+
+    async fn email_compose(
+        &self,
+        request: captain_types::email::GmailComposeRequest,
+    ) -> Result<captain_types::email::GmailComposeResult, String> {
+        self.handle_email_compose(request).await
+    }
+
+    async fn email_reply(
+        &self,
+        request: captain_types::email::GmailReplyRequest,
+    ) -> Result<captain_types::email::GmailComposeResult, String> {
+        self.handle_email_reply(request).await
+    }
+
+    async fn email_labels(
+        &self,
+        request: captain_types::email::GmailLabelListRequest,
+    ) -> Result<captain_types::email::GmailLabelListResult, String> {
+        self.handle_email_labels(request).await
+    }
+
+    async fn email_update(
+        &self,
+        request: captain_types::email::GmailUpdateRequest,
+    ) -> Result<captain_types::email::GmailUpdateResult, String> {
+        self.handle_email_update(request).await
+    }
+
+    async fn email_attachment(
+        &self,
+        request: captain_types::email::GmailAttachmentRequest,
+    ) -> Result<captain_types::email::GmailAttachmentData, String> {
+        self.handle_email_attachment(request).await
+    }
+
+    fn email_automation_rules(
+        &self,
+        request: captain_types::email_automation::GmailAutomationRuleQuery,
+    ) -> Result<Vec<captain_types::email_automation::GmailAutomationRuleView>, String> {
+        self.handle_email_automation_rules(request)
+    }
+
+    fn email_automation_rule_save(
+        &self,
+        request: captain_types::email_automation::GmailAutomationRuleSaveRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationRuleView, String> {
+        self.handle_email_automation_rule_save(request)
+    }
+
+    fn email_automation_rule_set_enabled(
+        &self,
+        request: captain_types::email_automation::GmailAutomationRuleStateRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationRuleView, String> {
+        self.handle_email_automation_rule_set_enabled(request)
+    }
+
+    fn email_automation_rule_remove(
+        &self,
+        request: captain_types::email_automation::GmailAutomationRuleRemoveRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationRuleView, String> {
+        self.handle_email_automation_rule_remove(request)
+    }
+
+    fn email_automation_deliveries(
+        &self,
+        request: captain_types::email_automation::GmailAutomationDeliveryQuery,
+    ) -> Result<Vec<captain_types::email_automation::GmailAutomationDeliveryView>, String> {
+        self.handle_email_automation_deliveries(request)
+    }
+
+    fn email_automation_delivery_requeue(
+        &self,
+        request: captain_types::email_automation::GmailAutomationDeliveryRequeueRequest,
+    ) -> Result<captain_types::email_automation::GmailAutomationDeliveryView, String> {
+        self.handle_email_automation_delivery_requeue(request)
     }
 
     async fn get_channel_default_recipient(&self, channel: &str) -> Option<String> {

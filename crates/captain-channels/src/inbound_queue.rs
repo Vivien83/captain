@@ -4,10 +4,13 @@ use crate::inbound_queue_snapshot::{InboundQueueChannelSnapshot, InboundQueueSna
 use crate::inbound_queue_state::SessionState;
 use crate::inbound_queue_store::{DeadInboundRecord, InboundQueueStore, PendingInboundRecord};
 use crate::inbound_queue_types::{
-    InboundStart, PendingInboundMessage, PendingInboundSummary, PendingMergeKind,
+    AcceptedInboundId, InboundStart, PendingInboundMessage, PendingInboundSummary,
+    PendingMergeKind, DURABLE_INGRESS_ID_METADATA_KEY, INBOUND_ACCEPTED_ID_RETENTION_SECS,
     MAX_RECOVERED_INBOUND_ATTEMPTS,
 };
-use crate::types::{ChannelContent, ChannelMessage, ChannelType};
+use crate::types::{
+    ChannelContent, ChannelMessage, ChannelType, INTERNAL_ADAPTER_NAME_METADATA_KEY,
+};
 use captain_types::agent::AgentId;
 use chrono::Utc;
 use std::collections::{BTreeMap, HashMap};
@@ -18,6 +21,7 @@ use tracing::warn;
 
 const QUEUED_ACK_COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_DURABLE_PENDING_SESSIONS: usize = 128;
+const MAX_ACCEPTED_INGRESS_IDS_PER_SESSION: usize = 256;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct InboundSessionQueue {
@@ -38,9 +42,17 @@ impl InboundSessionQueue {
     pub(crate) fn session_key(&self, message: &ChannelMessage, sender_user_id: &str) -> String {
         let thread_id = message.thread_id.as_deref().unwrap_or("-");
         let captain_user = message.sender.captain_user.as_deref().unwrap_or("-");
+        let account_scope = message
+            .metadata
+            .get("account_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|account| !account.is_empty())
+            .map(|account| format!("|account:{account}"))
+            .unwrap_or_default();
         format!(
-            "{}|chat:{}|user:{}|captain:{}|thread:{}",
+            "{}{}|chat:{}|user:{}|captain:{}|thread:{}",
             channel_key(&message.channel),
+            account_scope,
             message.sender.platform_id,
             sender_user_id,
             captain_user,
@@ -58,22 +70,52 @@ impl InboundSessionQueue {
         message: ChannelMessage,
         now: Instant,
     ) -> InboundStart {
-        let (start, records) = {
-            let mut sessions = self.lock_sessions();
-            let start = match sessions.get_mut(&key) {
-                Some(state) if is_dead_letter_only(state) => {
-                    *state = new_active_state(&message);
-                    InboundStart::Started { key }
-                }
-                Some(state) => InboundStart::Queued(queue_pending(state, message, now)),
-                None => {
-                    sessions.insert(key.clone(), new_active_state(&message));
-                    InboundStart::Started { key }
-                }
+        let durable_id = durable_ingress_id(&message).map(str::to_string);
+        if durable_id.is_some() && self.store.is_none() {
+            return InboundStart::Rejected {
+                reason: "durable inbound queue is unavailable".to_string(),
             };
-            (start, self.pending_records(&sessions))
+        }
+
+        let mut sessions = self.lock_sessions();
+        let previous = self.store.as_ref().map(|_| sessions.clone());
+        prune_accepted_ingress(&mut sessions);
+
+        if let Some(durable_id) = durable_id.as_deref() {
+            if sessions.values().any(|state| {
+                state
+                    .accepted_ingress
+                    .iter()
+                    .any(|accepted| accepted.id == durable_id)
+            }) {
+                return InboundStart::Duplicate { key };
+            }
+        }
+
+        let start = match sessions.get_mut(&key) {
+            Some(state) if is_dead_letter_only(state) || is_idle_tombstone(state) => {
+                let accepted_ingress = std::mem::take(&mut state.accepted_ingress);
+                *state = new_active_state(message, durable_id);
+                state.accepted_ingress.extend(accepted_ingress);
+                trim_accepted_ingress(&mut state.accepted_ingress);
+                InboundStart::Started { key }
+            }
+            Some(state) => {
+                remember_accepted_ingress(state, durable_id);
+                InboundStart::Queued(queue_pending(state, message, now))
+            }
+            None => {
+                sessions.insert(key.clone(), new_active_state(message, durable_id));
+                InboundStart::Started { key }
+            }
         };
-        self.persist_pending(records);
+        let records = self.pending_records(&sessions);
+        if let Err(reason) = self.persist_pending_result(records) {
+            if let Some(previous) = previous {
+                *sessions = previous;
+            }
+            return InboundStart::Rejected { reason };
+        }
         start
     }
 
@@ -104,24 +146,39 @@ impl InboundSessionQueue {
     }
 
     pub(crate) fn next_or_finish(&self, key: &str) -> Option<PendingInboundMessage> {
-        let (next, records) = {
-            let mut sessions = self.lock_sessions();
-            let state = sessions.get_mut(key)?;
-            state.inflight = None;
-            state.recovery_attempts = 0;
-            let next = if let Some(pending) = state.pending.take() {
-                state.inflight = Some(pending.clone());
-                Some(pending)
-            } else {
+        let mut sessions = self.lock_sessions();
+        let previous = self.store.as_ref().map(|_| sessions.clone());
+        let state = sessions.get_mut(key)?;
+        state.inflight = None;
+        state.active_agent_id = None;
+        state.recovery_attempts = 0;
+        let next = if let Some(pending) = state.pending.take() {
+            state.inflight = Some(pending.clone());
+            Some(pending)
+        } else {
+            if state.accepted_ingress.is_empty() && state.dead_letter.is_none() {
                 sessions.remove(key);
-                None
-            };
-            (next, self.pending_records(&sessions))
+            }
+            None
         };
-        self.persist_pending(records);
+        let records = self.pending_records(&sessions);
+        if let Err(reason) = self.persist_pending_result(records) {
+            if let Some(previous) = previous {
+                *sessions = previous;
+            }
+            warn!(key, %reason, "Failed to commit inbound channel completion");
+            return None;
+        }
         next
     }
 
+    pub(crate) fn abandon_for_recovery(&self, key: &str) {
+        if let Some(state) = self.lock_sessions().get_mut(key) {
+            state.active_agent_id = None;
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear(&self, key: &str) {
         let records = {
             let mut sessions = self.lock_sessions();
@@ -148,7 +205,9 @@ impl InboundSessionQueue {
                 };
                 sessions_cleared += 1;
                 messages_cleared += dead_letter.message.queued_count;
-                state.pending.is_some() || state.inflight.is_some()
+                state.pending.is_some()
+                    || state.inflight.is_some()
+                    || !state.accepted_ingress.is_empty()
             });
             (
                 (sessions_cleared, messages_cleared),
@@ -223,7 +282,7 @@ impl InboundSessionQueue {
         let mut channels: BTreeMap<String, InboundQueueChannelSnapshot> = BTreeMap::new();
 
         for state in sessions.values() {
-            let active = usize::from(!is_dead_letter_only(state));
+            let active = usize::from(state.inflight.is_some() || state.pending.is_some());
             snapshot.active_sessions += active;
             let pending_messages = state
                 .pending
@@ -314,6 +373,7 @@ impl InboundSessionQueue {
                 if state.pending.is_none()
                     && state.inflight.is_none()
                     && state.dead_letter.is_none()
+                    && state.accepted_ingress.is_empty()
                 {
                     return None;
                 }
@@ -324,20 +384,44 @@ impl InboundSessionQueue {
                     pending: state.pending.clone(),
                     inflight: state.inflight.clone(),
                     dead_letter: state.dead_letter.clone(),
+                    accepted_ingress: state.accepted_ingress.clone(),
                 })
             })
             .collect();
-        records.sort_by(|a, b| a.key.cmp(&b.key));
+        records.sort_by(|a, b| {
+            pending_record_priority(a)
+                .cmp(&pending_record_priority(b))
+                .then_with(|| a.key.cmp(&b.key))
+        });
         Some(records)
     }
 
     fn persist_pending(&self, records: Option<Vec<PendingInboundRecord>>) {
-        let (Some(store), Some(records)) = (self.store.as_ref(), records) else {
-            return;
-        };
-        if let Err(err) = store.save_records(&records) {
+        if let Err(err) = self.persist_pending_result(records) {
             warn!("Failed to persist inbound channel queue: {err}");
         }
+    }
+
+    fn persist_pending_result(
+        &self,
+        records: Option<Vec<PendingInboundRecord>>,
+    ) -> Result<(), String> {
+        let (Some(store), Some(records)) = (self.store.as_ref(), records) else {
+            return Ok(());
+        };
+        store
+            .save_records(&records)
+            .map_err(|err| format!("failed to persist inbound channel queue: {err}"))
+    }
+}
+
+fn pending_record_priority(record: &PendingInboundRecord) -> u8 {
+    if record.inflight.is_some() || record.pending.is_some() {
+        0
+    } else if record.dead_letter.is_some() {
+        1
+    } else {
+        2
     }
 }
 
@@ -345,7 +429,10 @@ fn records_to_sessions(records: Vec<PendingInboundRecord>) -> HashMap<String, Se
     records
         .into_iter()
         .filter_map(|record| {
-            if record.pending.is_none() && record.inflight.is_none() && record.dead_letter.is_none()
+            if record.pending.is_none()
+                && record.inflight.is_none()
+                && record.dead_letter.is_none()
+                && record.accepted_ingress.is_empty()
             {
                 return None;
             }
@@ -353,9 +440,9 @@ fn records_to_sessions(records: Vec<PendingInboundRecord>) -> HashMap<String, Se
                 .pending
                 .as_ref()
                 .or(record.inflight.as_ref())
-                .or(record.dead_letter.as_ref().map(|dead| &dead.message))?;
+                .or(record.dead_letter.as_ref().map(|dead| &dead.message));
             let channel = if record.channel.is_empty() {
-                channel_key(&message.message.channel)
+                channel_key(&message?.message.channel)
             } else {
                 record.channel
             };
@@ -367,6 +454,7 @@ fn records_to_sessions(records: Vec<PendingInboundRecord>) -> HashMap<String, Se
                     pending: record.pending,
                     inflight: record.inflight,
                     dead_letter: record.dead_letter,
+                    accepted_ingress: record.accepted_ingress,
                     recovery_attempts: record.recovery_attempts,
                     interjected_count: 0,
                     last_ack_at: None,
@@ -461,21 +549,88 @@ fn refresh_envelope(existing: &mut ChannelMessage, incoming: ChannelMessage) {
     existing.metadata = incoming.metadata;
 }
 
-fn new_active_state(message: &ChannelMessage) -> SessionState {
+fn new_active_state(message: ChannelMessage, durable_id: Option<String>) -> SessionState {
+    let channel = inbound_adapter_key(&message);
     SessionState {
-        channel: channel_key(&message.channel),
+        channel,
         active_agent_id: None,
         pending: None,
-        inflight: None,
+        inflight: Some(PendingInboundMessage {
+            message,
+            queued_count: 1,
+        }),
         dead_letter: None,
+        accepted_ingress: durable_id
+            .map(|id| {
+                vec![AcceptedInboundId {
+                    id,
+                    accepted_at: Utc::now(),
+                }]
+            })
+            .unwrap_or_default(),
         recovery_attempts: 0,
         interjected_count: 0,
         last_ack_at: None,
     }
 }
 
+fn inbound_adapter_key(message: &ChannelMessage) -> String {
+    message
+        .metadata
+        .get(INTERNAL_ADAPTER_NAME_METADATA_KEY)
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| channel_key(&message.channel))
+}
+
 fn is_dead_letter_only(state: &SessionState) -> bool {
     state.dead_letter.is_some() && state.pending.is_none() && state.inflight.is_none()
+}
+
+fn is_idle_tombstone(state: &SessionState) -> bool {
+    state.dead_letter.is_none() && state.pending.is_none() && state.inflight.is_none()
+}
+
+fn durable_ingress_id(message: &ChannelMessage) -> Option<&str> {
+    message
+        .metadata
+        .get(DURABLE_INGRESS_ID_METADATA_KEY)
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn remember_accepted_ingress(state: &mut SessionState, durable_id: Option<String>) {
+    let Some(id) = durable_id else {
+        return;
+    };
+    state.accepted_ingress.push(AcceptedInboundId {
+        id,
+        accepted_at: Utc::now(),
+    });
+    trim_accepted_ingress(&mut state.accepted_ingress);
+}
+
+fn trim_accepted_ingress(accepted: &mut Vec<AcceptedInboundId>) {
+    accepted.sort_by_key(|entry| entry.accepted_at);
+    if accepted.len() > MAX_ACCEPTED_INGRESS_IDS_PER_SESSION {
+        accepted.drain(..accepted.len() - MAX_ACCEPTED_INGRESS_IDS_PER_SESSION);
+    }
+}
+
+fn prune_accepted_ingress(sessions: &mut HashMap<String, SessionState>) {
+    let now = Utc::now();
+    sessions.retain(|_, state| {
+        state.accepted_ingress.retain(|accepted| {
+            now.signed_duration_since(accepted.accepted_at)
+                .num_seconds()
+                < INBOUND_ACCEPTED_ID_RETENTION_SECS
+        });
+        state.pending.is_some()
+            || state.inflight.is_some()
+            || state.dead_letter.is_some()
+            || !state.accepted_ingress.is_empty()
+    });
 }
 
 fn update_oldest_age(target: &mut Option<u64>, dead_letter: Option<&DeadInboundRecord>) {

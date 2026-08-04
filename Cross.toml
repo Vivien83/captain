@@ -3,7 +3,7 @@
 # The default `:main` images use a newer glibc that rejects those common VPS
 # targets at startup.
 [build.env]
-passthrough = ["CAPTAIN_BUILD_VERSION"]
+passthrough = ["CAPTAIN_BUILD_VERSION", "CAPTAIN_GOOGLE_OAUTH_CLIENT_ID"]
 
 [target.aarch64-unknown-linux-gnu]
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"

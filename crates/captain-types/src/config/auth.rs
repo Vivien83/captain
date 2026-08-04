@@ -80,6 +80,11 @@ impl std::fmt::Debug for AuthProfile {
 pub struct AuthConfig {
     /// Enable username/password authentication for browser surfaces.
     pub enabled: bool,
+    /// Explicitly permit credentialless access from a direct loopback client.
+    ///
+    /// This is a local-development escape hatch, not a deployment profile.
+    /// New installations fail closed unless setup provisions credentials.
+    pub allow_unauthenticated_loopback: bool,
     /// Admin username.
     pub username: String,
     /// Argon2id PHC password hash. Legacy SHA-256 values migrate at login.
@@ -99,6 +104,10 @@ impl std::fmt::Debug for AuthConfig {
         formatter
             .debug_struct("AuthConfig")
             .field("enabled", &self.enabled)
+            .field(
+                "allow_unauthenticated_loopback",
+                &self.allow_unauthenticated_loopback,
+            )
             .field("username", &self.username)
             .field(
                 "password_hash",
@@ -127,6 +136,7 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            allow_unauthenticated_loopback: false,
             username: "admin".to_string(),
             password_hash: String::new(),
             session_secret: String::new(),
@@ -268,6 +278,19 @@ pub fn ensure_session_signing_state(config_path: &Path, auth: &mut AuthConfig) -
         .and_then(toml_edit::Item::as_table_like_mut)
         .ok_or_else(|| invalid_auth_state("[auth] must be a TOML table"))?;
 
+    let persisted_enabled = match auth_table.get("enabled") {
+        Some(item) => Some(
+            item.as_bool()
+                .ok_or_else(|| invalid_auth_state("auth.enabled must be a boolean"))?,
+        ),
+        None => None,
+    };
+    let persisted_loopback_opt_out = match auth_table.get("allow_unauthenticated_loopback") {
+        Some(item) => Some(item.as_bool().ok_or_else(|| {
+            invalid_auth_state("auth.allow_unauthenticated_loopback must be a boolean")
+        })?),
+        None => None,
+    };
     let persisted_secret = match auth_table.get("session_secret") {
         Some(item) => Some(
             item.as_str()
@@ -310,9 +333,12 @@ pub fn ensure_session_signing_state(config_path: &Path, auth: &mut AuthConfig) -
     if let Some(epoch) = persisted_epoch {
         auth.session_epoch = epoch;
     }
+    auth.allow_unauthenticated_loopback =
+        persisted_loopback_opt_out.unwrap_or(matches!(persisted_enabled, Some(false)));
 
     let changed = persisted_secret.as_deref() != Some(auth.session_secret.as_str())
-        || persisted_epoch != Some(auth.session_epoch);
+        || persisted_epoch != Some(auth.session_epoch)
+        || persisted_loopback_opt_out != Some(auth.allow_unauthenticated_loopback);
     if changed {
         auth_table.insert(
             "session_secret",
@@ -324,6 +350,10 @@ pub fn ensure_session_signing_state(config_path: &Path, auth: &mut AuthConfig) -
                 i64::try_from(auth.session_epoch)
                     .map_err(|_| invalid_auth_state("auth.session_epoch exceeds TOML range"))?,
             ),
+        );
+        auth_table.insert(
+            "allow_unauthenticated_loopback",
+            toml_edit::value(auth.allow_unauthenticated_loopback),
         );
         crate::durable_fs::atomic_write(config_path, document.to_string().as_bytes())?;
     }
@@ -427,6 +457,7 @@ mod tests {
         let auth = AuthConfig::default();
 
         assert!(!auth.enabled);
+        assert!(!auth.allow_unauthenticated_loopback);
         assert_eq!(auth.username, "admin");
         assert!(auth.password_hash.is_empty());
         assert!(auth.session_secret.is_empty());
@@ -510,6 +541,52 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(auth.session_secret.is_empty());
+    }
+
+    #[test]
+    fn missing_auth_configuration_persists_fail_closed_loopback_policy() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.toml");
+        std::fs::write(&path, "api_listen = \"127.0.0.1:50051\"\n").unwrap();
+        let mut auth = AuthConfig::default();
+
+        assert!(ensure_session_signing_state(&path, &mut auth).unwrap());
+
+        assert!(!auth.allow_unauthenticated_loopback);
+        let persisted = std::fs::read_to_string(path).unwrap();
+        assert!(persisted.contains("allow_unauthenticated_loopback = false"));
+    }
+
+    #[test]
+    fn legacy_explicitly_disabled_auth_migrates_to_explicit_loopback_opt_out() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.toml");
+        std::fs::write(&path, "[auth]\nenabled = false\n").unwrap();
+        let mut auth = AuthConfig::default();
+
+        assert!(ensure_session_signing_state(&path, &mut auth).unwrap());
+
+        assert!(auth.allow_unauthenticated_loopback);
+        let persisted = std::fs::read_to_string(path).unwrap();
+        assert!(persisted.contains("allow_unauthenticated_loopback = true"));
+    }
+
+    #[test]
+    fn explicit_loopback_policy_is_preserved_without_reinterpretation() {
+        for allowed in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("config.toml");
+            std::fs::write(
+                &path,
+                format!("[auth]\nenabled = false\nallow_unauthenticated_loopback = {allowed}\n"),
+            )
+            .unwrap();
+            let mut auth = AuthConfig::default();
+
+            ensure_session_signing_state(&path, &mut auth).unwrap();
+
+            assert_eq!(auth.allow_unauthenticated_loopback, allowed);
+        }
     }
 
     #[test]

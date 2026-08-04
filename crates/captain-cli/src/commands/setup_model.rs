@@ -57,6 +57,14 @@ const SETUP_PROVIDERS: &[SetupProvider] = &[
         oauth: false,
     },
     SetupProvider {
+        id: "xai",
+        display: "xAI (Grok)",
+        env_var: Some("XAI_API_KEY"),
+        default_model: "grok-4.5",
+        hint: "API officielle ; OAuth tiers non publié",
+        oauth: false,
+    },
+    SetupProvider {
         id: "openrouter",
         display: "OpenRouter",
         env_var: Some("OPENROUTER_API_KEY"),
@@ -566,5 +574,15 @@ mod tests {
         let selected = setup_detected_or_default("openai", "codex", "gpt-detected", "gpt-default");
 
         assert_eq!(selected, "gpt-default");
+    }
+
+    #[test]
+    fn setup_exposes_xai_with_the_current_official_api_model() {
+        let xai = provider("xai");
+
+        assert_eq!(xai.env_var, Some("XAI_API_KEY"));
+        assert_eq!(xai.default_model, "grok-4.5");
+        assert!(!xai.oauth);
+        assert!(xai.hint.contains("OAuth tiers"));
     }
 }

@@ -2,7 +2,7 @@
 
 use std::{path::Path, process::Stdio};
 
-use captain_types::config::DockerSandboxConfig;
+use captain_types::config::{DockerSandboxConfig, ExecPolicy, ExecutionProfile};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -18,10 +18,22 @@ pub(crate) async fn tool_docker_exec(
     docker_config: Option<&DockerSandboxConfig>,
     workspace_root: Option<&Path>,
     caller_agent_id: Option<&str>,
+    exec_policy: Option<&ExecPolicy>,
 ) -> Result<String, String> {
     let config = docker_config.ok_or("Docker sandbox not configured")?;
     if !config.enabled {
         return Err("Docker sandbox is disabled. Set docker.enabled=true in config.".into());
+    }
+    let profile = exec_policy
+        .map(|policy| policy.profile)
+        .unwrap_or(ExecutionProfile::PersonalWorkstation);
+    let violations = config.profile_violations(profile);
+    if !violations.is_empty() {
+        return Err(format!(
+            "Docker execution configuration is incompatible with profile `{}`: {}. Captain will not fall back to host execution.",
+            profile.as_str(),
+            violations.join("; ")
+        ));
     }
 
     let command = input["command"]
@@ -132,6 +144,7 @@ fn spawn_docker_exec_process(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::guarded_exec::configure_tokio_command(&mut cmd, None, &[], &[]);
 
     cmd.spawn()
         .map_err(|error| format!("Docker exec failed: {error}"))
@@ -287,6 +300,55 @@ mod tests {
             DockerStreamEvent::Stderr(chunk) => assert_eq!(chunk, b"err"),
             DockerStreamEvent::Stdout(_) => panic!("stderr kind must produce stderr event"),
         }
+    }
+
+    #[tokio::test]
+    async fn disabled_docker_rail_fails_before_runtime_probe() {
+        let config = DockerSandboxConfig::default();
+        let policy = ExecPolicy {
+            profile: ExecutionProfile::UntrustedExecution,
+            ..ExecPolicy::default()
+        };
+        let workspace = tempfile::tempdir().unwrap();
+
+        let error = tool_docker_exec(
+            &serde_json::json!({"command": "true"}),
+            Some(&config),
+            Some(workspace.path()),
+            Some("captain"),
+            Some(&policy),
+        )
+        .await
+        .expect_err("disabled Docker must fail closed");
+
+        assert!(error.contains("Docker sandbox is disabled"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn untrusted_profile_rejects_unsafe_docker_before_runtime_probe() {
+        let config = DockerSandboxConfig {
+            enabled: true,
+            network: "bridge".to_string(),
+            ..DockerSandboxConfig::default()
+        };
+        let policy = ExecPolicy {
+            profile: ExecutionProfile::UntrustedExecution,
+            ..ExecPolicy::default()
+        };
+        let workspace = tempfile::tempdir().unwrap();
+
+        let error = tool_docker_exec(
+            &serde_json::json!({"command": "true"}),
+            Some(&config),
+            Some(workspace.path()),
+            Some("captain"),
+            Some(&policy),
+        )
+        .await
+        .expect_err("unsafe Docker config must fail before probing Docker");
+
+        assert!(error.contains("docker.network"), "{error}");
+        assert!(error.contains("will not fall back"), "{error}");
     }
 
     #[test]

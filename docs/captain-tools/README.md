@@ -51,6 +51,7 @@ with the matching family documentation. Any new family means: append a
 | [`project`](project.md)                           | D.15 | project, task, milestone, and checkpoint tools |
 | [`multimedia`](multimedia.md)                     | D.16 | `media_pipeline`, `image_analyze`, `image_generate`, `media_describe`, `media_transcribe`, `text_to_speech`, `speech_to_text`, `video_analyze` |
 | [`document`](document.md)                         | D.19 | `document_pipeline`, `document_create`, `document_extract` |
+| [`email`](email.md)                               | D.20 | native Gmail account, mailbox, draft/send, reversible mutation, attachment, rule and delivery tools |
 | [`runtime-changelog`](runtime-changelog.md)       | D.18 | public-safe, versioned runtime changes Captain reads after install/restart |
 
 > **Status:** audited — family bodies are enforced against

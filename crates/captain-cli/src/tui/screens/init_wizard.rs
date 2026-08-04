@@ -104,9 +104,9 @@ const PROVIDERS: &[ProviderInfo] = &[
         name: "xai",
         display: "xAI (Grok)",
         env_var: "XAI_API_KEY",
-        default_model: "grok-4-0709",
+        default_model: "grok-4.5",
         needs_key: true,
-        hint: "",
+        hint: "official API key",
     },
     ProviderInfo {
         name: "perplexity",
@@ -820,6 +820,7 @@ model = "{model}"
 decay_rate = 0.05
 
 [exec_policy]
+profile = "personal_workstation"
 mode = "full"
 critical_mode = "safe"
 "#,
@@ -1573,6 +1574,7 @@ mod tests {
         assert!(!config.contains("simple_model"));
         assert!(!config.contains("complex_model"));
         assert!(config.contains("[exec_policy]"));
+        assert!(config.contains("profile = \"personal_workstation\""));
         assert!(config.contains("mode = \"full\""));
         assert!(config.contains("critical_mode = \"safe\""));
     }

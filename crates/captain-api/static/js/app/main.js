@@ -1,6 +1,6 @@
-import { h, render } from 'preact';
-import { useState, useEffect } from 'preact/hooks';
-import htm from 'htm';
+import { h, render } from '/assets/app/vendor/preact.module.js';
+import { useState, useEffect } from '/assets/app/vendor/hooks.module.js';
+import htm from '/assets/app/vendor/htm.module.js';
 import { api, openEventStream } from './api.js';
 import { getState, setState, subscribe, toast } from './store.js';
 import { Login } from './components/Login.js';

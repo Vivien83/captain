@@ -38,10 +38,14 @@ impl SecuritySection {
 // ── Built-in feature definitions ────────────────────────────────────────────
 
 pub(crate) fn features_for_execution_summary(
+    profile: &str,
+    configured_policy_mode: &str,
     policy_mode: &str,
     critical_mode: &str,
     isolation_level: &str,
     os_isolation: bool,
+    docker_enabled: bool,
+    docker_untrusted_ready: bool,
 ) -> Vec<SecurityFeature> {
     vec![
         // Core
@@ -61,7 +65,7 @@ pub(crate) fn features_for_execution_summary(
             name: "Host Subprocess Boundary".into(),
             active: true,
             description: format!(
-                "{isolation_level}; policy {policy_mode}/{critical_mode}; bounded lifecycle"
+                "{profile}; {isolation_level}; configured {configured_policy_mode}; effective {policy_mode}/{critical_mode}; bounded lifecycle"
             ),
             section: SecuritySection::Core,
         },
@@ -79,6 +83,19 @@ pub(crate) fn features_for_execution_summary(
             name: "WASM Dual Metering".into(),
             active: true,
             description: "Fuel + epoch interruption with watchdog thread".into(),
+            section: SecuritySection::Core,
+        },
+        SecurityFeature {
+            name: "Explicit Docker Rail".into(),
+            active: docker_enabled,
+            description: format!(
+                "Explicit only; no host fallback; untrusted profile {}",
+                if docker_untrusted_ready {
+                    "ready"
+                } else {
+                    "not ready"
+                }
+            ),
             section: SecuritySection::Core,
         },
         SecurityFeature {
@@ -155,11 +172,17 @@ pub(crate) fn features_for_execution_summary(
 fn builtin_features() -> Vec<SecurityFeature> {
     let policy = captain_types::config::ExecPolicy::default();
     let posture = policy.host_execution_posture();
+    let docker =
+        captain_types::config::DockerSandboxConfig::default().isolation_posture(policy.profile);
     features_for_execution_summary(
+        posture.profile.as_str(),
+        posture.configured_policy_mode.as_str(),
         posture.policy_mode.as_str(),
         posture.critical_mode.as_str(),
         posture.isolation_level,
         posture.os_isolation,
+        docker.enabled,
+        docker.untrusted_profile_ready,
     )
 }
 
@@ -359,7 +382,16 @@ mod tests {
 
     #[test]
     fn skill_phrase_review_is_presented_as_advisory() {
-        let features = features_for_execution_summary("full", "safe", "host_process", false);
+        let features = features_for_execution_summary(
+            "personal_workstation",
+            "full",
+            "full",
+            "safe",
+            "host_process",
+            false,
+            false,
+            false,
+        );
         let review = features
             .iter()
             .find(|feature| feature.name == "Advisory Skill Phrase Review")

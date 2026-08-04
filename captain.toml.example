@@ -193,7 +193,8 @@ auto_approve_autonomous = true
 auto_approve = true
 
 [exec_policy]
-mode = "full"                              # deny | allowlist | full
+profile = "personal_workstation"           # personal_workstation | remote_operator | untrusted_execution
+mode = "allowlist"                         # deny | allowlist | full
 safe_bins = ["sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail", "wc", "date", "echo", "printf", "basename", "dirname", "pwd", "env"]
 allowed_commands = []
 # blocked_commands is omitted here so the hardened built-in blocklist stays active.

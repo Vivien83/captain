@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply or verify Captain's no-hosted-CI branch protection policy.
+# Apply or verify Captain's local-gate branch protection policy.
 
 set -euo pipefail
 
@@ -21,8 +21,8 @@ Usage: scripts/github-governance.sh [--verify|--apply|--policy-test]
 
 The policy requires reviewed pull requests for non-admin contributors, linear
 history, resolved conversations, and blocks force-pushes/deletion. It leaves
-required status checks empty because Captain's mandatory release gate runs
-locally and GitHub Actions are manual-only.
+GitHub Actions manual-only while requiring the exact-SHA
+captain/local-pr-gate status published by the trusted local Lima portal.
 EOF
 }
 
@@ -44,7 +44,10 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 policy_json() {
     jq -cn '{
-      required_status_checks: null,
+      required_status_checks: {
+        strict: true,
+        contexts: ["captain/local-pr-gate"]
+      },
       enforce_admins: false,
       required_pull_request_reviews: {
         dismiss_stale_reviews: true,
@@ -64,7 +67,8 @@ policy_json() {
 
 verify_policy_json() {
     jq -e '
-      .required_status_checks == null
+      .required_status_checks.strict == true
+      and (.required_status_checks.contexts | sort) == ["captain/local-pr-gate"]
       and .enforce_admins == false
       and .required_pull_request_reviews.required_approving_review_count == 1
       and .required_pull_request_reviews.dismiss_stale_reviews == true
@@ -79,7 +83,8 @@ verify_policy_json() {
 
 verify_remote_response() {
     jq -e '
-      .required_status_checks == null
+      .required_status_checks.strict == true
+      and (.required_status_checks.contexts | sort) == ["captain/local-pr-gate"]
       and .enforce_admins.enabled == false
       and .required_pull_request_reviews.required_approving_review_count == 1
       and .required_pull_request_reviews.dismiss_stale_reviews == true
@@ -114,6 +119,6 @@ gh api \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "repos/$REPO/branches/$BRANCH/protection" \
     | verify_remote_response \
-    || fail "remote branch protection does not match Captain's local-only CI policy"
+    || fail "remote branch protection does not match Captain's local-gate policy"
 
 printf 'GitHub governance verified: %s branch %s\n' "$REPO" "$BRANCH"

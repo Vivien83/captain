@@ -254,6 +254,7 @@ api_key_env = "{api_key_env}"
 decay_rate = 0.05
 
 [exec_policy]
+profile = "personal_workstation"
 mode = "full"
 critical_mode = "safe"
 "#

@@ -35,20 +35,20 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.10` explicitly.
+below pins `v0.1.0-alpha.11` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=captain.example.com \
     bash
@@ -61,8 +61,8 @@ domain/HTTPS wiring where the host supports it.
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.10"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.11"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -89,8 +89,8 @@ For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \
@@ -233,6 +233,12 @@ login with an older SHA-256 installation migrates its hash atomically.
 Browser cookies use `Secure` automatically behind declared HTTPS, and realtime
 browser connections exchange the cookie for a 30-second single-use ticket.
 Captain never authenticates protected routes from `?token=`.
+
+A skipped or incomplete setup no longer makes private routes public: Captain
+fails closed and asks the operator to run `captain setup`. Existing local
+development installs that explicitly disabled auth are migrated to
+`auth.allow_unauthenticated_loopback = true`; the flag is limited to the actual
+loopback client and setup turns it off as soon as credentials are provisioned.
 
 Configuration can be edited from the browser at:
 

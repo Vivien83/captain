@@ -88,6 +88,9 @@ pub enum ChannelContent {
     },
 }
 
+pub(crate) const INTERNAL_TARGET_AGENT_NAME_METADATA_KEY: &str = "_captain_target_agent_name";
+pub(crate) const INTERNAL_ADAPTER_NAME_METADATA_KEY: &str = "_captain_adapter_name";
+
 /// A unified message from any channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelMessage {
@@ -242,6 +245,12 @@ pub trait ChannelAdapter: Send + Sync {
     /// The channel type this adapter handles.
     fn channel_type(&self) -> ChannelType;
 
+    /// Additional names that may address this same live adapter. The bridge
+    /// itself remains keyed by `name()`; aliases are only kernel send routes.
+    fn registration_aliases(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Start receiving messages. Returns a stream of incoming messages.
     async fn start(
         &self,
@@ -265,6 +274,16 @@ pub trait ChannelAdapter: Send + Sync {
         _user: &ChannelUser,
         _message_id: &str,
         _reaction: &LifecycleReaction,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
+    /// Confirm that a platform-owned inbound item was accepted durably by
+    /// Captain. Adapters with explicit acknowledgement semantics (such as
+    /// IMAP `\\Seen`) override this; push channels keep the no-op default.
+    async fn acknowledge_inbound(
+        &self,
+        _message: &ChannelMessage,
     ) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }

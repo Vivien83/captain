@@ -88,6 +88,10 @@ pub async fn execute_tool(
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical Captain name.
     let tool_name = normalize_tool_name(tool_name);
+    let global_exec_policy = kernel.map(|handle| handle.global_exec_policy());
+    let effective_exec_policy =
+        intersect_execution_policy(exec_policy, global_exec_policy.as_ref());
+    let exec_policy = effective_exec_policy.as_ref();
 
     // v3.12b — wall-clock for the LearningSignal emission at the end.
     let dispatch_start = std::time::Instant::now();
@@ -183,6 +187,17 @@ pub async fn execute_tool(
     tool_result
 }
 
+fn intersect_execution_policy(
+    agent_policy: Option<&captain_types::config::ExecPolicy>,
+    global_policy: Option<&captain_types::config::ExecPolicy>,
+) -> Option<captain_types::config::ExecPolicy> {
+    match (agent_policy, global_policy) {
+        (None, None) => None,
+        (Some(policy), None) | (None, Some(policy)) => Some(policy.clone()),
+        (Some(agent), Some(global)) => Some(agent.intersect(global)),
+    }
+}
+
 /// Get definitions for all built-in tools.
 pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
     crate::tools::builtin_tool_definitions()
@@ -224,4 +239,44 @@ mod tests {
     mod ssh_package;
     mod tool_search_runtime;
     use memory_save_runtime::MemSaveStubKernel;
+
+    #[test]
+    fn global_execution_profile_is_a_non_bypassable_floor() {
+        use captain_types::config::{ExecPolicy, ExecSecurityMode, ExecutionProfile};
+
+        let agent = ExecPolicy {
+            profile: ExecutionProfile::PersonalWorkstation,
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        let global = ExecPolicy {
+            profile: ExecutionProfile::UntrustedExecution,
+            mode: ExecSecurityMode::Allowlist,
+            ..ExecPolicy::default()
+        };
+        let effective = intersect_execution_policy(Some(&agent), Some(&global))
+            .expect("effective execution policy");
+
+        assert_eq!(effective.profile, ExecutionProfile::UntrustedExecution);
+        assert_eq!(effective.mode, ExecSecurityMode::Allowlist);
+        assert_eq!(effective.effective_mode(), ExecSecurityMode::Deny);
+    }
+
+    #[test]
+    fn global_execution_mode_is_a_non_bypassable_floor() {
+        use captain_types::config::{ExecPolicy, ExecSecurityMode};
+
+        let agent = ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        let global = ExecPolicy {
+            mode: ExecSecurityMode::Deny,
+            ..ExecPolicy::default()
+        };
+        let effective = intersect_execution_policy(Some(&agent), Some(&global))
+            .expect("effective execution policy");
+
+        assert_eq!(effective.effective_mode(), ExecSecurityMode::Deny);
+    }
 }

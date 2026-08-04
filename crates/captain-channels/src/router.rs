@@ -36,6 +36,10 @@ pub struct AgentRouter {
     channel_defaults: DashMap<String, AgentId>,
     /// Per-channel-type default agent *name* (for re-resolution when UUID becomes stale).
     channel_default_names: DashMap<String, String>,
+    /// Per-account defaults within one channel type (for example two Email mailboxes).
+    account_defaults: DashMap<(String, String), AgentId>,
+    /// Agent names retained for account-default re-resolution after restart.
+    account_default_names: DashMap<(String, String), String>,
     /// Sorted bindings (most specific first). Uses Mutex for runtime updates via Arc.
     bindings: Mutex<Vec<(AgentBinding, String)>>,
     /// Broadcast configuration. Uses Mutex for runtime updates via Arc.
@@ -53,6 +57,8 @@ impl AgentRouter {
             default_agent: None,
             channel_defaults: DashMap::new(),
             channel_default_names: DashMap::new(),
+            account_defaults: DashMap::new(),
+            account_default_names: DashMap::new(),
             bindings: Mutex::new(Vec::new()),
             broadcast: Mutex::new(BroadcastConfig::default()),
             agent_name_cache: DashMap::new(),
@@ -92,6 +98,39 @@ impl AgentRouter {
     pub fn update_channel_default(&self, channel_key: &str, new_agent_id: AgentId) {
         self.channel_defaults
             .insert(channel_key.to_string(), new_agent_id);
+    }
+
+    /// Set a default agent for one account inside a channel type.
+    pub fn set_account_default_with_name(
+        &self,
+        channel_key: String,
+        account_id: String,
+        agent_id: AgentId,
+        agent_name: String,
+    ) {
+        let key = (channel_key, account_id);
+        self.account_defaults.insert(key.clone(), agent_id);
+        self.account_default_names.insert(key, agent_name);
+    }
+
+    /// Retrieve the configured agent name for one account default.
+    pub fn account_default_name(&self, channel_key: &str, account_id: &str) -> Option<String> {
+        self.account_default_names
+            .get(&(channel_key.to_string(), account_id.to_string()))
+            .map(|name| name.clone())
+    }
+
+    /// Refresh a stale account-default agent ID after name re-resolution.
+    pub fn update_account_default(
+        &self,
+        channel_key: &str,
+        account_id: &str,
+        new_agent_id: AgentId,
+    ) {
+        self.account_defaults.insert(
+            (channel_key.to_string(), account_id.to_string()),
+            new_agent_id,
+        );
     }
 
     /// Set a user's default agent.
@@ -196,6 +235,25 @@ impl AgentRouter {
         self.default_agent
     }
 
+    /// Resolve an account-specific default before falling back to the channel
+    /// and system defaults.
+    pub fn resolve_channel_default_for_account(
+        &self,
+        channel_type: &ChannelType,
+        account_id: Option<&str>,
+    ) -> Option<AgentId> {
+        let channel_key = format!("{channel_type:?}");
+        if let Some(account_id) = account_id {
+            if let Some(agent) = self
+                .account_defaults
+                .get(&(channel_key.clone(), account_id.to_string()))
+            {
+                return Some(*agent);
+            }
+        }
+        self.resolve_channel_default(channel_type)
+    }
+
     /// Resolve with full binding context (supports guild_id, roles, account_id).
     pub fn resolve_with_context(
         &self,
@@ -223,6 +281,14 @@ impl AgentRouter {
         }
         if let Some(agent) = self.user_defaults.get(platform_user_id) {
             return Some(*agent);
+        }
+        if let Some(account_id) = ctx.account_id.as_deref() {
+            if let Some(agent) = self
+                .account_defaults
+                .get(&(channel_key.clone(), account_id.to_string()))
+            {
+                return Some(*agent);
+            }
         }
         if let Some(agent) = self.channel_defaults.get(&channel_key) {
             return Some(*agent);
@@ -351,7 +417,7 @@ impl AgentRouter {
 }
 
 /// Convert ChannelType to lowercase string for binding matching.
-fn channel_type_to_str(ct: &ChannelType) -> &str {
+pub(crate) fn channel_type_to_str(ct: &ChannelType) -> &str {
     match ct {
         ChannelType::Telegram => "telegram",
         ChannelType::Discord => "discord",

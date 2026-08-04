@@ -100,6 +100,8 @@ tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip",
 
 # Home directory resolution
 dirs = "6"
+keyring = { version = "=3.6.3", default-features = false }
+oauth2 = { version = "=5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 
 # YAML parsing
 serde_yaml = "0.9"
@@ -184,13 +186,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Email (SMTP + IMAP)
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
-# imap 2.x pulls a transitive imap-proto v0.10.2 that triggers a future-incompat
-# `trailing semicolon in macro` warning. The summary is muted via
-# `.cargo/config.toml [future-incompat-report] frequency = "never"`. Migration to
-# imap 3.0 is parked until the crate exits alpha — the 3.0.0-alpha.* line is a
-# full async rewrite (imap-next + imap-codec + imap-types) that would require
-# rewriting most of `crates/captain-channels/src/email.rs` (~627 LOC, sync).
-imap = "2"
+# The 3.0 alpha keeps the synchronous client API while moving to the maintained
+# imap-proto 0.16 line. Pin it exactly until the upstream stable release so a
+# prerelease API change cannot enter Captain through an ordinary lock refresh.
+imap = "=3.0.0-alpha.15"
 # Native TLS is only used by the IMAP rail. Keep OpenSSL vendored so Linux
 # release bundles build reproducibly without host/container libssl-dev.
 native-tls = { version = "0.2", features = ["vendored"] }

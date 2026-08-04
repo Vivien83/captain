@@ -55,6 +55,33 @@ a claim that ordinary release tests are equivalent to Miri.
 | F12 | Remediated honestly (`48855ea`) | The unused local `taint` labels were removed. Code, API, CLI, and docs now describe heuristic content guards and explicitly report `provenance_tracking: false`. | Treat real typed provenance propagation as a separate design project. |
 | F13 | Remediated (`fc38ff7`) | CapSpec Telegram decision telemetry records decision kind and bounded transport error only; the opaque operator token is absent from success and failure logs. | Keep the source-bound non-disclosure regression. |
 
+## HARDEN11 follow-up — 2026-07-30
+
+This addendum supersedes the **current** F7 execution posture without rewriting
+the Alpha 10 evidence above.
+
+- `ExecSecurityMode::default()` is now `Allowlist`.
+- `personal_workstation`, `remote_operator`, and `untrusted_execution` are
+  typed deployment profiles. Remote operation has an allowlist floor;
+  untrusted execution denies agent-controlled host process starts.
+- The daemon policy and per-agent policy are intersected before tool discovery
+  and dispatch. Agent manifests cannot broaden profile, mode, command lists,
+  blocklists, time/output limits, or critical mode.
+- `process_start` now requires a content-bound exact-program `ExecPermit`; the
+  guarded-exec source audit covers eleven controlled process sinks.
+- Docker and WASM are explicit rails. Captain performs no automatic routing
+  and no host fallback. An enabled Docker rail under `untrusted_execution`
+  must use network `none`, a read-only root and workspace, dropped
+  capabilities, and finite CPU, memory, and PID limits.
+- CLI Status/Security, full Doctor, Ratatui, Control, `/api/status`,
+  `/api/health/detail`, and `/api/security` expose profile, configured and
+  effective mode, host permission, explicit routing, and Docker readiness.
+
+F8 and the dependency audit require no reopened implementation: remote
+marketplace operations remain structurally frozen before network/filesystem
+I/O, and release readiness already runs both the configured and unfiltered
+RustSec audits against an exact reviewed baseline.
+
 ## Closure Evidence
 
 The complete release-readiness gate passed from clean source before packaging:

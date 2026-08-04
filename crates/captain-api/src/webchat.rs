@@ -103,8 +103,8 @@ pub async fn logo_png() -> impl IntoResponse {
     )
 }
 
-/// GET /assets/app/{*path} — ES modules for the Control app. Static match
-/// over embedded files only: no filesystem access, no traversal surface.
+/// GET /assets/app/{*path} — JavaScript for the browser surfaces. Static
+/// match over embedded files only: no filesystem access or traversal surface.
 pub async fn app_asset(
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> impl IntoResponse {
@@ -163,6 +163,13 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
         "vendor/htm.module.js" => Some(include_str!("../static/vendor/preact/htm.module.js")),
         "vendor/marked.esm.js" => Some(include_str!("../static/vendor/marked/marked.esm.js")),
         "vendor/purify.es.mjs" => Some(include_str!("../static/vendor/dompurify/purify.es.mjs")),
+        "terminal/xterm.js" => Some(include_str!("../static/vendor/xterm/xterm.js")),
+        "terminal/addon-unicode11.js" => {
+            Some(include_str!("../static/vendor/xterm/addon-unicode11.js"))
+        }
+        "terminal/addon-fit.js" => Some(include_str!("../static/vendor/xterm/addon-fit.js")),
+        "terminal/main.js" => Some(include_str!("../static/js/pages/terminal.js")),
+        "config/main.js" => Some(include_str!("../static/js/pages/config.js")),
         _ => None,
     }
 }
@@ -192,6 +199,11 @@ mod control_app_asset_tests {
             "views/Capabilities.js",
             "views/NativeCapabilities.js",
             "views/Status.js",
+            "terminal/xterm.js",
+            "terminal/addon-unicode11.js",
+            "terminal/addon-fit.js",
+            "terminal/main.js",
+            "config/main.js",
         ] {
             let content = embedded_app_asset(path)
                 .unwrap_or_else(|| panic!("Control asset {path} is not embedded"));
@@ -199,6 +211,31 @@ mod control_app_asset_tests {
         }
         assert!(embedded_app_asset("views/System.js").is_none());
         assert!(embedded_app_asset("../../config.toml").is_none());
+    }
+
+    #[test]
+    fn every_browser_script_is_external_and_import_maps_are_absent() {
+        for (surface, html) in [
+            ("control", APP_HTML),
+            ("terminal", TERMINAL_HTML),
+            ("config", CONFIG_HTML),
+        ] {
+            assert!(
+                !html.contains("type=\"importmap\""),
+                "{surface} must not require an inline import map"
+            );
+            for (offset, _) in html.match_indices("<script") {
+                let tag_end = html[offset..]
+                    .find('>')
+                    .map(|relative| offset + relative + 1)
+                    .expect("script opening tag should be closed");
+                let opening_tag = &html[offset..tag_end];
+                assert!(
+                    opening_tag.contains(" src=\""),
+                    "{surface} contains an inline script: {opening_tag}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -256,39 +293,49 @@ mod control_app_asset_tests {
 
     #[test]
     fn web_terminal_uses_unicode11_cell_widths() {
-        assert!(TERMINAL_HTML.contains("e.Unicode11Addon=t()"));
-        assert!(TERMINAL_HTML.contains("allowProposedApi: true"));
-        assert!(TERMINAL_HTML.contains("term.unicode.activeVersion = '11'"));
-
-        let xterm = TERMINAL_HTML
-            .find("e.Terminal=void 0")
-            .expect("xterm must be embedded");
-        let unicode11 = TERMINAL_HTML
-            .find("e.Unicode11Addon=t()")
+        let xterm = embedded_app_asset("terminal/xterm.js").expect("xterm must be embedded");
+        let unicode11 = embedded_app_asset("terminal/addon-unicode11.js")
             .expect("Unicode 11 addon must be embedded");
-        let terminal_app = TERMINAL_HTML
-            .find("Captain Web Terminal")
-            .expect("terminal application must be embedded");
-        assert!(xterm < unicode11 && unicode11 < terminal_app);
+        let terminal_app =
+            embedded_app_asset("terminal/main.js").expect("terminal app must be embedded");
+
+        assert!(xterm.contains("e.Terminal=void 0"));
+        assert!(unicode11.contains("e.Unicode11Addon=t()"));
+        assert!(terminal_app.contains("allowProposedApi: true"));
+        assert!(terminal_app.contains("term.unicode.activeVersion = '11'"));
+
+        let xterm_tag = TERMINAL_HTML
+            .find("/assets/app/terminal/xterm.js")
+            .expect("xterm script tag must be present");
+        let unicode11_tag = TERMINAL_HTML
+            .find("/assets/app/terminal/addon-unicode11.js")
+            .expect("Unicode 11 script tag must be present");
+        let terminal_app_tag = TERMINAL_HTML
+            .find("/assets/app/terminal/main.js")
+            .expect("terminal app script tag must be present");
+        assert!(xterm_tag < unicode11_tag && unicode11_tag < terminal_app_tag);
     }
 
     #[test]
     fn web_terminal_reopens_only_validated_persisted_sessions() {
-        assert!(TERMINAL_HTML.contains("body: JSON.stringify({ activate: false })"));
-        assert!(TERMINAL_HTML.contains("New persisted session"));
-        assert!(TERMINAL_HTML.contains("bindKnownPersistedSession(items)"));
-        assert!(TERMINAL_HTML.contains("fetch('/api/sessions'"));
-        assert!(TERMINAL_HTML.contains("return items;"));
-        assert!(TERMINAL_HTML.contains("historyById[id] || remoteById[id]"));
-        assert!(TERMINAL_HTML.contains("meta.source === 'history' ? makeAutoSessionId() : id"));
+        let terminal_app =
+            embedded_app_asset("terminal/main.js").expect("terminal app must be embedded");
+
+        assert!(terminal_app.contains("body: JSON.stringify({ activate: false })"));
+        assert!(terminal_app.contains("New persisted session"));
+        assert!(terminal_app.contains("bindKnownPersistedSession(items)"));
+        assert!(terminal_app.contains("fetch('/api/sessions'"));
+        assert!(terminal_app.contains("return items;"));
+        assert!(terminal_app.contains("historyById[id] || remoteById[id]"));
+        assert!(terminal_app.contains("meta.source === 'history' ? makeAutoSessionId() : id"));
         assert!(
-            !TERMINAL_HTML.contains(
+            !terminal_app.contains(
                 "if (!activeResumeSessionId && validUuid(querySession)) activeResumeSessionId = querySession"
             ),
             "a terminal UUID must never be assumed to be a persisted session UUID"
         );
         assert!(
-            !TERMINAL_HTML.contains("return items.slice(0, recentSessionsLimit)"),
+            !terminal_app.contains("return items.slice(0, recentSessionsLimit)"),
             "persisted history must not be truncated to the browser recent-session cache"
         );
     }
@@ -352,18 +399,10 @@ const TERMINAL_HTML: &str = concat!(
     "\n</style>\n",
     "</head>\n<body class=\"terminal-body\" data-theme=\"dark\">\n",
     include_str!("../static/terminal_body.html"),
-    "<script>\n",
-    include_str!("../static/vendor/xterm/xterm.js"),
-    "\n</script>\n",
-    "<script>\n",
-    include_str!("../static/vendor/xterm/addon-unicode11.js"),
-    "\n</script>\n",
-    "<script>\n",
-    include_str!("../static/vendor/xterm/addon-fit.js"),
-    "\n</script>\n",
-    "<script>\n",
-    include_str!("../static/js/pages/terminal.js"),
-    "\n</script>\n",
+    "<script src=\"/assets/app/terminal/xterm.js\"></script>\n",
+    "<script src=\"/assets/app/terminal/addon-unicode11.js\"></script>\n",
+    "<script src=\"/assets/app/terminal/addon-fit.js\"></script>\n",
+    "<script src=\"/assets/app/terminal/main.js\"></script>\n",
     "</body></html>"
 );
 
@@ -383,8 +422,6 @@ const CONFIG_HTML: &str = concat!(
     "\n</style>\n",
     "</head>\n<body class=\"config-body\" data-theme=\"dark\">\n",
     include_str!("../static/config_body.html"),
-    "<script>\n",
-    include_str!("../static/js/pages/config.js"),
-    "\n</script>\n",
+    "<script src=\"/assets/app/config/main.js\"></script>\n",
     "</body></html>"
 );

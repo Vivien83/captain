@@ -34,6 +34,8 @@ impl CaptainKernel {
             self,
         ));
         self.restore_persisted_hands();
+        super::kernel_gmail_automation::spawn_gmail_automation_worker(Arc::clone(self));
+        super::kernel_gmail_delivery::spawn_gmail_delivery_worker(Arc::clone(self));
         self.start_registry_background_agent_loops();
         self.spawn_runtime_service_loops();
     }
@@ -53,7 +55,7 @@ impl CaptainKernel {
         crate::builtin_crons::ensure_all(self);
         crate::codex_model_updates::spawn_codex_model_catalog_monitor(Arc::clone(self));
         crate::release_updates::spawn_runtime_update_monitor(Arc::clone(self));
-        crate::provider_quota_monitor::spawn_codex_provider_quota_monitor(Arc::clone(self));
+        crate::provider_quota_monitor::spawn_provider_quota_monitor(Arc::clone(self));
         crate::milestone_alerts::spawn_deadline_alert_task(Arc::clone(self));
         crate::ephemeral_agents::spawn_ephemeral_agent_reaper(Arc::clone(self));
         self.start_agent_delegation_worker();

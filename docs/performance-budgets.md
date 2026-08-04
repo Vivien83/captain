@@ -61,8 +61,11 @@ The focused deterministic and browser checks are:
 
 ```bash
 scripts/control-web-audit.sh
+scripts/control-xss-smoke.mjs
 scripts/control-chat-performance-smoke.mjs
 ```
 
-The browser smoke writes disposable screenshots below `/private/tmp` for visual
-inspection. It does not add generated images to the repository.
+The XSS smoke runs the production CSP against malicious Markdown, tool output,
+and session labels. Browser smokes may write disposable screenshots below
+`/private/tmp` for visual inspection; they do not add generated images to the
+repository.

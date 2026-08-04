@@ -1,5 +1,8 @@
 //! Live provider subscription quota monitor and persistence bridge.
 
+#[path = "provider_quota_notification.rs"]
+mod notification;
+
 use crate::CaptainKernel;
 use captain_memory::provider_quota::ProviderQuotaStore;
 use captain_runtime::provider_quota::ProviderQuotaObserver;
@@ -22,8 +25,14 @@ pub(crate) fn provider_quota_observer(store: ProviderQuotaStore) -> ProviderQuot
     Arc::new(move |snapshot| persist_provider_quota_snapshot(&store, &snapshot))
 }
 
+/// Start provider-owned quota observation and native reset notifications.
+pub(crate) fn spawn_provider_quota_monitor(kernel: Arc<CaptainKernel>) {
+    notification::spawn_provider_quota_reset_delivery_worker(Arc::clone(&kernel));
+    spawn_codex_provider_quota_refresh(kernel);
+}
+
 /// Refresh Codex's official account usage endpoint immediately and every 5 minutes.
-pub(crate) fn spawn_codex_provider_quota_monitor(kernel: Arc<CaptainKernel>) {
+fn spawn_codex_provider_quota_refresh(kernel: Arc<CaptainKernel>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(REFRESH_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -121,6 +130,18 @@ fn persist_provider_quota_snapshot(store: &ProviderQuotaStore, snapshot: &Provid
                 .secondary
                 .as_ref()
                 .and_then(|window| window.resets_at);
+            if !change.confirmed_resets.is_empty() {
+                info!(
+                    provider = %snapshot.provider,
+                    limit_id = %snapshot.limit_id,
+                    reset_windows = ?change
+                        .confirmed_resets
+                        .iter()
+                        .map(|window| window.kind)
+                        .collect::<Vec<_>>(),
+                    "Provider subscription quota reset confirmed and queued"
+                );
+            }
             match change.current_alert {
                 QuotaAlertLevel::Normal => info!(
                     provider = %snapshot.provider,

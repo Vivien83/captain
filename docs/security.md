@@ -60,6 +60,7 @@ surface decisions that still require operator review.
 | 14 | Loop Guard | `captain-runtime` | Stuck agent tool loops |
 | 15 | Session Repair | `captain-runtime` | Corrupted LLM conversation history |
 | 16 | Health Endpoint Redaction | `captain-api` | Information leakage |
+| 17 | Durable Delegation Lineage | `captain-memory`, `captain-kernel` | Detached recursive delegation escaping depth or token limits |
 
 ---
 
@@ -234,6 +235,27 @@ stored, never the raw command. A durable denial requires an operator reason.
 Control, API, TUI, and Telegram can revoke a rule by ID; decisions, automatic
 rule applications, and revocations enter the audit hash chain with actor,
 source, digest, and rule ID.
+
+### 2.7 Durable Delegation Lineage
+
+Detached delegation does not trust process-local depth alone. While a delegated
+model turn executes, the Kernel carries its job ID, root ID, depth, and target
+agent in Tokio task-local state. A nested `agent_delegate` request derives its
+proposed parent from that state, but the SQLite store is authoritative.
+
+Enqueue uses an immediate transaction and requires the persisted parent to be
+`running` with `effect_state = started`, requires the parent target to equal the
+new caller, and requires exact root and depth continuity. Root jobs start at
+depth 1 and no job may exceed depth 10. These fields are persisted, included in
+bounded status events, and survive daemon restarts.
+
+Each root also owns a durable reservation row capped at 500000 tokens. Enqueue
+atomically adds the child's requested `max_tokens`; completion, retry, uncertain
+recovery, and partial history pruning never decrease it. Idempotent replay is
+checked before parent liveness and budget reservation, so a retried tool result
+returns the original job without charging twice. Visibility filtering removes
+`agent_delegate` from leaf agents as an early guard, but the transactional store
+check remains the security boundary.
 
 ---
 
@@ -688,7 +710,35 @@ reclaims the page.  An attacker with access to a core dump, swap file, or
 memory forensics tool can recover API keys.  `Zeroizing<String>` ensures
 the secret is overwritten as soon as it is no longer needed.
 
-### 8.4 External Secret Files
+### 8.4 Native Vault Master Key
+
+`vault.enc` is encrypted with AES-256-GCM, but its master key is not stored in
+that file or in Captain configuration. Captain uses the platform credential
+store directly: macOS Keychain, Windows Credential Manager, or Linux Secret
+Service. Every new key is read back and compared before vault initialization
+can succeed. A storage error fails closed and no code path prints the generated
+key.
+
+`CAPTAIN_VAULT_KEY` is an explicit base64-encoded 32-byte override for
+headless and CI environments. It takes precedence when supplied; operators are
+responsible for injecting it through their secret manager rather than a
+committed environment file.
+
+The obsolete local `.keyring` format is migration-only. Captain decodes and
+validates it, persists and verifies the same key in the native store, then
+removes the weak copy. Failed persistence leaves the legacy copy untouched; a
+native/legacy mismatch refuses both automatic deletion and overwrite.
+An unreadable or malformed legacy copy is likewise never ignored silently;
+unlock stops with an operator-facing remediation and leaves the file intact.
+
+Every vault mutation now holds a bounded cross-process lock around the full
+reload, change, and durable atomic-write cycle. A CLI command and the daemon
+therefore merge changes made from stale in-memory snapshots instead of letting
+the last writer erase unrelated credentials. The lock wait fails after ten
+seconds with a retryable error; a crashed process releases its OS lock, and the
+lock file itself contains no secret material.
+
+### 8.5 External Secret Files
 
 Production deployments can map logical credential keys to read-only files in
 `$CAPTAIN_HOME/secret-sources.toml`. This supports container secrets, systemd
@@ -812,7 +862,7 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert("x-xss-protection", "1; mode=block".parse().unwrap());
+    headers.insert("x-xss-protection", "0".parse().unwrap());
     headers.insert("content-security-policy", /* CSP policy */);
     headers.insert("referrer-policy", "strict-origin-when-cross-origin".parse().unwrap());
     headers.insert("cache-control", "no-store, no-cache, must-revalidate".parse().unwrap());
@@ -824,7 +874,7 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
 |--------|-------|------------------|
 | `X-Content-Type-Options` | `nosniff` | MIME type sniffing attacks |
 | `X-Frame-Options` | `DENY` | Clickjacking via iframes |
-| `X-XSS-Protection` | `1; mode=block` | Reflected XSS (legacy browsers) |
+| `X-XSS-Protection` | `0` | Disable legacy filters that can mutate otherwise safe markup |
 | `Content-Security-Policy` | See below | XSS, code injection, data exfiltration |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Referrer leakage |
 | `Cache-Control` | `no-store, no-cache, must-revalidate` | Sensitive data caching |
@@ -834,13 +884,31 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
 | Directive | Value | Purpose |
 |-----------|-------|---------|
 | `default-src` | `'self'` | Deny all external resources by default |
-| `script-src` | `'self' 'unsafe-inline' 'unsafe-eval' cdn.jsdelivr.net` | Allow scripts from self and CDN |
-| `style-src` | `'self' 'unsafe-inline' cdn.jsdelivr.net fonts.googleapis.com` | Allow styles from self, CDN, Google Fonts |
-| `img-src` | `'self' data:` | Allow images from self and data URIs |
-| `connect-src` | `'self' ws: wss:` | Allow WebSocket connections |
-| `font-src` | `'self' cdn.jsdelivr.net fonts.gstatic.com` | Allow fonts from CDN |
+| `script-src` | `'self'` | Only finite embedded same-origin script assets |
+| `script-src-attr` | `'none'` | Reject HTML event-handler attributes |
+| `style-src` | `'self' 'unsafe-inline'` | Same-origin styles plus bounded first-party dynamic layout |
+| `img-src` | `'self' data: blob:` | Same-origin and local generated images |
+| `connect-src` | `'self'` plus loopback `ws:`/`wss:` | Same-origin API and declared local realtime transports |
+| `font-src` | `'self'` | No external font authority |
+| `worker-src` / `manifest-src` | `'self'` | Embedded PWA worker and manifest only |
 | `object-src` | `'none'` | Block all plugins (Flash, Java, etc.) |
-| `base-uri` | `'self'` | Prevent base tag hijacking |
+| `base-uri` | `'none'` | Prevent base tag hijacking |
+| `frame-ancestors` | `'none'` | Prevent framing in modern browsers |
+
+Control's import map and the Terminal/Config inline script bundles were
+removed. All browser JavaScript is now served from the finite embedded
+`/assets/app/` map, so the executable policy needs neither `unsafe-inline` nor
+`unsafe-eval`. Inline CSS remains explicit because first-party components use
+bounded dynamic width/visibility values; attacker-controlled Markdown cannot
+carry `style`.
+
+LLM Markdown is parsed and then sanitized with a fixed passive tag and
+attribute allowlist. Forms, inputs, SVG, styles, frames, objects, embeds,
+scripts, data attributes, event handlers, and unsafe URL protocols are
+discarded. Links are restricted to HTTP(S), `mailto`, or `tel`, then receive
+`target="_blank"` with `rel="noopener noreferrer"`. Tool output and session
+labels use Preact text nodes. `scripts/control-xss-smoke.mjs` runs malicious
+probes through all three paths in Chromium under the production CSP.
 | `form-action` | `'self'` | Restrict form submission targets |
 
 ---
@@ -1009,7 +1077,7 @@ pattern like `"*"`, path traversal is still blocked.
 Agent-controlled execution has one shared boundary. It covers the shell tool,
 goal checks and recovery, Markdown skill capabilities, `execute_code`,
 workflow shell actions, static skill checks, package wrappers, Hand dependency
-installation, and WASM host execution.
+installation, WASM host execution, and supervised `process_start`.
 
 Before a process can start, `guarded_exec` applies the active execution policy,
 critical-pattern decision, literal-secret and `secrets.env` guards, executable
@@ -1017,6 +1085,16 @@ path validation, an explicit workspace, bounded runtime/output, and structured
 audit events that never contain the command body. The interactive shell tool
 can return a one-shot approval requirement. Unattended surfaces cannot invent
 an approval: critical content fails closed.
+
+The permit binding is separate from presentation. Shell permits bind to the
+exact reviewed content and surface. Direct-program permits bind to a
+domain-separated SHA-256 preimage beginning with
+`captain.exec-permit.program.v1`, followed by a big-endian `u64` length and the
+raw executable bytes, a big-endian `u64` argument count, then a big-endian
+`u64` length and raw bytes for every argument. The review string is a readable,
+escaped representation only; it grants no authority. The binary encoding is
+injective across executable and argument boundaries even when an input
+contains NUL.
 
 ### 13.1 Environment Clearing
 
@@ -1075,11 +1153,15 @@ like `../../bin/dangerous`.
 
 Allowlist mode rejects shell metacharacters before direct argument parsing and
 requires the executable to be explicitly allowed. Full mode still applies the
-configured blocklist and critical-pattern policy. New installations use
-`full`/`safe`: routine commands remain available, while recognized
-catastrophic commands fail closed. `open` is an explicit opt-in that can return
-a content-bound approval requirement, and `paranoid` requests approval for
-every shell-affecting operation.
+configured blocklist and critical-pattern policy. The structural default is
+`allowlist`; guided local setup writes an explicit
+`personal_workstation`/`full` choice for a trusted single-user host.
+`remote_operator` imposes effective allowlist semantics, while
+`untrusted_execution` denies all agent-controlled host starts. An agent policy
+is intersected with the daemon policy before visibility and dispatch, including
+mode, allowlists, blocklists, limits, critical mode, and profile. `open` can
+return a content-bound approval requirement, and `paranoid` requests approval
+for every shell-affecting operation.
 
 Critical-command recognition normalizes case, whitespace, short/long flag
 forms, common wrappers, and nested `sh`/`bash`/`zsh`/`dash -c` or `eval`
@@ -1100,11 +1182,17 @@ The native execution backend reports:
 
 ```json
 {
+  "profile": "untrusted_execution",
   "backend": "host_process",
   "isolation_level": "environment_scrub",
   "os_isolation": false,
   "environment_scrub": true,
-  "dangerous_command_guard": "normalized_lexical_heuristic"
+  "dangerous_command_guard": "normalized_lexical_heuristic",
+  "configured_policy_mode": "full",
+  "policy_mode": "deny",
+  "host_execution_allowed": false,
+  "isolation_routing": "explicit_only",
+  "explicit_isolation_backends": ["docker_exec", "wasm_agent"]
 }
 ```
 
@@ -1112,6 +1200,10 @@ The native execution backend reports:
 bounds are host-process protections. They are not namespace, seccomp,
 Landlock, chroot, or container isolation. Operators must choose the explicit
 Docker or WASM backend when an operating-system isolation boundary is required.
+Captain never auto-routes and never falls back to the host. An enabled Docker
+rail for `untrusted_execution` must use network `none`, a read-only root,
+dropped capabilities, a read-only workspace mount, and finite CPU, memory, and
+PID limits; daemon availability remains a live invocation-time check.
 
 ---
 
@@ -1444,6 +1536,7 @@ allowed_origins = []  # Exact additional HTTP(S) origins; restart after changes
 
 [auth]
 enabled = true
+allow_unauthenticated_loopback = false
 session_ttl_hours = 72
 session_cookie_secure = "auto"  # auto, always, or never for explicit local HTTP
 
@@ -1460,6 +1553,8 @@ max_memory_bytes = 16777216 # 16 MB max WASM memory
 # Rate Limiting
 # 500 tokens/minute/IP (not currently configurable via config.toml)
 # Web login also has bounded per-IP + per-username exponential backoff.
+# Active login blocks are never evicted under the 4096-key capacity limit.
+# Full active maps trigger a logged five-second global fail-closed backoff.
 
 # Web Search SSRF Protection
 [web]
@@ -1471,6 +1566,23 @@ atomically after one successful login. Browser session cookies are HttpOnly,
 SameSite=Strict, and `Secure` according to `session_cookie_secure`. Browser
 WebSocket/SSE connections use 30-second path/IP/epoch-bound one-time tickets;
 protected routes never authenticate from a `token` query parameter.
+
+Login attempts use separate process-local IP and normalized-username maps,
+bounded to 4,096 keys each. Capacity pressure may evict only a record with no
+active retry delay; an active block is retained. If every slot is actively
+blocked, Captain logs limiter saturation and applies one shared five-second
+`429` backoff. A restart clears this bounded state, so an Internet-facing
+deployment must also enforce login limits at its reverse proxy, firewall, WAF,
+or equivalent edge.
+
+Protected API and web routes fail closed when neither a daemon API key nor
+browser-session auth is configured. Credentialless development access requires
+the explicit `auth.allow_unauthenticated_loopback = true` opt-out and the
+actual client must be loopback. Missing peer metadata and remote clients behind
+a declared local reverse proxy are denied. Ambiguous or multi-hop
+`X-Forwarded-For` values are also denied for this credentialless mode.
+`captain setup` is the supported remediation and always writes the fail-closed
+value.
 
 ### 18.2 Environment Variables for Secrets
 
@@ -1581,6 +1693,16 @@ warning is therefore accepted transitively and pinned exactly.
 present only through `flume 0.12.0`, itself required by `mdns-sd 0.20.3`, and
 is pinned as an explicit release warning rather than hidden.
 
+The Email rail pins `imap 3.0.0-alpha.15` and its maintained
+`imap-proto 0.16.7` parser. This removes the `imap-proto 0.10.2`
+future-incompatibility warnings and the unsound `lexical-core 0.7.6` parser
+chain. The prerelease keeps the synchronous IMAP contract used by Captain and
+is pinned exactly until upstream publishes 3.0 stable. The adapter explicitly
+selects implicit TLS for every configured IMAP port, preserving the previous
+transport contract and preventing an automatic switch to STARTTLS on custom
+ports. The dependency gate also requires its sole parser parent, `native-tls`
+feature, and vendored TLS path to remain exact.
+
 The two reviewed vulnerability exceptions are RUSTSEC-2026-0194 and
 RUSTSEC-2026-0195 on `quick-xml 0.37.5`. The only parent is
 `tauri-winrt-notification 0.7.2` in the Windows desktop notification chain.
@@ -1634,6 +1756,8 @@ signature and absent Windows Authenticode signature, remains public in
 | API brute force / DoS | GCRA rate limiter (Section 11) |
 | Path traversal via `../` | safe_resolve_path / safe_resolve_parent (Section 12) |
 | Secret leakage to child processes | env_clear() + allowlist (Section 13) |
+| Agent manifest broadens daemon execution authority | Symmetric policy intersection plus non-bypassable deployment profile (Section 13.4) |
+| Untrusted code reaches host execution | `untrusted_execution` denies host starts; Docker/WASM require explicit invocation with no host fallback (Section 13.5) |
 | Untrusted skill source | Remote marketplace frozen; complete local source review plus manifest policy and advisory phrase findings (Section 14) |
 | Agent stuck in tool loop | LoopGuard with graduated response (Section 15) |
 | Corrupted LLM session history | Session repair (Section 16) |

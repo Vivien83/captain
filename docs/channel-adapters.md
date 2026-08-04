@@ -48,6 +48,47 @@ Follow the setup wizard for the exact fields required by the installed Captain
 version. Never paste a bot token, mailbox password, or callback secret into a
 manifest, repository, issue, or chat message.
 
+### Email: Gmail OAuth or IMAP/SMTP
+
+Captain exposes two deliberately separate email rails:
+
+- `captain email ...` connects one or more Gmail accounts through OAuth and
+  enables bounded Gmail API tools plus deterministic Gmail-to-agent rules;
+- `captain channel setup email` connects one or more provider-neutral
+  mailboxes through IMAP/SMTP so email itself can be a conversational channel.
+
+The IMAP/SMTP wizard asks for a stable lowercase account alias, mailbox
+address, hosts, app password, allowed senders, and whether the account should
+be the default. Running it again for another alias preserves existing
+mailboxes. The password is stored through Captain's credential resolver under
+a canonical per-account key; it is never written to `config.toml`.
+
+Bare `email` addresses the configured default mailbox. A secondary mailbox is
+addressed as `email:<alias>`, including for a live test:
+
+```bash
+captain channel test email
+captain channel test email:work
+```
+
+The live Email test logs in to IMAP, verifies every configured folder, and
+authenticates to SMTP. Supplying a recipient through the API additionally sends
+a real message. The operation can legitimately take longer than a token-only
+channel check because IMAP and SMTP each have a bounded network probe.
+
+An empty `allowed_senders` list is locked, not open. Rules accept only `*`, an
+exact address, or an explicit `@example.org` domain. Use `*` only when open
+inbound access is intentional. Messages denied by policy, malformed messages,
+and mail sent by the mailbox to itself are acknowledged without a model turn
+so they cannot retry forever.
+
+CLI, TUI, Desktop and Web Terminal consume the same readiness contract. They
+distinguish `ready`, `partial`, `locked`, `disabled`, `invalid`, and
+`not_configured`, show the default account and ready-account count, and never
+render a stored secret. The legacy scalar `[channels.email]` shape remains
+readable as one `default` account, but every guided write uses the named
+multi-account form.
+
 ### Telegram Rich Messages
 
 Telegram is Rich-first for normal Captain replies. Bot API 10.2 preserves GFM
@@ -98,6 +139,22 @@ is not sufficient for this privileged action. Stale or malformed callbacks are
 answered directly and never enter a session or model turn. Host updates verify
 the archive checksum in a detached process. Docker/manual procedures retain a
 24-hour reminder until the new runtime is actually observed.
+
+Provider-subscription reset notices are model-independent too. The kernel
+confirms a reset from two official provider observations, atomically records
+the transition and queues one mobile-readable Rich card for Telegram's
+`default_chat_id`. The card names each replenished window, usage before and
+after, remaining headroom, the next provider reset, observation time, and a
+short event ID. It contains no copied entitlement table and does not invoke an
+LLM.
+
+The reset outbox uses bounded retry for known send failures. A lease that
+expires while Telegram's outcome is unknown becomes `uncertain` and is never
+replayed automatically, because Telegram may already have accepted it.
+`channels.silent_mode = true` suppresses pending reset cards and retains their
+audit rows; disabling silent mode does not release an old notification burst.
+Queue state is visible under `provider_subscriptions.reset_notifications` in
+`GET /api/status` and `GET /api/budget`.
 
 ## Access Policy
 

@@ -127,23 +127,54 @@ fn print_daemon_runtime(body: &serde_json::Value) {
 }
 
 fn execution_summary(execution: &serde_json::Value) -> Option<String> {
+    let profile = execution["profile"].as_str().unwrap_or("unknown");
     let backend = execution["backend"].as_str()?;
     let isolation = execution["isolation_level"].as_str().unwrap_or("unknown");
-    let mode = execution["policy_mode"].as_str().unwrap_or("unknown");
+    let configured = execution["configured_policy_mode"]
+        .as_str()
+        .unwrap_or_else(|| execution["policy_mode"].as_str().unwrap_or("unknown"));
+    let effective = execution["policy_mode"].as_str().unwrap_or("unknown");
     let critical = execution["critical_mode"].as_str().unwrap_or("unknown");
+    let policy = if configured == effective {
+        format!("{effective}/{critical}")
+    } else {
+        format!("configured {configured} -> effective {effective}/{critical}")
+    };
+    let host = if execution["host_execution_allowed"]
+        .as_bool()
+        .unwrap_or(effective != "deny")
+    {
+        "host allowed"
+    } else {
+        "host blocked"
+    };
     let os_isolation = if execution["os_isolation"].as_bool().unwrap_or(false) {
         "OS-isolated"
     } else {
         "no OS isolation"
     };
     Some(format!(
-        "{backend}; {isolation}; {mode}/{critical}; {os_isolation}"
+        "{profile}; {backend}; {isolation}; {policy}; {host}; {os_isolation}"
     ))
 }
 
 fn print_execution_summary(execution: &serde_json::Value) {
     if let Some(summary) = execution_summary(execution) {
         ui::kv("Host execution", &summary);
+    }
+    let docker = &execution["docker"];
+    if !docker.is_null() {
+        let enabled = if docker["enabled"].as_bool().unwrap_or(false) {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let routing = docker["routing"].as_str().unwrap_or("explicit_only");
+        let availability = docker["runtime_availability"].as_str().unwrap_or("unknown");
+        ui::kv(
+            "Docker rail",
+            &format!("{enabled}; {routing}; runtime {availability}"),
+        );
     }
 }
 
@@ -620,6 +651,15 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
         }
     };
     let runtime_health = in_process_runtime_health(llm_driver_ready, &workload, &disk, &budget);
+    let mut execution = serde_json::to_value(kernel.config.exec_policy.host_execution_posture())
+        .unwrap_or_default();
+    execution["docker"] = serde_json::to_value(
+        kernel
+            .config
+            .docker
+            .isolation_posture(kernel.config.exec_policy.profile),
+    )
+    .unwrap_or_default();
     let status_body = serde_json::json!({
         "status": "in-process",
         "agent_count": agent_count,
@@ -629,7 +669,7 @@ fn print_in_process_status(config: Option<PathBuf>, json: bool, verbose: bool) {
         "default_model": kernel.config.default_model.model.clone(),
         "llm_driver_ready": llm_driver_ready,
         "llm_driver_error": llm_driver_error.clone(),
-        "execution": kernel.config.exec_policy.host_execution_posture(),
+        "execution": execution,
         "daemon": false,
         "shutdown": {"status": "idle", "active_work_count": 0, "active_run_count": 0, "active_process_count": 0, "operator_actions": []},
         "native_embeddings": captain_runtime::native_embeddings::status(),
@@ -779,17 +819,20 @@ mod tests {
     #[test]
     fn execution_summary_states_the_absence_of_os_isolation() {
         let summary = execution_summary(&serde_json::json!({
+            "profile": "remote_operator",
             "backend": "host_process",
             "isolation_level": "environment_scrub",
-            "policy_mode": "full",
+            "configured_policy_mode": "full",
+            "policy_mode": "allowlist",
             "critical_mode": "safe",
+            "host_execution_allowed": true,
             "os_isolation": false
         }))
         .unwrap();
 
         assert_eq!(
             summary,
-            "host_process; environment_scrub; full/safe; no OS isolation"
+            "remote_operator; host_process; environment_scrub; configured full -> effective allowlist/safe; host allowed; no OS isolation"
         );
     }
 

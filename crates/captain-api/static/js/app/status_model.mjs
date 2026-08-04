@@ -23,6 +23,8 @@ export function statusSnapshot(payload = {}) {
   const voice = objectAt(body.native_voice);
   const budget = objectAt(body.budget);
   const providerSubscriptions = objectAt(budget.provider_subscriptions);
+  const execution = objectAt(body.execution);
+  const docker = objectAt(execution.docker);
   const providerQuotaItems = arrayAt(providerSubscriptions.items).map((item) => {
     const quota = objectAt(item);
     const window = (value) => {
@@ -141,6 +143,23 @@ export function statusSnapshot(payload = {}) {
         state: stringAt(providerSubscriptions.state, 'unavailable'),
         reported: providerSubscriptions.reported_by_provider === true,
         items: providerQuotaItems,
+      },
+    },
+    execution: {
+      profile: stringAt(execution.profile, 'unknown'),
+      backend: stringAt(execution.backend, 'unknown'),
+      isolation: stringAt(execution.isolation_level, 'unknown'),
+      configuredMode: stringAt(execution.configured_policy_mode, stringAt(execution.policy_mode, 'unknown')),
+      effectiveMode: stringAt(execution.policy_mode, 'unknown'),
+      criticalMode: stringAt(execution.critical_mode, 'unknown'),
+      hostAllowed: execution.host_execution_allowed === true,
+      osIsolated: execution.os_isolation === true,
+      routing: stringAt(execution.isolation_routing, 'explicit_only'),
+      docker: {
+        enabled: docker.enabled === true,
+        availability: stringAt(docker.runtime_availability, 'unknown'),
+        untrustedReady: docker.untrusted_profile_ready === true,
+        violations: stringsAt(docker.violations),
       },
     },
     workload: {

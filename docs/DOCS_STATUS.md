@@ -4,6 +4,27 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Current Release Candidate
+
+`v0.1.0-alpha.11` is the current locally certified release candidate. It closes
+the remaining Alpha 10 audit gaps and adds the native Gmail OAuth rail,
+crash-safe Gmail automations, named IMAP/SMTP accounts, provider-confirmed
+subscription reset notifications, first-use xAI access, reproducible public
+discovery metadata, and an exact-SHA local pull-request gate.
+
+The candidate host contract remains exactly 22 files: five archives, five
+SHA-256 sidecars, five platform manifests, four installers, one aggregate
+manifest, one deterministic in-toto/SLSA v1 provenance statement, and its
+SHA-256 sidecar. Host targets and Docker architectures must be built strictly
+one at a time with disk/load checkpoints.
+
+Public source commit, annotated tag object, publication time, GitHub asset
+digests, OCI index and architecture manifests are unset until the live release
+is published and observed. No Alpha 10 provenance value is evidence for this
+candidate. The same boundary applies to external authorization: source gates
+prove OAuth/IMAP/SMTP protocol, storage, rollback, recovery and non-disclosure,
+but a real account login requires an operator-owned credential and consent.
+
 ## Current Public Release
 
 `v0.1.0-alpha.10` is the current public prerelease. It promotes the
@@ -84,6 +105,101 @@ streaming/non-streaming finalizer checks the explicit per-turn opt-out before
 embedding or storing its episodic interaction. The normal resumable transcript
 and mandatory operational/audit records remain intentional.
 
+## Alpha 11 Candidate Hardening
+
+The post-Alpha 10 source fails closed when neither browser authentication nor a
+daemon API key is configured. Credentialless development access is no longer
+an implicit consequence of empty credentials: it requires the durable
+`auth.allow_unauthenticated_loopback = true` opt-out and the actual client must
+be loopback. Existing configurations that explicitly disabled auth migrate to
+that visible compatibility flag. Setup and web credential rotation always
+write `false`, while Status and Doctor distinguish `unconfigured`,
+`unauthenticated_loopback`, and protected modes.
+
+The post-Alpha 10 credential vault also replaces its historical obfuscated
+local master-key file with macOS Keychain, Windows Credential Manager, or Linux
+Secret Service. A generated key is never printed and must survive a verified
+readback before initialization succeeds. Headless deployments use the explicit
+`CAPTAIN_VAULT_KEY` override. Legacy migration writes and verifies the native
+copy before deleting the old file; mismatches fail closed.
+
+Detached delegation in the post-Alpha 10 source now has a second, durable
+lineage boundary. Nested jobs persist `root_job_id`, `parent_job_id`, and
+one-based `depth`; enqueue verifies the active parent and caller under an
+immediate SQLite transaction. Depth is capped at 10. A separate lineage ledger
+atomically reserves every job's requested tokens up to 500000 for the complete
+tree and never refunds reservation on completion, retry, crash recovery, or
+partial history pruning. Status events and agent job projections expose bounded
+lineage metadata and remaining reservation without task or result content.
+
+Direct-program execution permits in the post-Alpha 10 source no longer derive
+authority from their human-readable review string. The authorization digest
+uses the fixed `captain.exec-permit.program.v1` domain, then a big-endian `u64`
+length and raw bytes for the executable, a big-endian `u64` argument count, and
+one length-prefixed byte string per argument. This encoding is injective even
+when a Rust string contains NUL; review and audit text remain readable and
+command-free respectively.
+
+The login limiter also fails closed under distributed capacity pressure. Its
+separate IP and normalized-username maps keep at most 4096 keys each, but an
+entry with an active retry delay is never evicted. A full map of active blocks
+starts a logged five-second global backoff and returns the existing `429` plus
+`Retry-After` path. The state is deliberately process-local and bounded; an
+Internet-facing deployment must additionally rate-limit login traffic at the
+reverse proxy, firewall, or edge.
+
+The post-Alpha 10 browser surfaces also use a strict executable-content
+boundary. Control no longer needs an inline import map, and Control, Terminal,
+Config, and the retained Desktop wrapper load every script from an embedded
+same-origin asset. Their CSP has no `unsafe-eval` and grants no inline script
+authority; script attributes, plugins, base-tag mutation, and framing are
+denied. Dynamic first-party layout still requires `style-src 'unsafe-inline'`.
+LLM Markdown is reduced by DOMPurify to a fixed passive allowlist and safe link
+protocols, while ordinary tool/session strings remain Preact text nodes.
+`scripts/control-xss-smoke.mjs` exercises all three attacker-controlled
+surfaces in Chromium under the production CSP.
+
+The post-Alpha 10 execution contract now separates deployment posture from
+command policy. The typed default is `personal_workstation` plus `allowlist`;
+guided local setup may record an explicit trusted-workstation `full` choice.
+`remote_operator` imposes allowlist semantics and `untrusted_execution` denies
+agent-controlled host processes. Per-agent policies are intersected with the
+daemon boundary before tool discovery and dispatch. `process_start` now
+requires an exact-program guarded permit. Docker and WASM remain explicit
+rails with no auto-routing or host fallback, and every status surface reports
+configured versus effective mode and Docker configuration readiness.
+
+Native Gmail accounts use a crash-safe multi-account OAuth lifecycle. Public
+metadata stays in SQLite while client material, access tokens and refresh
+tokens remain in the encrypted vault. Official builds may embed only Captain's
+public Google Desktop client ID; development and organization builds can use a
+reviewed client JSON. PKCE, random state, an exact loopback callback and
+versioned secret replacement remain mandatory. Deterministic Gmail rules and
+deliveries expose bounded metadata, preserve audit history and require explicit
+inspection before an uncertain outcome can be retried.
+
+The independent conversational Email channel supports named IMAP/SMTP accounts
+under `channels.email.accounts`. Each active account has its own allowlist,
+credential, folders, adapter and default agent; one account is the explicit
+default for bare `email`. The bridge persists mailbox/folder/UIDVALIDITY/UID
+acceptance before marking mail seen, so restart recovery can acknowledge a
+duplicate without replaying the model. CLI, API, TUI, Desktop and Web Terminal
+share the same readiness and typed form schema. Passwords never enter TOML or a
+rendered preview.
+
+xAI API keys are a native first-use path validated without a billed completion.
+Captain can identify an externally issued OAuth bearer, but does not claim a
+third-party login or refresh flow that xAI has not published. Provider quota
+reset cards likewise depend on two official observations and replenished
+reported capacity, never on a copied entitlement table or local timer.
+
+The local PR portal verifies an exact GitHub head SHA in a disposable Lima VM
+using root-owned policy and a sealed source tree before guest networking is
+removed. It publishes `captain/local-pr-gate` and recovers orphaned pending
+states after restart. Remote repository protection and publication still
+require a valid authenticated GitHub session and must be read back before they
+are described as active.
+
 ## Alpha 10 Release Provenance
 
 Local release builds remain the source of truth and do not consume automatic
@@ -102,11 +218,13 @@ not claim a SLSA certification level.
 
 The versioned public `main` policy requires reviewed pull requests for non-admin
 contributors, resolved conversations, linear history, and forbids force-pushes
-or deletion. Administrators retain the audited local publication path. No
-automatic status check is required because the complete gate runs locally;
-the three-OS workflow remains a manual fallback. Before Alpha 10 publication,
-the policy was applied and read back from GitHub with these requirements
-intact; the release push did not trigger a hosted workflow.
+or deletion. Administrators retain the audited local publication path. The
+post-Alpha 10 source additionally requires `captain/local-pr-gate`, produced by
+a trusted local portal in a disposable Lima VM and bound to the exact PR SHA;
+the three-OS workflow remains a manual fallback. The Alpha 10 policy was
+applied and read back before publication, but this stricter post-release policy
+must not be described as remotely active until a fresh authenticated
+`--apply` and `--verify` both pass.
 
 ## Alpha 10 Live Budget Contract
 
@@ -487,6 +605,7 @@ captain models list
 scripts/docs-global-audit.sh
 scripts/docs-release-audit.sh
 scripts/control-web-audit.sh
+scripts/control-xss-smoke.mjs
 scripts/control-chat-performance-smoke.mjs
 scripts/launch-site-audit.sh
 node scripts/launch-site-browser-smoke.mjs
@@ -673,8 +792,10 @@ DOC2 is enforced by:
   and WebAssembly binding compilation with a supported CPython interpreter.
 - `scripts/docs-release-audit.sh` for high-risk release-facing claims.
 - `scripts/control-web-audit.sh` for the six-hub Control contract and JavaScript
-  syntax. `scripts/control-chat-performance-smoke.mjs` certifies exact delta
-  batching, long transcript hydration, tail pinning, and desktop/mobile layout.
+  syntax. `scripts/control-xss-smoke.mjs` executes malicious Markdown, tool
+  output, and session-label probes under the production CSP.
+  `scripts/control-chat-performance-smoke.mjs` certifies exact delta batching,
+  long transcript hydration, tail pinning, and desktop/mobile layout.
 - `scripts/docs-global-audit.sh` also parses the bundled JavaScript/Python API
   clients and pins their cross-surface session primitives.
 - In the private maintainer checkout only, `scripts/launch-site-audit.sh` and

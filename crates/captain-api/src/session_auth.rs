@@ -81,6 +81,12 @@ pub fn load_web_auth_snapshot(
         if let Some(enabled) = auth.get("enabled").and_then(|v| v.as_bool()) {
             snapshot.auth.enabled = enabled;
         }
+        if let Some(allowed) = auth
+            .get("allow_unauthenticated_loopback")
+            .and_then(|v| v.as_bool())
+        {
+            snapshot.auth.allow_unauthenticated_loopback = allowed;
+        }
         if let Some(username) = auth.get("username").and_then(|v| v.as_str()) {
             snapshot.auth.username = username.to_string();
         }
@@ -258,6 +264,7 @@ api_key = ""
 
 [auth]
 enabled = true
+allow_unauthenticated_loopback = false
 username = "admin"
 password_hash = "hash"
 session_secret = "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws"
@@ -269,6 +276,7 @@ session_epoch = 4
         let snapshot = load_web_auth_snapshot(dir.path(), "secret-from-store", &fallback);
         assert_eq!(snapshot.api_key, "secret-from-store");
         assert!(snapshot.auth.enabled);
+        assert!(!snapshot.auth.allow_unauthenticated_loopback);
         assert_eq!(snapshot.auth.username, "admin");
         assert_eq!(snapshot.auth.session_epoch, 4);
         assert_eq!(snapshot.session_secret(), Some(test_secret(11)));

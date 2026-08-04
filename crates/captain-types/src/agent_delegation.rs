@@ -7,6 +7,8 @@ pub const AGENT_DELEGATION_MAX_RESULT_BYTES: usize = 256 * 1024;
 pub const AGENT_DELEGATION_MAX_DEPENDENCIES: usize = 16;
 pub const AGENT_DELEGATION_MAX_ACTIVE_PER_CALLER: usize = 32;
 pub const AGENT_DELEGATION_MAX_TOKENS: u64 = 500_000;
+pub const AGENT_DELEGATION_MAX_LINEAGE_TOKENS: u64 = 500_000;
+pub const AGENT_DELEGATION_MAX_DEPTH: u32 = 10;
 pub const AGENT_DELEGATION_MAX_ATTEMPTS: u32 = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +102,9 @@ impl AgentDelegationEffectState {
 pub struct NewAgentDelegationJob {
     pub id: String,
     pub idempotency_key: String,
+    pub root_job_id: String,
+    pub parent_job_id: Option<String>,
+    pub depth: u32,
     pub caller_agent_id: String,
     pub target_agent_id: String,
     pub title: String,
@@ -114,6 +119,10 @@ pub struct NewAgentDelegationJob {
 pub struct AgentDelegationJobRecord {
     pub id: String,
     pub idempotency_key: String,
+    pub root_job_id: String,
+    pub parent_job_id: Option<String>,
+    pub depth: u32,
+    pub lineage_reserved_tokens: u64,
     pub caller_agent_id: String,
     pub target_agent_id: String,
     pub title: String,

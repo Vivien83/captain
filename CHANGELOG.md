@@ -6,6 +6,92 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.11] - 2026-08-04
+
+Early-access release focused on secure extensibility, durable external
+operations, native account integrations, and locally enforced contribution and
+release gates.
+
+### Added
+
+- Native Gmail OAuth supports multiple named accounts, least-privilege
+  send/read/assistant profiles, encrypted token rotation, live identity checks,
+  deterministic Gmail-to-agent rules, bounded mailbox tools, and explicit
+  dead/uncertain delivery recovery.
+- The conversational Email channel supports multiple named IMAP/SMTP accounts,
+  account-specific allowlists and agents, one explicit default, live IMAP/SMTP
+  probes, and schema-driven configuration shared by TUI, Desktop, Web Terminal,
+  API, and CLI.
+- xAI is available during first-use provider setup with non-billable identity
+  and API-key ACL validation. Externally issued OAuth bearers are recognized,
+  while unsupported native OAuth login is reported honestly.
+- Provider-confirmed subscription resets produce one durable Telegram Rich
+  notification and content-free Status/Budget queue health. Captain requires
+  both a new provider reset identity and replenished reported capacity.
+- A local pull-request portal verifies the exact PR SHA in a disposable Lima
+  guest and publishes `captain/local-pr-gate` without automatic paid GitHub
+  Actions.
+- Repository discovery metadata, crawler policy, schema.org data, sitemap, and
+  IndexNow handoff are reproducible and read-back verifiable.
+
+### Security
+
+- Private API and web routes now fail closed when setup has not provisioned a
+  daemon API key or browser credentials. Credentialless development access
+  requires the explicit `auth.allow_unauthenticated_loopback = true` opt-out
+  and the actual client must be loopback, including behind a declared reverse
+  proxy. Existing configurations with explicit `auth.enabled = false` migrate
+  once to that visible compatibility flag; setup and credential rotation
+  always disable it.
+- Direct-program execution permits now bind to a versioned, domain-separated,
+  length-prefixed encoding of the executable and every argument. Human-readable
+  review text is kept separate, so embedded NUL bytes or argument boundaries
+  cannot alias the authorization digest.
+- Login-limit capacity pressure no longer evicts an active IP or username
+  block. If all 4,096 slots are actively blocked, Captain applies a logged
+  five-second global fail-closed backoff; public deployments still require an
+  upstream edge limiter because this daemon-local state resets on restart.
+- Control, Web Terminal, Config, and the retained Desktop wrapper no longer
+  grant inline or evaluated JavaScript authority. Every production script is
+  an embedded same-origin asset, ES modules use canonical vendored URLs, and
+  CSP rejects script attributes, plugin objects, base-tag changes, and framing.
+  Markdown is reduced to a fixed passive tag/attribute set with safe link
+  protocols; a Chromium smoke proves malicious Markdown, tool output, and
+  session labels remain inert.
+- Host execution now has explicit `personal_workstation`, `remote_operator`,
+  and `untrusted_execution` deployment profiles. The structural policy default
+  is `allowlist`; `remote_operator` cannot exceed allowlist semantics and
+  `untrusted_execution` cannot start agent-controlled host processes, even
+  when an agent manifest requests `full`. Per-agent and daemon policies are
+  intersected before tool visibility and dispatch. `process_start` now uses
+  the same content-bound permit as other guarded subprocesses. Docker and WASM
+  remain explicit rails: Captain never auto-routes or falls back to the host.
+  CLI, Doctor, TUI, Control, health and Security expose configured versus
+  effective policy plus Docker readiness.
+
+### Reliability
+
+- The Email rail now pins `imap 3.0.0-alpha.15` with
+  `imap-proto 0.16.7`. This removes the parser macros that future Rust versions
+  will reject and also removes the unsound legacy `lexical-core 0.7.6` chain.
+  The release dependency gate binds the exact prerelease, parser parent,
+  `native-tls` feature, and vendored TLS path until upstream publishes 3.0
+  stable.
+- The credential vault master key now lives in macOS Keychain, Windows
+  Credential Manager, or Linux Secret Service/keyutils. Headless deployments
+  use an explicit `CAPTAIN_VAULT_KEY`; legacy migration is verified before the
+  obsolete local key file is deleted.
+- IMAP messages are accepted durably before Captain marks them seen. Mailbox,
+  folder, UIDVALIDITY, and UID form the idempotency identity, so crash recovery
+  can re-acknowledge a retry without starting a second agent turn.
+- Email configuration writes use a bounded inter-process lock and a rollback
+  boundary spanning TOML plus secret persistence. Concurrent account updates
+  preserve both effects, and a failed secret write restores the preceding
+  configuration.
+- Channel clients no longer treat every HTTP 200 envelope as success, leave a
+  failed list request spinning forever, expose fake local enable toggles, or
+  render typed secrets in setup previews.
+
 ## [0.1.0-alpha.10] - 2026-07-30
 
 Early-access production-hardening release focused on a deny-by-default
@@ -478,7 +564,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.10...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.11...HEAD
+[0.1.0-alpha.11]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.10...v0.1.0-alpha.11
 [0.1.0-alpha.10]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.9...v0.1.0-alpha.10
 [0.1.0-alpha.9]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.8...v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.7...v0.1.0-alpha.8

@@ -3,16 +3,22 @@
 //! Polls IMAP for new emails and sends responses via SMTP using `lettre`.
 //! Uses the subject line for agent routing (e.g., "\[coder\] Fix this bug").
 
-use crate::types::{ChannelAdapter, ChannelContent, ChannelMessage, ChannelType, ChannelUser};
+use crate::inbound_queue_types::DURABLE_INGRESS_ID_METADATA_KEY;
+use crate::types::{
+    ChannelAdapter, ChannelContent, ChannelMessage, ChannelType, ChannelUser,
+    INTERNAL_TARGET_AGENT_NAME_METADATA_KEY,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use dashmap::DashMap;
 use futures::Stream;
 use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::Address;
 use lettre::AsyncSmtpTransport;
 use lettre::AsyncTransport;
 use lettre::Tokio1Executor;
+use serde::Serialize;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,11 +48,40 @@ struct ReplyCtx {
     message_id: String,
 }
 
-type FetchedEmail = (String, String, String, String);
-type EmailImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
+type EmailImapSession = imap::Session<imap::Connection>;
+const EMAIL_IMAP_ACK_TIMEOUT: Duration = Duration::from_secs(15);
+const EMAIL_CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EmailConnectivityReport {
+    pub imap_folders_checked: usize,
+    pub smtp_authenticated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EmailImapCursor {
+    folder: String,
+    uid_validity: u32,
+    uid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedEmail {
+    from_addr: String,
+    subject: String,
+    rfc_message_id: String,
+    body: String,
+}
+
+#[derive(Debug, Clone)]
+struct FetchedEmail {
+    cursor: EmailImapCursor,
+    parsed: Option<ParsedEmail>,
+}
 
 struct EmailPollRuntime {
     tx: mpsc::Sender<ChannelMessage>,
+    account_alias: String,
     poll_interval: Duration,
     imap_host: String,
     imap_port: u16,
@@ -60,6 +95,10 @@ struct EmailPollRuntime {
 
 /// Email channel adapter using IMAP for receiving and SMTP for sending.
 pub struct EmailAdapter {
+    /// Stable bridge registration name (`email` or `email:<alias>`).
+    adapter_name: String,
+    /// Stable mailbox alias propagated as trusted routing metadata.
+    account_alias: String,
     /// IMAP server host.
     imap_host: String,
     /// IMAP port (993 for TLS).
@@ -100,8 +139,40 @@ impl EmailAdapter {
         folders: Vec<String>,
         allowed_senders: Vec<String>,
     ) -> Self {
+        Self::new_named(
+            "email".to_string(),
+            "default".to_string(),
+            imap_host,
+            imap_port,
+            smtp_host,
+            smtp_port,
+            username,
+            password,
+            poll_interval_secs,
+            folders,
+            allowed_senders,
+        )
+    }
+
+    /// Create a named adapter for one configured mailbox.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_named(
+        adapter_name: String,
+        account_alias: String,
+        imap_host: String,
+        imap_port: u16,
+        smtp_host: String,
+        smtp_port: u16,
+        username: String,
+        password: String,
+        poll_interval_secs: u64,
+        folders: Vec<String>,
+        allowed_senders: Vec<String>,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
+            adapter_name,
+            account_alias,
             imap_host,
             imap_port,
             smtp_host,
@@ -122,22 +193,11 @@ impl EmailAdapter {
     }
 
     /// Check if a sender is in the allowlist (B.8 contract: empty = deny all,
-    /// `["*"]` = allow all, otherwise substring match against `sender`).
-    ///
-    /// Email matches by `contains` rather than equality so an operator can
-    /// authorise `@example.org` to admit every employee at that domain — a
-    /// long-standing email-specific affordance the strict `is_authorized`
-    /// helper does not give. The empty-list-denies invariant is enforced
-    /// here so a fresh `EmailConfig` cannot accept arbitrary inbound mail.
+    /// `["*"]` = allow all, full address = exact match, `@example.org` = exact
+    /// domain match). Invalid addresses never match, including under `*`.
     #[allow(dead_code)]
     fn is_allowed_sender(&self, sender: &str) -> bool {
-        if self.allowed_senders.is_empty() {
-            return false;
-        }
-        if self.allowed_senders.iter().any(|s| s == "*") {
-            return true;
-        }
-        self.allowed_senders.iter().any(|s| sender.contains(s))
+        email_sender_allowed(&self.allowed_senders, sender)
     }
 
     /// Extract agent name from subject line brackets, e.g., "[coder] Fix the bug" -> Some("coder")
@@ -176,17 +236,82 @@ impl EmailAdapter {
             AsyncSmtpTransport::<Tokio1Executor>::relay(&self.smtp_host)?
                 .port(self.smtp_port)
                 .credentials(creds)
+                .timeout(Some(EMAIL_CONNECTIVITY_TIMEOUT))
                 .build()
         } else {
             // STARTTLS (port 587 or other)
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.smtp_host)?
                 .port(self.smtp_port)
                 .credentials(creds)
+                .timeout(Some(EMAIL_CONNECTIVITY_TIMEOUT))
                 .build()
         };
 
         Ok(transport)
     }
+
+    /// Verify IMAP login/folder access and authenticated SMTP without sending.
+    pub async fn test_connectivity(&self) -> Result<EmailConnectivityReport, String> {
+        let host = self.imap_host.clone();
+        let port = self.imap_port;
+        let username = self.username.clone();
+        let password = self.password.clone();
+        let folders = self.folders.clone();
+        let folder_count = folders.len();
+        let imap = tokio::task::spawn_blocking(move || {
+            test_imap_connectivity(&host, port, &username, password.as_str(), &folders)
+        });
+        match tokio::time::timeout(EMAIL_CONNECTIVITY_TIMEOUT, imap).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => return Err(error),
+            Ok(Err(error)) => return Err(format!("IMAP connectivity worker failed: {error}")),
+            Err(_) => {
+                return Err(format!(
+                    "IMAP connectivity check exceeded {} seconds",
+                    EMAIL_CONNECTIVITY_TIMEOUT.as_secs()
+                ))
+            }
+        }
+
+        let transport = self
+            .build_smtp_transport()
+            .await
+            .map_err(|error| format!("SMTP transport setup failed: {error}"))?;
+        let smtp_authenticated =
+            tokio::time::timeout(EMAIL_CONNECTIVITY_TIMEOUT, transport.test_connection())
+                .await
+                .map_err(|_| {
+                    format!(
+                        "SMTP connectivity check exceeded {} seconds",
+                        EMAIL_CONNECTIVITY_TIMEOUT.as_secs()
+                    )
+                })?
+                .map_err(|error| format!("SMTP connectivity check failed: {error}"))?;
+        if !smtp_authenticated {
+            return Err("SMTP server did not confirm the authenticated connection".to_string());
+        }
+        Ok(EmailConnectivityReport {
+            imap_folders_checked: folder_count,
+            smtp_authenticated,
+        })
+    }
+}
+
+pub fn email_allowlist_rule_is_valid(rule: &str) -> bool {
+    let rule = rule.trim();
+    if rule == "*" {
+        return true;
+    }
+    if let Some(domain) = rule.strip_prefix('@') {
+        return !domain.is_empty()
+            && url::Host::parse(domain).is_ok()
+            && Address::new("captain", domain).is_ok();
+    }
+    parse_email_address(rule).is_some()
+}
+
+pub fn email_address_is_valid(address: &str) -> bool {
+    parse_email_address(address).is_some()
 }
 
 /// Extract `user@domain` from a potentially formatted email string like `"Name <user@domain>"`.
@@ -231,21 +356,19 @@ fn extract_text_body(parsed: &mailparse::ParsedMail<'_>) -> String {
         .unwrap_or_default()
 }
 
-/// Fetch unseen emails from IMAP using blocking I/O.
-/// Returns a Vec of (from_addr, subject, message_id, body).
+/// Fetch unseen emails from IMAP using blocking I/O. Fetching is read-only:
+/// platform acknowledgement happens only after the bridge persists acceptance.
 fn fetch_unseen_emails(
     host: &str,
     port: u16,
     username: &str,
     password: &str,
     folders: &[String],
-) -> Result<Vec<(String, String, String, String)>, String> {
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| format!("TLS connector error: {e}"))?;
-
-    let client =
-        imap::connect((host, port), host, &tls).map_err(|e| format!("IMAP connect failed: {e}"))?;
+) -> Result<Vec<FetchedEmail>, String> {
+    let client = imap::ClientBuilder::new(host, port)
+        .mode(imap::ConnectionMode::Tls)
+        .connect()
+        .map_err(|e| format!("IMAP connect failed: {e}"))?;
     let mut session = login_imap_session(client, username, password)?;
     let mut results = Vec::new();
 
@@ -258,7 +381,7 @@ fn fetch_unseen_emails(
 }
 
 fn login_imap_session(
-    client: imap::Client<native_tls::TlsStream<std::net::TcpStream>>,
+    client: imap::Client<imap::Connection>,
     username: &str,
     password: &str,
 ) -> Result<EmailImapSession, String> {
@@ -279,16 +402,38 @@ fn login_imap_session(
     Ok(session)
 }
 
+fn test_imap_connectivity(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    folders: &[String],
+) -> Result<(), String> {
+    let client = imap::ClientBuilder::new(host, port)
+        .mode(imap::ConnectionMode::Tls)
+        .connect()
+        .map_err(|error| format!("IMAP connectivity check failed: {error}"))?;
+    let mut session = login_imap_session(client, username, password)?;
+    let result = folders.iter().try_for_each(|folder| {
+        session
+            .examine(folder)
+            .map(|_| ())
+            .map_err(|error| format!("IMAP folder '{folder}' is unavailable: {error}"))
+    });
+    let _ = session.logout();
+    result
+}
+
 fn fetch_unseen_folder(
     session: &mut EmailImapSession,
     folder: &str,
     results: &mut Vec<FetchedEmail>,
 ) {
-    let Some(uid_set) = unseen_uid_set(session, folder) else {
+    let Some((uid_validity, uid_set)) = unseen_uid_set(session, folder) else {
         return;
     };
 
-    let fetches = match session.uid_fetch(&uid_set, "RFC822") {
+    let fetches = match session.uid_fetch(&uid_set, "(UID RFC822)") {
         Ok(f) => f,
         Err(e) => {
             warn!(folder, error = %e, "IMAP FETCH failed");
@@ -297,26 +442,52 @@ fn fetch_unseen_folder(
     };
 
     for fetch in fetches.iter() {
-        let Some(body_bytes) = fetch.body() else {
+        let Some(uid) = fetch.uid else {
+            warn!(
+                folder,
+                "IMAP UID FETCH response omitted UID, leaving message unread"
+            );
             continue;
         };
-        if let Some(email) = parse_fetched_email(body_bytes) {
-            results.push(email);
-        }
-    }
-
-    if let Err(e) = session.uid_store(&uid_set, "+FLAGS (\\Seen)") {
-        warn!(error = %e, "Failed to mark emails as Seen");
+        let Some(body_bytes) = fetch.body() else {
+            warn!(folder, uid, "IMAP UID FETCH response omitted RFC822 body");
+            continue;
+        };
+        let parsed = match parse_fetched_email(body_bytes) {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                warn!(folder, uid, %error, "Failed to parse fetched email; rejecting after poll");
+                None
+            }
+        };
+        results.push(FetchedEmail {
+            cursor: EmailImapCursor {
+                folder: folder.to_string(),
+                uid_validity,
+                uid,
+            },
+            parsed,
+        });
     }
 }
 
-fn unseen_uid_set(session: &mut EmailImapSession, folder: &str) -> Option<String> {
-    if let Err(e) = session.select(folder) {
-        warn!(folder, error = %e, "IMAP SELECT failed, skipping folder");
+fn unseen_uid_set(session: &mut EmailImapSession, folder: &str) -> Option<(u32, String)> {
+    let mailbox = match session.select(folder) {
+        Ok(mailbox) => mailbox,
+        Err(e) => {
+            warn!(folder, error = %e, "IMAP SELECT failed, skipping folder");
+            return None;
+        }
+    };
+    let Some(uid_validity) = mailbox.uid_validity else {
+        warn!(
+            folder,
+            "IMAP SELECT omitted UIDVALIDITY, leaving mailbox unread"
+        );
         return None;
-    }
+    };
 
-    let uids = match session.uid_search("UNSEEN") {
+    let mut uids = match session.uid_search("UNSEEN") {
         Ok(uids) => uids,
         Err(e) => {
             warn!(folder, error = %e, "IMAP SEARCH UNSEEN failed");
@@ -329,39 +500,160 @@ fn unseen_uid_set(session: &mut EmailImapSession, folder: &str) -> Option<String
         return None;
     }
 
-    Some(
+    let mut uids = uids.drain().collect::<Vec<_>>();
+    uids.sort_unstable();
+    Some((
+        uid_validity,
         uids.into_iter()
             .take(50)
             .map(|uid| uid.to_string())
             .collect::<Vec<_>>()
             .join(","),
-    )
+    ))
 }
 
-fn parse_fetched_email(body_bytes: &[u8]) -> Option<FetchedEmail> {
-    let parsed = match mailparse::parse_mail(body_bytes) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            warn!(error = %e, "Failed to parse email");
-            return None;
-        }
-    };
+fn parse_fetched_email(body_bytes: &[u8]) -> Result<ParsedEmail, String> {
+    let parsed = mailparse::parse_mail(body_bytes)
+        .map_err(|error| format!("invalid RFC822 message: {error}"))?;
 
     let from = get_header(&parsed, "From").unwrap_or_default();
     let subject = get_header(&parsed, "Subject").unwrap_or_default();
-    let message_id = get_header(&parsed, "Message-ID").unwrap_or_default();
-    let text_body = extract_text_body(&parsed);
-    Some((extract_email_addr(&from), subject, message_id, text_body))
+    let rfc_message_id = get_header(&parsed, "Message-ID").unwrap_or_default();
+    let body = extract_text_body(&parsed);
+    Ok(ParsedEmail {
+        from_addr: extract_email_addr(&from),
+        subject,
+        rfc_message_id,
+        body,
+    })
+}
+
+fn stable_email_ingress_id(account_alias: &str, cursor: &EmailImapCursor) -> String {
+    format!(
+        "email:{account_alias}:{}:{}:{}:{}",
+        cursor.folder.len(),
+        cursor.folder,
+        cursor.uid_validity,
+        cursor.uid
+    )
+}
+
+fn email_cursor_from_message(
+    message: &ChannelMessage,
+    expected_account_alias: &str,
+    allowed_folders: &[String],
+) -> Result<EmailImapCursor, String> {
+    if message.channel != ChannelType::Email {
+        return Err("inbound acknowledgement is not an Email message".to_string());
+    }
+    let account_alias = message
+        .metadata
+        .get("account_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Email acknowledgement is missing account_id".to_string())?;
+    if account_alias != expected_account_alias {
+        return Err("Email acknowledgement account does not match adapter".to_string());
+    }
+    let folder = message
+        .metadata
+        .get("imap_folder")
+        .and_then(serde_json::Value::as_str)
+        .filter(|folder| allowed_folders.iter().any(|allowed| allowed == folder))
+        .ok_or_else(|| "Email acknowledgement folder is not configured".to_string())?
+        .to_string();
+    let uid_validity = message
+        .metadata
+        .get("imap_uidvalidity")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| "Email acknowledgement UIDVALIDITY is invalid".to_string())?;
+    let uid = message
+        .metadata
+        .get("imap_uid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| "Email acknowledgement UID is invalid".to_string())?;
+    let cursor = EmailImapCursor {
+        folder,
+        uid_validity,
+        uid,
+    };
+    let stable_id = stable_email_ingress_id(account_alias, &cursor);
+    let durable_id = message
+        .metadata
+        .get(DURABLE_INGRESS_ID_METADATA_KEY)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Email acknowledgement is missing durable identity".to_string())?;
+    if durable_id != stable_id || message.platform_message_id != stable_id {
+        return Err("Email acknowledgement identity does not match IMAP cursor".to_string());
+    }
+    Ok(cursor)
+}
+
+fn mark_email_seen(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    cursor: &EmailImapCursor,
+) -> Result<(), String> {
+    let client = imap::ClientBuilder::new(host, port)
+        .mode(imap::ConnectionMode::Tls)
+        .connect()
+        .map_err(|error| format!("IMAP acknowledgement connect failed: {error}"))?;
+    let mut session = login_imap_session(client, username, password)?;
+    let result = (|| {
+        let mailbox = session
+            .select(&cursor.folder)
+            .map_err(|error| format!("IMAP acknowledgement SELECT failed: {error}"))?;
+        if mailbox.uid_validity != Some(cursor.uid_validity) {
+            return Err("IMAP UIDVALIDITY changed before acknowledgement".to_string());
+        }
+        session
+            .uid_store(cursor.uid.to_string(), "+FLAGS.SILENT (\\Seen)")
+            .map_err(|error| format!("IMAP acknowledgement STORE failed: {error}"))?;
+        Ok(())
+    })();
+    let _ = session.logout();
+    result
+}
+
+async fn mark_email_seen_async(
+    host: String,
+    port: u16,
+    username: String,
+    password: Zeroizing<String>,
+    cursor: EmailImapCursor,
+) -> Result<(), String> {
+    let task = tokio::task::spawn_blocking(move || {
+        mark_email_seen(&host, port, &username, password.as_str(), &cursor)
+    });
+    match tokio::time::timeout(EMAIL_IMAP_ACK_TIMEOUT, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(format!("IMAP acknowledgement worker failed: {error}")),
+        Err(_) => Err(format!(
+            "IMAP acknowledgement exceeded {} seconds",
+            EMAIL_IMAP_ACK_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 #[async_trait]
 impl ChannelAdapter for EmailAdapter {
     fn name(&self) -> &str {
-        "email"
+        &self.adapter_name
     }
 
     fn channel_type(&self) -> ChannelType {
         ChannelType::Email
+    }
+
+    fn registration_aliases(&self) -> Vec<String> {
+        if self.adapter_name == "email" {
+            vec![format!("email:{}", self.account_alias)]
+        } else {
+            Vec::new()
+        }
     }
 
     async fn start(
@@ -372,12 +664,14 @@ impl ChannelAdapter for EmailAdapter {
         let runtime = self.poll_runtime(tx);
 
         info!(
-            "Starting email adapter (IMAP: {}:{}, SMTP: {}:{}, polling every {:?})",
-            runtime.imap_host,
-            runtime.imap_port,
-            self.smtp_host,
-            self.smtp_port,
-            runtime.poll_interval
+            adapter = %self.adapter_name,
+            account = %self.account_alias,
+            imap_host = %runtime.imap_host,
+            imap_port = runtime.imap_port,
+            smtp_host = %self.smtp_host,
+            smtp_port = self.smtp_port,
+            poll_interval_secs = runtime.poll_interval.as_secs(),
+            "Starting email adapter"
         );
 
         tokio::spawn(run_email_poll_loop(runtime));
@@ -400,6 +694,23 @@ impl ChannelAdapter for EmailAdapter {
             }
         }
         Ok(())
+    }
+
+    async fn acknowledge_inbound(
+        &self,
+        message: &ChannelMessage,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let cursor = email_cursor_from_message(message, &self.account_alias, &self.folders)
+            .map_err(std::io::Error::other)?;
+        mark_email_seen_async(
+            self.imap_host.clone(),
+            self.imap_port,
+            self.username.clone(),
+            self.password.clone(),
+            cursor,
+        )
+        .await
+        .map_err(|error| std::io::Error::other(error).into())
     }
 
     async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -442,6 +753,7 @@ impl EmailAdapter {
     fn poll_runtime(&self, tx: mpsc::Sender<ChannelMessage>) -> EmailPollRuntime {
         EmailPollRuntime {
             tx,
+            account_alias: self.account_alias.clone(),
             poll_interval: self.poll_interval,
             imap_host: self.imap_host.clone(),
             imap_port: self.imap_port,
@@ -514,14 +826,12 @@ fn build_outgoing_email(
 
 async fn run_email_poll_loop(mut runtime: EmailPollRuntime) {
     loop {
-        if !wait_for_next_email_poll(&mut runtime.shutdown_rx, runtime.poll_interval).await {
-            break;
+        if let Some(emails) = poll_email_messages(&runtime).await {
+            if !dispatch_email_messages(&runtime, emails).await {
+                break;
+            }
         }
-
-        let Some(emails) = poll_email_messages(&runtime).await else {
-            continue;
-        };
-        if !dispatch_email_messages(&runtime, emails).await {
+        if !wait_for_next_email_poll(&mut runtime.shutdown_rx, runtime.poll_interval).await {
             break;
         }
     }
@@ -566,14 +876,30 @@ async fn poll_email_messages(runtime: &EmailPollRuntime) -> Option<Vec<FetchedEm
 }
 
 async fn dispatch_email_messages(runtime: &EmailPollRuntime, emails: Vec<FetchedEmail>) -> bool {
-    for (from_addr, subject, message_id, body) in emails {
-        if !email_sender_allowed(&runtime.allowed_senders, &from_addr) {
-            debug!(from = %from_addr, "Email from non-allowed sender, skipping");
+    for email in emails {
+        let cursor = email.cursor;
+        let Some(parsed) = email.parsed else {
+            acknowledge_rejected_email(runtime, cursor, "malformed RFC822 message").await;
+            continue;
+        };
+        if email_addresses_equal(&runtime.username, &parsed.from_addr) {
+            debug!(from = %parsed.from_addr, "Email from this mailbox, rejecting reply loop");
+            acknowledge_rejected_email(runtime, cursor, "self-sent reply loop prevention").await;
+            continue;
+        }
+        if !email_sender_allowed(&runtime.allowed_senders, &parsed.from_addr) {
+            debug!(from = %parsed.from_addr, "Email from non-allowed sender, rejecting");
+            acknowledge_rejected_email(runtime, cursor, "sender denied by allowlist").await;
             continue;
         }
 
-        remember_email_reply_context(&runtime.reply_ctx, &from_addr, &subject, &message_id);
-        let msg = email_channel_message(from_addr, subject, message_id, body);
+        remember_email_reply_context(
+            &runtime.reply_ctx,
+            &parsed.from_addr,
+            &parsed.subject,
+            &parsed.rfc_message_id,
+        );
+        let msg = email_channel_message(&runtime.account_alias, &cursor, parsed);
 
         if runtime.tx.send(msg).await.is_err() {
             info!("Email channel receiver dropped, stopping poll");
@@ -583,12 +909,66 @@ async fn dispatch_email_messages(runtime: &EmailPollRuntime, emails: Vec<Fetched
     true
 }
 
+async fn acknowledge_rejected_email(
+    runtime: &EmailPollRuntime,
+    cursor: EmailImapCursor,
+    reason: &'static str,
+) {
+    let uid = cursor.uid;
+    let folder = cursor.folder.clone();
+    match mark_email_seen_async(
+        runtime.imap_host.clone(),
+        runtime.imap_port,
+        runtime.username.clone(),
+        runtime.password.clone(),
+        cursor,
+    )
+    .await
+    {
+        Ok(()) => debug!(folder, uid, reason, "Rejected Email acknowledged as Seen"),
+        Err(error) => warn!(
+            folder,
+            uid,
+            reason,
+            %error,
+            "Rejected Email remains unread because acknowledgement failed"
+        ),
+    }
+}
+
 fn email_sender_allowed(allowed_senders: &[String], from_addr: &str) -> bool {
-    !allowed_senders.is_empty()
-        && (allowed_senders.iter().any(|sender| sender == "*")
-            || allowed_senders
-                .iter()
-                .any(|sender| from_addr.contains(sender)))
+    let Some(from_addr) = parse_email_address(from_addr) else {
+        return false;
+    };
+
+    allowed_senders.iter().any(|rule| {
+        let rule = rule.trim();
+        if rule == "*" {
+            return true;
+        }
+        if let Some(domain) = rule.strip_prefix('@') {
+            return !domain.is_empty() && from_addr.domain().eq_ignore_ascii_case(domain);
+        }
+        parse_email_address(rule).is_some_and(|allowed| email_addresses_match(&from_addr, &allowed))
+    })
+}
+
+fn parse_email_address(value: &str) -> Option<Address> {
+    let address = value.trim().parse::<Address>().ok()?;
+    url::Host::parse(address.domain()).ok()?;
+    Some(address)
+}
+
+fn email_addresses_equal(left: &str, right: &str) -> bool {
+    let (Some(left), Some(right)) = (parse_email_address(left), parse_email_address(right)) else {
+        return false;
+    };
+    email_addresses_match(&left, &right)
+}
+
+fn email_addresses_match(left: &Address, right: &Address) -> bool {
+    left.user().eq_ignore_ascii_case(right.user())
+        && left.domain().eq_ignore_ascii_case(right.domain())
 }
 
 fn remember_email_reply_context(
@@ -610,19 +990,49 @@ fn remember_email_reply_context(
 }
 
 fn email_channel_message(
-    from_addr: String,
-    subject: String,
-    message_id: String,
-    body: String,
+    account_alias: &str,
+    cursor: &EmailImapCursor,
+    parsed: ParsedEmail,
 ) -> ChannelMessage {
-    let _target_agent = EmailAdapter::extract_agent_from_subject(&subject);
-    let text = email_text_from_subject_body(&subject, &body);
+    let stable_id = stable_email_ingress_id(account_alias, cursor);
+    let requested_agent = EmailAdapter::extract_agent_from_subject(&parsed.subject);
+    let text = email_text_from_subject_body(&parsed.subject, &parsed.body);
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        "account_id".to_string(),
+        serde_json::Value::String(account_alias.to_string()),
+    );
+    metadata.insert(
+        DURABLE_INGRESS_ID_METADATA_KEY.to_string(),
+        serde_json::Value::String(stable_id.clone()),
+    );
+    metadata.insert(
+        "imap_folder".to_string(),
+        serde_json::Value::String(cursor.folder.clone()),
+    );
+    metadata.insert("imap_uid".to_string(), serde_json::json!(cursor.uid));
+    metadata.insert(
+        "imap_uidvalidity".to_string(),
+        serde_json::json!(cursor.uid_validity),
+    );
+    if !parsed.rfc_message_id.is_empty() {
+        metadata.insert(
+            "rfc_message_id".to_string(),
+            serde_json::Value::String(parsed.rfc_message_id),
+        );
+    }
+    if let Some(requested_agent) = requested_agent {
+        metadata.insert(
+            INTERNAL_TARGET_AGENT_NAME_METADATA_KEY.to_string(),
+            serde_json::Value::String(requested_agent),
+        );
+    }
     ChannelMessage {
         channel: ChannelType::Email,
-        platform_message_id: message_id,
+        platform_message_id: stable_id,
         sender: ChannelUser {
-            platform_id: from_addr.clone(),
-            display_name: from_addr,
+            platform_id: parsed.from_addr.clone(),
+            display_name: parsed.from_addr,
             captain_user: None,
         },
         content: ChannelContent::Text(text),
@@ -630,7 +1040,7 @@ fn email_channel_message(
         timestamp: Utc::now(),
         is_group: false,
         thread_id: None,
-        metadata: std::collections::HashMap::new(),
+        metadata,
     }
 }
 
@@ -662,6 +1072,98 @@ mod tests {
         );
         assert_eq!(adapter.name(), "email");
         assert_eq!(adapter.folders, vec!["INBOX".to_string()]);
+    }
+
+    #[test]
+    fn named_email_adapter_preserves_account_identity() {
+        let adapter = EmailAdapter::new_named(
+            "email:work".to_string(),
+            "work".to_string(),
+            "imap.example.com".to_string(),
+            993,
+            "smtp.example.com".to_string(),
+            587,
+            "captain@example.com".to_string(),
+            "secret".to_string(),
+            30,
+            vec!["INBOX".to_string()],
+            vec!["@example.com".to_string()],
+        );
+
+        assert_eq!(adapter.name(), "email:work");
+        assert_eq!(adapter.account_alias, "work");
+        assert!(adapter.registration_aliases().is_empty());
+        assert_eq!(
+            adapter.poll_runtime(mpsc::channel(1).0).account_alias,
+            "work"
+        );
+    }
+
+    #[test]
+    fn default_email_adapter_registers_its_explicit_alias() {
+        let adapter = EmailAdapter::new_named(
+            "email".to_string(),
+            "work".to_string(),
+            "imap.example.com".to_string(),
+            993,
+            "smtp.example.com".to_string(),
+            587,
+            "captain@example.com".to_string(),
+            "secret".to_string(),
+            30,
+            vec!["INBOX".to_string()],
+            vec!["@example.com".to_string()],
+        );
+
+        assert_eq!(adapter.registration_aliases(), vec!["email:work"]);
+    }
+
+    #[test]
+    fn inbound_email_exposes_trusted_account_metadata() {
+        let cursor = EmailImapCursor {
+            folder: "INBOX".to_string(),
+            uid_validity: 77,
+            uid: 42,
+        };
+        let message = email_channel_message(
+            "work",
+            &cursor,
+            ParsedEmail {
+                from_addr: "alice@example.com".to_string(),
+                subject: "[researcher] Hello".to_string(),
+                rfc_message_id: "<message-1>".to_string(),
+                body: "Body".to_string(),
+            },
+        );
+
+        assert_eq!(
+            message
+                .metadata
+                .get("account_id")
+                .and_then(|value| value.as_str()),
+            Some("work")
+        );
+        assert_eq!(message.platform_message_id, "email:work:5:INBOX:77:42");
+        assert_eq!(
+            message
+                .metadata
+                .get(DURABLE_INGRESS_ID_METADATA_KEY)
+                .and_then(|value| value.as_str()),
+            Some("email:work:5:INBOX:77:42")
+        );
+        assert_eq!(message.metadata["imap_folder"], serde_json::json!("INBOX"));
+        assert_eq!(message.metadata["imap_uid"], serde_json::json!(42));
+        assert_eq!(message.metadata["imap_uidvalidity"], serde_json::json!(77));
+        assert_eq!(
+            message.metadata["rfc_message_id"],
+            serde_json::json!("<message-1>")
+        );
+        assert_eq!(message.sender.platform_id, "alice@example.com");
+        assert_eq!(message.target_agent, None);
+        assert_eq!(
+            message.metadata[INTERNAL_TARGET_AGENT_NAME_METADATA_KEY],
+            serde_json::json!("researcher")
+        );
     }
 
     #[test]
@@ -711,7 +1213,7 @@ mod tests {
         );
         assert!(permissive.is_allowed_sender("anyone@anywhere.com"));
 
-        // Domain-prefix matching (long-standing email-specific affordance).
+        // Exact domain matching remains available without substring spoofing.
         let domain = EmailAdapter::new(
             "imap.example.com".to_string(),
             993,
@@ -725,7 +1227,9 @@ mod tests {
         );
         assert!(domain.is_allowed_sender("alice@company.com"));
         assert!(domain.is_allowed_sender("bob@company.com"));
+        assert!(domain.is_allowed_sender("ALICE@COMPANY.COM"));
         assert!(!domain.is_allowed_sender("alice@other.com"));
+        assert!(!domain.is_allowed_sender("alice@company.com.attacker.test"));
     }
 
     #[test]
@@ -739,10 +1243,48 @@ mod tests {
             &["@example.com".to_string()],
             "alice@example.com"
         ));
+        assert!(email_sender_allowed(
+            &["ALICE@EXAMPLE.COM".to_string()],
+            "alice@example.com"
+        ));
         assert!(!email_sender_allowed(
             &["@example.com".to_string()],
             "alice@other.test"
         ));
+        assert!(!email_sender_allowed(
+            &["alice@example.com".to_string()],
+            "alice@example.com.attacker.test"
+        ));
+        assert!(!email_sender_allowed(&["*".to_string()], ""));
+        assert!(!email_sender_allowed(
+            &["*".to_string()],
+            "not-an-email-address"
+        ));
+    }
+
+    #[test]
+    fn public_allowlist_validator_matches_runtime_security_rules() {
+        assert!(email_allowlist_rule_is_valid("*"));
+        assert!(email_allowlist_rule_is_valid("alice@example.com"));
+        assert!(email_allowlist_rule_is_valid("@example.com"));
+        assert!(!email_allowlist_rule_is_valid(""));
+        assert!(!email_allowlist_rule_is_valid("example.com"));
+        assert!(!email_allowlist_rule_is_valid("@example.com/attacker"));
+        assert!(email_address_is_valid("alice@example.com"));
+        assert!(!email_address_is_valid("alice@example.com/attacker"));
+    }
+
+    #[test]
+    fn configured_mailbox_identity_blocks_case_insensitive_reply_loops() {
+        assert!(email_addresses_equal(
+            "Captain@Example.COM",
+            "captain@example.com"
+        ));
+        assert!(!email_addresses_equal(
+            "captain@example.com",
+            "captain@other.test"
+        ));
+        assert!(!email_addresses_equal("not-an-address", "not-an-address"));
     }
 
     #[test]
@@ -817,13 +1359,45 @@ mod tests {
     #[test]
     fn parse_fetched_email_extracts_headers_and_plain_text() {
         let raw = b"From: Alice <alice@example.com>\r\nSubject: Hello\r\nMessage-ID: <msg-1>\r\nContent-Type: text/plain\r\n\r\nBody text";
-        let (from, subject, message_id, body) =
-            parse_fetched_email(raw).expect("valid RFC822 message should parse");
+        let parsed = parse_fetched_email(raw).expect("valid RFC822 message should parse");
 
-        assert_eq!(from, "alice@example.com");
-        assert_eq!(subject, "Hello");
-        assert_eq!(message_id, "<msg-1>");
-        assert_eq!(body, "Body text");
+        assert_eq!(parsed.from_addr, "alice@example.com");
+        assert_eq!(parsed.subject, "Hello");
+        assert_eq!(parsed.rfc_message_id, "<msg-1>");
+        assert_eq!(parsed.body, "Body text");
+    }
+
+    #[test]
+    fn imap_cursor_identity_is_injective_and_validated_before_ack() {
+        let cursor = EmailImapCursor {
+            folder: "Ops:Inbox".to_string(),
+            uid_validity: 9,
+            uid: 12,
+        };
+        let mut message = email_channel_message(
+            "work",
+            &cursor,
+            ParsedEmail {
+                from_addr: "alice@example.com".to_string(),
+                subject: "Hello".to_string(),
+                rfc_message_id: String::new(),
+                body: "Body".to_string(),
+            },
+        );
+
+        assert_eq!(message.platform_message_id, "email:work:9:Ops:Inbox:9:12");
+        assert_eq!(
+            email_cursor_from_message(&message, "work", &["Ops:Inbox".to_string()]),
+            Ok(cursor.clone())
+        );
+        assert!(!message.metadata.contains_key("rfc_message_id"));
+
+        message
+            .metadata
+            .insert("imap_uid".to_string(), serde_json::json!(13));
+        let error = email_cursor_from_message(&message, "work", &["Ops:Inbox".to_string()])
+            .expect_err("cursor tampering must be rejected");
+        assert!(error.contains("identity does not match"));
     }
 
     #[test]

@@ -13,6 +13,8 @@ pub mod compaction;
 pub mod config;
 pub mod config_template;
 pub mod durable_fs;
+pub mod email;
+pub mod email_automation;
 pub mod error;
 pub mod event;
 pub mod manifest_signing;

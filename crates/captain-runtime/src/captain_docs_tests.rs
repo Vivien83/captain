@@ -52,6 +52,14 @@ fn every_family_has_a_stub_file() {
 #[test]
 fn family_aliases_normalize_only_when_safe() {
     assert_eq!(
+        captain_docs::normalize_family_filter("gmail", "search inbox"),
+        Some("email")
+    );
+    assert_eq!(
+        captain_docs::normalize_family_filter("email automation", "list rules"),
+        Some("email")
+    );
+    assert_eq!(
         captain_docs::normalize_family_filter("changelog", "latest entry"),
         Some("runtime-changelog")
     );
@@ -361,6 +369,12 @@ fn d19_document_family_audit() {
     assert_family_doc("document", captain_docs::DOCUMENT_FAMILY_TOOLS);
 }
 
+/// D.20 — native Gmail reads/writes and durable Gmail-to-agent automations.
+#[test]
+fn d20_email_family_audit() {
+    assert_family_doc("email", captain_docs::EMAIL_FAMILY_TOOLS);
+}
+
 /// D.18 — runtime changelog family audit (public-safe versioned
 /// update notes for agents after a real install/restart).
 #[test]
@@ -397,6 +411,7 @@ fn every_builtin_tool_has_a_docs_family() {
         captain_docs::PROJECT_FAMILY_TOOLS,
         captain_docs::MULTIMEDIA_FAMILY_TOOLS,
         captain_docs::DOCUMENT_FAMILY_TOOLS,
+        captain_docs::EMAIL_FAMILY_TOOLS,
         captain_docs::RUNTIME_CHANGELOG_FAMILY_TOOLS,
     ]
     .into_iter()

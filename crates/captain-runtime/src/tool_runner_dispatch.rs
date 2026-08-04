@@ -14,13 +14,13 @@ use crate::tools::{
     dispatch_a2a_tool, dispatch_agent_tool, dispatch_automation_tool, dispatch_browser_tool,
     dispatch_canvas_tool, dispatch_capspec_management_tool, dispatch_channel_tool,
     dispatch_config_tool, dispatch_coordination_tool, dispatch_discovery_tool,
-    dispatch_docker_tool, dispatch_document_tool, dispatch_fallback_tool, dispatch_file_tool,
-    dispatch_goal_tool, dispatch_hand_tool, dispatch_improvement_tool, dispatch_knowledge_tool,
-    dispatch_location_tool, dispatch_media_tool, dispatch_memory_tool, dispatch_package_tool,
-    dispatch_peer_tool, dispatch_process_tool, dispatch_project_tool, dispatch_shell_exec,
-    dispatch_skill_runtime_tool, dispatch_ssh_tool, dispatch_system_update, dispatch_tool_run_tool,
-    dispatch_web_tool, tool_execute_code, tool_screenshot, ShellDispatchOutcome,
-    WebDispatchOutcome,
+    dispatch_docker_tool, dispatch_document_tool, dispatch_email_tool, dispatch_fallback_tool,
+    dispatch_file_tool, dispatch_goal_tool, dispatch_hand_tool, dispatch_improvement_tool,
+    dispatch_knowledge_tool, dispatch_location_tool, dispatch_media_tool, dispatch_memory_tool,
+    dispatch_package_tool, dispatch_peer_tool, dispatch_process_tool, dispatch_project_tool,
+    dispatch_shell_exec, dispatch_skill_runtime_tool, dispatch_ssh_tool, dispatch_system_update,
+    dispatch_tool_run_tool, dispatch_web_tool, tool_execute_code, tool_screenshot,
+    ShellDispatchOutcome, WebDispatchOutcome,
 };
 use crate::tts::TtsEngine;
 use crate::web_search::WebToolsContext;
@@ -310,6 +310,28 @@ async fn dispatch_operator_channel_tool(
             )
             .await
         }
+        "email_accounts"
+        | "email_search"
+        | "email_read"
+        | "email_compose"
+        | "email_reply"
+        | "email_labels"
+        | "email_update"
+        | "email_attachment_save"
+        | "email_automation_rules"
+        | "email_automation_rule_save"
+        | "email_automation_rule_set_enabled"
+        | "email_automation_rule_remove"
+        | "email_automation_deliveries"
+        | "email_automation_delivery_requeue" => {
+            dispatch_email_tool(
+                request.tool_name,
+                request.input,
+                request.kernel,
+                request.workspace_root,
+            )
+            .await
+        }
         "captain_docs" | "capability_search" | "skill_search" | "skill_view" | "skill_check"
         | "tool_search" => {
             dispatch_discovery_tool(
@@ -484,6 +506,7 @@ async fn dispatch_media_environment_tool(
                 request.docker_config,
                 request.workspace_root,
                 request.caller_agent_id,
+                request.exec_policy,
             )
             .await
         }
@@ -528,6 +551,7 @@ async fn dispatch_process_extension_tool(
                 request.input,
                 request.process_manager,
                 request.caller_agent_id,
+                request.exec_policy,
             )
             .await
         }

@@ -16,7 +16,7 @@ CAPTAIN_SMOKE_LLM="${CAPTAIN_SMOKE_LLM:-0}"
 CAPTAIN_SMOKE_TTS="${CAPTAIN_SMOKE_TTS:-0}"
 CAPTAIN_SMOKE_SSH_ALIAS="${CAPTAIN_SMOKE_SSH_ALIAS:-}"
 CAPTAIN_SMOKE_STRICT_RELEASE="${CAPTAIN_SMOKE_STRICT_RELEASE:-0}"
-EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.10}"
+EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.11}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -117,8 +117,8 @@ PASS=0
 FAIL=0
 WARN=0
 # Bash 3.2 treats an empty array expansion as an unbound variable under
-# `set -u`. Keep one harmless header so unauthenticated isolated smokes remain
-# portable across the supported macOS shells.
+# `set -u`. Keep one harmless header so both authenticated and explicit
+# loopback-only smokes remain portable across the supported macOS shells.
 AUTH_HEADER_ARGS=(-H "Accept: application/json")
 
 color() {
@@ -172,30 +172,13 @@ toml_top_string() {
   ' "$path"
 }
 
-toml_auth_string() {
+secrets_env_value() {
   local key="$1"
   local path="$2"
-  awk -v key="$key" '
-    /^\[auth\]/ { in_auth=1; next }
-    /^\[/ { in_auth=0 }
-    in_auth && $1 == key {
-      sub(/^[^=]*=[[:space:]]*"/, "")
-      sub(/".*$/, "")
-      print
-      exit
-    }
-  ' "$path"
-}
-
-toml_auth_int() {
-  local key="$1"
-  local path="$2"
-  awk -v key="$key" '
-    /^\[auth\]/ { in_auth=1; next }
-    /^\[/ { in_auth=0 }
-    in_auth && $1 == key {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      sub(/[[:space:]]*#.*/, "")
+  awk -F= -v key="$key" '
+    $1 == key {
+      sub(/^[^=]*=/, "")
+      sub(/\r$/, "")
       print
       exit
     }
@@ -208,36 +191,22 @@ load_auth_header() {
     return 0
   fi
 
-  local cfg="${CAPTAIN_HOME:-$HOME/.captain}/config.toml"
-  if [ ! -f "$cfg" ] || ! command -v openssl >/dev/null 2>&1; then
-    return 0
+  local home="${CAPTAIN_HOME:-$HOME/.captain}"
+  local cfg="$home/config.toml"
+  local secrets="$home/secrets.env"
+  local api_key="${CAPTAIN_DAEMON_API_KEY:-}"
+  if [ -z "$api_key" ] && [ -f "$cfg" ]; then
+    api_key="$(toml_top_string api_key "$cfg")"
   fi
-
-  local api_key username password_hash ttl secret expiry payload signature token
-  api_key="$(toml_top_string api_key "$cfg")"
-  if [ -z "$api_key" ] && [ -f "${CAPTAIN_HOME:-$HOME/.captain}/secrets.env" ]; then
-    api_key="$(awk -F= '$1=="CAPTAIN_DAEMON_API_KEY" {print $2; exit}' "${CAPTAIN_HOME:-$HOME/.captain}/secrets.env" | tr -d '\r')"
+  if [ -z "$api_key" ] && [ -f "$secrets" ]; then
+    api_key="$(secrets_env_value CAPTAIN_DAEMON_API_KEY "$secrets")"
   fi
-  if [ -z "$api_key" ]; then
-    api_key="${CAPTAIN_DAEMON_API_KEY:-${CAPTAIN_API_KEY:-}}"
-  fi
-  username="$(toml_auth_string username "$cfg")"
-  password_hash="$(toml_auth_string password_hash "$cfg")"
-  ttl="$(toml_auth_int session_ttl_hours "$cfg")"
-  ttl="${ttl:-1}"
-  if [ -z "$username" ] || [ -z "$password_hash" ]; then
-    return 0
+  if [ -z "$api_key" ] && [ -f "$secrets" ]; then
+    api_key="$(secrets_env_value CAPTAIN_API_KEY "$secrets")"
   fi
   if [ -n "$api_key" ]; then
-    secret="$api_key:$password_hash"
-  else
-    secret="$password_hash"
+    AUTH_HEADER_ARGS=(-H "Accept: application/json" -H "Authorization: Bearer $api_key")
   fi
-  expiry=$(( $(date +%s) + ttl * 3600 ))
-  payload="$username:$expiry"
-  signature="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" -hex | awk '{print $2}')"
-  token="$(printf '%s:%s' "$payload" "$signature" | base64 | tr -d '\n')"
-  AUTH_HEADER_ARGS=(-H "Accept: application/json" -H "Authorization: Bearer $token")
 }
 
 finish() {
@@ -255,7 +224,7 @@ finish() {
 }
 
 http_get() {
-  curl -sS --max-time "$TIMEOUT" "${AUTH_HEADER_ARGS[@]}" "$1"
+  curl -sS --fail --max-time "$TIMEOUT" "${AUTH_HEADER_ARGS[@]}" "$1"
 }
 
 wait_for_health() {
@@ -282,7 +251,7 @@ mcp_call() {
 
   jq -nc --arg id "$id" --arg name "$name" --argjson args "$args" \
     '{jsonrpc:"2.0",id:$id,method:"tools/call",params:{name:$name,arguments:$args}}' |
-    curl -sS --max-time "$TIMEOUT" \
+    curl -sS --fail --max-time "$TIMEOUT" \
       "${AUTH_HEADER_ARGS[@]}" \
       -H "Content-Type: application/json" \
       --data-binary @- \
@@ -294,7 +263,7 @@ agent_message() {
   local message="$2"
 
   jq -nc --arg message "$message" '{message:$message}' |
-    curl -sS --max-time "$TIMEOUT" \
+    curl -sS --fail --max-time "$TIMEOUT" \
       "${AUTH_HEADER_ARGS[@]}" \
       -H "Content-Type: application/json" \
       --data-binary @- \
@@ -367,6 +336,10 @@ agents=$(http_get "$BASE/api/agents") || {
   fail "GET /api/agents failed"
   finish
 }
+if ! printf '%s' "$agents" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  fail "GET /api/agents returned an invalid JSON array"
+  finish
+fi
 assert_jq_true "$agents" 'type == "array" and length > 0' "agents endpoint returns at least one agent"
 assert_jq_true "$agents" 'map(select(.name == "captain" and .state == "Running")) | length >= 1' "captain agent is running"
 if [ "$CAPTAIN_SMOKE_STRICT_RELEASE" = "1" ]; then

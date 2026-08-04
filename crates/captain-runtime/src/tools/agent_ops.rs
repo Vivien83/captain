@@ -5,7 +5,10 @@ use crate::kernel_handle::KernelHandle;
 use crate::tools::{require_kernel, AGENT_CALL_DEPTH, MAX_AGENT_CALL_DEPTH};
 use captain_types::agent::AgentManifest;
 use captain_types::agent_api::{AgentApiSpawnProvisionReport, AgentApiSpawnProvisionRequest};
-use captain_types::agent_delegation::{AgentDelegationJobRecord, AgentDelegationStatus};
+use captain_types::agent_delegation::{
+    AgentDelegationJobRecord, AgentDelegationStatus, AGENT_DELEGATION_MAX_DEPTH,
+    AGENT_DELEGATION_MAX_LINEAGE_TOKENS,
+};
 use captain_types::tool_compat::normalize_tool_name;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -479,6 +482,10 @@ fn agent_job_value(
     );
     serde_json::json!({
         "job_id": job.id,
+        "root_job_id": job.root_job_id,
+        "parent_job_id": job.parent_job_id,
+        "depth": job.depth,
+        "max_depth": AGENT_DELEGATION_MAX_DEPTH,
         "title": job.title,
         "target_agent_id": job.target_agent_id,
         "status": job.status.as_str(),
@@ -487,6 +494,10 @@ fn agent_job_value(
         "attempt_count": job.attempt_count,
         "depends_on": job.depends_on,
         "budget_tokens": job.max_tokens,
+        "lineage_reserved_tokens": job.lineage_reserved_tokens,
+        "lineage_budget_tokens": AGENT_DELEGATION_MAX_LINEAGE_TOKENS,
+        "lineage_budget_remaining_tokens":
+            AGENT_DELEGATION_MAX_LINEAGE_TOKENS.saturating_sub(job.lineage_reserved_tokens),
         "used_tokens": job.used_tokens,
         "budget_exceeded": job.used_tokens.is_some_and(|used| used > job.max_tokens),
         "result_available": terminal && job.result.is_some(),
@@ -676,6 +687,19 @@ mod tests {
         let status = agent_job_value(&job, false, false);
         assert!(status["result"].is_null());
         assert_eq!(status["result_available"], true);
+        assert_eq!(status["root_job_id"], "job-root");
+        assert_eq!(status["parent_job_id"], "job-parent");
+        assert_eq!(status["depth"], 3);
+        assert_eq!(status["max_depth"], AGENT_DELEGATION_MAX_DEPTH);
+        assert_eq!(status["lineage_reserved_tokens"], 15_000);
+        assert_eq!(
+            status["lineage_budget_tokens"],
+            AGENT_DELEGATION_MAX_LINEAGE_TOKENS
+        );
+        assert_eq!(
+            status["lineage_budget_remaining_tokens"],
+            AGENT_DELEGATION_MAX_LINEAGE_TOKENS - 15_000
+        );
         assert!(status.get("task").is_none());
 
         let result = agent_job_value(&job, true, false);
@@ -698,6 +722,10 @@ mod tests {
         AgentDelegationJobRecord {
             id: "job-42".to_string(),
             idempotency_key: "idem-42".to_string(),
+            root_job_id: "job-root".to_string(),
+            parent_job_id: Some("job-parent".to_string()),
+            depth: 3,
+            lineage_reserved_tokens: 15_000,
             caller_agent_id: "captain".to_string(),
             target_agent_id: "reviewer".to_string(),
             title: "Review".to_string(),

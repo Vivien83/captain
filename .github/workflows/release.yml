@@ -39,6 +39,9 @@ jobs:
       # release binary self-reports the static Cargo.toml version
       # instead of the actual tag.
       CAPTAIN_BUILD_VERSION: ${{ github.ref_name }}
+      # Optional verified Captain Desktop OAuth identity. Installed apps are
+      # public clients; authorization is protected with PKCE.
+      CAPTAIN_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.CAPTAIN_GOOGLE_OAUTH_CLIENT_ID }}
     strategy:
       fail-fast: false
       matrix:

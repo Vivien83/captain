@@ -53,6 +53,7 @@ CONTRACT_DOCS=(
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
@@ -280,6 +281,7 @@ require_contains "DOC2 defines the essential public navigation boundary" docs/DO
 require_contains "DOC2 preserves runtime-bound Markdown for reproducible builds" docs/DOCS_STATUS.md 'can also be executable or build-time source'
 require_contains "DOC2 pins six primary hubs" docs/DOCS_STATUS.md "exactly six primary hubs"
 require_contains "DOC2 pins Control audit" docs/DOCS_STATUS.md "scripts/control-web-audit.sh"
+require_contains "DOC2 pins Control XSS smoke" docs/DOCS_STATUS.md "scripts/control-xss-smoke.mjs"
 require_contains "DOC2 classifies performance budgets" docs/DOCS_STATUS.md "docs/performance-budgets.md"
 require_contains "DOC2 pins Control performance smoke" docs/DOCS_STATUS.md "scripts/control-chat-performance-smoke.mjs"
 require_contains "DOC2 pins compaction terminal smoke" docs/DOCS_STATUS.md "scripts/compaction-progress-terminal-smoke.mjs"
@@ -370,9 +372,26 @@ require_contains "types expose the exact host execution backend" crates/captain-
 require_contains "types expose the exact host isolation level" crates/captain-types/src/config/execution.rs 'HOST_EXECUTION_ISOLATION_LEVEL: &str = "environment_scrub"'
 require_contains "types deny host operating-system isolation" crates/captain-types/src/config/execution.rs 'HOST_EXECUTION_OS_ISOLATED: bool = false'
 require_contains "types classify the dangerous-command guard honestly" crates/captain-types/src/config/execution.rs 'DANGEROUS_COMMAND_GUARD_LEVEL: &str = "normalized_lexical_heuristic"'
+require_contains "types expose personal workstation execution profile" crates/captain-types/src/config/execution.rs 'PersonalWorkstation'
+require_contains "types expose remote operator execution profile" crates/captain-types/src/config/execution.rs 'RemoteOperator'
+require_contains "types expose untrusted execution profile" crates/captain-types/src/config/execution.rs 'UntrustedExecution'
+require_contains "types make allowlist the structural execution default" crates/captain-types/src/config/execution.rs 'fn exec_policy_default_is_allowlisted_and_explicitly_non_isolated'
+require_contains "daemon and agent execution policies intersect" crates/captain-runtime/src/tool_runner.rs 'Some(agent.intersect(global))'
+require_contains "process supervisor requires an execution permit" crates/captain-runtime/src/process_manager.rs 'start_in_dir_with_permit'
+require_contains "process start uses the guarded process surface" crates/captain-runtime/src/tools/process_ops.rs 'ExecSurface::ProcessTool'
+require_contains "Docker execution denies host fallback" crates/captain-runtime/src/tools/docker_ops.rs 'Captain will not fall back to host execution.'
+require_contains "API distinguishes configured execution mode" crates/captain-api/src/security_routes.rs 'configured_policy_mode'
+require_contains "Control exposes the execution profile" crates/captain-api/static/js/app/status_model.mjs "profile: stringAt(execution.profile, 'unknown')"
+require_contains "configuration guide documents explicit-only routing" docs/configuration.md 'Docker routing is always `explicit_only`'
+require_contains "tool docs include process_start in guarded execution" docs/captain-tools/shell-process.md 'WASM host execution, and `process_start`'
+require_contains "security reconciliation records HARDEN11 F7 closure" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md '## HARDEN11 follow-up — 2026-07-30'
+require_contains "reference config uses the allowlist default" captain.toml.example 'mode = "allowlist"'
 require_contains "reference config uses safe critical mode" captain.toml.example 'critical_mode = "safe"'
+require_contains "quick init records trusted workstation profile" crates/captain-cli/src/commands/init.rs 'profile = "personal_workstation"'
 require_contains "quick init writes safe critical mode" crates/captain-cli/src/commands/init.rs 'critical_mode = "safe"'
+require_contains "setup wizard records trusted workstation profile" crates/captain-cli/src/tui/screens/wizard.rs 'profile = "personal_workstation"'
 require_contains "setup wizard writes safe critical mode" crates/captain-cli/src/tui/screens/wizard.rs 'critical_mode = "safe"'
+require_contains "first-use wizard records trusted workstation profile" crates/captain-cli/src/tui/screens/init_wizard.rs 'profile = "personal_workstation"'
 require_contains "first-use wizard writes safe critical mode" crates/captain-cli/src/tui/screens/init_wizard.rs 'critical_mode = "safe"'
 require_contains "security reconciliation marks F7 remediated" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md '| F7 | Remediated (T8) |'
 require_contains "skills expose a typed remote marketplace freeze" crates/captain-skills/src/lib.rs 'RemoteMarketplaceFrozen'
@@ -399,6 +418,12 @@ require_contains "dependency evidence distinguishes reviewed from absent advisor
 require_contains "dependency gate runs an unfiltered audit" scripts/dependency-audit.sh 'cargo audit --json --no-fetch --file "$ROOT_DIR/Cargo.lock"'
 require_contains "dependency gate rejects RSA packages" scripts/dependency-audit.sh 'versions("rsa") == []'
 require_contains "dependency gate rejects RSA russh features" scripts/dependency-audit.sh '== ["aws-lc-rs", "flate2"]'
+require_contains "dependency gate removes legacy IMAP parser" scripts/dependency-audit.sh 'versions("lexical-core") == []'
+require_contains "dependency gate pins the IMAP client" scripts/dependency-audit.sh 'versions("imap") == ["3.0.0-alpha.15"]'
+require_contains "dependency gate pins the IMAP parser" scripts/dependency-audit.sh 'versions("imap-proto") == ["0.16.7"]'
+require_contains "dependency evidence explains the exact IMAP prerelease" docs/evidence/DEPENDENCY_SECURITY_BASELINE_2026-07-30.md 'prerelease preserves Captain'
+require_contains "runtime changelog exposes the IMAP modernization" docs/captain-tools/runtime-changelog.md 'maintained `imap-proto 0.16.7` parser'
+require_contains "email IMAP keeps implicit TLS on custom ports" crates/captain-channels/src/email.rs '.mode(imap::ConnectionMode::Tls)'
 require_contains "workspace SSH dependency disables default features" Cargo.toml 'russh = { version = "=0.62.4", default-features = false'
 require_not_contains "workspace SSH key features omit RSA" Cargo.toml '"ed25519", "rsa"'
 if [ "$INTERNAL_DOCS_PRESENT" = "1" ]; then
@@ -430,9 +455,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable prerelease" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10"
-  require_contains "$readme pins the immutable prerelease image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10"
-  require_contains "$readme pins the prerelease installer" "$readme" "releases/download/v0.1.0-alpha.10/install.sh"
+  require_contains "$readme links the immutable candidate" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11"
+  require_contains "$readme pins the immutable candidate image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11"
+  require_contains "$readme pins the candidate installer" "$readme" "releases/download/v0.1.0-alpha.11/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -480,9 +505,10 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "current runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.10"
-require_contains "current public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.10] - 2026-07-30"
-require_contains "reviewed public alpha release notes exist" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
+require_contains "candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.11"
+require_contains "candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.11] - 2026-08-04"
+require_contains "reviewed candidate alpha release notes exist" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
+require_contains "historical alpha.10 release notes remain available" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
 require_contains "historical alpha.9 release notes remain available" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
 require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
 require_contains "historical alpha.7 release notes remain available" docs/releases/v0.1.0-alpha.7.md "# Captain 0.1.0-alpha.7"
@@ -510,6 +536,10 @@ require_contains "alpha.10 notes pin live OCI provenance" docs/releases/v0.1.0-a
 require_contains "alpha.10 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.10.md "GitHub Actions API returned zero runs"
 require_not_contains "alpha.10 notes do not copy alpha.9 source provenance" docs/releases/v0.1.0-alpha.10.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
 require_not_contains "alpha.10 notes do not copy alpha.9 OCI provenance" docs/releases/v0.1.0-alpha.10.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
+require_contains "DOC2 identifies the alpha.11 candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.11` is the current locally certified release candidate'
+require_contains "alpha.11 notes keep live provenance unset" docs/releases/v0.1.0-alpha.11.md 'unset until the live release has'
+require_not_contains "alpha.11 notes do not copy alpha.10 source provenance" docs/releases/v0.1.0-alpha.11.md "48f898a9e4d38e8b8c7627644b66e22076a39364"
+require_not_contains "alpha.11 notes do not copy alpha.10 OCI provenance" docs/releases/v0.1.0-alpha.11.md "sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477"
 require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the previous public prerelease'
 require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
 require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
@@ -549,11 +579,21 @@ require_contains "agent config reads redact auth signing material" crates/captai
 require_contains "kernel config writes reject managed auth state" crates/captain-kernel/src/kernel_handle_config.rs "is_managed_auth_config_path"
 require_contains "DOC2 records Argon2id browser passwords" docs/DOCS_STATUS.md "salted Argon2id PHC strings"
 require_contains "configuration documents secure cookie policy" docs/configuration.md 'session_cookie_secure = "auto"'
+require_contains "configuration documents fail-closed loopback opt-out" docs/configuration.md 'allow_unauthenticated_loopback = false'
+require_contains "auth defaults reject credentialless loopback" crates/captain-types/src/config/auth.rs "allow_unauthenticated_loopback: false"
+require_contains "auth boot migrates only explicit legacy opt-out" crates/captain-types/src/config/auth.rs 'unwrap_or(matches!(persisted_enabled, Some(false)))'
+require_contains "API credentialless mode requires actual loopback" crates/captain-api/src/middleware.rs "&& client_is_loopback"
+require_contains "setup closes credentialless loopback mode" crates/captain-cli/src/commands/setup_access.rs '"allow_unauthenticated_loopback".to_string()'
+require_contains "status distinguishes unconfigured auth" crates/captain-api/src/status_payload.rs '(false, false, false) => "unconfigured"'
+require_contains "doctor reports explicit loopback auth opt-out" crates/captain-cli/src/commands/doctor/environment.rs '"unauthenticated_loopback"'
 require_contains "API documents one-time realtime ticket" docs/api-reference.md "30-second single-use ticket"
 require_contains "security reconciliation closes F3" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F3 | Remediated (T6 + T7)"
 require_contains "web password hashing uses Argon2id" crates/captain-types/src/config/auth.rs "Argon2::default()"
 require_contains "legacy login migrates password hash" crates/captain-api/src/web_auth_routes.rs "migrate_legacy_password_hash"
 require_contains "login limiter tracks IP and username" crates/captain-api/src/web_auth_security.rs "by_user"
+require_contains "login limiter has a bounded saturation backoff" crates/captain-api/src/web_auth_security.rs "LOGIN_SATURATION_BACKOFF"
+require_contains "login limiter never evicts an active block under pressure" crates/captain-api/src/web_auth_security.rs "capacity_pressure_never_evicts_an_active_login_block"
+require_contains "public deployment docs require an upstream login limiter" docs/deployment/vps-web-terminal.md "Add an upstream login request limit"
 require_contains "realtime tickets are consumed once" crates/captain-api/src/web_auth_security.rs "state.tickets.remove(ticket)"
 require_contains "browser chat requests realtime ticket" crates/captain-api/static/js/app/api.js "api.realtimeTicket(path)"
 require_contains "API auth has one explicit public allowlist" crates/captain-api/src/middleware.rs "const PUBLIC_ALLOWLIST"
@@ -565,9 +605,9 @@ require_contains "Control emits centralized unauthorized signal" crates/captain-
 require_contains "Control consumes centralized unauthorized signal" crates/captain-api/static/js/app/main.js "captain:unauthorized"
 require_contains "security reconciliation closes F4" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F4 | Remediated (T3)"
 require_contains "DOC2 defines fail-closed browser origins" docs/DOCS_STATUS.md "Alpha 10 Browser Origin Contract"
-require_contains "security policy supports only alpha.10" SECURITY.md '| 0.1.0-alpha.10 | :white_check_mark: |'
-require_contains "security policy retires alpha.9" SECURITY.md '| 0.1.0-alpha.9 | :x: |'
-require_contains "security policy pins the alpha.10 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.10` is an early-access release.'
+require_contains "security policy supports only alpha.11" SECURITY.md '| 0.1.0-alpha.11 | :white_check_mark: |'
+require_contains "security policy retires alpha.10" SECURITY.md '| 0.1.0-alpha.10 | :x: |'
+require_contains "security policy pins the alpha.11 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.11` is an early-access release.'
 require_contains "configuration exposes exact API origins" docs/configuration.md 'allowed_origins = ["https://console.example.com"]'
 require_contains "reference config exposes the API origin section" captain.toml.example "[api]"
 require_not_contains "API CORS policy has no wildcard helper" crates/captain-api/src/request_origin_security.rs "tower_http::cors::Any"
@@ -782,7 +822,21 @@ require_contains "configuration documents external secret registry" docs/configu
 require_contains "configuration pins authoritative external mappings" docs/configuration.md 'external mapping is **authoritative**'
 require_contains "configuration exposes redacted source status CLI" docs/configuration.md 'captain vault sources --json'
 require_contains "CLI documents external source status" docs/cli-reference.md 'captain vault sources [--json]'
-require_contains "CLI channel setup uses canonical secrets store" docs/cli-reference.md 'Saves local tokens to `~/.captain/secrets.env`'
+require_contains "CLI documents native vault key storage" docs/cli-reference.md 'macOS Keychain, Windows Credential Manager, or Linux Secret Service'
+require_contains "CLI documents headless vault key contract" docs/cli-reference.md 'headless and CI deployments must provide'
+require_contains "security docs pin verified native vault storage" docs/security.md 'Every new key is read back and compared'
+require_contains "security docs pin fail-closed legacy migration" docs/security.md 'native/legacy mismatch refuses both automatic deletion and overwrite'
+require_contains "vault uses the real platform keyring crate" crates/captain-extensions/src/vault_keyring.rs 'keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)'
+require_not_contains "vault never prints generated master keys" crates/captain-extensions/src/vault_keyring.rs 'eprintln!'
+require_contains "CLI channel setup uses canonical credential resolver" docs/cli-reference.md 'Saves local tokens through the canonical credential resolver'
+require_contains "channel docs distinguish Gmail OAuth from IMAP SMTP" docs/channel-adapters.md 'Captain exposes two deliberately separate email rails'
+require_contains "configuration documents named Email accounts" docs/configuration.md '[[channels.email.accounts]]'
+require_contains "API documents channel form schema authority" docs/api-reference.md 'authoritative guided-client schema'
+require_contains "API documents named Email live probes" docs/api-reference.md 'Email probe performs real IMAP login/folder checks'
+require_contains "CLI documents named Email tests" docs/cli-reference.md 'captain channel test email:work'
+require_not_contains "CLI docs expose no dead channel enable command" docs/cli-reference.md 'captain channel enable <CHANNEL>'
+require_not_contains "CLI parser exposes no dead channel enable variant" crates/captain-cli/src/cli_args_config.rs 'Enable {'
+require_not_contains "CLI parser exposes no dead channel disable variant" crates/captain-cli/src/cli_args_config.rs 'Disable {'
 require_contains "tool docs put external sources first" docs/captain-tools/config-secret.md '`~/.captain/secret-sources.toml` file mapping'
 require_contains "tool docs pin external fail-closed behavior" docs/captain-tools/config-secret.md 'authoritative and fail-closed'
 require_contains "security docs block mounted source targets" docs/security.md 'all configured source targets join the kernel'
@@ -864,10 +918,21 @@ require_contains "release readiness compiles captain-graph bindings" scripts/rel
 require_file scripts/control-web-audit.sh
 require_file scripts/control-chat-performance-test.mjs
 require_file scripts/control-chat-performance-smoke.mjs
+require_file scripts/control-xss-smoke.mjs
 require_file scripts/compaction-progress-terminal-smoke.mjs
 require_contains "chat surface gate runs the deterministic Control audit" scripts/core-surface-gates.sh 'scripts/control-web-audit.sh'
+require_contains "chat surface gate runs the browser XSS smoke" scripts/core-surface-gates.sh 'scripts/control-xss-smoke.mjs'
 require_contains "chat surface gate runs the browser performance smoke" scripts/core-surface-gates.sh 'scripts/control-chat-performance-smoke.mjs'
 require_contains "chat surface gate runs compaction terminal smoke" scripts/core-surface-gates.sh 'scripts/compaction-progress-terminal-smoke.mjs'
+require_contains "browser CSP denies inline and evaluated script authority" crates/captain-api/src/middleware.rs "script-src 'self'; script-src-attr 'none'; style-src"
+require_pretest_not_contains "browser CSP has no evaluated script authority" crates/captain-api/src/middleware.rs "'unsafe-eval'"
+require_contains "security middleware emits the reviewed CSP" crates/captain-api/src/middleware.rs "security_header_middleware_emits_the_reviewed_csp"
+require_not_contains "Desktop CSP has no evaluated script authority" crates/captain-desktop/tauri.conf.json "'unsafe-eval'"
+require_not_contains "Control HTML no longer needs an import map" crates/captain-api/static/app_body.html 'type="importmap"'
+require_contains "Control HTML loads its module as a same-origin asset" crates/captain-api/static/app_body.html 'src="/assets/app/main.js"'
+require_contains "browser assets enforce external script tags" crates/captain-api/src/webchat.rs "every_browser_script_is_external_and_import_maps_are_absent"
+require_contains "Markdown uses a fixed passive tag allowlist" crates/captain-api/static/js/app/components/Markdown.js "const MARKDOWN_TAGS"
+require_contains "XSS smoke covers Markdown, tools and sessions" scripts/control-xss-smoke.mjs "Markdown, tool output, and session labels stay inert"
 require_contains "DOC2 classifies compaction progress" docs/DOCS_STATUS.md "Alpha 10 Compaction Progress Contract"
 require_contains "API documents typed compaction WebSocket progress" docs/api-reference.md '"type": "compaction_progress"'
 require_contains "API documents daemon compaction SSE" docs/api-reference.md "event: compaction_progress"
@@ -880,12 +945,27 @@ require_file scripts/release-provenance.sh
 require_file scripts/release-provenance-test.sh
 require_file docs/release-provenance.md
 require_file scripts/github-governance.sh
+require_file scripts/github-discoverability.sh
+require_file scripts/local-pr-gate.sh
+require_file scripts/local-pr-gate-worker.sh
+require_file scripts/local-pr-vm-bootstrap.sh
+require_file scripts/local-pr-portal.sh
+require_file scripts/local-pr-gate-test.sh
+require_file scripts/local-pr-lima-smoke.sh
 require_file docs/repository-governance.md
 require_contains "docs index exposes release provenance" docs/INDEX.md "Release Provenance"
 require_contains "docs README exposes release provenance" docs/README.md "Release provenance"
 require_contains "docs index exposes repository governance" docs/INDEX.md "Repository Governance"
-require_contains "repository governance documents local-only status checks" docs/repository-governance.md 'no GitHub status check is required automatically'
+require_contains "repository governance documents the local required status" docs/repository-governance.md 'captain/local-pr-gate'
+require_contains "repository governance documents disposable Lima execution" docs/repository-governance.md 'disposable plain-mode Lima VM'
+require_contains "repository governance documents the portal service" docs/repository-governance.md 'scripts/local-pr-portal.sh --install-launchd'
+require_contains "repository governance documents exact-base controller verification" docs/repository-governance.md 'exact protected-base SHA'
+require_contains "repository governance documents root-owned toolchain and policies" docs/repository-governance.md 'root-owned, non-writable paths'
+require_contains "repository governance documents immutable audit snapshots" docs/repository-governance.md 'immutable snapshots'
 require_contains "repository governance applies versioned protection" docs/repository-governance.md 'scripts/github-governance.sh --apply'
+require_contains "repository governance applies versioned discovery metadata" docs/repository-governance.md 'scripts/github-discoverability.sh --apply'
+require_contains "site deployment documents IndexNow notification" docs/deployment/launch-site.md 'api.indexnow.org/indexnow'
+require_contains "site deployment keeps Google indexing operator-owned" docs/deployment/launch-site.md 'Google Search Console'
 require_file "docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md"
 require_contains "release supply-chain evidence keeps remote policy honest" docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md 'No document may claim the remote state is active'
 require_contains "release supply-chain evidence pins sequential bundles" docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md 'invoke each target separately'
@@ -921,6 +1001,10 @@ require_contains "security docs name guarded execution source" docs/security.md 
 require_not_contains "security docs have no subprocess sandbox overclaim" docs/security.md 'subprocess_sandbox'
 require_not_contains "architecture has no subprocess sandbox overclaim" docs/architecture.md 'subprocess_sandbox'
 require_contains "architecture documents content-bound approval permits" docs/architecture.md "content-bound permit"
+require_contains "program permits use a versioned authorization domain" crates/captain-runtime/src/guarded_exec.rs 'captain.exec-permit.program.v1\0'
+require_contains "program permits encode an explicit argument count" crates/captain-runtime/src/guarded_exec.rs 'program argument count must fit in u64'
+require_contains "program permit boundary collisions have a regression proof" crates/captain-runtime/src/guarded_exec_tests.rs 'direct_program_authorization_encoding_is_injective'
+require_contains "security docs pin injective program permit framing" docs/security.md 'big-endian `u64` argument count'
 require_contains "public changelog records unified subprocess sinks" CHANGELOG.md "All agent-controlled subprocess sinks now share one guarded execution"
 require_contains "shell tool docs name the shared guarded boundary" docs/captain-tools/shell-process.md '`guarded_exec` is the mandatory subprocess entry'
 require_contains "shell tool docs pin exact safe environment" docs/captain-tools/shell-process.md '`PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`, `LANG`'

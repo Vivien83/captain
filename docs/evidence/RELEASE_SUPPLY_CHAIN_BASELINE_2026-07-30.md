@@ -62,28 +62,41 @@ for completion before starting the next.
 
 `scripts/github-governance.sh` defines the exact public `main` policy:
 one approving review for non-admin contributors, stale-review dismissal,
-last-push approval, resolved conversations, linear history, no force-push, and
-no branch deletion. Administrators retain the local publisher path and no
-automatic hosted status check is required.
+last-push approval, resolved conversations, linear history, no force-push, no
+branch deletion, and strict `captain/local-pr-gate` success on the current SHA.
+The status is generated locally in a disposable, mountless Lima clone; no
+automatic hosted status check or GitHub Actions minute is required.
 
-The local policy test is green. Remote application and read-back remain a
-publication-time T14 exit condition because the workstation's current `gh`
-credential is invalid. No document may claim the remote state is active until
-`scripts/github-governance.sh --apply` and `--verify` both succeed.
+The mocked controller/portal contract and local policy test are green. A real
+Lima boundary smoke on 2026-08-03 also passed on Ubuntu ARM64 with no host
+mount, SSH agent, or container runtime; the disposable VM was destroyed.
+Controller policy, worker, exporter, public auditor, and secret policy are
+verified at the exact base SHA and installed root-owned in the guest. Source
+and public-export snapshots are sealed before any pull-request code executes.
+
+Remote application and read-back remain a post-Alpha 10 exit condition because
+the workstation's current `gh` credential is invalid. The full real-PR gate
+also retains its 35 GiB host floor; only 22 GiB were free during this proof.
+No document may claim the remote state is active before one real portal status.
+After that proof, `scripts/github-governance.sh --apply` plus `--verify` must
+both succeed.
 
 ## Reproducible Gate
 
 The tranche gate passed:
 
-- shell syntax for six release/governance scripts;
-- guarded execution audit: 9 controlled sinks;
+- shell syntax for the release/governance scripts;
+- guarded execution audit: 11 controlled sinks;
 - provenance generation, verification, and tamper rejection;
-- local governance policy validation;
-- release workflow audit: 125 checks;
-- DOC2 global audit: 630 checks;
-- docs release audit: 95 checks;
+- local governance policy validation and mocked exact-SHA portal recovery;
+- real mountless Lima isolation smoke;
+- release workflow audit: 150 checks;
+- DOC2 global audit: 715 maintainer checks and 710 public-export checks;
+- docs release audit: 105 checks;
+- public source audit and secret scan;
 - staged and unstaged diff checks.
 
-T14 remains open for live branch-policy application, clean-source release
-readiness, five real sequential bundles, Docker digests/attestations, and
-remote publication verification.
+The remaining portal exits are a valid GitHub credential, one full real-PR
+status, and live application/read-back of the stricter branch policy. Alpha 10
+release publication evidence remains recorded separately and is not rewritten
+by this post-release gate.

@@ -41,6 +41,11 @@ pub mod document_definitions;
 pub mod document_dispatch;
 pub mod document_extract;
 pub mod document_ops;
+pub mod email_automation_definitions;
+pub mod email_automation_ops;
+pub mod email_definitions;
+pub mod email_dispatch;
+pub mod email_ops;
 pub mod errors;
 pub mod execution_context;
 pub mod file_definitions;
@@ -207,6 +212,17 @@ pub(crate) use document_dispatch::dispatch_document_tool;
 pub(crate) use document_extract::extract_pdf_text_from_bytes;
 pub(crate) use document_extract::tool_document_extract;
 pub(crate) use document_ops::tool_document_pipeline;
+pub(crate) use email_automation_ops::{
+    tool_email_automation_deliveries, tool_email_automation_delivery_requeue,
+    tool_email_automation_rule_remove, tool_email_automation_rule_save,
+    tool_email_automation_rule_set_enabled, tool_email_automation_rules,
+};
+pub use email_definitions::email_tool_definitions;
+pub(crate) use email_dispatch::dispatch_email_tool;
+pub(crate) use email_ops::{
+    tool_email_accounts, tool_email_attachment_save, tool_email_compose, tool_email_labels,
+    tool_email_read, tool_email_reply, tool_email_search, tool_email_update,
+};
 pub(crate) use errors::{
     is_retryable_tool, is_write_tool_that_must_not_be_masked, render_error_with_suggestion,
 };

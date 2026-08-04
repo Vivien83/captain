@@ -161,10 +161,11 @@ fn extract_all_commands(command: &str) -> Vec<&str> {
 ///
 /// Returns `Ok(())` if the command is allowed, `Err(reason)` if blocked.
 pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<(), String> {
-    match policy.mode {
-        ExecSecurityMode::Deny => {
-            Err("Shell execution is disabled (exec_policy.mode = deny)".to_string())
-        }
+    match policy.effective_mode() {
+        ExecSecurityMode::Deny => Err(format!(
+            "Host execution is disabled by execution profile `{}`",
+            policy.profile.as_str()
+        )),
         ExecSecurityMode::Full => {
             // Check the blocklist after shared lexical normalization so trivial
             // case, whitespace, and short-flag reordering cannot bypass it.

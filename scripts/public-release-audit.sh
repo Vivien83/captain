@@ -3,13 +3,49 @@
 
 set -euo pipefail
 
-ROOT_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd -P)}"
-ROOT_DIR=$(cd "$ROOT_DIR" && pwd -P)
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+ROOT_DIR=""
+POLICY_ROOT="$SCRIPT_ROOT"
 
 fail() {
   printf 'Public release audit failed: %s\n' "$*" >&2
   exit 1
 }
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/public-release-audit.sh [--policy-root PATH] [source-root]
+
+--policy-root selects the trusted scripts and gitleaks policy used to audit the
+source tree. The local PR gate uses a root-owned policy bundle for this option.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --policy-root)
+      shift
+      [ "$#" -gt 0 ] || fail "--policy-root requires a path"
+      POLICY_ROOT="$1"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      fail "unknown option: $1"
+      ;;
+    *)
+      [ -z "$ROOT_DIR" ] || fail "only one source root is allowed"
+      ROOT_DIR="$1"
+      ;;
+  esac
+  shift
+done
+
+ROOT_DIR="${ROOT_DIR:-$SCRIPT_ROOT}"
+ROOT_DIR=$(cd "$ROOT_DIR" && pwd -P)
+POLICY_ROOT=$(cd "$POLICY_ROOT" && pwd -P)
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -25,8 +61,19 @@ need_cmd grep
 need_cmd node
 need_cmd rg
 
+for policy_file in \
+  .gitleaks.toml \
+  scripts/check-markdown-links.mjs \
+  scripts/public-boundary-guard.sh \
+  scripts/publish-release-local.sh \
+  scripts/github-discoverability.sh; do
+  [ -f "$POLICY_ROOT/$policy_file" ] \
+    || fail "trusted policy file is missing: $policy_file"
+done
+
 printf '== Captain public source audit\n'
 printf '   root=%s\n' "$ROOT_DIR"
+printf '   policy=%s\n' "$POLICY_ROOT"
 
 required_files=(
   .gitattributes
@@ -37,6 +84,7 @@ required_files=(
   SECURITY.md
   docs/release-provenance.md
   docs/repository-governance.md
+  docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
   docs/releases/v0.1.0-alpha.8.md
@@ -54,6 +102,13 @@ required_files=(
   scripts/release-provenance.sh
   scripts/release-provenance-test.sh
   scripts/github-governance.sh
+  scripts/github-discoverability.sh
+  scripts/local-pr-gate.sh
+  scripts/local-pr-gate-worker.sh
+  scripts/local-pr-vm-bootstrap.sh
+  scripts/local-pr-portal.sh
+  scripts/local-pr-gate-test.sh
+  scripts/local-pr-lima-smoke.sh
 )
 for relative in "${required_files[@]}"; do
   [ -f "$ROOT_DIR/$relative" ] || fail "required file is missing: $relative"
@@ -61,12 +116,12 @@ done
 pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
-  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10' \
-    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable prerelease"
-  grep -Fq 'releases/download/v0.1.0-alpha.10/install.sh' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the prerelease installer"
-  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable prerelease image"
+  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11' \
+    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable candidate"
+  grep -Fq 'releases/download/v0.1.0-alpha.11/install.sh' \
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the candidate installer"
+  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11' \
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable candidate image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
   fi
@@ -74,9 +129,20 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
     fail "$readme still exposes the private release candidate"
   fi
 done
-grep -Fq '### 0.1.0-alpha.10' \
+grep -Fq '### 0.1.0-alpha.11' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
-  || fail "agent-facing changelog does not identify the public alpha"
+  || fail "agent-facing changelog does not identify the candidate alpha"
+grep -Fq 'unset until the live release has' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
+  || fail "candidate release notes do not keep live provenance explicitly unset"
+if grep -Fq '48f898a9e4d38e8b8c7627644b66e22076a39364' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md"; then
+  fail "Alpha 11 release notes copied the Alpha 10 public source commit"
+fi
+if grep -Fq 'sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md"; then
+  fail "Alpha 11 release notes copied the Alpha 10 OCI digest"
+fi
 grep -Fq '48f898a9e4d38e8b8c7627644b66e22076a39364' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.10.md" \
   || fail "published release notes do not pin the Alpha 10 source commit"
@@ -103,8 +169,11 @@ grep -Fq 'sha256:412921cd69726152235bc08614d185686ebe8a34490ee11b42a94a79e0ddc87
 grep -Fq 'image: ghcr.io/vivien83/captain-agent-os:${CAPTAIN_IMAGE_TAG:-alpha}' \
   "$ROOT_DIR/docker-compose.yml" \
   || fail "Compose does not default to the public alpha channel"
-CAPTAIN_RELEASE_POLICY_TEST=1 "$ROOT_DIR/scripts/publish-release-local.sh" >/dev/null \
+CAPTAIN_RELEASE_POLICY_TEST=1 "$POLICY_ROOT/scripts/publish-release-local.sh" >/dev/null \
   || fail "local release channel policy failed"
+CAPTAIN_GITHUB_DISCOVERABILITY_POLICY_TEST=1 \
+  "$POLICY_ROOT/scripts/github-discoverability.sh" >/dev/null \
+  || fail "GitHub discoverability policy failed"
 legacy_image_matches=$(rg -n --hidden \
   --glob '!.git/**' \
   --glob '!scripts/public-release-audit.sh' \
@@ -114,7 +183,7 @@ if [ -n "$legacy_image_matches" ]; then
   printf '%s\n' "$legacy_image_matches" >&2
   fail "public tree still references the private historical image package"
 fi
-pass "public alpha version, installer, image, and prerelease policy are coherent"
+pass "candidate alpha version, installer, image, and prerelease policy are coherent"
 
 forbidden_paths=(
   .mcp.json
@@ -162,7 +231,7 @@ if find "$ROOT_DIR/docs" -maxdepth 1 -type f -name 'v3*.md' -print -quit | grep 
 fi
 pass "maintainer-only, historical, site, and generated paths are absent"
 
-"$ROOT_DIR/scripts/public-boundary-guard.sh" "$ROOT_DIR" >/dev/null \
+"$POLICY_ROOT/scripts/public-boundary-guard.sh" "$ROOT_DIR" >/dev/null \
   || fail "public boundary guard rejected the source tree"
 pass "maintainer-only references are absent"
 
@@ -234,7 +303,7 @@ if [ -n "$automatic_actions" ]; then
 fi
 pass "GitHub Actions are manual-only"
 
-node "$ROOT_DIR/scripts/check-markdown-links.mjs" "$ROOT_DIR"
+node "$POLICY_ROOT/scripts/check-markdown-links.mjs" "$ROOT_DIR"
 pass "local Markdown links resolve with exact path casing"
 
 gitleaks detect \
@@ -242,7 +311,7 @@ gitleaks detect \
   --no-git \
   --redact \
   --no-banner \
-  --config "$ROOT_DIR/.gitleaks.toml"
+  --config "$POLICY_ROOT/.gitleaks.toml"
 pass "gitleaks found no secret in the public tree"
 
 printf 'Captain public source audit passed.\n'

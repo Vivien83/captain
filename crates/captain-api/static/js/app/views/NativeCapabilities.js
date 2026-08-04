@@ -1,6 +1,6 @@
-import { h } from 'preact';
-import { useCallback, useEffect, useState } from 'preact/hooks';
-import htm from 'htm';
+import { h } from '/assets/app/vendor/preact.module.js';
+import { useCallback, useEffect, useState } from '/assets/app/vendor/hooks.module.js';
+import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
 import { toast } from '../store.js';
 

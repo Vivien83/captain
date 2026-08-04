@@ -1,6 +1,9 @@
 //! Static local-agent coordination tool definitions.
 
 use captain_types::agent::AGENT_MANIFEST_CANONICAL_EXAMPLE;
+use captain_types::agent_delegation::{
+    AGENT_DELEGATION_MAX_DEPTH, AGENT_DELEGATION_MAX_LINEAGE_TOKENS, AGENT_DELEGATION_MAX_TOKENS,
+};
 use captain_types::tool::ToolDefinition;
 use serde_json::Value;
 
@@ -162,16 +165,19 @@ fn agent_watch_tool_definition() -> ToolDefinition {
 }
 
 fn agent_delegate_tool_definition() -> ToolDefinition {
+    let description = format!(
+        "Crée une délégation durable et détachée vers un sub-agent avec budget, dépendances et reprise explicite. Retourne immédiatement un job_id par défaut: continuer le travail indépendant, puis revenir avec agent_job_status, agent_job_result ou agent_job_list. Plusieurs appels indépendants dans le même tour sont parallélisables; renseigner depends_on uniquement quand un job a besoin des résultats d'autres jobs. Captain attend alors leurs succès avant de démarrer le job dépendant. Ne pas inventer de parallélisme entre étapes dépendantes. Une délégation créée par un job actif devient son enfant durable: la filiation est vérifiée en base, la profondeur totale est limitée à {AGENT_DELEGATION_MAX_DEPTH} et toute la lignée partage au maximum {AGENT_DELEGATION_MAX_LINEAGE_TOKENS} tokens réservés, même après crash ou nettoyage d'historique. wait_for_result=true reste disponible seulement quand le résultat est immédiatement nécessaire et bloque au maximum timeout_seconds. Après crash, une tâche sans effet peut repartir; une tâche dont l'effet a commencé devient uncertain et exige agent_job_resume, donc aucun replay silencieux. Toujours fixer max_tokens à un budget serré et demander un livrable précis. Une extraction factuelle courte tient souvent dans 800-1500 tokens; un rôle critique/QA ouvert requiert plutôt 3000-5000 tokens."
+    );
     tool_definition(
         "agent_delegate",
-        "Crée une délégation durable et détachée vers un sub-agent avec budget, dépendances et reprise explicite. Retourne immédiatement un job_id par défaut: continuer le travail indépendant, puis revenir avec agent_job_status, agent_job_result ou agent_job_list. Plusieurs appels indépendants dans le même tour sont parallélisables; renseigner depends_on uniquement quand un job a besoin des résultats d'autres jobs. Captain attend alors leurs succès avant de démarrer le job dépendant. Ne pas inventer de parallélisme entre étapes dépendantes. wait_for_result=true reste disponible seulement quand le résultat est immédiatement nécessaire et bloque au maximum timeout_seconds. Après crash, une tâche sans effet peut repartir; une tâche dont l'effet a commencé devient uncertain et exige agent_job_resume, donc aucun replay silencieux. Toujours fixer max_tokens à un budget serré et demander un livrable précis. Une extraction factuelle courte tient souvent dans 800-1500 tokens; un rôle critique/QA ouvert requiert plutôt 3000-5000 tokens.",
+        &description,
         serde_json::json!({
             "type": "object",
             "properties": {
                 "agent_id": { "type": "string", "description": "UUID de l'agent à qui déléguer" },
                 "title": { "type": "string", "description": "Titre opérationnel court visible dans le suivi; dérivé de la première ligne de task si absent" },
                 "task": { "type": "string", "description": "Description de la tâche à accomplir" },
-                "max_tokens": { "type": "integer", "description": "Budget maximum du tour délégué en tokens", "default": 5000, "minimum": 1, "maximum": 500000 },
+                "max_tokens": { "type": "integer", "description": "Budget maximum du tour délégué en tokens; cette réservation est aussi débitée du budget durable de toute la lignée", "default": 5000, "minimum": 1, "maximum": AGENT_DELEGATION_MAX_TOKENS },
                 "depends_on": { "type": "array", "description": "Job IDs de ce même agent appelant qui doivent réussir avant le démarrage", "items": { "type": "string" }, "maxItems": 16 },
                 "wait_for_result": { "type": "boolean", "description": "Attendre explicitement la fin au lieu de rendre la main; défaut false", "default": false },
                 "timeout_seconds": { "type": "integer", "description": "Fenêtre d'attente si wait_for_result=true", "default": 120, "minimum": 1, "maximum": 600 }
@@ -365,9 +371,22 @@ mod tests {
             integer_field(property(delegate, "max_tokens"), "default"),
             Some(5000)
         );
+        assert_eq!(
+            integer_field(property(delegate, "max_tokens"), "maximum"),
+            Some(AGENT_DELEGATION_MAX_TOKENS)
+        );
         assert_contains(&delegate.description, "durable et détachée");
         assert_contains(&delegate.description, "Plusieurs appels indépendants");
         assert_contains(&delegate.description, "depends_on");
+        assert_contains(&delegate.description, "filiation est vérifiée en base");
+        assert_contains(
+            &delegate.description,
+            &format!("limitée à {AGENT_DELEGATION_MAX_DEPTH}"),
+        );
+        assert_contains(
+            &delegate.description,
+            &format!("{AGENT_DELEGATION_MAX_LINEAGE_TOKENS} tokens réservés"),
+        );
         assert_contains(&delegate.description, "aucun replay silencieux");
         assert_contains(&delegate.description, "3000-5000 tokens");
         assert_eq!(property(delegate, "wait_for_result")["default"], false);

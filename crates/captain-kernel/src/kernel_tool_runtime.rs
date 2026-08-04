@@ -3,7 +3,7 @@ use super::CaptainKernel;
 use captain_runtime::tool_runner::builtin_tool_definitions;
 use captain_skills::SkillToolDef;
 use captain_types::agent::{AgentEntry, AgentId, ToolProfile};
-use captain_types::config::{ExecSecurityMode, MemoryBackend};
+use captain_types::config::{ExecPolicy, ExecSecurityMode, MemoryBackend};
 use captain_types::tool::ToolDefinition;
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
@@ -22,7 +22,7 @@ impl CaptainKernel {
         let workspace = entry
             .as_ref()
             .and_then(|entry| entry.manifest.workspace.as_deref());
-        let selection = AgentToolSelection::from_entry(entry.as_ref());
+        let selection = AgentToolSelection::from_entry(entry.as_ref(), &self.config.exec_policy);
         let mut all_tools = super::filter_builtins_for_agent(
             builtin_tool_definitions(),
             &selection.declared_tools,
@@ -42,7 +42,7 @@ impl CaptainKernel {
         );
         self.append_available_mcp_tools(&mut all_tools, &selection);
         apply_tool_allow_block_lists(&mut all_tools, &selection);
-        apply_exec_policy_visibility(&mut all_tools, &selection);
+        apply_exec_policy_visibility(&mut all_tools, &selection, self.config.docker.enabled);
         apply_subagent_depth_visibility(&mut all_tools, selection.subagent_depth);
 
         all_tools
@@ -202,15 +202,24 @@ struct AgentToolSelection {
     declared_tools: Vec<String>,
     tool_allowlist: Vec<String>,
     tool_blocklist: Vec<String>,
-    exec_blocks_shell: bool,
+    exec_blocks_host: bool,
     subagent_depth: u32,
 }
 
 impl AgentToolSelection {
-    fn from_entry(entry: Option<&AgentEntry>) -> Self {
+    fn from_entry(entry: Option<&AgentEntry>, global_policy: &ExecPolicy) -> Self {
         let Some(entry) = entry else {
-            return Self::default();
+            return Self {
+                exec_blocks_host: global_policy.effective_mode() == ExecSecurityMode::Deny,
+                ..Self::default()
+            };
         };
+        let mut effective_policy = entry
+            .manifest
+            .exec_policy
+            .clone()
+            .unwrap_or_else(|| global_policy.clone());
+        effective_policy = effective_policy.intersect(global_policy);
         Self {
             skill_allowlist: entry.manifest.skills.clone(),
             mcp_allowlist: entry.manifest.mcp_servers.clone(),
@@ -218,11 +227,7 @@ impl AgentToolSelection {
             declared_tools: entry.manifest.capabilities.tools.clone(),
             tool_allowlist: entry.manifest.tool_allowlist.clone(),
             tool_blocklist: entry.manifest.tool_blocklist.clone(),
-            exec_blocks_shell: entry
-                .manifest
-                .exec_policy
-                .as_ref()
-                .is_some_and(|p| p.mode == ExecSecurityMode::Deny),
+            exec_blocks_host: effective_policy.effective_mode() == ExecSecurityMode::Deny,
             subagent_depth: u32::try_from(subagent_depth_from_manifest(&entry.manifest))
                 .unwrap_or(0),
         }
@@ -341,9 +346,28 @@ fn apply_tool_allow_block_lists(tools: &mut Vec<ToolDefinition>, selection: &Age
     }
 }
 
-fn apply_exec_policy_visibility(tools: &mut Vec<ToolDefinition>, selection: &AgentToolSelection) {
-    if selection.exec_blocks_shell {
-        tools.retain(|tool| tool.name != "shell_exec");
+fn apply_exec_policy_visibility(
+    tools: &mut Vec<ToolDefinition>,
+    selection: &AgentToolSelection,
+    docker_enabled: bool,
+) {
+    const HOST_EXECUTION_START_TOOLS: &[&str] = &[
+        "cargo",
+        "execute_code",
+        "npm",
+        "pip",
+        "process_start",
+        "process_write",
+        "shell_exec",
+        "skill_execute",
+        "tool_run_start",
+    ];
+
+    if selection.exec_blocks_host {
+        tools.retain(|tool| !HOST_EXECUTION_START_TOOLS.contains(&tool.name.as_str()));
+    }
+    if !docker_enabled {
+        tools.retain(|tool| tool.name != "docker_exec");
     }
 }
 
@@ -588,6 +612,49 @@ with = {{ path = "README.md" }}
 
         let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, vec!["file_read"]);
+    }
+
+    #[test]
+    fn denied_host_execution_hides_start_and_write_tools_but_keeps_cleanup() {
+        let selection = AgentToolSelection {
+            exec_blocks_host: true,
+            ..Default::default()
+        };
+        let mut tools = vec![
+            td("shell_exec"),
+            td("execute_code"),
+            td("process_start"),
+            td("process_write"),
+            td("process_poll"),
+            td("process_kill"),
+            td("docker_exec"),
+            td("ssh_exec"),
+            td("file_read"),
+        ];
+
+        apply_exec_policy_visibility(&mut tools, &selection, true);
+
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "process_poll",
+                "process_kill",
+                "docker_exec",
+                "ssh_exec",
+                "file_read"
+            ]
+        );
+    }
+
+    #[test]
+    fn unavailable_explicit_docker_rail_is_not_advertised() {
+        let mut tools = vec![td("shell_exec"), td("docker_exec")];
+
+        apply_exec_policy_visibility(&mut tools, &AgentToolSelection::default(), false);
+
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, vec!["shell_exec"]);
     }
 
     #[test]

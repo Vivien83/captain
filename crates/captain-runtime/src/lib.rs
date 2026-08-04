@@ -271,3 +271,4 @@ pub mod workflow_learning_staging;
 mod workflow_learning_staging_tests;
 pub mod workspace_context;
 pub mod workspace_sandbox;
+pub mod xai_auth;

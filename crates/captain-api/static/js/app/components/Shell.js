@@ -1,6 +1,6 @@
-import { h } from 'preact';
-import { useState, useEffect } from 'preact/hooks';
-import htm from 'htm';
+import { h } from '/assets/app/vendor/preact.module.js';
+import { useState, useEffect } from '/assets/app/vendor/hooks.module.js';
+import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
 import { getState, setState, subscribe, toast } from '../store.js';
 import { PRIMARY_HUBS, hubForRoute } from '../control_contract.mjs';
@@ -240,7 +240,7 @@ async function switchTo(agentId, session) {
 }
 
 // No blocking browser dialogs: inline rename input, two-click delete confirm.
-function SessionRow({ session, agentId, active }) {
+export function SessionRow({ session, agentId, active }) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(session.label || '');
   const [confirmDel, setConfirmDel] = useState(false);

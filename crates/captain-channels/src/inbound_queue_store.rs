@@ -4,7 +4,10 @@
 //! message stays durable until the dispatch loop reports completion, giving the
 //! bridge at-least-once recovery across crashes.
 
-use crate::inbound_queue_types::{PendingInboundMessage, INBOUND_DEAD_LETTER_RETENTION_SECS};
+use crate::inbound_queue_types::{
+    AcceptedInboundId, PendingInboundMessage, INBOUND_ACCEPTED_ID_RETENTION_SECS,
+    INBOUND_DEAD_LETTER_RETENTION_SECS,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -29,6 +32,8 @@ pub(crate) struct PendingInboundRecord {
     pub inflight: Option<PendingInboundMessage>,
     #[serde(default)]
     pub dead_letter: Option<DeadInboundRecord>,
+    #[serde(default)]
+    pub accepted_ingress: Vec<AcceptedInboundId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,9 +84,18 @@ impl InboundQueueStore {
                     record.dead_letter = None;
                     pruned = true;
                 }
+                let accepted_before = record.accepted_ingress.len();
+                record.accepted_ingress.retain(|accepted| {
+                    Utc::now()
+                        .signed_duration_since(accepted.accepted_at)
+                        .num_seconds()
+                        < INBOUND_ACCEPTED_ID_RETENTION_SECS
+                });
+                pruned |= accepted_before != record.accepted_ingress.len();
                 if record.pending.is_none()
                     && record.inflight.is_none()
                     && record.dead_letter.is_none()
+                    && record.accepted_ingress.is_empty()
                 {
                     pruned = true;
                     None

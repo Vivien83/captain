@@ -26,6 +26,114 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.11 — Secure extensibility and durable integrations
+
+Agent-facing changes:
+
+- An installation with neither a daemon API key nor browser credentials now
+  fails closed on private routes. Credentialless loopback access requires the
+  explicit durable `auth.allow_unauthenticated_loopback = true` compatibility
+  flag and an actual loopback client; setup and credential rotation disable
+  that flag.
+- Detached nested delegation now persists a root job, parent job and one-based
+  depth. The SQLite enqueue transaction verifies that the parent is actively
+  running as the caller, caps a tree at depth 10, and atomically reserves each
+  job's requested budget against one durable 500000-token root ledger.
+  Idempotent retries do not charge twice, while completion, restart, uncertain
+  recovery and history pruning do not restore reservation. Job status and
+  bounded events expose lineage and reservation metadata without raw task or
+  result content.
+- Direct-program execution permits now use a versioned, domain-separated,
+  length-prefixed digest of the executable and every argument. Their escaped
+  review string is presentation-only, so embedded NUL bytes and argument
+  boundaries cannot produce the same authorization.
+- Login-limit capacity pressure no longer evicts an active IP or username
+  block. If all 4096 slots are actively blocked, Captain applies a logged
+  five-second global fail-closed backoff. The state remains bounded and
+  process-local, so exposed deployments still require an upstream edge limit.
+- Control, Web Terminal, Config and Desktop load only embedded same-origin
+  scripts. Browser policy grants neither evaluated nor inline JavaScript
+  authority, and Markdown accepts only a fixed passive HTML subset plus safe
+  link protocols. Tool output and session labels remain text, not markup.
+- Execution now exposes three non-bypassable deployment profiles. The typed
+  default is `allowlist`; `remote_operator` cannot exceed allowlist semantics
+  and `untrusted_execution` cannot start agent-controlled host processes.
+  Daemon and agent policies are intersected before discovery and dispatch, and
+  `process_start` uses the same exact-program permit as other guarded spawns.
+  Docker/WASM are explicit rails only, with no automatic route or host
+  fallback. Status, Security, Doctor, TUI and Control show configured versus
+  effective mode plus Docker readiness.
+- The Email rail now uses the exactly pinned `imap 3.0.0-alpha.15` client and
+  maintained `imap-proto 0.16.7` parser. This preserves the synchronous
+  login/search/fetch behavior while removing the parser version that future
+  Rust compilers will reject and the obsolete `lexical-core` chain. The
+  dependency gate prevents prerelease, parent, TLS-feature, or vendored-TLS
+  drift.
+- The encrypted vault now stores its master key in the real platform
+  credential store instead of an obfuscated local file. New keys are verified
+  by readback and are never printed. Headless systems must provide
+  `CAPTAIN_VAULT_KEY`; the obsolete file is removed only after a verified
+  migration, while conflicts fail closed.
+- Native Gmail accounts now have a multi-account OAuth lifecycle and operator
+  CLI: `captain email connect/accounts/status/test/default/disconnect`. The
+  first connection imports a Google Desktop client JSON; later accounts may
+  reuse its encrypted client. Tokens and client secrets remain vault-only,
+  outputs omit vault references, reconnect and refresh use versioned secrets,
+  and a lifecycle lock plus orphan sweep makes interrupted writes recoverable.
+  OAuth over SSH requires an explicit callback port and local tunnel. This
+  account surface is distinct from the existing IMAP/SMTP Email channel.
+- Native Gmail mailbox tools now cover bounded search/read, draft-first
+  compose/reply, reversible label/message changes and workspace-safe attachment
+  saves. Durable deterministic rules can route matching messages to an exact
+  registered agent. Agent and CLI surfaces share versioned rule mutation,
+  content-free delivery inventories and explicit dead/uncertain recovery;
+  uncertain requeue requires session inspection and duplicate-risk consent.
+- xAI is now a first-use provider instead of a hidden advanced entry. The
+  fallback catalog selects `grok-4.5`, model aliases and metering use its
+  current official context and short-context price, and provider validation
+  uses the non-billable `/v1/me` plus API-key ACL introspection instead of a
+  generated completion. Captain recognizes an externally supplied OAuth
+  bearer exactly as xAI reports it, while clearly marking native OAuth login
+  unavailable because xAI has not published a third-party client/refresh
+  contract for `api.x.ai`.
+- The kernel now monitors provider-confirmed subscription resets. It requires
+  both an advanced provider reset identity and replenished reported capacity,
+  then atomically persists the observation, transition, and one durable
+  Telegram Rich card. Known delivery failures retry with bounded backoff; an
+  outcome lost across a crash becomes operator-visible `uncertain` and is not
+  replayed blindly. Silent mode suppresses pending cards without erasing their
+  audit trail, and Status/Budget expose the content-free queue health.
+- The conversational Email channel now supports named IMAP/SMTP accounts with
+  independent readiness, allowlists, agent defaults and adapters. Bare `email`
+  addresses the configured default; `email:<alias>` targets a named mailbox.
+  Session identity includes the mailbox so unrelated accounts never merge.
+- IMAP messages carry a durable mailbox/folder/UIDVALIDITY/UID identity. The
+  bridge persists acceptance before marking the message seen, re-acknowledges
+  accepted retries without rerunning the model, and keeps an inflight message
+  recoverable after restart. Invalid or denied mail is acknowledged without a
+  model turn so it cannot loop forever.
+- `captain channel setup email` creates or patches one named mailbox without
+  replacing its siblings. Passwords use a canonical credential key outside
+  TOML, writes are serialized across processes, and a credential failure rolls
+  the config back. `captain channel test email[:alias]` verifies IMAP login and
+  folders, SMTP authentication, and an optional real delivery.
+- TUI, Desktop and Web Terminal now consume the live channel schema and exact
+  readiness returned by the daemon. Email forms send typed arrays, numbers and
+  booleans, preserve existing account credentials, mask secrets, and expose
+  partial, locked, invalid, disabled and ready states. HTTP success with an
+  error envelope remains an error, and a failed list request exits loading.
+- Official builds can embed Captain's public verified Google Desktop client ID
+  for a one-command Gmail consent flow. Builds without it keep the explicit
+  organization-owned client JSON path and the generic IMAP/SMTP fallback;
+  neither path embeds a client secret or user token.
+- Repository discovery metadata and the launch-site crawler contract are now
+  reproducible and read-back verifiable. Search-engine indexing remains an
+  external asynchronous outcome, never a status inferred from HTTP 200 alone.
+- Maintainers can run the complete pull-request gate locally against the exact
+  submitted SHA in a disposable, network-isolated Lima guest. The published
+  status is SHA-bound and orphaned pending runs are recovered after restart;
+  no automatic paid GitHub Actions workflow is required.
+
 ### 0.1.0-alpha.10 — Production hardening and durable operations
 
 Agent-facing changes:

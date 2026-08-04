@@ -45,6 +45,7 @@ Telegram o Discord.
 <tr><td><b>Capacidades nativas legibles</b></td><td>Coloca un archivo <code>*.captain</code> revisado en un directorio global o de proyecto <code>.captain/</code> y Captain lo carga en caliente como herramienta tipada <code>cap_*</code>. Captain Forge mantiene dependencias, permisos, aprobaciones, DAG duradero, recuperación tras fallos, historial de revisiones, rollback y decisiones exactas del operador bajo control del kernel.</td></tr>
 <tr><td><b>Memoria que sigue la conversación</b></td><td>Recuerdo de sesiones, hechos duraderos del usuario, estado de proyectos, grafo de conocimiento y embeddings ONNX locales opcionales aportan contexto acotado sin reinyectar todo el historial en cada turno. Los hechos aceptados entran primero en un diario local duradero, siguen disponibles durante una caída de MemPalace y se resincronizan automáticamente con backoff acotado.</td></tr>
 <tr><td><b>Cualquier modelo, sin ataduras</b></td><td>Codex con tu suscripción de ChatGPT, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter y modelos locales vía Ollama. Captain descubre el catálogo y las credenciales configuradas sin depender de cifras fijas; el presupuesto de contexto sigue la ventana activa del modelo seleccionado. Los controles de razonamiento por agente conservan el valor predeterminado del modelo en Auto; cuando Codex anuncia Ultra, Captain aplica el máximo esfuerzo del modelo y delegación proactiva acotada solo en el agente raíz. Para Codex, una actualización cada hora muestra los modelos nuevos en Control y, si está configurado, Telegram; Captain nunca cambia de modelo sin tu decisión explícita y tu estrategia de sesión.</td></tr>
+<tr><td><b>Email para trabajo real</b></td><td>Conecta varias cuentas Gmail mediante OAuth o varios buzones independientes del proveedor mediante IMAP/SMTP. Busca, lee, prepara, envía, etiqueta, guarda adjuntos y dirige coincidencias deterministas a un agente exacto. Las credenciales permanecen fuera de la configuración pública; el trabajo aceptado, los cursores de automatización y los resultados ambiguos tras un fallo son duraderos e inspeccionables.</td></tr>
 <tr><td><b>Seis centros operativos</b></td><td>Chat, Projects, Automation, Learning, Capabilities y Status forman la superficie principal compartida por el TUI y Control. Automation agrupa Workflows, Triggers, Crons, Aprobaciones y Webhooks.</td></tr>
 <tr><td><b>Agentes como servicios</b></td><td>Cada agente puede recibir ingress externo autenticado y emitir callbacks HTTP firmados. Captain prepara el ingress automáticamente e indica la URL externa que aún hace falta para activar el egress.</td></tr>
 <tr><td><b>Operable como software real</b></td><td><code>captain doctor</code> explica qué está roto y cómo arreglarlo. Snapshots y reinicio de fábrica (con respaldo primero, siempre). Registro de auditoría encadenado por hash. Endpoints de salud. Un asistente de configuración que termina con un daemon funcionando y verificado — no un muro de próximos pasos.</td></tr>
@@ -54,16 +55,16 @@ Telegram o Discord.
 
 ## Instalación rápida
 
-Versión preliminar pública actual:
-[v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10).
-Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10`;
+Candidato actual de acceso anticipado:
+[v0.1.0-alpha.11](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11).
+Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11`;
 canal alfa móvil: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
 ```
 
 El repositorio oficial, los assets, los checksums y la imagen son públicos. No
@@ -99,8 +100,8 @@ los instaladores Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # o cualquier clave de proveedor soportado
 export TELEGRAM_BOT_TOKEN=...      # opcional — ver más abajo
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 El perfil `vps` instala un servicio systemd, lo inicia, y valida su salud.
@@ -118,8 +119,8 @@ sin arrancar aún el daemon, para que la comprobación de disponibilidad de
 abajo no se ejecute antes de que hayas iniciado sesión:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # muestra una URL + un código — ábrela en tu teléfono, sin necesidad de navegador local
 systemctl start captain    # instalación no-root: systemctl --user start captain
@@ -135,7 +136,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 ```
 
 El primer arranque genera la clave API del daemon y la persiste — junto
@@ -152,8 +153,8 @@ espacio PID ni el modo privilegiado. Para ejecutar la imagen inmutable:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose up -d
 ```
 
 Configura el proveedor elegido después del primer arranque. Cualquier acceso
@@ -253,6 +254,7 @@ ordenar mediante dependencias.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Instalaciones headless, proxy inverso, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | Servidores de herramientas externos y contrato de transporte |
 | [Troubleshooting](docs/troubleshooting.md) | Problemas comunes y sus soluciones |
+| [Notas de la versión 0.1.0-alpha.11](docs/releases/v0.1.0-alpha.11.md) | Email nativo, integraciones duraderas, cierre de auditoría y CI local |
 | [Notas de la versión 0.1.0-alpha.10](docs/releases/v0.1.0-alpha.10.md) | Endurecimiento de producción, operaciones duraderas y releases locales verificables |
 | [Notas de la versión 0.1.0-alpha.9](docs/releases/v0.1.0-alpha.9.md) | Aprendizaje durable de workflows y actualizaciones nativas |
 | [Notas de la versión 0.1.0-alpha.7](docs/releases/v0.1.0-alpha.7.md) | Estado confirmado duradero, reinicio supervisado, contexto fiel y memoria TUI directa |

@@ -65,7 +65,7 @@ fn parse_shell_exec_options<'a>(
     let policy_timeout = exec_policy.map(|p| p.timeout_secs).unwrap_or(30);
     let requested_timeout = input["timeout_seconds"].as_u64();
     let use_direct_exec = exec_policy
-        .map(|p| p.mode == captain_types::config::ExecSecurityMode::Allowlist)
+        .map(|p| p.effective_mode() == captain_types::config::ExecSecurityMode::Allowlist)
         .unwrap_or(true);
 
     Ok(ShellExecOptions {

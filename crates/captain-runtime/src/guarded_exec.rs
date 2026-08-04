@@ -12,6 +12,9 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use captain_types::config::{CriticalMode, ExecPolicy, ExecSecurityMode};
+use sha2::{Digest, Sha256};
+
+const PROGRAM_AUTHORIZATION_DOMAIN: &[u8] = b"captain.exec-permit.program.v1\0";
 
 #[cfg(test)]
 pub(crate) static TEST_ASYNC_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -22,6 +25,7 @@ pub(crate) static TEST_SYNC_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::n
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecSurface {
     ShellTool,
+    ProcessTool,
     GoalCheck,
     GoalRecovery,
     SkillCapability,
@@ -36,6 +40,7 @@ impl ExecSurface {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ShellTool => "shell_tool",
+            Self::ProcessTool => "process_tool",
             Self::GoalCheck => "goal_check",
             Self::GoalRecovery => "goal_recovery",
             Self::SkillCapability => "skill_capability",
@@ -59,12 +64,12 @@ pub enum ReviewDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecPermit {
     surface: ExecSurface,
-    content_sha256: [u8; 32],
+    authorization_sha256: [u8; 32],
 }
 
 impl ExecPermit {
     pub fn authorizes(self, surface: ExecSurface, content: &str) -> bool {
-        self.surface == surface && self.content_sha256 == content_digest(content)
+        self.surface == surface && self.authorization_sha256 == content_digest(content)
     }
 
     pub fn authorizes_program(
@@ -73,7 +78,8 @@ impl ExecPermit {
         executable: &str,
         args: &[String],
     ) -> bool {
-        self.authorizes(surface, &program_review_content(executable, args))
+        self.surface == surface
+            && self.authorization_sha256 == program_authorization_digest(executable, args)
     }
 }
 
@@ -139,6 +145,7 @@ pub struct ProgramExecRequest<'a> {
 /// that no UI can answer.
 pub fn unattended_policy(timeout_secs: u64) -> ExecPolicy {
     ExecPolicy {
+        mode: ExecSecurityMode::Full,
         timeout_secs: timeout_secs.max(1),
         critical_mode: CriticalMode::Safe,
         ..ExecPolicy::default()
@@ -196,12 +203,52 @@ pub fn review_program(
 }
 
 fn program_review_content(executable: &str, args: &[String]) -> String {
-    let mut content = executable.to_string();
+    let mut content = program_review_component(executable);
     for arg in args {
-        content.push('\0');
-        content.push_str(arg);
+        content.push(' ');
+        content.push_str(&program_review_component(arg));
     }
     content
+}
+
+fn program_review_component(value: &str) -> String {
+    let is_plain = !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b'+' | b'@' | b'%' | b','
+                )
+        });
+    if is_plain {
+        value.to_string()
+    } else {
+        format!("{value:?}")
+    }
+}
+
+fn program_authorization_digest(executable: &str, args: &[String]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PROGRAM_AUTHORIZATION_DOMAIN);
+    update_length_prefixed(&mut hasher, executable.as_bytes());
+    hasher.update(
+        u64::try_from(args.len())
+            .expect("program argument count must fit in u64")
+            .to_be_bytes(),
+    );
+    for arg in args {
+        update_length_prefixed(&mut hasher, arg.as_bytes());
+    }
+    hasher.finalize().into()
+}
+
+fn update_length_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update(
+        u64::try_from(bytes.len())
+            .expect("program component length must fit in u64")
+            .to_be_bytes(),
+    );
+    hasher.update(bytes);
 }
 
 fn review_content(
@@ -302,9 +349,13 @@ fn review_content(
         surface = surface_name,
         "Agent-controlled execution passed shared review"
     );
+    let authorization_sha256 = match kind {
+        ContentKind::Program { executable, args } => program_authorization_digest(executable, args),
+        ContentKind::Shell | ContentKind::Script { .. } => content_digest(content),
+    };
     Ok(ReviewDecision::Proceed(ExecPermit {
         surface,
-        content_sha256: content_digest(content),
+        authorization_sha256,
     }))
 }
 
@@ -319,13 +370,12 @@ pub fn permit_after_operator_approval(surface: ExecSurface, content: &str) -> Ex
     );
     ExecPermit {
         surface,
-        content_sha256: content_digest(content),
+        authorization_sha256: content_digest(content),
     }
 }
 
 fn content_digest(content: &str) -> [u8; 32] {
-    use sha2::Digest;
-    sha2::Sha256::digest(content.as_bytes()).into()
+    Sha256::digest(content.as_bytes()).into()
 }
 
 fn enforce_exec_policy(
@@ -333,9 +383,14 @@ fn enforce_exec_policy(
     kind: ContentKind<'_>,
     policy: &ExecPolicy,
 ) -> Result<(), String> {
-    match policy.mode {
+    let effective_mode = policy.effective_mode();
+    match effective_mode {
         ExecSecurityMode::Deny => {
-            return Err("execution is disabled (exec_policy.mode = deny)".to_string());
+            return Err(format!(
+                "host execution is disabled by execution profile `{}` and effective policy `{}`; use an explicitly configured docker_exec rail or a WASM agent when isolation is required",
+                policy.profile.as_str(),
+                effective_mode.as_str()
+            ));
         }
         ExecSecurityMode::Full => {
             crate::subprocess_guard::validate_command_allowlist(content, policy)?;
@@ -362,7 +417,7 @@ fn enforce_exec_policy(
         }
     }
 
-    if policy.mode != ExecSecurityMode::Full && matches!(kind, ContentKind::Shell) {
+    if effective_mode != ExecSecurityMode::Full && matches!(kind, ContentKind::Shell) {
         if let Some(reason) = crate::tools::check_shell_content_guard(content) {
             return Err(reason);
         }
@@ -580,7 +635,8 @@ pub async fn run_unattended_shell(request: ShellExecRequest<'_>) -> Result<ExecO
     }
 
     validate_environment_inputs(request.allowed_env_vars, request.explicit_env)?;
-    let direct_exec = policy.mode == ExecSecurityMode::Allowlist && !request.bash_required;
+    let direct_exec =
+        policy.effective_mode() == ExecSecurityMode::Allowlist && !request.bash_required;
     let mut cmd = build_shell_command(request.command, direct_exec, request.bash_required)?;
     configure_tokio_command(
         &mut cmd,

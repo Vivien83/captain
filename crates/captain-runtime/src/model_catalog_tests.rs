@@ -146,7 +146,7 @@ fn test_list_aliases() {
     assert!(aliases.len() >= 20);
     assert_eq!(aliases.get("sonnet").unwrap(), "claude-sonnet-4-6");
     // New aliases
-    assert_eq!(aliases.get("grok").unwrap(), "grok-4-0709");
+    assert_eq!(aliases.get("grok").unwrap(), "grok-4.5");
     assert_eq!(aliases.get("jamba").unwrap(), "jamba-1.5-large");
 }
 
@@ -154,7 +154,7 @@ fn test_list_aliases() {
 fn test_find_grok_by_alias() {
     let catalog = ModelCatalog::new();
     let entry = catalog.find_model("grok").unwrap();
-    assert_eq!(entry.id, "grok-4-0709");
+    assert_eq!(entry.id, "grok-4.5");
     assert_eq!(entry.provider, "xai");
 }
 
@@ -175,8 +175,8 @@ fn test_new_providers_in_catalog() {
 fn test_xai_models() {
     let catalog = ModelCatalog::new();
     let xai = catalog.models_by_provider("xai");
-    assert_eq!(xai.len(), 9);
-    assert!(xai.iter().any(|m| m.id == "grok-4-0709"));
+    assert_eq!(xai.len(), 10);
+    assert!(xai.iter().any(|m| m.id == "grok-4.5"));
     assert!(xai.iter().any(|m| m.id == "grok-4-fast-reasoning"));
     assert!(xai.iter().any(|m| m.id == "grok-4-fast-non-reasoning"));
     assert!(xai.iter().any(|m| m.id == "grok-4-1-fast-reasoning"));

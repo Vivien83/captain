@@ -81,6 +81,7 @@ credentials include:
 | Groq | `GROQ_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
+| xAI | `XAI_API_KEY` |
 
 The live `captain models providers` output lists every provider recognized by
 the installed binary and whether its authentication is ready. Local
@@ -90,6 +91,46 @@ with `captain models test` before assigning production work.
 Keep secrets in the OS keyring, Captain secret store, `secrets.env`, or
 environment variables with restricted permissions. Never put a raw API key in
 an agent manifest, repository, issue, or chat transcript.
+
+### xAI authentication
+
+The production third-party path documented by xAI is an API key:
+
+```bash
+captain auth login xai
+captain auth doctor --test
+```
+
+Captain stores `XAI_API_KEY` through the ordinary credential authority and
+uses the OpenAI-compatible `https://api.x.ai/v1` transport. Its live test does
+not spend inference tokens: `/v1/me` verifies the bearer and reports whether
+it is an API key or OAuth token; an API key is then checked through
+`/v1/api-key` for blocked/disabled state plus the chat and selected-model ACLs.
+A valid key without those ACLs is authenticated but not inference-ready.
+
+xAI's inference OpenAPI states that `/v1/me` accepts OAuth bearer tokens, so
+Captain detects one accurately when an external credential authority supplies
+it. Captain does **not** offer `captain auth login xai` as a browser/device
+OAuth flow: xAI does not publish third-party client registration,
+authorization endpoints, or a refresh contract for `api.x.ai`. The documented
+Grok Build browser and device login targets xAI's own inference proxy and must
+not be copied or scraped as a Captain client. Until xAI publishes that public
+contract, the guided Captain login requests an API key and reports OAuth as
+external-only instead of pretending it is ready.
+
+Official references:
+
+- <https://docs.x.ai/developers/rest-api-reference/inference>
+- <https://api.x.ai/api-docs/openapi.json>
+- <https://docs.x.ai/build/enterprise>
+- <https://docs.x.ai/developers/grok-4-5>
+
+The built-in fallback catalog now selects `grok-4.5`; the model inventory
+returned by xAI for the authenticated account remains authoritative. xAI
+currently documents a 500000-token context and USD 2/6 per million
+short-context input/output tokens for that model. Captain keeps a conservative
+32768-token generation cap because xAI does not publish a separate maximum
+output value.
 
 ## Select a Model
 
@@ -199,11 +240,29 @@ model calls. Durations, percentages, reset timestamps, plan labels, credits,
 and additional metered families are stored exactly as reported. Captain does
 not hard-code a five-hour or weekly allowance.
 
+The kernel compares consecutive durable provider observations to detect a
+real allowance reset. A reset is confirmed only when the provider's reset
+identity advances and reported usage falls; a drifting `reset_after` countdown
+or Captain's local clock is never sufficient. The new observation, transition
+event, and Telegram-notification outbox row are committed in one SQLite
+transaction. The same contract covers primary, secondary, and reported spend
+control windows without inventing a plan entitlement.
+
+Confirmed resets are delivered automatically as a mobile-readable Rich
+Telegram card when `channels.telegram.default_chat_id` is configured. Delivery
+uses a durable lease and bounded retry. If Telegram may have accepted a card
+before Captain crashed, the row becomes `uncertain` and is not replayed
+automatically, avoiding an unbounded duplicate. `channels.silent_mode = true`
+suppresses pending proactive reset cards while preserving their audit rows.
+
 `captain status --verbose`, the Status hub, `GET /api/status`, and
 `GET /api/budget` show these provider observations separately. `unavailable`
 means that no current official observation exists; it never means unlimited.
 Data older than fifteen minutes is marked `stale`. A provider-reported
-exhaustion is not retried or silently routed to a fallback provider.
+exhaustion is not retried or silently routed to a fallback provider. The same
+status payload exposes `reset_notifications`: `active` means a card is pending,
+delivering, or waiting for retry; `attention` means a dead or uncertain
+delivery requires operator review.
 
 During interactive use, full-screen Ratatui Chat polls only Captain's local
 snapshot every five seconds. Its compact bottom band names the active model

@@ -219,6 +219,14 @@ fn approval_preview_summary(
     match tool_name {
         "shell_exec" => shell_exec_approval_preview(input),
         "file_write" => file_write_approval_preview(input, kernel, caller_agent_id, workspace_root),
+        "email_compose"
+        | "email_reply"
+        | "email_update"
+        | "email_attachment_save"
+        | "email_automation_rule_save"
+        | "email_automation_rule_set_enabled"
+        | "email_automation_rule_remove"
+        | "email_automation_delivery_requeue" => email_approval_preview(tool_name, input),
         _ => generic_approval_preview(tool_name, input),
     }
 }
@@ -233,6 +241,91 @@ pub(crate) fn shell_exec_approval_preview(input: &serde_json::Value) -> String {
          Requires explicit confirmation before execution.",
         captain_types::truncate_str(command, 240)
     )
+}
+
+fn email_approval_preview(tool_name: &str, input: &serde_json::Value) -> String {
+    let account = input["account"].as_str().unwrap_or("<default>");
+    let detail = match tool_name {
+        "email_compose" => format!(
+            "delivery={}, to={}, cc={}, bcc={}, subject={}, attachments={}",
+            input["delivery"].as_str().unwrap_or("draft"),
+            preview_string_array(&input["to"]),
+            preview_string_array(&input["cc"]),
+            preview_string_array(&input["bcc"]),
+            captain_types::truncate_str(input["subject"].as_str().unwrap_or("<empty>"), 120),
+            input["attachments"].as_array().map_or(0, Vec::len),
+        ),
+        "email_reply" => format!(
+            "delivery={}, message_id={}, attachments={}",
+            input["delivery"].as_str().unwrap_or("draft"),
+            captain_types::truncate_str(input["message_id"].as_str().unwrap_or("<missing>"), 80),
+            input["attachments"].as_array().map_or(0, Vec::len),
+        ),
+        "email_update" => format!(
+            "action={}, message_id={}, labels={}",
+            input["action"].as_str().unwrap_or("<missing>"),
+            captain_types::truncate_str(input["message_id"].as_str().unwrap_or("<missing>"), 80),
+            input["label_ids"].as_array().map_or(0, Vec::len),
+        ),
+        "email_attachment_save" => format!(
+            "message_id={}, attachment_id={}, path={}, overwrite={}",
+            captain_types::truncate_str(input["message_id"].as_str().unwrap_or("<missing>"), 80),
+            captain_types::truncate_str(input["attachment_id"].as_str().unwrap_or("<missing>"), 80),
+            captain_types::truncate_str(input["path"].as_str().unwrap_or("<missing>"), 160),
+            input["overwrite"].as_bool().unwrap_or(false),
+        ),
+        "email_automation_rule_save" => format!(
+            "rule_id={}, expected_version={}, account={}, name={}, target_agent={}, enabled={}, include_body={}",
+            captain_types::truncate_str(input["id"].as_str().unwrap_or("<derived>"), 96),
+            input["expected_version"].as_u64().map_or_else(|| "<new>".to_string(), |value| value.to_string()),
+            captain_types::truncate_str(input["account"].as_str().unwrap_or("<default>"), 48),
+            captain_types::truncate_str(input["name"].as_str().unwrap_or("<missing>"), 120),
+            captain_types::truncate_str(input["target_agent"].as_str().unwrap_or("captain"), 128),
+            input["enabled"].as_bool().unwrap_or(true),
+            input["include_body"].as_bool().unwrap_or(false),
+        ),
+        "email_automation_rule_set_enabled" => format!(
+            "rule_id={}, expected_version={}, enabled={}",
+            captain_types::truncate_str(input["rule_id"].as_str().unwrap_or("<missing>"), 96),
+            input["expected_version"].as_u64().unwrap_or_default(),
+            input["enabled"].as_bool().unwrap_or(false),
+        ),
+        "email_automation_rule_remove" => format!(
+            "rule_id={}, expected_version={}",
+            captain_types::truncate_str(input["rule_id"].as_str().unwrap_or("<missing>"), 96),
+            input["expected_version"].as_u64().unwrap_or_default(),
+        ),
+        "email_automation_delivery_requeue" => format!(
+            "delivery_id={}, expected_status={}",
+            captain_types::truncate_str(input["delivery_id"].as_str().unwrap_or("<missing>"), 96),
+            input["expected_status"].as_str().unwrap_or("<missing>"),
+        ),
+        _ => "unsupported email operation".to_string(),
+    };
+    format!(
+        "Approval preview (no email or file side effect executed yet).\n\
+         Tool: {tool_name}\n\
+         Account: {}\n\
+         Planned operation: {}\n\
+         Message bodies and attachment contents are intentionally omitted.",
+        captain_types::truncate_str(account, 48),
+        captain_types::truncate_str(&detail, 480),
+    )
+}
+
+fn preview_string_array(value: &serde_json::Value) -> String {
+    let joined = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if joined.is_empty() {
+        "<none>".to_string()
+    } else {
+        captain_types::truncate_str(&joined, 160).to_string()
+    }
 }
 
 fn file_write_approval_preview(
@@ -408,5 +501,28 @@ mod tests {
         assert!(preview.contains("-beta"));
         assert!(preview.contains("+gamma"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), "alpha\nbeta\n");
+    }
+
+    #[test]
+    fn email_approval_preview_never_exposes_message_body() {
+        let preview = email_approval_preview(
+            "email_compose",
+            &serde_json::json!({
+                "account": "work",
+                "to": ["recipient@example.com"],
+                "subject": "Status report",
+                "text_body": "PRIVATE BODY MUST NOT LEAK",
+                "html_body": "<p>PRIVATE HTML MUST NOT LEAK</p>",
+                "delivery": "send",
+                "attachments": [{"path": "private.txt"}]
+            }),
+        );
+
+        assert!(preview.contains("recipient@example.com"));
+        assert!(preview.contains("Status report"));
+        assert!(preview.contains("delivery=send"));
+        assert!(!preview.contains("PRIVATE BODY"));
+        assert!(!preview.contains("PRIVATE HTML"));
+        assert!(!preview.contains("private.txt"));
     }
 }

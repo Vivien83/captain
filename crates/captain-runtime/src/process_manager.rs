@@ -108,8 +108,27 @@ impl ProcessManager {
         args: &[String],
         cwd: Option<&Path>,
     ) -> Result<ProcessId, String> {
+        let policy = crate::guarded_exec::unattended_policy(30);
+        let permit = crate::guarded_exec::review_program(
+            crate::guarded_exec::ExecSurface::ProcessTool,
+            command,
+            args,
+            Some(&policy),
+        )?;
+        self.start_in_dir_with_permit(agent_id, command, args, cwd, permit)
+            .await
+    }
+
+    pub async fn start_in_dir_with_permit(
+        &self,
+        agent_id: &str,
+        command: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        permit: crate::guarded_exec::ExecPermit,
+    ) -> Result<ProcessId, String> {
         self.ensure_agent_process_capacity(agent_id)?;
-        let mut child = spawn_process_child(command, args, cwd)?;
+        let mut child = spawn_process_child(command, args, cwd, permit)?;
         let pid = child.id();
 
         let stdin = child.stdin.take();
@@ -421,16 +440,21 @@ fn spawn_process_child(
     command: &str,
     args: &[String],
     cwd: Option<&Path>,
+    permit: crate::guarded_exec::ExecPermit,
 ) -> Result<tokio::process::Child, String> {
-    let mut cmd = tokio::process::Command::new(command);
-    cmd.args(args)
-        .stdin(Stdio::piped())
+    if !permit.authorizes_program(crate::guarded_exec::ExecSurface::ProcessTool, command, args) {
+        return Err("Guarded execution permit does not authorize process_start".to_string());
+    }
+    let mut cmd = crate::guarded_exec::build_program_command(command, args);
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
-    crate::env_sandbox::apply_minimal_env(&mut cmd);
+    crate::guarded_exec::configure_tokio_command(&mut cmd, cwd, &[], &[]);
+    // Managed processes are intentionally durable across daemon restarts and
+    // are recovered through the process registry. The shared one-shot helper
+    // defaults to kill-on-drop, so opt out only on this supervised surface.
+    cmd.kill_on_drop(false);
+    cmd.stdin(Stdio::piped());
     cmd.spawn()
         .map_err(|e| format!("Failed to start process '{}': {}", command, e))
 }

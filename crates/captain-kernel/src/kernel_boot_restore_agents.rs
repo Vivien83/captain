@@ -124,7 +124,7 @@ struct RestoredAgent {
 fn prepare_restored_agent(kernel: &CaptainKernel, entry: AgentEntry, name: &str) -> RestoredAgent {
     let mut restored_entry = entry;
     restored_entry.state = AgentState::Running;
-    ensure_restored_exec_policy(kernel, &mut restored_entry);
+    let exec_policy_changed = ensure_restored_exec_policy(kernel, &mut restored_entry);
     apply_budget_defaults(
         &kernel.budget_config(),
         &mut restored_entry.manifest.resources,
@@ -136,14 +136,21 @@ fn prepare_restored_agent(kernel: &CaptainKernel, entry: AgentEntry, name: &str)
 
     RestoredAgent {
         entry: restored_entry,
-        manifest_changed: model_repair.manifest_changed || fallback_changed,
+        manifest_changed: exec_policy_changed || model_repair.manifest_changed || fallback_changed,
     }
 }
 
-fn ensure_restored_exec_policy(kernel: &CaptainKernel, restored_entry: &mut AgentEntry) {
-    if restored_entry.manifest.exec_policy.is_none() {
+fn ensure_restored_exec_policy(kernel: &CaptainKernel, restored_entry: &mut AgentEntry) -> bool {
+    let Some(policy) = restored_entry.manifest.exec_policy.as_mut() else {
         restored_entry.manifest.exec_policy = Some(kernel.config.exec_policy.clone());
+        return true;
+    };
+    let constrained_profile = policy.profile.stricter(kernel.config.exec_policy.profile);
+    if constrained_profile != policy.profile {
+        policy.profile = constrained_profile;
+        return true;
     }
+    false
 }
 
 struct RestoredModelRepair {

@@ -23,7 +23,7 @@ impl InboundSessionCleanup {
 impl Drop for InboundSessionCleanup {
     fn drop(&mut self) {
         if let Some(queue) = self.queue.take() {
-            queue.clear(&self.key);
+            queue.abandon_for_recovery(&self.key);
         }
     }
 }
@@ -54,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_clears_session_on_drop() {
+    fn cleanup_preserves_inflight_session_for_restart_recovery() {
         let queue = InboundSessionQueue::default();
         let key = "telegram|chat:chat-1|user:user-1|captain:-|thread:-".to_string();
         assert!(matches!(
@@ -65,7 +65,7 @@ mod tests {
 
         drop(InboundSessionCleanup::new(queue.clone(), key));
 
-        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.active_len(), 1);
     }
 
     #[test]

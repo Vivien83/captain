@@ -4,34 +4,30 @@
 //! the OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service)
 //! or the `CAPTAIN_VAULT_KEY` env var for headless/CI environments.
 
+use crate::vault_keyring;
 use crate::{ExtensionError, ExtensionResult};
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::Argon2;
+use fs2::FileExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-// sha2 is used only in non-test keyring functions
-#[cfg(not(test))]
-use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use tracing::{debug, info};
 use zeroize::Zeroizing;
 
-/// Service name for OS keyring storage.
-#[cfg(not(test))]
-const KEYRING_SERVICE: &str = "captain-vault";
-/// Username for OS keyring (used by platform keyring backends).
-#[allow(dead_code)]
-const KEYRING_USER: &str = "master-key";
-/// Env var fallback for vault key.
-const VAULT_KEY_ENV: &str = "CAPTAIN_VAULT_KEY";
 /// Salt length for Argon2.
 const SALT_LEN: usize = 16;
 /// Nonce length for AES-256-GCM.
 const NONCE_LEN: usize = 12;
 /// Magic bytes for vault file format versioning.
 const VAULT_MAGIC: &[u8; 4] = b"OFV1";
+/// A wedged peer must not make a credential mutation hang forever.
+const VAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const VAULT_LOCK_RETRY: Duration = Duration::from_millis(25);
 
 /// On-disk vault format (encrypted).
 #[derive(Serialize, Deserialize)]
@@ -77,53 +73,23 @@ impl CredentialVault {
 
     /// Initialize a new vault. Generates a master key and stores it in the OS keyring.
     pub fn init(&mut self) -> ExtensionResult<()> {
+        let _lock = self.acquire_mutation_lock()?;
         if self.path.exists() {
             return Err(ExtensionError::Vault(
                 "Vault already exists. Delete it first to re-initialize.".to_string(),
             ));
         }
 
-        // Check if a master key is already available (env var or keyring)
-        let key_bytes = if let Ok(existing_b64) = std::env::var(VAULT_KEY_ENV) {
-            // Use the existing key from env var
-            info!("Using existing vault key from {}", VAULT_KEY_ENV);
-            decode_master_key(&existing_b64)?
-        } else if let Ok(existing_b64) = load_keyring_key() {
-            info!("Using existing vault key from OS keyring");
-            decode_master_key(&existing_b64)?
-        } else {
-            // Generate a random master key
-            let mut kb = Zeroizing::new([0u8; 32]);
-            OsRng.fill_bytes(kb.as_mut());
-            let key_b64 = Zeroizing::new(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                kb.as_ref(),
-            ));
-
-            // Try to store in OS keyring
-            match store_keyring_key(&key_b64) {
-                Ok(()) => {
-                    info!("Vault master key stored in OS keyring");
-                }
-                Err(e) => {
-                    warn!(
-                        "Could not store in OS keyring: {e}. Set {} env var instead.",
-                        VAULT_KEY_ENV
-                    );
-                    eprintln!(
-                        "Vault key (save this as {}): {}",
-                        VAULT_KEY_ENV,
-                        key_b64.as_str()
-                    );
-                }
-            }
-            kb
-        };
+        let key_bytes = vault_keyring::initialize_master_key()?;
 
         // Create empty vault file
         self.entries.clear();
         self.unlocked = true;
-        self.save(&key_bytes)?;
+        if let Err(error) = self.save(&key_bytes) {
+            self.entries.clear();
+            self.unlocked = false;
+            return Err(error);
+        }
         self.cached_key = Some(key_bytes);
         info!("Credential vault initialized at {:?}", self.path);
         Ok(())
@@ -158,9 +124,11 @@ impl CredentialVault {
         if !self.unlocked {
             return Err(ExtensionError::VaultLocked);
         }
-        self.entries.insert(key, value);
         let master_key = self.resolve_master_key()?;
-        self.save(&master_key)
+        let _lock = self.acquire_mutation_lock()?;
+        self.load(&master_key)?;
+        self.entries.insert(key, value);
+        self.persist_mutation(&master_key)
     }
 
     /// Remove a secret from the vault.
@@ -168,10 +136,12 @@ impl CredentialVault {
         if !self.unlocked {
             return Err(ExtensionError::VaultLocked);
         }
+        let master_key = self.resolve_master_key()?;
+        let _lock = self.acquire_mutation_lock()?;
+        self.load(&master_key)?;
         let removed = self.entries.remove(key).is_some();
         if removed {
-            let master_key = self.resolve_master_key()?;
-            self.save(&master_key)?;
+            self.persist_mutation(&master_key)?;
         }
         Ok(removed)
     }
@@ -193,6 +163,7 @@ impl CredentialVault {
 
     /// Initialize a vault with an explicit master key (for testing / programmatic use).
     pub fn init_with_key(&mut self, master_key: Zeroizing<[u8; 32]>) -> ExtensionResult<()> {
+        let _lock = self.acquire_mutation_lock()?;
         if self.path.exists() {
             return Err(ExtensionError::Vault(
                 "Vault already exists. Delete it first to re-initialize.".to_string(),
@@ -200,7 +171,11 @@ impl CredentialVault {
         }
         self.entries.clear();
         self.unlocked = true;
-        self.save(&master_key)?;
+        if let Err(error) = self.save(&master_key) {
+            self.entries.clear();
+            self.unlocked = false;
+            return Err(error);
+        }
         self.cached_key = Some(master_key);
         debug!(
             "Credential vault initialized at {:?} (explicit key)",
@@ -241,22 +216,54 @@ impl CredentialVault {
 
     // ── Internal ─────────────────────────────────────────────────────────
 
-    /// Resolve the master key from cache, keyring, or env var.
+    /// Serialize the complete reload-mutate-save cycle across processes.
+    fn acquire_mutation_lock(&self) -> ExtensionResult<File> {
+        let lock_path = vault_lock_path(&self.path);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let lock_file = open_private_lock_file(&lock_path)?;
+        let started = Instant::now();
+        loop {
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => return Ok(lock_file),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if started.elapsed() >= VAULT_LOCK_TIMEOUT {
+                        return Err(ExtensionError::Vault(format!(
+                            "Credential vault is busy after {} seconds; retry the operation",
+                            VAULT_LOCK_TIMEOUT.as_secs()
+                        )));
+                    }
+                    std::thread::sleep(VAULT_LOCK_RETRY);
+                }
+                Err(error) => {
+                    return Err(ExtensionError::Vault(format!(
+                        "Credential vault lock failed: {error}"
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Never expose an in-memory credential state that failed durability.
+    fn persist_mutation(&mut self, master_key: &[u8; 32]) -> ExtensionResult<()> {
+        match self.save(master_key) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = self.load(master_key);
+                Err(error)
+            }
+        }
+    }
+
+    /// Resolve the master key from cache, explicit env, or the OS credential store.
     fn resolve_master_key(&self) -> ExtensionResult<Zeroizing<[u8; 32]>> {
-        // Use cached key if available (avoids env var race in parallel tests)
         if let Some(ref cached) = self.cached_key {
             return Ok(cached.clone());
         }
 
-        // Try OS keyring first
-        if let Ok(key_b64) = load_keyring_key() {
-            return decode_master_key(&key_b64);
-        }
-
-        // Fallback to env var
-        if let Ok(key_b64) = std::env::var(VAULT_KEY_ENV) {
-            let key_b64 = Zeroizing::new(key_b64);
-            return decode_master_key(&key_b64);
+        if let Some(key) = vault_keyring::resolve_master_key()? {
+            return Ok(key);
         }
 
         Err(ExtensionError::VaultLocked)
@@ -383,6 +390,29 @@ impl CredentialVault {
     }
 }
 
+fn vault_lock_path(vault_path: &Path) -> PathBuf {
+    let mut path = vault_path.as_os_str().to_os_string();
+    path.push(".lock");
+    PathBuf::from(path)
+}
+
+fn open_private_lock_file(path: &Path) -> ExtensionResult<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
+}
+
 impl Drop for CredentialVault {
     fn drop(&mut self) {
         // Zeroizing<String> handles zeroing individual values.
@@ -400,112 +430,6 @@ fn derive_key(master_key: &[u8; 32], salt: &[u8]) -> ExtensionResult<Zeroizing<[
         .hash_password_into(master_key, salt, derived.as_mut())
         .map_err(|e| ExtensionError::Vault(format!("Key derivation failed: {e}")))?;
     Ok(derived)
-}
-
-/// Decode a base64 master key into raw bytes.
-fn decode_master_key(key_b64: &str) -> ExtensionResult<Zeroizing<[u8; 32]>> {
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key_b64)
-        .map_err(|e| ExtensionError::Vault(format!("Key decode failed: {e}")))?;
-    if bytes.len() != 32 {
-        return Err(ExtensionError::Vault(format!(
-            "Invalid key length: expected 32, got {}",
-            bytes.len()
-        )));
-    }
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&bytes);
-    Ok(key)
-}
-
-/// Store the master key in the OS keyring.
-fn store_keyring_key(key_b64: &str) -> Result<(), String> {
-    // Use SHA-256 hash of the key as a verification token stored alongside.
-    // The actual keyring interaction uses platform APIs.
-    #[cfg(not(test))]
-    {
-        // In production, we'd use the `keyring` crate. Since it's an optional
-        // heavy dependency, we use a file-based fallback that's still better
-        // than plaintext env vars.
-        let keyring_path = dirs::data_local_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("captain")
-            .join(".keyring");
-        // Store encrypted with a machine-specific key
-        let machine_id = machine_fingerprint();
-        let mut hasher = Sha256::new();
-        hasher.update(&machine_id);
-        hasher.update(KEYRING_SERVICE.as_bytes());
-        let mask: Vec<u8> = hasher.finalize().to_vec();
-
-        let key_bytes = key_b64.as_bytes();
-        let obfuscated: Vec<u8> = key_bytes
-            .iter()
-            .enumerate()
-            .map(|(i, b)| b ^ mask[i % mask.len()])
-            .collect();
-        let encoded =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &obfuscated);
-        captain_types::durable_fs::atomic_write(&keyring_path, encoded.as_bytes())
-            .map_err(|e| format!("write: {e}"))?;
-        Ok(())
-    }
-    #[cfg(test)]
-    {
-        let _ = key_b64;
-        Err("Keyring not available in tests".to_string())
-    }
-}
-
-/// Load the master key from the OS keyring.
-fn load_keyring_key() -> Result<Zeroizing<String>, String> {
-    #[cfg(not(test))]
-    {
-        let keyring_path = dirs::data_local_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("captain")
-            .join(".keyring");
-        if !keyring_path.exists() {
-            return Err("Keyring file not found".to_string());
-        }
-        let encoded = std::fs::read_to_string(&keyring_path).map_err(|e| format!("read: {e}"))?;
-        let obfuscated =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded.trim())
-                .map_err(|e| format!("decode: {e}"))?;
-
-        let machine_id = machine_fingerprint();
-        let mut hasher = Sha256::new();
-        hasher.update(&machine_id);
-        hasher.update(KEYRING_SERVICE.as_bytes());
-        let mask: Vec<u8> = hasher.finalize().to_vec();
-
-        let key_bytes: Vec<u8> = obfuscated
-            .iter()
-            .enumerate()
-            .map(|(i, b)| b ^ mask[i % mask.len()])
-            .collect();
-        let key_str = String::from_utf8(key_bytes).map_err(|e| format!("utf8: {e}"))?;
-        Ok(Zeroizing::new(key_str))
-    }
-    #[cfg(test)]
-    {
-        Err("Keyring not available in tests".to_string())
-    }
-}
-
-/// Generate a machine-specific fingerprint for keyring obfuscation.
-#[cfg(not(test))]
-fn machine_fingerprint() -> Vec<u8> {
-    use sha2::Digest;
-    let mut hasher = Sha256::new();
-    // Mix in username + hostname for basic machine binding
-    if let Ok(user) = std::env::var("USERNAME").or_else(|_| std::env::var("USER")) {
-        hasher.update(user.as_bytes());
-    }
-    if let Ok(host) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
-        hasher.update(host.as_bytes());
-    }
-    hasher.update(b"captain-vault-v1");
-    hasher.finalize().to_vec()
 }
 
 #[cfg(test)]
@@ -577,6 +501,57 @@ mod tests {
         let mut keys = vault.list_keys();
         keys.sort();
         assert_eq!(keys, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn stale_instances_merge_mutations_under_the_process_lock() {
+        let (dir, mut first) = test_vault();
+        let key = random_key();
+        first.init_with_key(key.clone()).unwrap();
+
+        let mut second = CredentialVault::new(dir.path().join("vault.enc"));
+        second.unlock_with_key(key.clone()).unwrap();
+        first
+            .set("FIRST".to_string(), Zeroizing::new("one".to_string()))
+            .unwrap();
+        second
+            .set("SECOND".to_string(), Zeroizing::new("two".to_string()))
+            .unwrap();
+
+        let mut reopened = CredentialVault::new(dir.path().join("vault.enc"));
+        reopened.unlock_with_key(key).unwrap();
+        assert_eq!(reopened.get("FIRST").unwrap().as_str(), "one");
+        assert_eq!(reopened.get("SECOND").unwrap().as_str(), "two");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_save_restores_the_last_durable_snapshot() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, mut vault) = test_vault();
+        let key = random_key();
+        vault.init_with_key(key.clone()).unwrap();
+        vault
+            .set("DURABLE".to_string(), Zeroizing::new("kept".to_string()))
+            .unwrap();
+
+        let original_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = vault.set(
+            "UNSAVED".to_string(),
+            Zeroizing::new("discarded".to_string()),
+        );
+        std::fs::set_permissions(dir.path(), original_permissions).unwrap();
+
+        assert!(result.is_err());
+        assert_eq!(vault.get("DURABLE").unwrap().as_str(), "kept");
+        assert!(vault.get("UNSAVED").is_none());
+
+        let mut reopened = CredentialVault::new(dir.path().join("vault.enc"));
+        reopened.unlock_with_key(key).unwrap();
+        assert_eq!(reopened.get("DURABLE").unwrap().as_str(), "kept");
+        assert!(reopened.get("UNSAVED").is_none());
     }
 
     #[test]

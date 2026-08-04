@@ -141,6 +141,10 @@ pub struct ToolRunEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDelegationEvent {
     pub job_id: String,
+    pub root_job_id: String,
+    pub parent_job_id: Option<String>,
+    pub depth: u32,
+    pub lineage_reserved_tokens: u64,
     pub title: String,
     pub target_agent_id: String,
     pub status: String,

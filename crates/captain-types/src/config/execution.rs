@@ -13,6 +13,52 @@ pub const HOST_EXECUTION_OS_ISOLATED: bool = false;
 /// Dangerous-command recognition is a normalized lexical guard, not a shell
 /// proof or an adversarial-code sandbox.
 pub const DANGEROUS_COMMAND_GUARD_LEVEL: &str = "normalized_lexical_heuristic";
+/// Captain never selects an isolation backend from host capabilities. The
+/// operator or agent must name an explicit Docker tool or WASM agent.
+pub const ISOLATION_ROUTING_MODE: &str = "explicit_only";
+pub const EXPLICIT_ISOLATION_BACKENDS: &[&str] = &["docker_exec", "wasm_agent"];
+
+/// Deployment posture for agent-controlled execution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionProfile {
+    /// Single-user workstation. Host execution follows the configured policy
+    /// and remains explicitly non-isolated at the operating-system level.
+    #[default]
+    PersonalWorkstation,
+    /// Remotely operated daemon. Host execution is constrained to allowlist
+    /// semantics even if a legacy policy still says `full`.
+    RemoteOperator,
+    /// Untrusted workloads may not spawn agent-controlled host processes.
+    /// Docker and WASM remain separate, explicit execution rails.
+    UntrustedExecution,
+}
+
+impl ExecutionProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PersonalWorkstation => "personal_workstation",
+            Self::RemoteOperator => "remote_operator",
+            Self::UntrustedExecution => "untrusted_execution",
+        }
+    }
+
+    pub const fn restriction_rank(self) -> u8 {
+        match self {
+            Self::PersonalWorkstation => 0,
+            Self::RemoteOperator => 1,
+            Self::UntrustedExecution => 2,
+        }
+    }
+
+    pub const fn stricter(self, other: Self) -> Self {
+        if self.restriction_rank() >= other.restriction_rank() {
+            self
+        } else {
+            other
+        }
+    }
+}
 
 /// Q.9 — High-level Captain security profile, chosen at `captain setup`
 /// (or via `/security` later). Independent of `ExecSecurityMode` (which
@@ -54,10 +100,10 @@ pub enum ExecSecurityMode {
     #[serde(alias = "none", alias = "disabled")]
     Deny,
     /// Only allow commands in safe_bins or allowed_commands.
+    #[default]
     #[serde(alias = "restricted")]
     Allowlist,
     /// Allow all commands except those in blocked_commands.
-    #[default]
     #[serde(alias = "allow", alias = "all", alias = "unrestricted")]
     Full,
 }
@@ -75,19 +121,28 @@ impl ExecSecurityMode {
 /// Honest, machine-readable posture for host subprocess execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct HostExecutionPosture {
+    pub profile: ExecutionProfile,
     pub backend: &'static str,
     pub isolation_level: &'static str,
     pub os_isolation: bool,
     pub environment_scrub: bool,
     pub dangerous_command_guard: &'static str,
+    pub configured_policy_mode: ExecSecurityMode,
     pub policy_mode: ExecSecurityMode,
     pub critical_mode: CriticalMode,
+    pub host_execution_allowed: bool,
+    pub isolation_routing: &'static str,
+    pub explicit_isolation_backends: &'static [&'static str],
 }
 
 /// Shell/exec security policy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExecPolicy {
+    /// Deployment posture. Profiles constrain, but never silently broaden,
+    /// the command policy configured below.
+    #[serde(default)]
+    pub profile: ExecutionProfile,
     /// Security mode: "deny" blocks all, "allowlist" only allows listed,
     /// "full" allows all except blocked_commands.
     pub mode: ExecSecurityMode,
@@ -112,16 +167,132 @@ pub struct ExecPolicy {
 }
 
 impl ExecPolicy {
+    /// Intersect two execution policies without granting authority held by
+    /// only one side. This is used when a per-agent policy meets the daemon
+    /// deployment boundary.
+    pub fn intersect(&self, other: &Self) -> Self {
+        let profile = self.profile.stricter(other.profile);
+        let mode = stricter_exec_mode(self.mode, other.mode);
+        let effective_mode = effective_mode_for(profile, mode);
+        let self_effective_mode = self.effective_mode();
+        let other_effective_mode = other.effective_mode();
+        let safe_bins = policy_allow_values(
+            effective_mode,
+            self_effective_mode,
+            &self.safe_bins,
+            other_effective_mode,
+            &other.safe_bins,
+        );
+        let allowed_commands = policy_allow_values(
+            effective_mode,
+            self_effective_mode,
+            &self.allowed_commands,
+            other_effective_mode,
+            &other.allowed_commands,
+        );
+        let mut blocked_commands = self.blocked_commands.clone();
+        blocked_commands.extend(other.blocked_commands.iter().cloned());
+        blocked_commands.sort();
+        blocked_commands.dedup();
+        Self {
+            profile,
+            mode,
+            safe_bins,
+            allowed_commands,
+            blocked_commands,
+            timeout_secs: strict_positive_limit(self.timeout_secs, other.timeout_secs),
+            max_output_bytes: self.max_output_bytes.min(other.max_output_bytes),
+            no_output_timeout_secs: strict_positive_limit(
+                self.no_output_timeout_secs,
+                other.no_output_timeout_secs,
+            ),
+            critical_mode: stricter_critical_mode(self.critical_mode, other.critical_mode),
+        }
+    }
+
+    /// Effective host policy after applying the profile's non-bypassable floor.
+    pub const fn effective_mode(&self) -> ExecSecurityMode {
+        effective_mode_for(self.profile, self.mode)
+    }
+
     pub const fn host_execution_posture(&self) -> HostExecutionPosture {
+        let effective_mode = self.effective_mode();
         HostExecutionPosture {
+            profile: self.profile,
             backend: HOST_EXECUTION_BACKEND,
             isolation_level: HOST_EXECUTION_ISOLATION_LEVEL,
             os_isolation: HOST_EXECUTION_OS_ISOLATED,
             environment_scrub: true,
             dangerous_command_guard: DANGEROUS_COMMAND_GUARD_LEVEL,
-            policy_mode: self.mode,
+            configured_policy_mode: self.mode,
+            policy_mode: effective_mode,
             critical_mode: self.critical_mode,
+            host_execution_allowed: !matches!(effective_mode, ExecSecurityMode::Deny),
+            isolation_routing: ISOLATION_ROUTING_MODE,
+            explicit_isolation_backends: EXPLICIT_ISOLATION_BACKENDS,
         }
+    }
+}
+
+const fn effective_mode_for(profile: ExecutionProfile, mode: ExecSecurityMode) -> ExecSecurityMode {
+    match profile {
+        ExecutionProfile::PersonalWorkstation => mode,
+        ExecutionProfile::RemoteOperator => match mode {
+            ExecSecurityMode::Deny => ExecSecurityMode::Deny,
+            ExecSecurityMode::Allowlist | ExecSecurityMode::Full => ExecSecurityMode::Allowlist,
+        },
+        ExecutionProfile::UntrustedExecution => ExecSecurityMode::Deny,
+    }
+}
+
+fn stricter_exec_mode(left: ExecSecurityMode, right: ExecSecurityMode) -> ExecSecurityMode {
+    if left == ExecSecurityMode::Deny || right == ExecSecurityMode::Deny {
+        ExecSecurityMode::Deny
+    } else if left == ExecSecurityMode::Allowlist || right == ExecSecurityMode::Allowlist {
+        ExecSecurityMode::Allowlist
+    } else {
+        ExecSecurityMode::Full
+    }
+}
+
+fn policy_allow_values(
+    result_mode: ExecSecurityMode,
+    left_mode: ExecSecurityMode,
+    left: &[String],
+    right_mode: ExecSecurityMode,
+    right: &[String],
+) -> Vec<String> {
+    if result_mode != ExecSecurityMode::Allowlist {
+        return Vec::new();
+    }
+    match (
+        left_mode == ExecSecurityMode::Allowlist,
+        right_mode == ExecSecurityMode::Allowlist,
+    ) {
+        (true, true) => left
+            .iter()
+            .filter(|value| right.contains(value))
+            .cloned()
+            .collect(),
+        (true, false) => left.to_vec(),
+        (false, true) => right.to_vec(),
+        (false, false) => Vec::new(),
+    }
+}
+
+fn strict_positive_limit(left: u64, right: u64) -> u64 {
+    match (left, right) {
+        (0, value) | (value, 0) => value,
+        _ => left.min(right),
+    }
+}
+
+fn stricter_critical_mode(left: CriticalMode, right: CriticalMode) -> CriticalMode {
+    use CriticalMode::{Open, Paranoid, Safe};
+    match (left, right) {
+        (Paranoid, _) | (_, Paranoid) => Paranoid,
+        (Safe, _) | (_, Safe) => Safe,
+        _ => Open,
     }
 }
 
@@ -216,6 +387,7 @@ fn default_blocked_commands() -> Vec<String> {
 impl Default for ExecPolicy {
     fn default() -> Self {
         Self {
+            profile: ExecutionProfile::default(),
             mode: ExecSecurityMode::default(),
             safe_bins: vec![
                 "sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail", "wc",
@@ -280,9 +452,11 @@ mod tests {
     }
 
     #[test]
-    fn exec_policy_default_keeps_autonomy_with_a_safe_critical_floor() {
+    fn exec_policy_default_is_allowlisted_and_explicitly_non_isolated() {
         let policy = ExecPolicy::default();
-        assert_eq!(policy.mode, ExecSecurityMode::Full);
+        assert_eq!(policy.profile, ExecutionProfile::PersonalWorkstation);
+        assert_eq!(policy.mode, ExecSecurityMode::Allowlist);
+        assert_eq!(policy.effective_mode(), ExecSecurityMode::Allowlist);
         assert_eq!(policy.timeout_secs, 30);
         assert_eq!(policy.max_output_bytes, 100 * 1024);
         assert_eq!(policy.no_output_timeout_secs, 30);
@@ -313,6 +487,7 @@ max_output_bytes = 1024
     #[test]
     fn host_execution_posture_never_claims_os_isolation() {
         let posture = ExecPolicy::default().host_execution_posture();
+        assert_eq!(posture.profile, ExecutionProfile::PersonalWorkstation);
         assert_eq!(posture.backend, "host_process");
         assert_eq!(posture.isolation_level, "environment_scrub");
         assert!(!posture.os_isolation);
@@ -321,7 +496,131 @@ max_output_bytes = 1024
             posture.dangerous_command_guard,
             "normalized_lexical_heuristic"
         );
-        assert_eq!(posture.policy_mode, ExecSecurityMode::Full);
+        assert_eq!(posture.configured_policy_mode, ExecSecurityMode::Allowlist);
+        assert_eq!(posture.policy_mode, ExecSecurityMode::Allowlist);
         assert_eq!(posture.critical_mode, CriticalMode::Safe);
+        assert!(posture.host_execution_allowed);
+        assert_eq!(posture.isolation_routing, "explicit_only");
+        assert_eq!(
+            posture.explicit_isolation_backends,
+            ["docker_exec", "wasm_agent"]
+        );
+    }
+
+    #[test]
+    fn execution_profiles_only_restrict_configured_host_authority() {
+        let full = ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        assert_eq!(full.effective_mode(), ExecSecurityMode::Full);
+
+        let remote = ExecPolicy {
+            profile: ExecutionProfile::RemoteOperator,
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        assert_eq!(remote.effective_mode(), ExecSecurityMode::Allowlist);
+
+        let untrusted = ExecPolicy {
+            profile: ExecutionProfile::UntrustedExecution,
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        assert_eq!(untrusted.effective_mode(), ExecSecurityMode::Deny);
+        assert!(!untrusted.host_execution_posture().host_execution_allowed);
+    }
+
+    #[test]
+    fn execution_profile_serde_uses_human_readable_names() {
+        for (raw, expected) in [
+            (
+                "personal_workstation",
+                ExecutionProfile::PersonalWorkstation,
+            ),
+            ("remote_operator", ExecutionProfile::RemoteOperator),
+            ("untrusted_execution", ExecutionProfile::UntrustedExecution),
+        ] {
+            let policy: ExecPolicy =
+                toml::from_str(&format!("profile = \"{raw}\"\nmode = \"full\"\n"))
+                    .expect("execution profile should deserialize");
+            assert_eq!(policy.profile, expected);
+        }
+    }
+
+    #[test]
+    fn policy_intersection_never_broadens_daemon_authority() {
+        let mut agent = ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            timeout_secs: 60,
+            max_output_bytes: 2000,
+            no_output_timeout_secs: 0,
+            critical_mode: CriticalMode::Open,
+            ..ExecPolicy::default()
+        };
+        agent.blocked_commands = vec!["agent-block".to_string()];
+        let daemon = ExecPolicy {
+            profile: ExecutionProfile::RemoteOperator,
+            mode: ExecSecurityMode::Allowlist,
+            safe_bins: vec!["echo".to_string()],
+            allowed_commands: vec!["cargo test".to_string()],
+            blocked_commands: vec!["daemon-block".to_string()],
+            timeout_secs: 20,
+            max_output_bytes: 1000,
+            no_output_timeout_secs: 10,
+            critical_mode: CriticalMode::Safe,
+        };
+
+        let effective = agent.intersect(&daemon);
+
+        assert_eq!(effective.profile, ExecutionProfile::RemoteOperator);
+        assert_eq!(effective.mode, ExecSecurityMode::Allowlist);
+        assert_eq!(effective.effective_mode(), ExecSecurityMode::Allowlist);
+        assert_eq!(effective.safe_bins, ["echo"]);
+        assert_eq!(effective.allowed_commands, ["cargo test"]);
+        assert_eq!(effective.blocked_commands, ["agent-block", "daemon-block"]);
+        assert_eq!(effective.timeout_secs, 20);
+        assert_eq!(effective.max_output_bytes, 1000);
+        assert_eq!(effective.no_output_timeout_secs, 10);
+        assert_eq!(effective.critical_mode, CriticalMode::Safe);
+    }
+
+    #[test]
+    fn policy_intersection_preserves_global_deny() {
+        let agent = ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        let daemon = ExecPolicy {
+            mode: ExecSecurityMode::Deny,
+            ..ExecPolicy::default()
+        };
+
+        assert_eq!(
+            agent.intersect(&daemon).effective_mode(),
+            ExecSecurityMode::Deny
+        );
+    }
+
+    #[test]
+    fn remote_profile_retains_only_shared_latent_allowlist_entries() {
+        let mut agent = ExecPolicy {
+            profile: ExecutionProfile::RemoteOperator,
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        agent.safe_bins = vec!["echo".to_string(), "cat".to_string()];
+        let mut daemon = ExecPolicy {
+            profile: ExecutionProfile::RemoteOperator,
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        };
+        daemon.safe_bins = vec!["echo".to_string(), "date".to_string()];
+
+        let effective = agent.intersect(&daemon);
+
+        assert_eq!(effective.mode, ExecSecurityMode::Full);
+        assert_eq!(effective.effective_mode(), ExecSecurityMode::Allowlist);
+        assert_eq!(effective.safe_bins, ["echo"]);
     }
 }

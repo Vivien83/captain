@@ -380,6 +380,14 @@ pub(crate) fn tool_run_list(input: &serde_json::Value) -> Result<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_types::config::ExecSecurityMode;
+
+    fn trusted_test_exec_policy() -> ExecPolicy {
+        ExecPolicy {
+            mode: ExecSecurityMode::Full,
+            ..ExecPolicy::default()
+        }
+    }
 
     #[test]
     fn rejects_non_detachable_tool() {
@@ -455,7 +463,7 @@ mod tests {
                 caller_agent_id: Some("agent-test".to_string()),
                 allowed_env_vars: Vec::new(),
                 workspace_root: None,
-                exec_policy: None,
+                exec_policy: Some(trusted_test_exec_policy()),
             },
         )
         .await
@@ -566,7 +574,7 @@ mod tests {
                 caller_agent_id: Some("caller-agent".to_string()),
                 allowed_env_vars: Vec::new(),
                 workspace_root: None,
-                exec_policy: None,
+                exec_policy: Some(trusted_test_exec_policy()),
             },
         )
         .await

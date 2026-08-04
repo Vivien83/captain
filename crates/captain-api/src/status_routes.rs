@@ -2,6 +2,7 @@
 
 use crate::agent_api_egress_queue::agent_api_egress_queue_entries;
 use crate::channel_readiness::channel_readiness_with;
+use crate::channel_readiness_email::email_channel_readiness;
 use crate::channel_registry::{
     active_channel_names, channel_config_values, is_channel_configured, CHANNEL_REGISTRY,
 };
@@ -30,6 +31,29 @@ fn build_channel_status_with(
     let mut items = Vec::new();
     for meta in CHANNEL_REGISTRY {
         let is_configured = is_channel_configured(config, meta.name);
+        if meta.name == "email" {
+            let readiness = email_channel_readiness(config.email.as_ref(), resolve);
+            let name = meta.name.to_string();
+            if is_configured {
+                configured.push(name.clone());
+            }
+            if readiness.ready {
+                ready.push(name.clone());
+            } else if is_configured {
+                locked.push(name.clone());
+            }
+            items.push(serde_json::json!({
+                "name": meta.name,
+                "configured": is_configured,
+                "ready": readiness.ready,
+                "operational_state": readiness.operational_state,
+                "security_state": readiness.security_state,
+                "missing_required_fields": readiness.missing_required_fields,
+                "operator_actions": readiness.operator_actions,
+                "account_summary": readiness,
+            }));
+            continue;
+        }
         let values = channel_config_values(config, meta.name);
         let readiness = channel_readiness_with(meta, values.as_ref(), resolve);
         let name = meta.name.to_string();
@@ -189,8 +213,10 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "consciousness": consciousness_status,
         "agents": agents,
     });
+    status_payload["unauthenticated_loopback_allowed"] =
+        serde_json::json!(auth.unauthenticated_loopback_allowed);
     status_payload["execution"] =
-        serde_json::to_value(config.exec_policy.host_execution_posture()).unwrap_or_default();
+        crate::security_routes::execution_status(&config.exec_policy, &config.docker);
     status_payload["shutdown"] = shutdown_status;
     status_payload["disk"] = disk_status;
     status_payload["budget"] = budget_status;

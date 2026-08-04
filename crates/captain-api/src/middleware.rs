@@ -15,6 +15,8 @@ use tracing::info;
 /// Request ID header name (standard).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 
+pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; font-src 'self'; media-src 'self' blob:; frame-src 'self' blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
 /// Middleware: inject a unique request ID and log the request/response.
 pub async fn request_logging(request: Request<Body>, next: Next) -> Response<Body> {
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -58,10 +60,10 @@ pub struct AuthState {
 ///
 /// When `api_key` is non-empty (after trimming), requests to non-public
 /// endpoints must include `Authorization: Bearer <api_key>`.
-/// If the key is empty or whitespace-only, auth is disabled entirely
-/// (public/local development mode).
 ///
 /// When web auth is enabled, session cookies are also accepted.
+/// Credentialless access is fail-closed unless the operator explicitly enables
+/// the direct-loopback-only development escape hatch.
 pub async fn auth(
     axum::extract::State(auth_state): axum::extract::State<AuthState>,
     mut request: Request<Body>,
@@ -105,7 +107,16 @@ pub async fn auth(
         return unauthorized_response("Invalid or expired realtime ticket");
     }
 
-    match authorize_request(&request, &auth_snapshot) {
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|connect| connect.0);
+    let client_is_loopback = crate::web_auth_security::request_client_is_loopback(
+        peer,
+        request.headers(),
+        &auth_state.deployment,
+    );
+    match authorize_request(&request, &auth_snapshot, client_is_loopback) {
         AuthDecision::Allow => next.run(request).await,
         AuthDecision::Deny(error_msg) => unauthorized_response(error_msg),
     }
@@ -248,10 +259,15 @@ const PUBLIC_ALLOWLIST: &[PublicEndpoint] = &[
 fn authorize_request(
     request: &Request<Body>,
     auth_snapshot: &crate::session_auth::WebAuthSnapshot,
+    client_is_loopback: bool,
 ) -> AuthDecision {
     let auth_enabled = auth_snapshot.auth.enabled;
     let api_key = auth_snapshot.api_key.trim();
-    if api_key.is_empty() && !auth_enabled {
+    if api_key.is_empty()
+        && !auth_enabled
+        && auth_snapshot.auth.allow_unauthenticated_loopback
+        && client_is_loopback
+    {
         return AuthDecision::Allow;
     }
 
@@ -270,6 +286,8 @@ fn authorize_request(
         header_auth.is_some(),
         auth_enabled,
         api_key.is_empty(),
+        auth_snapshot.auth.allow_unauthenticated_loopback,
+        client_is_loopback,
     ))
 }
 
@@ -317,9 +335,15 @@ fn auth_error_message(
     credential_provided: bool,
     auth_enabled: bool,
     api_key_empty: bool,
+    loopback_opt_out: bool,
+    client_is_loopback: bool,
 ) -> &'static str {
     if credential_provided {
         "Invalid API key"
+    } else if !auth_enabled && api_key_empty && loopback_opt_out && !client_is_loopback {
+        "Unauthenticated access is restricted to direct loopback clients"
+    } else if !auth_enabled && api_key_empty {
+        "Authentication is not configured; run `captain setup`"
     } else if auth_enabled && api_key_empty {
         "Missing or invalid web session credentials"
     } else if auth_enabled {
@@ -360,13 +384,14 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert("x-xss-protection", "1; mode=block".parse().unwrap());
-    // All JS/CSS is bundled inline — only external resource is Google Fonts.
+    // Legacy browser XSS filters can mutate otherwise safe markup. Captain
+    // relies on its strict CSP and explicit output sanitization instead.
+    headers.insert("x-xss-protection", "0".parse().unwrap());
+    // Browser scripts are immutable same-origin assets. Inline style remains
+    // necessary for bounded dynamic layout values emitted by the UI runtime.
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; font-src 'self' https://fonts.gstatic.com; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
-            .parse()
-            .unwrap(),
+        CONTENT_SECURITY_POLICY.parse().unwrap(),
     );
     headers.insert(
         "referrer-policy",
@@ -386,10 +411,49 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
 
     #[test]
     fn test_request_id_header_constant() {
         assert_eq!(REQUEST_ID_HEADER, "x-request-id");
+    }
+
+    #[test]
+    fn browser_csp_forbids_dynamic_or_inline_script_authority() {
+        let script_src = CONTENT_SECURITY_POLICY
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("script-src "))
+            .expect("script-src directive must exist");
+
+        assert_eq!(script_src, "script-src 'self'");
+        assert!(!CONTENT_SECURITY_POLICY.contains("'unsafe-eval'"));
+        assert!(!script_src.contains("'unsafe-inline'"));
+        assert!(CONTENT_SECURITY_POLICY.contains("script-src-attr 'none'"));
+        assert!(CONTENT_SECURITY_POLICY.contains("object-src 'none'"));
+        assert!(CONTENT_SECURITY_POLICY.contains("base-uri 'none'"));
+        assert!(CONTENT_SECURITY_POLICY.contains("frame-ancestors 'none'"));
+    }
+
+    #[tokio::test]
+    async fn security_header_middleware_emits_the_reviewed_csp() {
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(security_headers));
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/")
+                    .body(axum::body::Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("middleware response should succeed");
+
+        assert_eq!(
+            response.headers()["content-security-policy"],
+            CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(response.headers()["x-xss-protection"], "0");
     }
 
     #[test]
@@ -447,7 +511,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            authorize_request(&request, &snapshot),
+            authorize_request(&request, &snapshot, false),
             AuthDecision::Deny("Invalid API key")
         );
     }
@@ -478,7 +542,10 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        assert_eq!(authorize_request(&request, &snapshot), AuthDecision::Allow);
+        assert_eq!(
+            authorize_request(&request, &snapshot, false),
+            AuthDecision::Allow
+        );
     }
 
     #[test]
@@ -493,8 +560,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            authorize_request(&request, &snapshot),
+            authorize_request(&request, &snapshot, false),
             AuthDecision::Deny("Missing Authorization: Bearer <api_key> header")
+        );
+    }
+
+    #[test]
+    fn unconfigured_auth_fails_closed_by_default() {
+        let snapshot = crate::session_auth::WebAuthSnapshot {
+            api_key: String::new(),
+            auth: captain_types::config::AuthConfig::default(),
+        };
+        let request = Request::builder()
+            .uri("/api/commands")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            authorize_request(&request, &snapshot, true),
+            AuthDecision::Deny("Authentication is not configured; run `captain setup`")
+        );
+    }
+
+    #[test]
+    fn explicit_unauthenticated_mode_is_loopback_only() {
+        let snapshot = crate::session_auth::WebAuthSnapshot {
+            api_key: String::new(),
+            auth: captain_types::config::AuthConfig {
+                allow_unauthenticated_loopback: true,
+                ..Default::default()
+            },
+        };
+        let request = Request::builder()
+            .uri("/api/commands")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            authorize_request(&request, &snapshot, true),
+            AuthDecision::Allow
+        );
+        assert_eq!(
+            authorize_request(&request, &snapshot, false),
+            AuthDecision::Deny("Unauthenticated access is restricted to direct loopback clients")
         );
     }
 }

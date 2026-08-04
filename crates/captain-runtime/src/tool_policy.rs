@@ -3,6 +3,7 @@
 //! Provides deny-wins, glob-pattern based tool access control with
 //! agent-level and global rules, group expansion, and depth restrictions.
 
+use captain_types::agent_delegation::AGENT_DELEGATION_MAX_DEPTH;
 use serde::{Deserialize, Serialize};
 
 /// Effect of a policy rule.
@@ -55,7 +56,7 @@ impl Default for ToolPolicy {
             agent_rules: Vec::new(),
             global_rules: Vec::new(),
             groups: Vec::new(),
-            subagent_max_depth: 10,
+            subagent_max_depth: AGENT_DELEGATION_MAX_DEPTH,
             subagent_max_concurrent: 5,
         }
     }
@@ -257,7 +258,7 @@ const SUBAGENT_DENY_ALWAYS: &[&str] = &[
 ];
 
 /// Tools denied to leaf subagents (depth >= max_depth - 1). Prevents deep spawn chains.
-const SUBAGENT_DENY_LEAF: &[&str] = &["agent_spawn", "agent_kill"];
+const SUBAGENT_DENY_LEAF: &[&str] = &["agent_spawn", "agent_delegate", "agent_kill"];
 
 /// Filter a list of tools based on the current agent depth.
 ///
@@ -398,7 +399,7 @@ mod tests {
     #[test]
     fn default_policy_uses_documented_subagent_limits() {
         let policy = ToolPolicy::default();
-        assert_eq!(policy.subagent_max_depth, 10);
+        assert_eq!(policy.subagent_max_depth, AGENT_DELEGATION_MAX_DEPTH);
         assert_eq!(policy.subagent_max_concurrent, 5);
     }
 
@@ -459,10 +460,16 @@ mod tests {
 
     #[test]
     fn test_leaf_depth_denies_spawn() {
-        let tools: Vec<String> = vec!["agent_spawn", "agent_kill", "web_search", "file_read"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let tools: Vec<String> = vec![
+            "agent_spawn",
+            "agent_delegate",
+            "agent_kill",
+            "web_search",
+            "file_read",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         // max_depth=5, depth=4 -> leaf (4 >= 5-1)
         let filtered = filter_tools_by_depth(&tools, 4, 5);
         assert_eq!(filtered.len(), 2);

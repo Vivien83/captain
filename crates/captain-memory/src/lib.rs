@@ -12,6 +12,8 @@ pub mod compaction_progress;
 pub mod consolidation;
 pub mod detached_tool_runs;
 pub mod event_log;
+pub mod gmail_accounts;
+pub mod gmail_automation;
 pub mod knowledge;
 pub mod learning_review;
 pub mod memory_capsule;
@@ -22,6 +24,7 @@ pub mod project;
 pub mod project_checkpoint;
 pub mod project_task;
 pub mod provider_quota;
+pub mod provider_quota_reset;
 pub mod semantic;
 pub mod session;
 pub mod structured;
@@ -50,6 +53,8 @@ pub mod workflow_learning_test;
 mod workflow_learning_types;
 mod workflow_learning_validation;
 
+#[cfg(test)]
+mod gmail_automation_tests;
 #[cfg(test)]
 mod workflow_learning_control_tests;
 #[cfg(test)]

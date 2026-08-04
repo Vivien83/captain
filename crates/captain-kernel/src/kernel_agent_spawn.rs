@@ -66,8 +66,16 @@ impl CaptainKernel {
         }
         if manifest.exec_policy.is_none() {
             manifest.exec_policy = Some(self.config.exec_policy.clone());
+        } else if let Some(policy) = manifest.exec_policy.as_mut() {
+            policy.profile = policy.profile.stricter(self.config.exec_policy.profile);
         }
-        info!(agent = %name, id = %agent_id, exec_mode = ?manifest.exec_policy.as_ref().map(|p| &p.mode), "Agent exec_policy resolved");
+        info!(
+            agent = %name,
+            id = %agent_id,
+            exec_profile = ?manifest.exec_policy.as_ref().map(|policy| policy.profile.as_str()),
+            exec_mode = ?manifest.exec_policy.as_ref().map(|policy| policy.effective_mode().as_str()),
+            "Agent exec_policy resolved"
+        );
 
         self.apply_spawn_default_model(&mut manifest);
         normalize_spawn_model_name(&mut manifest);

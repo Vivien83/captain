@@ -1,7 +1,7 @@
 # Reviewed transitive advisories.
 #
 # Tauri's Linux desktop stack still uses the GTK3 bindings listed below.
-# The remaining proc-macro, UNIC, lexical, LRU, paste, and fxhash entries are
+# The remaining proc-macro, UNIC, LRU, paste, and fxhash entries are
 # also target-specific or transitive. `scripts/dependency-audit.sh` runs a
 # second audit without this file and pins every accepted package, version,
 # advisory, plus the critical direct parent chains, so this list cannot hide
@@ -48,6 +48,5 @@ ignore = [
     "RUSTSEC-2025-0098",  # unic-ucd-version unmaintained
     "RUSTSEC-2025-0100",  # unic-ucd-ident unmaintained
     "RUSTSEC-2026-0002",  # lru IterMut soundness
-    "RUSTSEC-2023-0086",  # lexical-core soundness
     "RUSTSEC-2026-0097",  # rand ThreadRng custom logger unsoundness — remaining exposure is Tauri build-time phf_generator 0.8 only
 ]

@@ -1,8 +1,8 @@
 # Deploying Captain
 
 Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
-container image. The current public release is the prerelease
-`v0.1.0-alpha.10`; pin it explicitly because GitHub's `/releases/latest`
+container image. The current release candidate is the prerelease
+`v0.1.0-alpha.11`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 
 ## Host Install
@@ -10,8 +10,8 @@ endpoint excludes prereleases.
 macOS, Linux, or a Linux VPS:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=desktop bash
 ```
 
 Use `CAPTAIN_PROFILE=vps` for a service-oriented server install. The installer
@@ -62,14 +62,14 @@ approving first launch.
 The immutable image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 
 docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 ```
 
 The moving prerelease channel is `ghcr.io/vivien83/captain-agent-os:alpha`.
@@ -96,8 +96,8 @@ docker compose up -d --build
 To consume the published image without rebuilding:
 
 ```bash
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose up -d --no-build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose up -d --no-build
 ```
 
 The optional `personal`, `trusted`, and `yolo` overlays progressively grant
@@ -126,6 +126,14 @@ binding. Keep Captain authentication enabled and place remote access behind an
 HTTPS reverse proxy. Forward WebSocket/SSE upgrades and use long read timeouts
 for terminal and streaming sessions. Follow
 [VPS Web Terminal](deployment/vps-web-terminal.md) for the complete contract.
+Preserve Captain's `Content-Security-Policy` response header: Control,
+Terminal, Config, and Desktop load embedded same-origin scripts and
+intentionally grant no inline or evaluated JavaScript authority.
+
+The daemon login limiter is a bounded, process-local second line of defense. It
+never evicts an active block and fails closed briefly if all slots are active,
+but a restart clears that state. Enforce a separate login request limit at the
+reverse proxy, firewall, WAF, or equivalent edge before exposing Captain.
 
 Do not expose port `50051` directly to the Internet without Captain auth and
 TLS termination.
@@ -147,7 +155,7 @@ candidate observable and checks again after the reminder. Pull the desired
 immutable tag and recreate the container:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 docker rm -f captain
 # Re-run the same docker run command; captain-data preserves state.
 ```

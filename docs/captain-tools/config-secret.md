@@ -86,10 +86,11 @@ admin" or "génère-moi un nouveau mot de passe terminal".
 | `generate_password` | no | `true` generates a strong password and returns it once in the tool result. |
 | `session_ttl_hours` | no | Web session lifetime, 1-8760 hours. New installs default to 72 hours. |
 
-The tool writes `[auth]` in `config.toml`, forces `auth.enabled = true`, creates
-a config backup, validates the roundtrip parse, and emits the config hot-reload
-event. The web auth layer reads `config.toml` live, so new credentials work
-without restarting Captain. Password rotation invalidates old browser sessions
+The tool writes `[auth]` in `config.toml`, forces `auth.enabled = true`, resets
+`auth.allow_unauthenticated_loopback = false`, creates a config backup,
+validates the roundtrip parse, and emits the config hot-reload event. The web
+auth layer reads `config.toml` live, so new credentials work without restarting
+Captain. Password rotation invalidates old browser sessions
 by incrementing Captain's managed `session_epoch`. Session signatures use only
 the independent 32-byte `session_secret` generated at first boot; neither the
 daemon `api_key` nor `password_hash` is signing material. Config display
@@ -100,6 +101,9 @@ Legacy SHA-256 hashes remain readable only for compatibility: the first
 successful login atomically migrates them to Argon2id. Login backoff is
 dedicated per IP and username. Browser realtime transports use 30-second
 single-use tickets and never put API keys or session tokens in query strings.
+Without credentials, private routes fail closed and direct the operator to
+`captain setup`; credentialless access exists only through the explicit
+direct-loopback development opt-out.
 
 #### `self_configure`
 

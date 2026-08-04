@@ -515,6 +515,9 @@ fn estimate_cost_rates(model: &str) -> (f64, f64) {
     }
 
     // ── xAI / Grok ──────────────────────────────────────────────
+    if model.contains("grok-4.5") {
+        return (2.0, 6.0);
+    }
     if model.contains("grok-4-1") {
         return (0.20, 0.50);
     }
@@ -774,6 +777,12 @@ mod tests {
     fn test_estimate_cost_grok() {
         let cost = MeteringEngine::estimate_cost("grok-2", 1_000_000, 1_000_000);
         assert!((cost - 12.0).abs() < 0.01); // $2.00 + $10.00
+    }
+
+    #[test]
+    fn test_estimate_cost_grok_45() {
+        let cost = MeteringEngine::estimate_cost("grok-4.5", 1_000_000, 1_000_000);
+        assert!((cost - 8.0).abs() < 0.01); // $2.00 + $6.00
     }
 
     #[test]

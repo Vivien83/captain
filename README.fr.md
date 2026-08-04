@@ -45,6 +45,7 @@ authentifiée, Telegram ou Discord.
 <tr><td><b>Capacités natives lisibles</b></td><td>Déposez un fichier <code>*.captain</code> relu dans un dossier global ou projet <code>.captain/</code> : Captain le charge à chaud comme outil typé <code>cap_*</code>. Captain Forge garde dépendances, permissions, approbations, DAG durable, reprise après crash, historique de révisions, rollback et décisions opérateur exactes sous le contrôle du kernel.</td></tr>
 <tr><td><b>Une mémoire qui suit l'échange</b></td><td>Rappel de sessions, faits utilisateur durables, état des projets, graphe de connaissances et embeddings ONNX locaux optionnels fournissent un contexte borné sans réinjecter tout l'historique à chaque tour. Les faits acceptés entrent d'abord dans un journal local durable, restent disponibles pendant une panne MemPalace et se resynchronisent automatiquement avec un backoff borné.</td></tr>
 <tr><td><b>N'importe quel modèle, aucun verrouillage</b></td><td>Codex via votre abonnement ChatGPT, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter et modèles locaux via Ollama. Captain découvre le catalogue et les identifiants réellement configurés sans dépendre de compteurs figés ; le budget de contexte suit la fenêtre live du modèle sélectionné. Les contrôles de raisonnement par agent préservent le défaut du modèle en Auto ; lorsque Codex annonce Ultra, Captain applique l'effort modèle maximal et une délégation proactive bornée réservée à l'agent racine. Pour Codex, une actualisation horaire signale les nouveaux modèles dans Control et, s'il est configuré, Telegram ; Captain ne bascule jamais sans votre décision explicite et votre choix de stratégie de session.</td></tr>
+<tr><td><b>Email pour le travail réel</b></td><td>Connectez plusieurs comptes Gmail par OAuth ou plusieurs boîtes indépendantes du fournisseur par IMAP/SMTP. Recherchez, lisez, préparez, envoyez, classez, enregistrez des pièces jointes et routez des correspondances déterministes vers un agent précis. Les identifiants restent hors de la configuration publique ; travail accepté, curseurs d'automatisation et résultats ambigus après crash restent durables et inspectables.</td></tr>
 <tr><td><b>Six hubs opérationnels</b></td><td>Chat, Projects, Automation, Learning, Capabilities et Status forment la surface primaire commune au TUI et à Control. Automation regroupe Workflows, Triggers, Crons, Approbations et Webhooks.</td></tr>
 <tr><td><b>Agents exposés comme services</b></td><td>Chaque agent peut recevoir un ingress externe authentifié et émettre des callbacks HTTP signés. Captain prépare l'ingress automatiquement et indique précisément l'URL de callback externe encore nécessaire pour rendre l'egress prêt.</td></tr>
 <tr><td><b>Opérable comme un vrai logiciel</b></td><td><code>captain doctor</code> explique ce qui est cassé et comment le réparer. Snapshots et reset usine (sauvegarde d'abord, toujours). Piste d'audit chaînée par hash. Endpoints de santé. Un assistant de configuration qui se termine avec un daemon en cours d'exécution et vérifié — pas un mur de prochaines étapes.</td></tr>
@@ -54,16 +55,16 @@ authentifiée, Telegram ou Discord.
 
 ## Installation rapide
 
-Préversion publique actuelle :
-[v0.1.0-alpha.10](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.10).
-Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10` ;
+Candidate de préversion early-access :
+[v0.1.0-alpha.11](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11).
+Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11` ;
 canal alpha mobile : `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
 ```
 
 Le dépôt officiel, les assets, les checksums et l'image sont publics. Aucun
@@ -99,8 +100,8 @@ agrégé et les installateurs Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # ou toute clé de provider supportée
 export TELEGRAM_BOT_TOKEN=...      # optionnel — voir ci-dessous
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
 ```
 
 Le profil `vps` installe un service systemd, le démarre, et valide sa
@@ -118,8 +119,8 @@ sans démarrer le daemon tout de suite, pour que la vérification de
 disponibilité ci-dessous ne tourne pas avant que vous vous soyez connecté :
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.10/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.10 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # affiche une URL + un code — ouvrez-la sur votre téléphone, pas besoin de navigateur local
 systemctl start captain    # install non-root : systemctl --user start captain
@@ -135,7 +136,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.10
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
 ```
 
 Le premier démarrage génère la clé API du daemon et la persiste — avec tout
@@ -151,8 +152,8 @@ l'espace PID, ni le mode privilégié. Pour lancer l'image immuable :
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.10 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose up -d
 ```
 
 Configurez le provider choisi après le premier démarrage. Tout accès à l'hôte
@@ -252,6 +253,7 @@ l'agent peut revisiter, annuler ou ordonner par dépendances.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Installs headless, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | Serveurs d'outils externes et contrat de transport |
 | [Troubleshooting](docs/troubleshooting.md) | Problèmes courants et leurs correctifs |
+| [Notes de release 0.1.0-alpha.11](docs/releases/v0.1.0-alpha.11.md) | Email natif, intégrations durables, clôture d'audit et CI locale |
 | [Notes de release 0.1.0-alpha.10](docs/releases/v0.1.0-alpha.10.md) | Durcissement production, opérations durables et releases locales attestées |
 | [Notes de release 0.1.0-alpha.9](docs/releases/v0.1.0-alpha.9.md) | Apprentissage durable des workflows et mises à jour natives |
 | [Notes de release 0.1.0-alpha.7](docs/releases/v0.1.0-alpha.7.md) | État validé durable, reprise supervisée, contexte fidèle et mémoire TUI directe |

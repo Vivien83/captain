@@ -1,6 +1,7 @@
 //! Public-safe presentation of provider-reported subscription quotas.
 
 use captain_memory::provider_quota::ProviderQuotaStore;
+use captain_memory::provider_quota_reset::ProviderQuotaResetQueueStatus;
 use captain_types::quota::{ProviderQuotaSnapshot, QuotaAlertLevel};
 use chrono::{DateTime, Utc};
 
@@ -8,13 +9,42 @@ const STALE_AFTER_SECONDS: i64 = 15 * 60;
 
 /// Build a stable status object without ever inferring provider allowances.
 pub fn build_provider_subscription_status(store: &ProviderQuotaStore) -> serde_json::Value {
-    match store.list_current() {
+    let mut status = match store.list_current() {
         Ok(snapshots) => provider_subscription_status_from_snapshots(&snapshots, Utc::now()),
         Err(error) => {
             tracing::warn!(error = %error, "Provider subscription quota status unavailable");
             unavailable_status("storage_unavailable")
         }
+    };
+    let notification_status = match store.reset_notification_queue_status() {
+        Ok(queue) => reset_notification_status(&queue),
+        Err(error) => {
+            tracing::warn!(error = %error, "Provider quota reset notification status unavailable");
+            serde_json::json!({
+                "state": "unavailable",
+                "reason": "storage_unavailable",
+            })
+        }
+    };
+    if let Some(object) = status.as_object_mut() {
+        object.insert("reset_notifications".to_string(), notification_status);
     }
+    status
+}
+
+fn reset_notification_status(queue: &ProviderQuotaResetQueueStatus) -> serde_json::Value {
+    let state = if queue.requires_attention() {
+        "attention"
+    } else if queue.pending + queue.delivering + queue.retry_wait > 0 {
+        "active"
+    } else {
+        "ok"
+    };
+    let mut value = serde_json::to_value(queue).unwrap_or_default();
+    if let Some(object) = value.as_object_mut() {
+        object.insert("state".to_string(), serde_json::json!(state));
+    }
+    value
 }
 
 fn provider_subscription_status_from_snapshots(
@@ -184,5 +214,19 @@ mod tests {
             status["items"][0]["primary"]["remaining_source"],
             "derived_from_provider_used_percent"
         );
+    }
+
+    #[test]
+    fn reset_notification_status_surfaces_uncertain_delivery() {
+        let queue = ProviderQuotaResetQueueStatus {
+            pending: 1,
+            uncertain: 1,
+            ..ProviderQuotaResetQueueStatus::default()
+        };
+
+        let status = reset_notification_status(&queue);
+        assert_eq!(status["state"], "attention");
+        assert_eq!(status["pending"], 1);
+        assert_eq!(status["uncertain"], 1);
     }
 }

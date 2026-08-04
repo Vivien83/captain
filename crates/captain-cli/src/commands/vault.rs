@@ -145,7 +145,11 @@ pub(crate) fn cmd_vault_remove(key: &str) {
 }
 
 fn ensure_vault_key_is_local(home: &std::path::Path, key: &str) -> Result<(), String> {
-    if load_external_sources(home).is_configured(key) {
+    if captain_kernel::gmail_persistence::is_managed_gmail_vault_key(key) {
+        Err(format!(
+            "'{key}' is managed by `captain email`; use email connect or disconnect instead."
+        ))
+    } else if load_external_sources(home).is_configured(key) {
         Err(format!(
             "'{key}' is managed by secret-sources.toml; change the external mapping or file instead."
         ))
@@ -187,5 +191,7 @@ mod tests {
         let error = ensure_vault_key_is_local(home.path(), "TEST_EXTERNAL_VAULT").unwrap_err();
         assert!(error.contains("managed by secret-sources.toml"));
         assert!(ensure_vault_key_is_local(home.path(), "LOCAL_VAULT_KEY").is_ok());
+        assert!(ensure_vault_key_is_local(home.path(), "CAPTAIN_GMAIL_TOKEN_DEADBEEF").is_err());
+        assert!(ensure_vault_key_is_local(home.path(), "CAPTAIN_GMAIL_CLIENT_DEADBEEF").is_err());
     }
 }

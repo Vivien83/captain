@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 36;
+const SCHEMA_VERSION: u32 = 41;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -153,6 +153,26 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 36 {
         migrate_v36(conn)?;
+    }
+
+    if current_version < 37 {
+        migrate_v37(conn)?;
+    }
+
+    if current_version < 38 {
+        migrate_v38(conn)?;
+    }
+
+    if current_version < 39 {
+        migrate_v39(conn)?;
+    }
+
+    if current_version < 40 {
+        migrate_v40(conn)?;
+    }
+
+    if current_version < 41 {
+        migrate_v41(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -1690,6 +1710,372 @@ fn migrate_v36(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 37: durable parent lineage, nesting depth and reserved token budget
+/// for detached sub-agent delegations.
+fn migrate_v37(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "agent_delegation_jobs", "root_job_id") {
+        conn.execute(
+            "ALTER TABLE agent_delegation_jobs
+             ADD COLUMN root_job_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "agent_delegation_jobs", "parent_job_id") {
+        conn.execute(
+            "ALTER TABLE agent_delegation_jobs ADD COLUMN parent_job_id TEXT",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "agent_delegation_jobs", "depth") {
+        conn.execute(
+            "ALTER TABLE agent_delegation_jobs
+             ADD COLUMN depth INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+
+    conn.execute_batch(
+        "UPDATE agent_delegation_jobs
+         SET root_job_id = id, parent_job_id = NULL, depth = 1
+         WHERE root_job_id = '';
+
+         CREATE TABLE IF NOT EXISTS agent_delegation_lineages (
+             root_job_id TEXT PRIMARY KEY,
+             reserved_tokens INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(root_job_id) BETWEEN 1 AND 96),
+             CHECK(reserved_tokens BETWEEN 1 AND 500000),
+             CHECK(updated_at >= created_at)
+         );
+
+         INSERT OR IGNORE INTO agent_delegation_lineages (
+             root_job_id, reserved_tokens, created_at, updated_at
+         )
+         SELECT root_job_id, SUM(max_tokens), MIN(created_at), MAX(updated_at)
+         FROM agent_delegation_jobs
+         GROUP BY root_job_id;
+
+         UPDATE agent_delegation_lineages
+         SET reserved_tokens = MAX(
+                 reserved_tokens,
+                 COALESCE((
+                     SELECT SUM(jobs.max_tokens)
+                     FROM agent_delegation_jobs jobs
+                     WHERE jobs.root_job_id =
+                           agent_delegation_lineages.root_job_id
+                 ), 0)
+             ),
+             updated_at = MAX(
+                 updated_at,
+                 COALESCE((
+                     SELECT MAX(jobs.updated_at)
+                     FROM agent_delegation_jobs jobs
+                     WHERE jobs.root_job_id =
+                           agent_delegation_lineages.root_job_id
+                 ), updated_at)
+             );
+
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_jobs_root
+             ON agent_delegation_jobs(root_job_id, created_at, id);
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_jobs_parent
+             ON agent_delegation_jobs(parent_job_id, created_at, id);
+         CREATE INDEX IF NOT EXISTS idx_agent_delegation_jobs_depth
+             ON agent_delegation_jobs(root_job_id, depth, created_at, id);
+
+         DROP TRIGGER IF EXISTS guard_agent_delegation_lineage_insert;
+         CREATE TRIGGER guard_agent_delegation_lineage_insert
+         BEFORE INSERT ON agent_delegation_jobs
+         WHEN NEW.root_job_id = ''
+           OR NEW.depth NOT BETWEEN 1 AND 10
+           OR (
+               NEW.parent_job_id IS NULL
+               AND (NEW.root_job_id <> NEW.id OR NEW.depth <> 1)
+           )
+           OR (
+               NEW.parent_job_id IS NOT NULL
+               AND (NEW.parent_job_id = '' OR NEW.parent_job_id = NEW.id OR NEW.depth <= 1)
+           )
+         BEGIN
+             SELECT RAISE(ABORT, 'invalid agent delegation lineage');
+         END;
+
+         DROP TRIGGER IF EXISTS guard_agent_delegation_lineage_update;
+         CREATE TRIGGER guard_agent_delegation_lineage_update
+         BEFORE UPDATE OF id, root_job_id, parent_job_id, depth
+         ON agent_delegation_jobs
+         WHEN NEW.root_job_id = ''
+           OR NEW.depth NOT BETWEEN 1 AND 10
+           OR (
+               NEW.parent_job_id IS NULL
+               AND (NEW.root_job_id <> NEW.id OR NEW.depth <> 1)
+           )
+           OR (
+               NEW.parent_job_id IS NOT NULL
+               AND (NEW.parent_job_id = '' OR NEW.parent_job_id = NEW.id OR NEW.depth <= 1)
+           )
+         BEGIN
+             SELECT RAISE(ABORT, 'invalid agent delegation lineage');
+         END;
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (
+             37,
+             datetime('now'),
+             'Add durable lineage, depth and reserved delegation budgets'
+         );",
+    )?;
+    Ok(())
+}
+
+/// Version 38: native multi-account Gmail registry. OAuth credentials and
+/// tokens are referenced by opaque vault keys and never stored in SQLite.
+fn migrate_v38(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS gmail_accounts (
+             alias TEXT PRIMARY KEY,
+             email_address TEXT NOT NULL,
+             access_profile TEXT NOT NULL,
+             granted_scopes_json TEXT NOT NULL,
+             token_vault_key TEXT NOT NULL UNIQUE,
+             client_vault_key TEXT NOT NULL,
+             history_id TEXT,
+             status TEXT NOT NULL DEFAULT 'ready',
+             enabled INTEGER NOT NULL DEFAULT 1,
+             is_default INTEGER NOT NULL DEFAULT 0,
+             last_sync_at INTEGER,
+             last_error_code TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(alias) BETWEEN 1 AND 48),
+             CHECK(alias = lower(alias)),
+             CHECK(alias NOT GLOB '*[^a-z0-9._-]*'),
+             CHECK(substr(alias, 1, 1) GLOB '[a-z0-9]'),
+             CHECK(length(email_address) BETWEEN 3 AND 320),
+             CHECK(instr(email_address, char(10)) = 0),
+             CHECK(instr(email_address, char(13)) = 0),
+             CHECK(access_profile IN ('send', 'read', 'assistant')),
+             CHECK(length(granted_scopes_json) BETWEEN 2 AND 4096),
+             CHECK(length(token_vault_key) BETWEEN 1 AND 128),
+             CHECK(length(client_vault_key) BETWEEN 1 AND 128),
+             CHECK(token_vault_key NOT GLOB '*[^A-Z0-9_]*'),
+             CHECK(client_vault_key NOT GLOB '*[^A-Z0-9_]*'),
+             CHECK(token_vault_key <> client_vault_key),
+             CHECK(history_id IS NULL OR length(history_id) BETWEEN 1 AND 128),
+             CHECK(status IN ('ready', 'reauth_required', 'disabled')),
+             CHECK(enabled IN (0, 1)),
+             CHECK(is_default IN (0, 1)),
+             CHECK(last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64),
+             CHECK(created_at >= 0 AND updated_at >= created_at),
+             CHECK(last_sync_at IS NULL OR last_sync_at >= created_at)
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_gmail_accounts_email
+             ON gmail_accounts(email_address COLLATE NOCASE);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_gmail_accounts_one_default
+             ON gmail_accounts(is_default) WHERE is_default = 1;
+         CREATE INDEX IF NOT EXISTS idx_gmail_accounts_status
+             ON gmail_accounts(enabled, status, alias);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (38, datetime('now'), 'Add native multi-account Gmail registry');",
+    )?;
+    Ok(())
+}
+
+/// Version 39: deterministic Gmail rules, immutable match audit, and a
+/// crash-safe delivery outbox. A delivery interrupted after dispatch becomes
+/// uncertain and cannot be replayed without an explicit operator decision.
+fn migrate_v39(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS gmail_automation_rules (
+             id TEXT PRIMARY KEY,
+             account_alias TEXT NOT NULL,
+             name TEXT NOT NULL,
+             condition_json TEXT NOT NULL,
+             action_json TEXT NOT NULL,
+             enabled INTEGER NOT NULL DEFAULT 1,
+             max_fires_per_hour INTEGER NOT NULL DEFAULT 30,
+             state_version INTEGER NOT NULL DEFAULT 1,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(id) BETWEEN 1 AND 96),
+             CHECK(id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(account_alias) BETWEEN 1 AND 48),
+             CHECK(length(name) BETWEEN 1 AND 160),
+             CHECK(length(condition_json) BETWEEN 2 AND 16384),
+             CHECK(length(action_json) BETWEEN 2 AND 32768),
+             CHECK(enabled IN (0, 1)),
+             CHECK(max_fires_per_hour BETWEEN 1 AND 1000),
+             CHECK(state_version >= 1),
+             CHECK(created_at >= 0 AND updated_at >= created_at)
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_gmail_automation_rule_name
+             ON gmail_automation_rules(account_alias, name COLLATE NOCASE);
+         CREATE INDEX IF NOT EXISTS idx_gmail_automation_rules_enabled
+             ON gmail_automation_rules(enabled, account_alias, id);
+
+         CREATE TABLE IF NOT EXISTS gmail_automation_events (
+             id TEXT PRIMARY KEY,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             rule_id TEXT NOT NULL REFERENCES gmail_automation_rules(id) ON DELETE RESTRICT,
+             rule_version INTEGER NOT NULL,
+             rule_snapshot_json TEXT NOT NULL,
+             account_alias TEXT NOT NULL,
+             message_id TEXT NOT NULL,
+             history_id TEXT NOT NULL,
+             metadata_json TEXT NOT NULL,
+             decision TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             CHECK(length(id) BETWEEN 1 AND 96),
+             CHECK(length(idempotency_key) BETWEEN 1 AND 192),
+             CHECK(rule_version >= 1),
+             CHECK(length(rule_snapshot_json) BETWEEN 2 AND 65536),
+             CHECK(length(message_id) BETWEEN 1 AND 256),
+             CHECK(length(history_id) BETWEEN 1 AND 128),
+             CHECK(history_id NOT GLOB '*[^0-9]*'),
+             CHECK(length(metadata_json) BETWEEN 2 AND 65536),
+             CHECK(decision IN ('queued', 'suppressed_rate_limit')),
+             CHECK(created_at >= 0),
+             UNIQUE(rule_id, account_alias, message_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_gmail_automation_events_rate
+             ON gmail_automation_events(rule_id, decision, created_at);
+         CREATE INDEX IF NOT EXISTS idx_gmail_automation_events_account
+             ON gmail_automation_events(account_alias, created_at DESC);
+
+         CREATE TABLE IF NOT EXISTS gmail_automation_outbox (
+             id TEXT PRIMARY KEY,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             event_id TEXT NOT NULL UNIQUE
+                 REFERENCES gmail_automation_events(id) ON DELETE RESTRICT,
+             target_agent_id TEXT NOT NULL,
+             payload_json TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'pending',
+             attempt_count INTEGER NOT NULL DEFAULT 0,
+             max_attempts INTEGER NOT NULL DEFAULT 3,
+             run_after INTEGER NOT NULL,
+             lease_owner TEXT,
+             lease_expires_at INTEGER,
+             delivery_result_json TEXT,
+             last_error TEXT,
+             delivered_at INTEGER,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(id) BETWEEN 1 AND 96),
+             CHECK(length(idempotency_key) BETWEEN 1 AND 192),
+             CHECK(length(target_agent_id) = 36),
+             CHECK(length(payload_json) BETWEEN 2 AND 98304),
+             CHECK(status IN (
+                 'pending', 'delivering', 'retry_wait', 'delivered', 'dead', 'uncertain'
+             )),
+             CHECK(attempt_count >= 0 AND attempt_count <= max_attempts),
+             CHECK(max_attempts BETWEEN 1 AND 10),
+             CHECK(run_after >= 0),
+             CHECK((lease_owner IS NULL) = (lease_expires_at IS NULL)),
+             CHECK(status = 'delivering' OR lease_owner IS NULL),
+             CHECK(lease_owner IS NULL OR length(lease_owner) BETWEEN 1 AND 96),
+             CHECK(delivery_result_json IS NULL OR length(delivery_result_json) <= 32768),
+             CHECK(last_error IS NULL OR length(last_error) <= 2048),
+             CHECK(delivered_at IS NULL OR delivered_at >= created_at),
+             CHECK(created_at >= 0 AND updated_at >= created_at)
+         );
+         CREATE INDEX IF NOT EXISTS idx_gmail_automation_outbox_due
+             ON gmail_automation_outbox(status, run_after, created_at);
+         CREATE INDEX IF NOT EXISTS idx_gmail_automation_outbox_lease
+             ON gmail_automation_outbox(status, lease_expires_at);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (
+             39,
+             datetime('now'),
+             'Add deterministic Gmail rules and crash-safe delivery outbox'
+         );",
+    )?;
+    Ok(())
+}
+
+/// Version 40: resumable page checkpoint for incremental and recovery Gmail
+/// synchronization. OAuth token refreshes no longer serve as the sync cursor.
+fn migrate_v40(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS gmail_sync_checkpoints (
+             account_alias TEXT PRIMARY KEY,
+             mode TEXT NOT NULL,
+             start_history_id TEXT NOT NULL,
+             target_history_id TEXT NOT NULL,
+             page_token TEXT,
+             pages_processed INTEGER NOT NULL DEFAULT 0,
+             messages_processed INTEGER NOT NULL DEFAULT 0,
+             last_error_code TEXT,
+             started_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(mode IN ('incremental', 'recovery')),
+             CHECK(length(start_history_id) BETWEEN 1 AND 128),
+             CHECK(start_history_id NOT GLOB '*[^0-9]*'),
+             CHECK(length(target_history_id) BETWEEN 1 AND 128),
+             CHECK(target_history_id NOT GLOB '*[^0-9]*'),
+             CHECK(page_token IS NULL OR length(page_token) BETWEEN 1 AND 2048),
+             CHECK(pages_processed >= 0),
+             CHECK(messages_processed >= 0),
+             CHECK(last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64),
+             CHECK(started_at >= 0 AND updated_at >= started_at)
+         );
+         CREATE INDEX IF NOT EXISTS idx_gmail_sync_checkpoints_updated
+             ON gmail_sync_checkpoints(updated_at, account_alias);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (40, datetime('now'), 'Add resumable Gmail synchronization checkpoints');",
+    )?;
+    Ok(())
+}
+
+/// Version 41: crash-safe outbox for provider-confirmed quota-reset cards.
+fn migrate_v41(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS provider_quota_reset_outbox (
+             id TEXT PRIMARY KEY,
+             provider TEXT NOT NULL,
+             limit_id TEXT NOT NULL,
+             payload_json TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'pending',
+             attempt_count INTEGER NOT NULL DEFAULT 0,
+             max_attempts INTEGER NOT NULL DEFAULT 24,
+             run_after INTEGER NOT NULL,
+             lease_owner TEXT,
+             lease_expires_at INTEGER,
+             external_message_id TEXT,
+             last_error TEXT,
+             delivered_at INTEGER,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(id) = 36),
+             CHECK(length(payload_json) BETWEEN 2 AND 65536),
+             CHECK(status IN (
+                 'pending', 'delivering', 'retry_wait', 'delivered',
+                 'suppressed', 'dead', 'uncertain'
+             )),
+             CHECK(attempt_count >= 0 AND attempt_count <= max_attempts),
+             CHECK(max_attempts BETWEEN 1 AND 100),
+             CHECK(run_after >= 0),
+             CHECK((lease_owner IS NULL) = (lease_expires_at IS NULL)),
+             CHECK(status = 'delivering' OR lease_owner IS NULL),
+             CHECK(lease_owner IS NULL OR length(lease_owner) BETWEEN 1 AND 96),
+             CHECK(external_message_id IS NULL OR length(external_message_id) <= 256),
+             CHECK(last_error IS NULL OR length(last_error) <= 2048),
+             CHECK(delivered_at IS NULL OR delivered_at >= created_at),
+             CHECK(created_at >= 0 AND updated_at >= created_at)
+         );
+         CREATE INDEX IF NOT EXISTS idx_provider_quota_reset_outbox_due
+             ON provider_quota_reset_outbox(status, run_after, created_at);
+         CREATE INDEX IF NOT EXISTS idx_provider_quota_reset_outbox_lease
+             ON provider_quota_reset_outbox(status, lease_expires_at);
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (41, datetime('now'), 'Add crash-safe provider quota reset outbox');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1791,6 +2177,12 @@ mod tests {
         assert!(tables.contains(&"detached_tool_runs".to_string()));
         assert!(tables.contains(&"provider_quota_snapshots".to_string()));
         assert!(tables.contains(&"provider_quota_events".to_string()));
+        assert!(tables.contains(&"provider_quota_reset_outbox".to_string()));
+        assert!(tables.contains(&"gmail_accounts".to_string()));
+        assert!(tables.contains(&"gmail_automation_rules".to_string()));
+        assert!(tables.contains(&"gmail_automation_events".to_string()));
+        assert!(tables.contains(&"gmail_automation_outbox".to_string()));
+        assert!(tables.contains(&"gmail_sync_checkpoints".to_string()));
         assert!(tables.contains(&"workflow_episodes".to_string()));
         assert!(tables.contains(&"workflow_episode_steps".to_string()));
         assert!(tables.contains(&"workflow_learning_proposals".to_string()));
@@ -1870,7 +2262,10 @@ mod tests {
         )
         .unwrap();
 
-        run_migrations(&conn).unwrap();
+        // This fixture intentionally contains only the v35 audit surface.
+        // Exercise v36 directly so later unrelated migrations do not require
+        // fabricating tables that a real v35 database would already contain.
+        migrate_v36(&conn).unwrap();
 
         let row: (i64, i64, String) = conn
             .query_row(
@@ -1911,6 +2306,85 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap(); // Should not error
+    }
+
+    #[test]
+    fn v39_replays_cleanly_from_a_v38_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE gmail_automation_outbox;
+             DROP TABLE gmail_automation_events;
+             DROP TABLE gmail_automation_rules;
+             DELETE FROM migrations WHERE version = 39;
+             PRAGMA user_version = 38;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        assert!(table_exists(&conn, "gmail_automation_rules").unwrap());
+        assert!(table_exists(&conn, "gmail_automation_events").unwrap());
+        assert!(table_exists(&conn, "gmail_automation_outbox").unwrap());
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+        let migration_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM migrations WHERE version = 39",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migration_count, 1);
+    }
+
+    #[test]
+    fn v40_replays_cleanly_from_a_v39_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE gmail_sync_checkpoints;
+             DELETE FROM migrations WHERE version = 40;
+             PRAGMA user_version = 39;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        assert!(table_exists(&conn, "gmail_sync_checkpoints").unwrap());
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+        let migration_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM migrations WHERE version = 40",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migration_count, 1);
+    }
+
+    #[test]
+    fn v41_replays_cleanly_from_a_v40_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE provider_quota_reset_outbox;
+             DELETE FROM migrations WHERE version = 41;
+             PRAGMA user_version = 40;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        assert!(table_exists(&conn, "provider_quota_reset_outbox").unwrap());
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+        let migration_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM migrations WHERE version = 41",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migration_count, 1);
     }
 
     #[test]
@@ -2175,9 +2649,11 @@ mod tests {
         conn.execute(
             "INSERT INTO agent_delegation_jobs (
                  id, idempotency_key, caller_agent_id, target_agent_id,
-                 title, task, max_tokens, status, created_at, updated_at
+                 title, task, max_tokens, status, created_at, updated_at,
+                 root_job_id, depth
              ) VALUES ('job-v33', 'idem:job-v33', 'caller', 'worker',
-                       'proof', 'produce evidence', 5000, 'queued', 1, 1)",
+                       'proof', 'produce evidence', 5000, 'queued', 1, 1,
+                       'job-v33', 1)",
             [],
         )
         .unwrap();
@@ -2278,5 +2754,131 @@ mod tests {
             ("runtime-v35".to_string(), "session-v35".to_string(), 2)
         );
         assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v37_backfills_delegation_lineage_and_replays_without_double_reservation() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO agent_delegation_lineages (
+                 root_job_id, reserved_tokens, created_at, updated_at
+             ) VALUES ('job-v37', 5000, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_delegation_jobs (
+                 id, idempotency_key, caller_agent_id, target_agent_id,
+                 title, task, max_tokens, status, created_at, updated_at,
+                 root_job_id, depth
+             ) VALUES ('job-v37', 'idem:job-v37', 'caller', 'worker',
+                       'proof', 'produce evidence', 5000, 'queued', 1, 1,
+                       'job-v37', 1)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute_batch(
+            "DROP TRIGGER guard_agent_delegation_lineage_insert;
+             DROP TRIGGER guard_agent_delegation_lineage_update;
+             DROP TABLE agent_delegation_lineages;
+             UPDATE agent_delegation_jobs
+             SET root_job_id = '', parent_job_id = NULL, depth = 1
+             WHERE id = 'job-v37';
+             DELETE FROM migrations WHERE version = 37;
+             PRAGMA user_version = 36;",
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+
+        let row: (String, Option<String>, i64, i64) = conn
+            .query_row(
+                "SELECT jobs.root_job_id, jobs.parent_job_id, jobs.depth,
+                        lineages.reserved_tokens
+                 FROM agent_delegation_jobs jobs
+                 JOIN agent_delegation_lineages lineages
+                   ON lineages.root_job_id = jobs.root_job_id
+                 WHERE jobs.id = 'job-v37'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("job-v37".to_string(), None, 1, 5000));
+
+        conn.pragma_update(None, "user_version", 36).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 37", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+        let reserved: i64 = conn
+            .query_row(
+                "SELECT reserved_tokens FROM agent_delegation_lineages
+                 WHERE root_job_id = 'job-v37'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reserved, 5000);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v38_adds_gmail_registry_and_replays_without_losing_accounts() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO gmail_accounts (
+                 alias, email_address, access_profile, granted_scopes_json,
+                 token_vault_key, client_vault_key, history_id, status,
+                 enabled, is_default, created_at, updated_at
+             ) VALUES (
+                 'personal', 'person@gmail.com', 'assistant',
+                 '[\"https://www.googleapis.com/auth/gmail.modify\"]',
+                 'CAPTAIN_GMAIL_PERSONAL_TOKEN',
+                 'CAPTAIN_GMAIL_PERSONAL_CLIENT', '12345', 'ready',
+                 1, 1, 1, 1
+             )",
+            [],
+        )
+        .unwrap();
+
+        conn.pragma_update(None, "user_version", 37).unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 38", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+
+        let row: (String, String, String, i64) = conn
+            .query_row(
+                "SELECT email_address, access_profile, token_vault_key, is_default
+                 FROM gmail_accounts WHERE alias = 'personal'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                "person@gmail.com".to_string(),
+                "assistant".to_string(),
+                "CAPTAIN_GMAIL_PERSONAL_TOKEN".to_string(),
+                1,
+            )
+        );
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+
+        assert!(conn
+            .execute(
+                "INSERT INTO gmail_accounts (
+                     alias, email_address, access_profile, granted_scopes_json,
+                     token_vault_key, client_vault_key, status,
+                     enabled, is_default, created_at, updated_at
+                 ) VALUES (
+                     'bad', 'bad@gmail.com', 'send', '[]',
+                     'lowercase_token', 'CAPTAIN_GMAIL_BAD_CLIENT', 'ready',
+                     1, 0, 1, 1
+                 )",
+                [],
+            )
+            .is_err());
     }
 }

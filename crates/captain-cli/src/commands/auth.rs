@@ -5,6 +5,8 @@ use super::model_state::{current_model_status_json, providers_array};
 
 pub(crate) use super::auth_codex::cmd_login_codex;
 
+const XAI_AUTH_GUIDANCE: &str = "xAI documents API-key authentication for third-party api.x.ai clients. Captain can recognize an externally issued OAuth bearer, but cannot initiate or refresh xAI OAuth until xAI publishes third-party client registration and authorization endpoints.";
+
 pub(crate) fn cmd_auth_status(json: bool) {
     let body = auth_status_json(None);
     if json {
@@ -179,6 +181,9 @@ fn live_test_ok(test_body: &serde_json::Value) -> bool {
 pub(crate) fn cmd_auth_login(provider: &str) {
     if provider.eq_ignore_ascii_case("codex") {
         cmd_login_codex(false);
+    } else if provider.eq_ignore_ascii_case("xai") {
+        ui::hint(XAI_AUTH_GUIDANCE);
+        cmd_config_set_key(provider);
     } else {
         cmd_config_set_key(provider);
     }
@@ -298,5 +303,12 @@ mod tests {
             auth_status_current_provider(&providers, "unknown")["auth_status"],
             "unknown"
         );
+    }
+
+    #[test]
+    fn xai_guidance_does_not_promise_an_undocumented_oauth_flow() {
+        assert!(XAI_AUTH_GUIDANCE.contains("API-key authentication"));
+        assert!(XAI_AUTH_GUIDANCE.contains("cannot initiate or refresh xAI OAuth"));
+        assert!(XAI_AUTH_GUIDANCE.contains("third-party client registration"));
     }
 }
