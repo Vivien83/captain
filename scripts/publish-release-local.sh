@@ -68,7 +68,37 @@ release_host_checkpoint() {
         || fail "release publication requires more than ${min_free_gib} GiB free"
 }
 
+stage_docker_context_storage() {
+    local context_json="$1"
+    local target_dir="$2"
+    local metadata_path
+    local tls_path
+    local context_id
+
+    metadata_path="$(jq -r '.Storage.MetadataPath // empty' <<<"$context_json")"
+    case "$metadata_path" in
+        ""|"<IN MEMORY>") return 0 ;;
+    esac
+    [ -d "$metadata_path" ] \
+        || fail "active Docker context metadata is unavailable: $metadata_path"
+    context_id="$(basename "$metadata_path")"
+    case "$context_id" in
+        ""|.|..|*[!A-Za-z0-9_-]*) fail "active Docker context has an invalid storage identifier" ;;
+    esac
+
+    mkdir -p "$target_dir/contexts/meta"
+    cp -R "$metadata_path" "$target_dir/contexts/meta/$context_id"
+
+    tls_path="$(jq -r '.Storage.TLSPath // empty' <<<"$context_json")"
+    if [ -n "$tls_path" ] && [ "$tls_path" != "<IN MEMORY>" ] && [ -d "$tls_path" ]; then
+        mkdir -p "$target_dir/contexts/tls"
+        cp -R "$tls_path" "$target_dir/contexts/tls/$context_id"
+    fi
+    chmod -R go-rwx "$target_dir/contexts"
+}
+
 if is_yes "${CAPTAIN_RELEASE_POLICY_TEST:-}"; then
+    need_cmd jq
     [ "$(release_channel_for_version v0.1.0-alpha.1)" = "alpha" ] || exit 1
     [ "$(release_channel_for_version v0.1.0-beta.2)" = "beta" ] || exit 1
     [ "$(release_channel_for_version v0.1.0-rc.3)" = "rc" ] || exit 1
@@ -78,6 +108,27 @@ if is_yes "${CAPTAIN_RELEASE_POLICY_TEST:-}"; then
     if is_prerelease_version v0.1.0; then
         exit 1
     fi
+    (
+        context_test_root="$(mktemp -d "${TMPDIR:-/tmp}/captain-docker-context-test.XXXXXX")"
+        trap 'rm -rf "$context_test_root"' EXIT
+        context_id="0123456789abcdef"
+        metadata_path="$context_test_root/source/meta/$context_id"
+        tls_path="$context_test_root/source/tls/$context_id"
+        mkdir -p "$metadata_path" "$tls_path/docker"
+        printf '{"Name":"desktop-test"}\n' >"$metadata_path/meta.json"
+        printf 'test certificate\n' >"$tls_path/docker/ca.pem"
+        context_json="$(jq -n \
+            --arg metadata "$metadata_path" \
+            --arg tls "$tls_path" \
+            '{Storage:{MetadataPath:$metadata,TLSPath:$tls}}')"
+        stage_docker_context_storage "$context_json" "$context_test_root/isolated"
+        [ -f "$context_test_root/isolated/contexts/meta/$context_id/meta.json" ] || exit 1
+        [ -f "$context_test_root/isolated/contexts/tls/$context_id/docker/ca.pem" ] || exit 1
+        stage_docker_context_storage \
+            '{"Storage":{"MetadataPath":"<IN MEMORY>","TLSPath":"<IN MEMORY>"}}' \
+            "$context_test_root/default"
+        [ ! -e "$context_test_root/default/contexts" ] || exit 1
+    )
     printf 'Captain release channel policy passed.\n'
     exit 0
 fi
@@ -261,8 +312,10 @@ if ! is_yes "${CAPTAIN_SKIP_DOCKER_PUSH:-}"; then
         || fail "Docker Buildx plugin path is unavailable; install or repair Docker Buildx"
     docker_plugin_dir="$(dirname "$docker_plugin_path")"
     docker_context="$(docker context show)"
+    docker_context_json="$(docker context inspect --format '{{json .}}' "$docker_context")"
     docker_auth_dir="$(mktemp -d "${TMPDIR:-/tmp}/captain-docker-auth.XXXXXX")"
     chmod 700 "$docker_auth_dir"
+    stage_docker_context_storage "$docker_context_json" "$docker_auth_dir"
     jq -n \
         --arg context "$docker_context" \
         --arg plugin_dir "$docker_plugin_dir" \
