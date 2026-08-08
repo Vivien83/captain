@@ -23,8 +23,9 @@ local public-export publisher.
 Captain versions the public repository's discovery metadata instead of relying
 on an unrecorded GitHub UI setting. `scripts/github-discoverability.sh` keeps a
 search-oriented but factual description, the canonical product homepage, and a
-bounded topic taxonomy for self-hosting, Rust, AI agents, orchestration, Codex,
-MCP, Telegram, and workflow automation.
+bounded topic taxonomy for the Captain Agent OS brand, agent OS/framework
+discovery, self-hosting, Rust, persistent memory, orchestration, Codex, MCP,
+Telegram, Discord, and workflow automation.
 
 After authenticating `gh` with repository administration permission, apply and
 read back the exact public state:

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="${CAPTAIN_REPO:-Vivien83/captain}"
-DESCRIPTION="Self-hosted autonomous AI agent OS in Rust with persistent memory, tools, workflows, Telegram, Codex, and multi-agent orchestration."
+DESCRIPTION="Captain Agent OS: self-hosted, local-first autonomous AI agent runtime in Rust with persistent memory, tools, workflows, Codex, and multi-agent orchestration."
 HOMEPAGE="https://captainagent.fr/"
 MODE="verify"
 
@@ -45,14 +45,18 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 expected_topics_json() {
     jq -cn '[
+      "agent-framework",
+      "agent-os",
       "agentic-ai",
       "ai-agent",
       "autonomous-agents",
       "codex",
+      "discord-bot",
       "local-first",
       "llm",
       "mcp",
       "multi-agent",
+      "persistent-memory",
       "rust",
       "self-hosted",
       "telegram-bot",
