@@ -133,6 +133,13 @@ Agent-facing changes:
   submitted SHA in a disposable, network-isolated Lima guest. The published
   status is SHA-bound and orphaned pending runs are recovered after restart;
   no automatic paid GitHub Actions workflow is required.
+- The public `v0.1.0-alpha.11` prerelease contains exactly 22 assets. Its
+  annotated tag dereferences to source commit
+  `cd7f580a5e89ea77852468bc4fad9875f00dce61`; the immutable image and moving
+  `:alpha` channel share OCI index digest
+  `sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192`.
+  Anonymous ARM64 and AMD64 execution succeeded, and GitHub reports zero
+  Actions runs because the release was built and published locally.
 
 ### 0.1.0-alpha.10 — Production hardening and durable operations
 

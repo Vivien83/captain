@@ -54,7 +54,7 @@ Telegram, or Discord.
 
 ## Quick Install
 
-Current early-access release candidate:
+Current public early-access release:
 [v0.1.0-alpha.11](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11).
 Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.

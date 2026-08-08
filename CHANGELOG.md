@@ -6,7 +6,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0-alpha.11] - 2026-08-04
+## [0.1.0-alpha.11] - 2026-08-08
 
 Early-access release focused on secure extensibility, durable external
 operations, native account integrations, and locally enforced contribution and

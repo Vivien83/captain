@@ -55,7 +55,7 @@ Telegram o Discord.
 
 ## Instalación rápida
 
-Candidato actual de acceso anticipado:
+Versión pública actual de acceso anticipado:
 [v0.1.0-alpha.11](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11).
 Imagen Docker inmutable: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11`;
 canal alfa móvil: `ghcr.io/vivien83/captain-agent-os:alpha`.

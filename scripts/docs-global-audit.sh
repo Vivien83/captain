@@ -455,9 +455,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable candidate" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11"
-  require_contains "$readme pins the immutable candidate image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11"
-  require_contains "$readme pins the candidate installer" "$readme" "releases/download/v0.1.0-alpha.11/install.sh"
+  require_contains "$readme links the immutable release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11"
+  require_contains "$readme pins the immutable release image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11"
+  require_contains "$readme pins the release installer" "$readme" "releases/download/v0.1.0-alpha.11/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -505,9 +505,9 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.11"
-require_contains "candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.11] - 2026-08-04"
-require_contains "reviewed candidate alpha release notes exist" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
+require_contains "public runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.11"
+require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.11] - 2026-08-08"
+require_contains "reviewed public alpha release notes exist" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
 require_contains "historical alpha.10 release notes remain available" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
 require_contains "historical alpha.9 release notes remain available" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
 require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
@@ -524,8 +524,8 @@ require_contains "agent changelog records the published alpha.8 multi-arch diges
 require_contains "DOC2 records the published alpha.9 provenance" docs/DOCS_STATUS.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
 require_contains "DOC2 records the published alpha.9 multi-arch digest" docs/DOCS_STATUS.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
 require_contains "agent changelog records the published alpha.9 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
-require_contains "DOC2 identifies the alpha.9 previous release" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is the previous public prerelease'
-require_contains "DOC2 identifies the alpha.10 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.10` is the current public prerelease'
+require_contains "DOC2 identifies alpha.9 as earlier history" docs/DOCS_STATUS.md '`v0.1.0-alpha.9` is an earlier public prerelease'
+require_contains "DOC2 identifies the alpha.10 previous release" docs/DOCS_STATUS.md '`v0.1.0-alpha.10` is the previous public prerelease'
 require_contains "DOC2 pins the alpha.10 host asset count" docs/DOCS_STATUS.md 'exactly 22 files'
 require_contains "DOC2 records the published alpha.10 provenance" docs/DOCS_STATUS.md "48f898a9e4d38e8b8c7627644b66e22076a39364"
 require_contains "DOC2 records the published alpha.10 tag object" docs/DOCS_STATUS.md "b58f7561d0014228cc523b1770b5c411b017ef52"
@@ -536,11 +536,17 @@ require_contains "alpha.10 notes pin live OCI provenance" docs/releases/v0.1.0-a
 require_contains "alpha.10 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.10.md "GitHub Actions API returned zero runs"
 require_not_contains "alpha.10 notes do not copy alpha.9 source provenance" docs/releases/v0.1.0-alpha.10.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
 require_not_contains "alpha.10 notes do not copy alpha.9 OCI provenance" docs/releases/v0.1.0-alpha.10.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
-require_contains "DOC2 identifies the alpha.11 candidate" docs/DOCS_STATUS.md '`v0.1.0-alpha.11` is the current locally certified release candidate'
-require_contains "alpha.11 notes keep live provenance unset" docs/releases/v0.1.0-alpha.11.md 'unset until the live release has'
+require_contains "DOC2 identifies the alpha.11 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.11` is the current public prerelease'
+require_contains "DOC2 records the published alpha.11 provenance" docs/DOCS_STATUS.md 'cd7f580a5e89ea77852468bc4fad9875f00dce61'
+require_contains "DOC2 records the published alpha.11 tag object" docs/DOCS_STATUS.md 'fafc41e33386ec370f3da17d24650e370d46af4e'
+require_contains "DOC2 records the published alpha.11 multi-arch digest" docs/DOCS_STATUS.md 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
+require_contains "agent changelog records the published alpha.11 digest" docs/captain-tools/runtime-changelog.md 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
+require_contains "alpha.11 notes pin live source provenance" docs/releases/v0.1.0-alpha.11.md 'cd7f580a5e89ea77852468bc4fad9875f00dce61'
+require_contains "alpha.11 notes pin live OCI provenance" docs/releases/v0.1.0-alpha.11.md 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
+require_contains "alpha.11 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.11.md 'GitHub Actions API returned zero runs'
 require_not_contains "alpha.11 notes do not copy alpha.10 source provenance" docs/releases/v0.1.0-alpha.11.md "48f898a9e4d38e8b8c7627644b66e22076a39364"
 require_not_contains "alpha.11 notes do not copy alpha.10 OCI provenance" docs/releases/v0.1.0-alpha.11.md "sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477"
-require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is the previous public prerelease'
+require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is an earlier public prerelease'
 require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
 require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
 require_contains "agent changelog retains the alpha.7 multi-arch digest" docs/captain-tools/runtime-changelog.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
@@ -964,8 +970,10 @@ require_contains "repository governance documents root-owned toolchain and polic
 require_contains "repository governance documents immutable audit snapshots" docs/repository-governance.md 'immutable snapshots'
 require_contains "repository governance applies versioned protection" docs/repository-governance.md 'scripts/github-governance.sh --apply'
 require_contains "repository governance applies versioned discovery metadata" docs/repository-governance.md 'scripts/github-discoverability.sh --apply'
-require_contains "site deployment documents IndexNow notification" docs/deployment/launch-site.md 'api.indexnow.org/indexnow'
-require_contains "site deployment keeps Google indexing operator-owned" docs/deployment/launch-site.md 'Google Search Console'
+if [ "$SITE_PRESENT" = "1" ]; then
+  require_contains "site deployment documents IndexNow notification" docs/deployment/launch-site.md 'api.indexnow.org/indexnow'
+  require_contains "site deployment keeps Google indexing operator-owned" docs/deployment/launch-site.md 'Google Search Console'
+fi
 require_file "docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md"
 require_contains "release supply-chain evidence keeps remote policy honest" docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md 'No document may claim the remote state is active'
 require_contains "release supply-chain evidence pins sequential bundles" docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md 'invoke each target separately'

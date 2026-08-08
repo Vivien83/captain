@@ -155,7 +155,7 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current release candidate has an agent-facing changelog" \
+  "current public release has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
   "### 0.1.0-alpha.11"
 require_contains \
@@ -167,11 +167,11 @@ require_contains \
   scripts/excellence-smoke.sh \
   '0.1.0-alpha.11'
 require_contains \
-  "public changelog exposes the candidate alpha" \
+  "public changelog exposes the published alpha" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.11] - 2026-08-04'
+  '## [0.1.0-alpha.11] - 2026-08-08'
 require_contains \
-  "reviewed candidate alpha notes exist" \
+  "reviewed public alpha notes exist" \
   docs/releases/v0.1.0-alpha.11.md \
   '# Captain 0.1.0-alpha.11'
 require_contains \
@@ -323,29 +323,41 @@ require_contains \
   docs/releases/v0.1.0-alpha.10.md \
   'GitHub Actions API returned zero runs'
 require_not_contains \
-  "alpha.11 candidate notes do not copy the alpha.10 source commit" \
+  "alpha.11 notes do not copy the alpha.10 source commit" \
   docs/releases/v0.1.0-alpha.11.md \
   '48f898a9e4d38e8b8c7627644b66e22076a39364'
 require_not_contains \
-  "alpha.11 candidate notes do not copy the alpha.10 OCI digest" \
+  "alpha.11 notes do not copy the alpha.10 OCI digest" \
   docs/releases/v0.1.0-alpha.11.md \
   'sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477'
 require_contains \
-  "alpha.11 candidate notes keep live provenance unset" \
+  "published alpha.11 notes pin the public source commit" \
   docs/releases/v0.1.0-alpha.11.md \
-  'unset until the live release has'
+  'cd7f580a5e89ea77852468bc4fad9875f00dce61'
 require_contains \
-  "alpha.11 candidate notes pin the 22-asset contract" \
+  "published alpha.11 notes pin the annotated tag object" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'fafc41e33386ec370f3da17d24650e370d46af4e'
+require_contains \
+  "published alpha.11 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
+require_contains \
+  "published alpha.11 notes pin the 22-asset contract" \
   docs/releases/v0.1.0-alpha.11.md \
   'exactly 22 host assets'
 require_contains \
-  "alpha.11 candidate notes pin sequential host builds" \
+  "published alpha.11 notes pin sequential host builds" \
   docs/releases/v0.1.0-alpha.11.md \
   'one target at a time'
 require_contains \
-  "alpha.11 candidate notes pin sequential Docker builds" \
+  "published alpha.11 notes pin sequential Docker builds" \
   docs/releases/v0.1.0-alpha.11.md \
   'strictly one after the other'
+require_contains \
+  "published alpha.11 notes record the zero-Actions proof" \
+  docs/releases/v0.1.0-alpha.11.md \
+  'GitHub Actions API returned zero runs'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
   docs/channel-adapters.md \

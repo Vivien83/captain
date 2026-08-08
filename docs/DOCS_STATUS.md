@@ -4,30 +4,57 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Current Release Candidate
+## Current Public Release
 
-`v0.1.0-alpha.11` is the current locally certified release candidate. It closes
+`v0.1.0-alpha.11` is the current public prerelease. It closes
 the remaining Alpha 10 audit gaps and adds the native Gmail OAuth rail,
 crash-safe Gmail automations, named IMAP/SMTP accounts, provider-confirmed
 subscription reset notifications, first-use xAI access, reproducible public
 discovery metadata, and an exact-SHA local pull-request gate.
 
-The candidate host contract remains exactly 22 files: five archives, five
+Its host release contract contains exactly 22 files: five archives, five
 SHA-256 sidecars, five platform manifests, four installers, one aggregate
 manifest, one deterministic in-toto/SLSA v1 provenance statement, and its
 SHA-256 sidecar. Host targets and Docker architectures must be built strictly
 one at a time with disk/load checkpoints.
 
-Public source commit, annotated tag object, publication time, GitHub asset
-digests, OCI index and architecture manifests are unset until the live release
-is published and observed. No Alpha 10 provenance value is evidence for this
-candidate. The same boundary applies to external authorization: source gates
-prove OAuth/IMAP/SMTP protocol, storage, rollback, recovery and non-disclosure,
-but a real account login requires an operator-owned credential and consent.
+Its verified public surfaces are:
 
-## Current Public Release
+- release:
+  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11>
+- source commit: `cd7f580a5e89ea77852468bc4fad9875f00dce61`
+- source tree: `12dd801af4168adf12210cda40aadb14ea947905`
+- annotated tag object: `fafc41e33386ec370f3da17d24650e370d46af4e`
+- publication time: `2026-08-08T10:32:11Z`
+- immutable image:
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11`
+- OCI index digest:
+  `sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192`
+- `linux/amd64` manifest:
+  `sha256:e6c0b739250fb40fba9a8d5f10a358ec7035550550f9b74036780db92aabac29`
+- `linux/arm64` manifest:
+  `sha256:4d7ce0ba24bf561cdc5ae0c273f684fd7501934cf4010d88678093dd3634ef86`
+- AMD64 attestation manifest:
+  `sha256:c85ffeb3f732a1204686f19a9ba7521d0551edd365ea9c5c3bd4d539f70f76cb`
+- ARM64 attestation manifest:
+  `sha256:d3529989ad74309f24ef4977e8da8b039c842eca32578d4b8eb6eeb07c015ef9`
 
-`v0.1.0-alpha.10` is the current public prerelease. It promotes the
+The annotated tag dereferences to the source commit above. The GitHub Release
+contains exactly 22 uploaded assets, and every GitHub-reported SHA-256 digest
+matches the corresponding locally certified file. The immutable image and
+moving `:alpha` channel resolved to the same OCI index. Anonymous HTTP checks
+downloaded `manifest.json` and `install.sh` with their published digests, and
+anonymous Docker pulls executed `captain --version` successfully on ARM64 and
+AMD64. The GitHub Actions API returned zero runs because the complete release
+was built and published locally.
+
+External authorization remains an operator boundary: source gates prove
+OAuth/IMAP/SMTP protocol, storage, rollback, recovery and non-disclosure, but a
+real account login requires an operator-owned credential and consent.
+
+## Previous Public Release
+
+`v0.1.0-alpha.10` is the previous public prerelease. It promotes the
 deny-by-default API and browser perimeter, guarded host execution, append-only
 audit recovery, crash-safe outbound delivery and delegation, evidence-bound
 project completion, synchronized budgets, complete memory write opt-out,
@@ -70,9 +97,9 @@ executed `captain --version` successfully on ARM64 and AMD64. The GitHub
 Actions API returned zero runs because the complete release was built and
 published locally.
 
-## Previous Public Release
+## Earlier Public Release
 
-`v0.1.0-alpha.9` is the previous public prerelease. It combines durable
+`v0.1.0-alpha.9` is an earlier public prerelease. It combines durable
 Workflow Learning V2 with Captain's native release monitor. Its immutable
 public surfaces are:
 
@@ -105,9 +132,9 @@ streaming/non-streaming finalizer checks the explicit per-turn opt-out before
 embedding or storing its episodic interaction. The normal resumable transcript
 and mandatory operational/audit records remain intentional.
 
-## Alpha 11 Candidate Hardening
+## Alpha 11 Hardening
 
-The post-Alpha 10 source fails closed when neither browser authentication nor a
+The published Alpha 11 runtime fails closed when neither browser authentication nor a
 daemon API key is configured. Credentialless development access is no longer
 an implicit consequence of empty credentials: it requires the durable
 `auth.allow_unauthenticated_loopback = true` opt-out and the actual client must
@@ -116,14 +143,14 @@ that visible compatibility flag. Setup and web credential rotation always
 write `false`, while Status and Doctor distinguish `unconfigured`,
 `unauthenticated_loopback`, and protected modes.
 
-The post-Alpha 10 credential vault also replaces its historical obfuscated
+The published Alpha 11 credential vault also replaces its historical obfuscated
 local master-key file with macOS Keychain, Windows Credential Manager, or Linux
 Secret Service. A generated key is never printed and must survive a verified
 readback before initialization succeeds. Headless deployments use the explicit
 `CAPTAIN_VAULT_KEY` override. Legacy migration writes and verifies the native
 copy before deleting the old file; mismatches fail closed.
 
-Detached delegation in the post-Alpha 10 source now has a second, durable
+Detached delegation in the published Alpha 11 runtime now has a second, durable
 lineage boundary. Nested jobs persist `root_job_id`, `parent_job_id`, and
 one-based `depth`; enqueue verifies the active parent and caller under an
 immediate SQLite transaction. Depth is capped at 10. A separate lineage ledger
@@ -132,7 +159,7 @@ tree and never refunds reservation on completion, retry, crash recovery, or
 partial history pruning. Status events and agent job projections expose bounded
 lineage metadata and remaining reservation without task or result content.
 
-Direct-program execution permits in the post-Alpha 10 source no longer derive
+Direct-program execution permits in the published Alpha 11 runtime no longer derive
 authority from their human-readable review string. The authorization digest
 uses the fixed `captain.exec-permit.program.v1` domain, then a big-endian `u64`
 length and raw bytes for the executable, a big-endian `u64` argument count, and
@@ -148,7 +175,7 @@ starts a logged five-second global backoff and returns the existing `429` plus
 Internet-facing deployment must additionally rate-limit login traffic at the
 reverse proxy, firewall, or edge.
 
-The post-Alpha 10 browser surfaces also use a strict executable-content
+The published Alpha 11 browser surfaces also use a strict executable-content
 boundary. Control no longer needs an inline import map, and Control, Terminal,
 Config, and the retained Desktop wrapper load every script from an embedded
 same-origin asset. Their CSP has no `unsafe-eval` and grants no inline script
@@ -159,7 +186,7 @@ protocols, while ordinary tool/session strings remain Preact text nodes.
 `scripts/control-xss-smoke.mjs` exercises all three attacker-controlled
 surfaces in Chromium under the production CSP.
 
-The post-Alpha 10 execution contract now separates deployment posture from
+The published Alpha 11 execution contract now separates deployment posture from
 command policy. The typed default is `personal_workstation` plus `allowlist`;
 guided local setup may record an explicit trusted-workstation `full` choice.
 `remote_operator` imposes allowlist semantics and `untrusted_execution` denies
@@ -219,7 +246,7 @@ not claim a SLSA certification level.
 The versioned public `main` policy requires reviewed pull requests for non-admin
 contributors, resolved conversations, linear history, and forbids force-pushes
 or deletion. Administrators retain the audited local publication path. The
-post-Alpha 10 source additionally requires `captain/local-pr-gate`, produced by
+published Alpha 11 source additionally requires `captain/local-pr-gate`, produced by
 a trusted local portal in a disposable Lima VM and bound to the exact PR SHA;
 the three-OS workflow remains a manual fallback. The Alpha 10 policy was
 applied and read back before publication, but this stricter post-release policy
@@ -353,9 +380,9 @@ Authenticated `/api/health/detail`, Prometheus metrics, `captain security`,
 public health probe reports only overall `ok` or `degraded` plus version.
 There is no repair operation and no mounted HTTP repair endpoint.
 
-## Previous Public Release
+## Earlier Public Release
 
-`v0.1.0-alpha.8` is the previous public prerelease. It combines Captain Forge's
+`v0.1.0-alpha.8` is an earlier public prerelease. It combines Captain Forge's
 readable native capabilities with durable internal hourly token guards and
 provider-reported Codex subscription windows. Its immutable public surfaces
 are:

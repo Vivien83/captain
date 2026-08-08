@@ -117,24 +117,33 @@ pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11' \
-    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable candidate"
+    "$ROOT_DIR/$readme" || fail "$readme does not link the immutable release"
   grep -Fq 'releases/download/v0.1.0-alpha.11/install.sh' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the candidate installer"
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the release installer"
   grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11' \
-    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable candidate image"
+    "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable release image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
   fi
   if grep -Fq '0.1.0-dev.2026-07-13a' "$ROOT_DIR/$readme"; then
-    fail "$readme still exposes the private release candidate"
+    fail "$readme still exposes the private development build"
   fi
 done
 grep -Fq '### 0.1.0-alpha.11' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
-  || fail "agent-facing changelog does not identify the candidate alpha"
-grep -Fq 'unset until the live release has' \
+  || fail "agent-facing changelog does not identify the public alpha"
+grep -Fq 'cd7f580a5e89ea77852468bc4fad9875f00dce61' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
-  || fail "candidate release notes do not keep live provenance explicitly unset"
+  || fail "published release notes do not pin the Alpha 11 source commit"
+grep -Fq 'fafc41e33386ec370f3da17d24650e370d46af4e' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
+  || fail "published release notes do not pin the Alpha 11 tag object"
+grep -Fq 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
+  || fail "published release notes do not pin the Alpha 11 OCI index"
+grep -Fq 'GitHub Actions API returned zero runs' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
+  || fail "published release notes do not record the Alpha 11 zero-Actions proof"
 if grep -Fq '48f898a9e4d38e8b8c7627644b66e22076a39364' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md"; then
   fail "Alpha 11 release notes copied the Alpha 10 public source commit"
