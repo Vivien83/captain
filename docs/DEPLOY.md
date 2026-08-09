@@ -145,7 +145,7 @@ reverse proxy, firewall, WAF, or equivalent edge before exposing Captain.
 Do not expose port `50051` directly to the Internet without Captain auth and
 TLS termination.
 
-For a systemd VPS, the Alpha 12 installer can own this path end to end when
+For a systemd VPS, the current installer can own this path end to end when
 `CAPTAIN_DOMAIN` is set. It validates DNS, refuses an unrelated listener on
 `80/443`, installs Caddy, updates one managed import with rollback, opens an
 active `ufw`/`firewalld`, and verifies the public health and Control page. See

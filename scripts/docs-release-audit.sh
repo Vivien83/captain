@@ -512,6 +512,26 @@ require_not_contains \
   "alpha.13 notes do not copy alpha.12 OCI provenance" \
   docs/releases/v0.1.0-alpha.13.md \
   'sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa'
+require_contains \
+  "alpha.13 notes pin the published source revision" \
+  docs/releases/v0.1.0-alpha.13.md \
+  '6c05ae0c667e865a198764c1cd88c9050bd87db1'
+require_contains \
+  "alpha.13 notes pin the published OCI index" \
+  docs/releases/v0.1.0-alpha.13.md \
+  'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
+require_contains \
+  "DOC2 names alpha.13 as the current public release" \
+  docs/DOCS_STATUS.md \
+  '`v0.1.0-alpha.13` is the current public prerelease'
+require_not_contains \
+  "DOC2 no longer presents alpha.13 as unpublished" \
+  docs/DOCS_STATUS.md \
+  'Alpha 13 is not yet the current public release'
+require_contains \
+  "agent changelog pins the public alpha.13 source" \
+  docs/captain-tools/runtime-changelog.md \
+  '6c05ae0c667e865a198764c1cd88c9050bd87db1'
 require_not_contains \
   "current deployment docs do not call the domain rail post-Alpha 11" \
   docs/deployment/github-vps-install.md \

@@ -161,7 +161,7 @@ captain.example.com {
 
 `captain setup --profile vps` with `CAPTAIN_DOMAIN` or `CAPTAIN_PUBLIC_URL`
 writes a validated handoff Caddyfile to `~/.captain/deploy/Caddyfile`. The
-Alpha 12 `install.sh` goes further: it installs Caddy when needed, adds one
+The current `install.sh` goes further: it installs Caddy when needed, adds one
 idempotent managed import to `/etc/caddy/Caddyfile`, validates before reload,
 rolls back failed activation, and verifies the public `/api/health` plus Control
 root. An existing non-Caddy listener on `80/443` is never replaced; use

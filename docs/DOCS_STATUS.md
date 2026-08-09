@@ -4,7 +4,7 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Alpha 13 Release Candidate Contract
+## Alpha 13 Published Contract
 
 Alpha 13 adds adaptive delivery verification to the existing agent loop. Pure
 conversation and read-only inspection keep their direct path. Once a turn has
@@ -34,17 +34,16 @@ share transient `verifying`, `correcting`, `verification_verified`, and
 Telegram uses one Rich card only for a slow check, correction, or incomplete
 delivery. These signals never become chat-history messages.
 
-The candidate also hardens macOS self-update preflight and Wasmtime watchdog
-lifecycle, and keeps compact quota gauges bound to provider-wide windows plus
-the active model. Its selective streaming lock is implemented and certified:
-held segments require exact text plus one terminal event, replacements are
-single-delivery, and the direct path refuses a transport retry after its first
-visible delta. Alpha 13 is not yet the current public release: export and
-publication remain forbidden until the final release-readiness gate,
-sequential local bundles, GitHub/GHCR publication, and anonymous verification
-all pass on one clean revision.
+The published release also hardens macOS self-update preflight and Wasmtime
+watchdog lifecycle, and keeps compact quota gauges bound to provider-wide
+windows plus the active model. Its selective streaming lock is implemented and
+certified: held segments require exact text plus one terminal event,
+replacements are single-delivery, and the direct path refuses a transport retry
+after its first visible delta. The final release-readiness gate, sequential
+local bundles, GitHub/GHCR publication, and anonymous verification all passed
+on one clean public revision before the publication facts below were recorded.
 
-## Alpha 12 Published Contract
+## Alpha 12 Previous Contract
 
 The published Alpha 12 release adds a managed VPS-domain bootstrap. One
 `CAPTAIN_DOMAIN` now drives HTTPS-only setup, a loopback Captain API, Caddy
@@ -135,10 +134,10 @@ ambiguous cancellation or replay after restart.
 
 ## Current Public Release
 
-`v0.1.0-alpha.12` is the current public prerelease. It adds crash-recoverable
-Live Runs, evidence-grounded Web research, immutable checksum-bound artifacts,
-managed VPS domains, continuous Deployment Readiness, and process-level
-power-loss certification while preserving Captain's six-hub product shape.
+`v0.1.0-alpha.13` is the current public prerelease. It adds adaptive delivery
+verification, crash-safe evidence, bounded correction, verified streaming
+delivery, discreet progress across every active surface, safer macOS updates,
+and joined Wasmtime watchdog shutdown.
 
 Its host release contract contains exactly 22 files: five archives, five
 SHA-256 sidecars, five platform manifests, four installers, one aggregate
@@ -149,36 +148,51 @@ at a time with disk/load checkpoints.
 Its verified public surfaces are:
 
 - release:
-  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.12>
-- source commit: `cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2`
-- source tree: `7f08e7a8ac3dba7cfec7286783315cacd429a51e`
-- annotated tag object: `651a018593ea2d21af2e2a50d786d7f35654be9d`
-- publication time: `2026-08-09T09:48:03Z`
+  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.13>
+- source commit: `6c05ae0c667e865a198764c1cd88c9050bd87db1`
+- source tree: `c62a39fc15d0672995a58464cb59d3d3296d23d9`
+- annotated tag object: `8451b5934739ce383475f336654e6f68a63152bf`
+- publication time: `2026-08-09T18:32:01Z`
 - immutable image:
-  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12`
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13`
 - OCI index digest:
-  `sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa`
+  `sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec`
 - `linux/amd64` manifest:
-  `sha256:adc010a7a6add166422dc9299988d1807f5fb842341036c40629baf4a8a3be35`
+  `sha256:043a282d26a44d888d1b8c675922291a8fb27054486dd7a5669ef72b19dce809`
 - `linux/arm64` manifest:
-  `sha256:6649665253bc9cb21d16f5fb871b3ee72533585f2def8f1eb5a93b6f95fd00a0`
+  `sha256:8c6ce1584aa54c75c725cfe454bb59ed193983134fe04428f68e23431f10260d`
 - AMD64 attestation manifest:
-  `sha256:b970129386cf8dde4ca156cc3a596e6f96ba2fceea574d4d300240d890891a24`
+  `sha256:1527ae7003e41ad3078befca59f9d3bc1f3f61be2c3108ee15ac4714483bc572`
 - ARM64 attestation manifest:
-  `sha256:7b6e13c787bd8cf0ee372874ecd37460719d3c0bb497003ae546b8c86090333b`
+  `sha256:042391403d759c76cafaafb7036b08ed6d8b6102a043e106bd65fb092ddce0a0`
 
 The annotated tag dereferences to the source commit above. The GitHub Release
 contains exactly 22 uploaded assets, and every GitHub-reported SHA-256 digest
 matches the corresponding locally certified file. The immutable image and
 moving `:alpha` channel resolved to the same OCI index. Anonymous HTTP checks
 downloaded `manifest.json` and `install.sh` with their published digests, and
-anonymous Docker pulls executed `captain --version` successfully on ARM64 and
-AMD64. The GitHub Actions API returned zero runs because the complete release
-was built and published locally.
+anonymous OCI inspection exposed both image platforms and both BuildKit
+attestations. The GitHub Actions API returned zero runs because the complete
+release was built and published locally and sequentially.
 
 ## Previous Public Release
 
-`v0.1.0-alpha.11` is the previous public prerelease. It closes
+`v0.1.0-alpha.12` is the previous public prerelease. It adds crash-recoverable
+Live Runs, evidence-grounded Web research, immutable checksum-bound artifacts,
+managed VPS domains, continuous Deployment Readiness, and process-level
+power-loss certification while preserving Captain's six-hub product shape.
+
+Its verified public surfaces are the annotated tag object
+`651a018593ea2d21af2e2a50d786d7f35654be9d`, source commit
+`cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2`, source tree
+`7f08e7a8ac3dba7cfec7286783315cacd429a51e`, and OCI index
+`sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa`.
+The release contains exactly 22 locally built assets and was published at
+`2026-08-09T09:48:03Z` with zero GitHub Actions runs.
+
+## Earlier Public Release
+
+`v0.1.0-alpha.11` is an earlier public prerelease. It closes
 the remaining Alpha 10 audit gaps and adds the native Gmail OAuth rail,
 crash-safe Gmail automations, named IMAP/SMTP accounts, provider-confirmed
 subscription reset notifications, first-use xAI access, reproducible public

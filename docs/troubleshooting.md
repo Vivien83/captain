@@ -82,7 +82,7 @@ authentication. Remote access must also use HTTPS through a reverse proxy.
 
 ### Managed VPS domain does not become ready
 
-This section applies to the Alpha 12 managed-domain installer. It fails instead
+This section applies to the current managed-domain installer. It fails instead
 of reporting a partially reachable Captain.
 Inspect each boundary without deleting state:
 

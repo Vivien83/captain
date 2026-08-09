@@ -69,6 +69,15 @@ Agent-facing changes:
 - Provider quota surfaces continue to use live provider-reported windows. The
   compact Chat gauge prioritizes provider-wide limits and the active model;
   unrelated model-specific families remain clearly secondary.
+- The public `v0.1.0-alpha.13` prerelease contains exactly 22 assets. Its
+  annotated tag object `8451b5934739ce383475f336654e6f68a63152bf`
+  dereferences to source commit
+  `6c05ae0c667e865a198764c1cd88c9050bd87db1`; the immutable image and moving
+  `:alpha` channel share OCI index digest
+  `sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec`.
+  Anonymous HTTP asset and OCI-index checks succeeded, and GitHub reports zero
+  Actions runs because the release was built and published locally and
+  sequentially.
 
 ### 0.1.0-alpha.12 — Durable Live Runs, grounded research, and managed VPS bootstrap
 

@@ -52,10 +52,10 @@ curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13
 ```
 
 The VPS profile installs the binary, prepares local state, runs setup, and
-installs a systemd service. Alpha 12 can also activate one managed public HTTPS
-domain: set `CAPTAIN_DOMAIN` for unattended setup or answer the interactive
-prompt. See [GitHub + VPS Install](deployment/github-vps-install.md) for DNS,
-firewall, rollback, and readiness requirements.
+installs a systemd service. The current installer can also activate one managed
+public HTTPS domain: set `CAPTAIN_DOMAIN` for unattended setup or answer the
+interactive prompt. See [GitHub + VPS Install](deployment/github-vps-install.md)
+for DNS, firewall, rollback, and readiness requirements.
 
 ### Windows
 
