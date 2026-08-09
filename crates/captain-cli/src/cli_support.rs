@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::cli_captain_home;
@@ -242,6 +242,13 @@ pub(crate) fn prompt_input(prompt: &str) -> String {
 /// matching `prompt_input`'s behavior — masking only matters for a real
 /// interactive terminal in the first place.
 pub(crate) fn prompt_secret(prompt: &str) -> String {
+    // A process launched from an interactive shell can still have a controlling
+    // TTY even when its stdin is intentionally piped. In that case rpassword
+    // would read /dev/tty and ignore the automation input indefinitely.
+    if !io::stdin().is_terminal() {
+        return prompt_input(prompt);
+    }
+
     match rpassword::prompt_password(prompt) {
         Ok(value) => value.trim().to_string(),
         // rpassword doesn't print the prompt before failing to open a TTY,
