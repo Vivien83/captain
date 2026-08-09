@@ -136,13 +136,33 @@ grep -Fq '### 0.1.0-alpha.12' \
   || fail "agent-facing changelog does not identify the release candidate"
 grep -Fq '## Durable Live Runs' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
-  || fail "release candidate notes do not expose durable Live Runs"
+  || fail "published release notes do not expose durable Live Runs"
 grep -Fq '## Managed VPS domains and readiness' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
-  || fail "release candidate notes do not expose managed VPS readiness"
+  || fail "published release notes do not expose managed VPS readiness"
 grep -Fq 'selective metadata and redacted tail are not sent' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
-  || fail "release candidate notes do not pin the authorized destination boundary"
+  || fail "published release notes do not pin the authorized destination boundary"
+grep -Fq 'cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "published release notes do not pin the Alpha 12 source commit"
+grep -Fq '651a018593ea2d21af2e2a50d786d7f35654be9d' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "published release notes do not pin the Alpha 12 tag object"
+grep -Fq 'sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "published release notes do not pin the Alpha 12 OCI index"
+grep -Fq 'GitHub Actions API returned zero runs' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "published release notes do not record the Alpha 12 zero-Actions proof"
+if grep -Fq 'cd7f580a5e89ea77852468bc4fad9875f00dce61' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md"; then
+  fail "Alpha 12 release notes copied the Alpha 11 public source commit"
+fi
+if grep -Fq 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md"; then
+  fail "Alpha 12 release notes copied the Alpha 11 OCI digest"
+fi
 grep -Fq 'cd7f580a5e89ea77852468bc4fad9875f00dce61' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
   || fail "published release notes do not pin the Alpha 11 source commit"

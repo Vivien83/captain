@@ -165,6 +165,15 @@ Agent-facing changes:
   `captain doctor --full`, CLI/Ratatui Status, `GET /api/status` under
   `deployment.readiness`, and Control's Status hub consume that cache without
   starting network work on each refresh.
+- The public `v0.1.0-alpha.12` prerelease contains exactly 22 assets. Its
+  annotated tag object `651a018593ea2d21af2e2a50d786d7f35654be9d`
+  dereferences to source commit
+  `cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2`; the immutable image and moving
+  `:alpha` channel share OCI index digest
+  `sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa`.
+  Anonymous HTTP asset checks and ARM64/AMD64 container execution succeeded,
+  and GitHub reports zero Actions runs because the release was built and
+  published locally.
 
 ### 0.1.0-alpha.11 — Secure extensibility and durable integrations
 

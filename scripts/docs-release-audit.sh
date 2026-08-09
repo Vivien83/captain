@@ -172,7 +172,7 @@ require_contains \
   CHANGELOG.md \
   '## [0.1.0-alpha.12] - 2026-08-09'
 require_contains \
-  "reviewed release candidate notes exist" \
+  "published release notes exist" \
   docs/releases/v0.1.0-alpha.12.md \
   '# Captain 0.1.0-alpha.12'
 require_contains \
@@ -362,6 +362,34 @@ require_contains \
 require_contains \
   "published alpha.11 notes record the zero-Actions proof" \
   docs/releases/v0.1.0-alpha.11.md \
+  'GitHub Actions API returned zero runs'
+require_not_contains \
+  "alpha.12 notes do not copy the alpha.11 source commit" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'cd7f580a5e89ea77852468bc4fad9875f00dce61'
+require_not_contains \
+  "alpha.12 notes do not copy the alpha.11 OCI digest" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
+require_contains \
+  "published alpha.12 notes pin the public source commit" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2'
+require_contains \
+  "published alpha.12 notes pin the annotated tag object" \
+  docs/releases/v0.1.0-alpha.12.md \
+  '651a018593ea2d21af2e2a50d786d7f35654be9d'
+require_contains \
+  "published alpha.12 notes pin the multi-arch digest" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa'
+require_contains \
+  "published alpha.12 notes pin the 22-asset contract" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'exactly 22 host assets'
+require_contains \
+  "published alpha.12 notes record the zero-Actions proof" \
+  docs/releases/v0.1.0-alpha.12.md \
   'GitHub Actions API returned zero runs'
 require_contains \
   "Telegram operator docs pin Rich-first transport" \
