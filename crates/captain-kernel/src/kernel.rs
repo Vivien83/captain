@@ -139,6 +139,8 @@ mod kernel_handle_a2a;
 mod kernel_handle_agents;
 #[path = "kernel_handle_approval.rs"]
 mod kernel_handle_approval;
+#[path = "kernel_handle_artifacts.rs"]
+mod kernel_handle_artifacts;
 #[path = "kernel_handle_automation.rs"]
 mod kernel_handle_automation;
 #[path = "kernel_handle_channels.rs"]
@@ -161,6 +163,9 @@ mod kernel_handle_mcp;
 mod kernel_handle_memory;
 #[path = "kernel_handle_projects.rs"]
 mod kernel_handle_projects;
+#[path = "kernel_handle_tool_runs.rs"]
+mod kernel_handle_tool_runs;
+pub use kernel_handle_tool_runs::ToolRunOperatorSurface;
 #[path = "kernel_llm_launch.rs"]
 mod kernel_llm_launch;
 #[path = "kernel_llm_prompt.rs"]
@@ -300,6 +305,8 @@ pub struct CaptainKernel {
     pub scheduler: AgentScheduler,
     /// Memory substrate.
     pub memory: Arc<MemorySubstrate>,
+    /// Immutable, crash-safe user artifact store.
+    pub(crate) artifact_store: Arc<captain_memory::artifacts::ArtifactStore>,
     /// Process supervisor.
     pub supervisor: Supervisor,
     /// Workflow engine.
@@ -760,6 +767,7 @@ impl CaptainKernel {
             event_bus: EventBus::new(),
             scheduler: AgentScheduler::with_usage_store(boot_core.memory.usage().clone()),
             memory: boot_core.memory.clone(),
+            artifact_store: boot_core.artifact_store,
             supervisor: boot_core.supervisor,
             workflows: WorkflowEngine::new(),
             triggers: boot_core.triggers,
@@ -1314,6 +1322,42 @@ impl KernelHandle for CaptainKernel {
                 .external_source_paths(),
         );
         blocked
+    }
+
+    async fn artifact_publish(
+        &self,
+        caller_agent_id: &str,
+        request: captain_memory::artifacts::PublishArtifactRequest,
+    ) -> Result<captain_types::artifact::ArtifactVersion, String> {
+        self.handle_artifact_publish(caller_agent_id, request).await
+    }
+
+    async fn artifact_list(
+        &self,
+        caller_agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<captain_types::artifact::ArtifactVersion>, String> {
+        self.handle_artifact_list(caller_agent_id, limit).await
+    }
+
+    async fn artifact_inspect(
+        &self,
+        caller_agent_id: &str,
+        artifact_id: uuid::Uuid,
+        version: Option<u32>,
+    ) -> Result<captain_types::artifact::ArtifactVersion, String> {
+        self.handle_artifact_inspect(caller_agent_id, artifact_id, version)
+            .await
+    }
+
+    async fn artifact_payload(
+        &self,
+        caller_agent_id: &str,
+        artifact_id: uuid::Uuid,
+        version: Option<u32>,
+    ) -> Result<(captain_types::artifact::ArtifactVersion, std::path::PathBuf), String> {
+        self.handle_artifact_payload(caller_agent_id, artifact_id, version)
+            .await
     }
 
     fn global_exec_policy(&self) -> captain_types::config::ExecPolicy {

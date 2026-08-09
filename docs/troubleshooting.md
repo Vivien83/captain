@@ -46,8 +46,8 @@ export PATH="$HOME/.captain/bin:$PATH"
 GitHub's `/releases/latest` route excludes prereleases. Pin the alpha tag:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 bash
 ```
 
 No GitHub token is required for the official public repository. A token is
@@ -79,6 +79,33 @@ lsof -nP -iTCP:50051 -sTCP:LISTEN
 
 Captain binds to `127.0.0.1:50051` by default. A non-loopback binding requires
 authentication. Remote access must also use HTTPS through a reverse proxy.
+
+### Managed VPS domain does not become ready
+
+This section applies to the Alpha 12 managed-domain installer. It fails instead
+of reporting a partially reachable Captain.
+Inspect each boundary without deleting state:
+
+```bash
+getent ahosts captain.example.com
+ss -ltnp | grep -E ':(80|443)[[:space:]]'
+systemctl status captain caddy --no-pager
+journalctl -u caddy -n 80 --no-pager
+curl -fsS http://127.0.0.1:50051/api/health
+curl -fsS https://captain.example.com/api/health
+```
+
+An unresolved name means the `A`/`AAAA` record is missing or still propagating.
+A listener other than the system Caddy service means Captain deliberately left
+the existing proxy untouched; rerun with `CAPTAIN_INSTALL_PROXY=0` and wire
+that proxy manually. If local health works but HTTPS does not, allow TCP
+`80/443` in the VPS provider firewall. The installer handles active `ufw` and
+`firewalld`, not a hosting-provider control plane.
+
+Caddy validation or service-activation failures restore the previous root
+Caddyfile and Captain fragment. A certificate-readiness timeout keeps the
+validated site configuration so Caddy can recover after DNS or firewall repair;
+reload it with `systemctl reload caddy` and repeat the two health requests.
 
 ### Restart is stuck
 
@@ -135,7 +162,11 @@ compacted session.
 
 Control is at `http://127.0.0.1:50051/`; the expert terminal is at
 `http://127.0.0.1:50051/terminal`. Setup writes one-time initial credentials to
-`~/.captain/initial-credentials.txt`.
+`~/.captain/initial-credentials.txt`. Use its administrator username/password
+for the browser login; the browser creates its HttpOnly session token after a
+successful login. Do not paste the daemon API key into the browser form. The
+installer reports the credentials-file path without echoing secrets into
+terminal or provisioning logs.
 
 API requests use the configured bearer key:
 
@@ -210,8 +241,8 @@ should not be the first production integration.
 The public alpha image supports Linux AMD64 and ARM64:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
-docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11 --version
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
+docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12 --version
 docker logs captain
 ```
 

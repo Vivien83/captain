@@ -114,6 +114,42 @@ export function Status() {
             </div>
           <//>
 
+          <${StatusSection} title="Déploiement">
+            <div class="status-grid">
+              <${StatusMetric} label="Readiness" value=${snapshot.deployment.readiness.state}
+                meta=${snapshot.deployment.readiness.checkedAt
+                  ? 'vérifié ' + formatTimestamp(snapshot.deployment.readiness.checkedAt) + ' · prochain ' + formatTimestamp(snapshot.deployment.readiness.nextCheckAt)
+                  : snapshot.deployment.readiness.state === 'not_configured'
+                    ? 'aucun domaine public configuré'
+                    : snapshot.deployment.readiness.checks.length + ' contrôle(s) · premier passage en attente'}
+                tone=${stateTone(snapshot.deployment.readiness.state)} />
+              <${StatusMetric} label="Domaine public" value=${snapshot.deployment.publicUrl || 'non configuré'}
+                meta=${snapshot.deployment.publicUrl
+                  ? snapshot.deployment.profile + ' · ' + (snapshot.deployment.https ? 'HTTPS' : 'HTTP')
+                  : 'profil ' + snapshot.deployment.profile}
+                tone=${snapshot.deployment.publicUrl && !snapshot.deployment.https ? 'warn' : 'neutral'} />
+              <${StatusMetric} label="Reverse proxy" value=${snapshot.deployment.reverseProxy || 'non configuré'}
+                meta=${snapshot.deployment.readiness.durationMs === null
+                  ? 'premier contrôle en attente'
+                  : 'sonde ' + formatLatency(snapshot.deployment.readiness.durationMs)} />
+            </div>
+            ${snapshot.deployment.readiness.checks.length > 0 && html`
+              <div class="status-issue-list">
+                ${snapshot.deployment.readiness.checks.map((check) => html`
+                  <div class="status-issue tone-${stateTone(check.status)}" key=${check.id}>
+                    <div>
+                      <strong>${check.summary}</strong>
+                    </div>
+                    <span class="status-pill status-${check.status === 'ok' || check.status === 'skipped' ? 'done' : (check.status === 'failed' ? 'blocked' : 'review')}">${check.status}</span>
+                  </div>
+                `)}
+              </div>
+            `}
+            ${snapshot.deployment.readiness.actions.length > 0 && html`
+              <${TextSignals} items=${snapshot.deployment.readiness.actions} actions=${true} />
+            `}
+          <//>
+
           <${StatusSection} title="Quotas">
             <div class="status-grid">
               <${StatusMetric} label="Captain internal" value=${formatNumber(snapshot.budget.totalTokens)} meta=${snapshot.budget.limitedAgents + ' agent(s) · fenêtre glissante locale'}
@@ -216,6 +252,18 @@ function ReadyState({ value }) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('fr-FR');
+}
+
+function formatTimestamp(value) {
+  if (!value) return 'jamais';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function providerQuotaWindows(quota) {

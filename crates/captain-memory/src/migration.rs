@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 41;
+const SCHEMA_VERSION: u32 = 43;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -173,6 +173,14 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 41 {
         migrate_v41(conn)?;
+    }
+
+    if current_version < 42 {
+        migrate_v42(conn)?;
+    }
+
+    if current_version < 43 {
+        migrate_v43(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -2076,6 +2084,78 @@ fn migrate_v41(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 42: promote the historical detached-run table into the durable
+/// metadata ledger for every tool run and attach owner-only output evidence.
+/// The table name remains unchanged to keep existing installations and backup
+/// tooling compatible.
+fn migrate_v42(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "detached_tool_runs", "detached") {
+        conn.execute_batch(
+            "ALTER TABLE detached_tool_runs
+                 ADD COLUMN detached INTEGER NOT NULL DEFAULT 1;",
+        )?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "input_sha256") {
+        conn.execute_batch("ALTER TABLE detached_tool_runs ADD COLUMN input_sha256 TEXT;")?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "output_file_name") {
+        conn.execute_batch("ALTER TABLE detached_tool_runs ADD COLUMN output_file_name TEXT;")?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "output_stored_bytes") {
+        conn.execute_batch(
+            "ALTER TABLE detached_tool_runs ADD COLUMN output_stored_bytes INTEGER;",
+        )?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "output_total_bytes") {
+        conn.execute_batch(
+            "ALTER TABLE detached_tool_runs ADD COLUMN output_total_bytes INTEGER;",
+        )?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "output_sha256") {
+        conn.execute_batch("ALTER TABLE detached_tool_runs ADD COLUMN output_sha256 TEXT;")?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "output_capped") {
+        conn.execute_batch(
+            "ALTER TABLE detached_tool_runs
+                 ADD COLUMN output_capped INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "output_redacted") {
+        conn.execute_batch(
+            "ALTER TABLE detached_tool_runs
+                 ADD COLUMN output_redacted INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (42, datetime('now'), 'Promote tool runs and add durable output evidence')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Version 43: preserve explicit retry lineage without persisting raw tool
+/// input. `retry_of_run_id` points to the immediately preceding run; the input
+/// digest remains the authority for exact-retry validation.
+fn migrate_v43(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "detached_tool_runs", "retry_of_run_id") {
+        conn.execute_batch("ALTER TABLE detached_tool_runs ADD COLUMN retry_of_run_id TEXT;")?;
+    }
+    if !column_exists(conn, "detached_tool_runs", "retry_attempt") {
+        conn.execute_batch(
+            "ALTER TABLE detached_tool_runs
+                 ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_detached_tool_runs_retry_of
+             ON detached_tool_runs(retry_of_run_id);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (43, datetime('now'), 'Add explicit tool run retry lineage');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2385,6 +2465,98 @@ mod tests {
             )
             .unwrap();
         assert_eq!(migration_count, 1);
+    }
+
+    #[test]
+    fn v42_promotes_existing_detached_runs_without_losing_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migrations (
+                 version INTEGER PRIMARY KEY,
+                 applied_at TEXT NOT NULL,
+                 description TEXT
+             );
+             CREATE TABLE detached_tool_runs (
+                 run_id TEXT PRIMARY KEY,
+                 tool_name TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 caller_agent_id TEXT,
+                 origin_tool_use_id TEXT,
+                 started_at INTEGER NOT NULL,
+                 finished_at INTEGER,
+                 is_error INTEGER,
+                 result TEXT,
+                 result_truncated INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO detached_tool_runs
+                 (run_id, tool_name, status, started_at, result_truncated)
+             VALUES ('toolrun-existing', 'shell_exec', 'completed', 10, 0);
+             PRAGMA user_version = 41;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let row: (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT run_id, detached, output_file_name
+                 FROM detached_tool_runs WHERE run_id = 'toolrun-existing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("toolrun-existing".to_string(), 1, None));
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v43_adds_retry_lineage_without_rewriting_existing_runs() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migrations (
+                 version INTEGER PRIMARY KEY,
+                 applied_at TEXT NOT NULL,
+                 description TEXT
+             );
+             CREATE TABLE detached_tool_runs (
+                 run_id TEXT PRIMARY KEY,
+                 tool_name TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 caller_agent_id TEXT,
+                 origin_tool_use_id TEXT,
+                 started_at INTEGER NOT NULL,
+                 finished_at INTEGER,
+                 is_error INTEGER,
+                 result TEXT,
+                 result_truncated INTEGER NOT NULL DEFAULT 0,
+                 detached INTEGER NOT NULL DEFAULT 1,
+                 input_sha256 TEXT,
+                 output_file_name TEXT,
+                 output_stored_bytes INTEGER,
+                 output_total_bytes INTEGER,
+                 output_sha256 TEXT,
+                 output_capped INTEGER NOT NULL DEFAULT 0,
+                 output_redacted INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO detached_tool_runs
+                 (run_id, tool_name, status, started_at, result_truncated, detached)
+             VALUES ('toolrun-before-retry', 'shell_exec', 'failed', 10, 0, 1);
+             PRAGMA user_version = 42;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let row: (String, Option<String>, i64) = conn
+            .query_row(
+                "SELECT run_id, retry_of_run_id, retry_attempt FROM detached_tool_runs
+                 WHERE run_id = 'toolrun-before-retry'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("toolrun-before-retry".to_string(), None, 0));
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]

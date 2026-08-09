@@ -53,6 +53,7 @@ CONTRACT_DOCS=(
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
@@ -455,9 +456,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11"
-  require_contains "$readme pins the immutable release image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11"
-  require_contains "$readme pins the release installer" "$readme" "releases/download/v0.1.0-alpha.11/install.sh"
+  require_contains "$readme links the immutable release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.12"
+  require_contains "$readme pins the immutable release image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12"
+  require_contains "$readme pins the release installer" "$readme" "releases/download/v0.1.0-alpha.12/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -505,9 +506,10 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "public runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.11"
-require_contains "public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.11] - 2026-08-08"
-require_contains "reviewed public alpha release notes exist" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
+require_contains "release candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.12"
+require_contains "release candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.12] - 2026-08-09"
+require_contains "reviewed release candidate notes exist" docs/releases/v0.1.0-alpha.12.md "# Captain 0.1.0-alpha.12"
+require_contains "historical alpha.11 release notes remain available" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
 require_contains "historical alpha.10 release notes remain available" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
 require_contains "historical alpha.9 release notes remain available" docs/releases/v0.1.0-alpha.9.md "# Captain 0.1.0-alpha.9"
 require_contains "historical alpha.8 release notes remain available" docs/releases/v0.1.0-alpha.8.md "# Captain 0.1.0-alpha.8"
@@ -546,6 +548,12 @@ require_contains "alpha.11 notes pin live OCI provenance" docs/releases/v0.1.0-a
 require_contains "alpha.11 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.11.md 'GitHub Actions API returned zero runs'
 require_not_contains "alpha.11 notes do not copy alpha.10 source provenance" docs/releases/v0.1.0-alpha.11.md "48f898a9e4d38e8b8c7627644b66e22076a39364"
 require_not_contains "alpha.11 notes do not copy alpha.10 OCI provenance" docs/releases/v0.1.0-alpha.11.md "sha256:c54d1319b5173ca55540dc69e0f965a31b51cdfccb497ca77882882a16b4e477"
+require_contains "alpha.12 notes expose durable Live Runs" docs/releases/v0.1.0-alpha.12.md "## Durable Live Runs"
+require_contains "alpha.12 notes expose grounded research" docs/releases/v0.1.0-alpha.12.md "## Evidence-grounded Web research"
+require_contains "alpha.12 notes expose immutable artifacts" docs/releases/v0.1.0-alpha.12.md "## Immutable artifacts"
+require_contains "alpha.12 notes expose managed VPS domains" docs/releases/v0.1.0-alpha.12.md "## Managed VPS domains and readiness"
+require_contains "alpha.12 notes pin the authorized destination boundary" docs/releases/v0.1.0-alpha.12.md "selective metadata and redacted tail are not sent"
+require_contains "DOC2 identifies the Alpha 12 candidate contract" docs/DOCS_STATUS.md "## Alpha 12 Release Candidate Contract"
 require_contains "DOC2 retains the alpha.8 public history" docs/DOCS_STATUS.md '`v0.1.0-alpha.8` is an earlier public prerelease'
 require_contains "DOC2 retains the alpha.7 source provenance" docs/DOCS_STATUS.md "dc2f64603eff708a8eab5735121cfc1a2d39386f"
 require_contains "DOC2 retains the alpha.7 multi-arch digest" docs/DOCS_STATUS.md "sha256:e49e1ad02d6a65742343aaf7abcd1c4fcfd277dab605d3d284830f03c7d42354"
@@ -611,9 +619,9 @@ require_contains "Control emits centralized unauthorized signal" crates/captain-
 require_contains "Control consumes centralized unauthorized signal" crates/captain-api/static/js/app/main.js "captain:unauthorized"
 require_contains "security reconciliation closes F4" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F4 | Remediated (T3)"
 require_contains "DOC2 defines fail-closed browser origins" docs/DOCS_STATUS.md "Alpha 10 Browser Origin Contract"
-require_contains "security policy supports only alpha.11" SECURITY.md '| 0.1.0-alpha.11 | :white_check_mark: |'
-require_contains "security policy retires alpha.10" SECURITY.md '| 0.1.0-alpha.10 | :x: |'
-require_contains "security policy pins the alpha.11 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.11` is an early-access release.'
+require_contains "security policy supports only alpha.12" SECURITY.md '| 0.1.0-alpha.12 | :white_check_mark: |'
+require_contains "security policy retires alpha.11" SECURITY.md '| 0.1.0-alpha.11 | :x: |'
+require_contains "security policy pins the alpha.12 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.12` is an early-access release.'
 require_contains "configuration exposes exact API origins" docs/configuration.md 'allowed_origins = ["https://console.example.com"]'
 require_contains "reference config exposes the API origin section" captain.toml.example "[api]"
 require_not_contains "API CORS policy has no wildcard helper" crates/captain-api/src/request_origin_security.rs "tower_http::cors::Any"
@@ -683,6 +691,20 @@ require_contains "runtime uses the active Codex context field first" crates/capt
 require_contains "architecture pins power-loss-safe SQLite commits" docs/architecture.md '`synchronous=FULL`'
 require_contains "architecture pins macOS full-fsync state files" docs/architecture.md '`F_FULLFSYNC` after `fsync` on macOS'
 require_contains "deployment documents the isolated SIGKILL proof" docs/DEPLOY.md 'scripts/persistence-power-loss-smoke.sh'
+require_contains "deployment pins cross-surface session recovery after SIGKILL" docs/DEPLOY.md 'activates a detached cross-surface session'
+require_contains "deployment pins audit chain continuity after SIGKILL" docs/DEPLOY.md 'same valid hash-chain epoch'
+require_contains "deployment pins Live Run reconciliation after SIGKILL" docs/DEPLOY.md 'in-flight Live Run and its partial owner-only capture'
+require_contains "power-loss smoke restores an exact session" scripts/persistence-power-loss-smoke.sh '"recovered session can be activated"'
+require_contains "power-loss smoke preserves the audit tip" scripts/persistence-power-loss-smoke.sh '"pre-crash audit tip remains in the recovered chain"'
+require_contains "power-loss smoke uses fail-closed daemon auth" scripts/persistence-power-loss-smoke.sh 'Authorization: Bearer $API_KEY'
+require_contains "power-loss smoke seeds a durable in-flight Live Run" scripts/persistence-power-loss-smoke.sh 'seed_inflight_tool_run'
+require_contains "power-loss smoke certifies redacted partial evidence" scripts/persistence-power-loss-smoke.sh '"partial tool-run evidence is recovered and redacted after SIGKILL"'
+require_contains "public changelog records session recovery after power loss" CHANGELOG.md 'detached cross-surface session can'
+require_contains "public changelog records Live Run recovery after power loss" CHANGELOG.md 'in-flight Live Run is also restored as `interrupted`'
+require_contains "runtime changelog records audit continuity after power loss" docs/captain-tools/runtime-changelog.md 'pre-crash audit tip still belongs to the same healthy'
+require_contains "runtime changelog records interrupted Live Run recovery" docs/captain-tools/runtime-changelog.md 'boot restores it as `interrupted`'
+require_contains "DOC2 pins the full ALPHA12 power-loss proof" docs/DOCS_STATUS.md 'retain the pre-crash audit tip in the same healthy epoch'
+require_contains "DOC2 pins Live Run recovery in the ALPHA12 power-loss proof" docs/DOCS_STATUS.md 'synthetic in-flight Live Run to `interrupted`'
 require_contains "runtime changelog exposes the durable commit boundary" docs/captain-tools/runtime-changelog.md 'explicit power-loss commit boundary'
 require_contains "public changelog exposes the durable commit boundary" CHANGELOG.md 'explicit power-loss commit boundary'
 require_contains "SQLite runtime enables full synchronous commits" crates/captain-memory/src/substrate.rs 'PRAGMA synchronous=FULL'
@@ -711,6 +733,21 @@ require_contains "direct CLI boot checks managed memory" crates/captain-cli/src/
 require_contains "TUI boot checks managed memory" crates/captain-cli/src/tui/event.rs "prepare_kernel_config"
 require_contains "Captain MCP boot checks managed memory" crates/captain-cli/src/mcp.rs "prepare_kernel_config"
 require_contains "host installer provisions managed memory" scripts/install.sh '"$INSTALL_DIR/captain" memory install'
+require_contains "host installer normalizes a VPS domain before dependencies" scripts/install.sh 'prepare_vps_domain'
+require_contains "host installer refuses occupied proxy ports" scripts/install.sh 'Ports 80 or 443 are already in use'
+require_contains "host installer validates Caddy before activation" scripts/install.sh 'validate --config "$caddy_root" --adapter caddyfile'
+require_contains "host installer restores failed Caddy activation" scripts/install.sh 'The previous configuration was restored'
+require_contains "host installer verifies public Captain Web" scripts/install.sh 'Captain Web verified end to end'
+require_contains "host installer distinguishes browser and API credentials" scripts/install.sh 'API bearer key: for CLI/API clients; it is not pasted into the browser login'
+require_contains "VPS guide pins automatic browser session creation" docs/deployment/github-vps-install.md 'A successful browser login creates the'
+require_contains "VPS guide pins the managed Alpha 12 installer" docs/deployment/github-vps-install.md 'The `v0.1.0-alpha.12` installer includes Captain'
+require_contains "VPS docs pin managed-domain rollback" docs/deployment/github-vps-install.md 'restores the previous files if validation or activation fails'
+require_not_contains "getting-started does not describe the domain rail as post-Alpha 11" docs/getting-started.md 'post-Alpha 11'
+require_not_contains "deployment guide does not describe the domain rail as post-Alpha 11" docs/DEPLOY.md 'post-Alpha 11'
+require_not_contains "Web terminal guide does not describe the domain rail as post-Alpha 11" docs/deployment/vps-web-terminal.md 'post-Alpha 11'
+require_not_contains "troubleshooting does not describe the domain rail as post-Alpha 11" docs/troubleshooting.md 'post-Alpha 11'
+require_not_contains "configuration does not describe approval core as post-Alpha 11" docs/configuration.md 'post-Alpha 11'
+require_contains "VPS domain regression test exists" scripts/install-vps-domain-test.sh 'managed VPS domain installer is validated in isolation'
 require_contains "Windows installer provisions managed memory" scripts/install.ps1 '& $installedExe memory install'
 require_contains "container boot repairs managed memory" docker-entrypoint.sh "captain memory install --force"
 require_contains "Control declares the Captain favicon" crates/captain-api/src/webchat.rs 'every_web_surface_declares_the_captain_favicon'
@@ -772,6 +809,72 @@ require_contains "workflow guide exposes Control hub" docs/workflows.md "Automat
 require_contains "workflow guide pins newest-first history" docs/workflows.md "orders results newest-first"
 require_contains "shell docs pin fail-closed parallelism" docs/captain-tools/shell-process.md "The classifier fails closed"
 require_contains "shell docs pin interrupted persistence" docs/captain-tools/shell-process.md 'becomes `interrupted` after a restart'
+require_contains "API reference exposes authenticated artifact routes" docs/api-reference.md '## Artifact Endpoints'
+require_contains "API reference pins artifact payload verification" docs/api-reference.md 'verify both its byte count and'
+require_contains "API reference pins SVG download-only" docs/api-reference.md 'SVG or unknown/active format'
+require_contains "API reference pins immutable artifact retention" docs/api-reference.md 'There is intentionally no artifact mutation or deletion endpoint'
+require_contains "security docs pin artifact CSP sandbox" docs/security.md 'response CSP starts with `sandbox`'
+require_contains "security docs pin exact artifact preview path" docs/security.md '/api/artifacts/{uuid}/versions/{positive-version}/preview'
+require_contains "DOC2 classifies ALPHA12 artifact source contract" docs/DOCS_STATUS.md '/api/status.artifacts'
+require_contains "runtime changelog exposes artifact operator surfaces" docs/captain-tools/runtime-changelog.md 'Authenticated operator endpoints list artifacts and versions'
+require_contains "Control deployment guide pins artifact drawer without a seventh hub" docs/deployment/vps-web-terminal.md 'It is not a seventh hub'
+require_contains "architecture pins sandboxed artifact drawer" docs/architecture.md 'Supported previews run in an empty-sandbox, no-referrer iframe'
+require_contains "DOC2 pins artifact drawer browser smoke" docs/DOCS_STATUS.md '344 px foldable layouts'
+require_contains "runtime changelog exposes artifact drawer" docs/captain-tools/runtime-changelog.md 'global `Fichiers produits` drawer'
+require_contains "CLI reference exposes TUI artifact overlay" docs/cli-reference.md '`/artifacts` opens the global read-only'
+require_contains "CLI reference keeps artifact preview in Control" docs/cli-reference.md 'sandboxed preview and verified download remain in authenticated Control Web'
+require_contains "VPS terminal documents bounded artifact summary" docs/deployment/vps-web-terminal.md 'Its `/artifacts` command'
+require_contains "architecture pins TUI artifact metadata-only contract" docs/architecture.md 'inventory, exact versions, integrity metadata and provenance but never renders'
+require_contains "DOC2 pins standalone artifact interception" docs/DOCS_STATUS.md '`/artifacts` before the model and return at most twelve payload-free rows'
+require_contains "runtime changelog exposes TUI artifact overlay" docs/captain-tools/runtime-changelog.md 'Full Ratatui Chat now opens the same immutable inventory through `/artifacts`'
+require_contains "full TUI implements artifact overlay command" crates/captain-cli/src/tui/mod.rs 'fn open_artifacts(&mut self)'
+require_contains "standalone TUI intercepts artifact command" crates/captain-cli/src/tui/chat_runner.rs 'fn handle_artifacts_slash(&mut self'
+require_contains "TUI artifact screen is metadata-only" crates/captain-cli/src/tui/screens/artifacts.rs 'active content is never rendered in the terminal'
+require_contains "TUI retains six primary hubs" crates/captain-cli/src/tui/mod.rs 'assert_eq!(TABS.len(), 6);'
+require_contains "Control embeds the artifact drawer" crates/captain-api/src/webchat.rs '"components/ArtifactDrawer.js"'
+require_contains "core surface gate runs artifact drawer smoke" scripts/core-surface-gates.sh 'scripts/control-artifact-drawer-smoke.mjs'
+require_contains "artifact API mounts authenticated inventory" crates/captain-api/src/server_artifact_routes.rs '"/api/artifacts"'
+require_contains "artifact API reads verified bytes" crates/captain-memory/src/artifacts.rs 'pub fn read_verified_payload'
+require_not_contains "artifact API exposes no destructive route" crates/captain-api/src/server_artifact_routes.rs '.delete('
+require_contains "API reference exposes authenticated Live Runs routes" docs/api-reference.md '## Live Run Endpoints'
+require_contains "API reference pins bounded Live Runs tail" docs/api-reference.md 'capped at 32 KiB'
+require_contains "security docs pin strict Live Runs cancellation" docs/security.md 'run is active'
+require_contains "architecture omits Live Runs disk authority" docs/architecture.md 'does not inherit its full internal representation'
+require_contains "DOC2 classifies authenticated Live Runs API" docs/DOCS_STATUS.md 'Authenticated `/api/tool-runs` operator routes'
+require_contains "runtime changelog exposes Live Runs operator API" docs/captain-tools/runtime-changelog.md 'Authenticated `/api/tool-runs` endpoints'
+require_contains "API reference exposes Control Live Runs drawer" docs/api-reference.md '**Live Runs** drawer'
+require_contains "architecture pins text-only Control Live Runs tail" docs/architecture.md 'as text nodes, never HTML'
+require_contains "DOC2 pins Control Live Runs browser smoke" docs/DOCS_STATUS.md 'redacted/XSS-safe tail'
+require_contains "VPS guide exposes authenticated Live Runs drawer" docs/deployment/vps-web-terminal.md 'global **Live Runs** drawer'
+require_contains "runtime changelog exposes Control Live Runs drawer" docs/captain-tools/runtime-changelog.md 'Live Runs operator drawer'
+require_contains "Control embeds the Live Runs drawer" crates/captain-api/src/webchat.rs '"components/LiveRunsDrawer.js"'
+require_contains "Control consumes private Live Runs inventory" crates/captain-api/static/js/app/api.js "request(withQuery('/api/tool-runs'"
+require_contains "Control renders Live Runs tail as text" crates/captain-api/static/js/app/components/LiveRunsDrawer.js 'html`<pre>${tail.content}</pre>`'
+require_contains "Control gates Live Runs cancellation on cancellable metadata" crates/captain-api/static/js/app/components/LiveRunsDrawer.js '!selected.cancellable'
+require_contains "core surface gate runs Live Runs drawer smoke" scripts/core-surface-gates.sh 'scripts/control-live-runs-smoke.mjs'
+require_contains "Live Runs API mounts authenticated inventory" crates/captain-api/src/server_observability_routes.rs '"/api/tool-runs"'
+require_contains "Live Runs surfaces share selective projection" crates/captain-runtime/src/tool_run_operator.rs 'pub struct OperatorToolRun'
+require_contains "Live Runs projection never exports result preview" crates/captain-runtime/src/tool_run_operator.rs 'result_available: snapshot.result_preview.is_some()'
+require_contains "Live Runs surfaces share fail-closed tail" crates/captain-runtime/src/tool_run_operator.rs 'pub fn operator_tail('
+require_contains "Live Runs API uses kernel cancellation authority" crates/captain-api/src/tool_run_routes.rs '.operator_cancel_tool_run(ToolRunOperatorSurface::Api, &run_id)'
+require_contains "Live Runs kernel identifies API and TUI cancellation" crates/captain-kernel/src/kernel_handle_tool_runs.rs 'Self::Tui => "operator:tui"'
+require_contains "Live Runs strict cancellation is atomic" crates/captain-runtime/src/tool_runs.rs 'CancellationPolicy::ActiveCancellableOnly'
+require_contains "Live Runs API is pinned private" crates/captain-api/src/middleware_auth_matrix_tests.rs '"/api/tool-runs/toolrun-01234567-89ab-cdef-0123-456789abcdef/tail"'
+require_not_contains "Live Runs API does not serialize internal snapshot" crates/captain-api/src/tool_run_routes.rs 'serde_json::to_value(snapshot)'
+require_contains "CLI reference exposes global Live Runs overlay" docs/cli-reference.md '`/runs` opens the global **Live Runs** overlay'
+require_contains "VPS terminal keeps Live Runs summary bounded" docs/deployment/vps-web-terminal.md 'Its `/runs` command is also intercepted before the model'
+require_contains "DOC2 pins TUI stale-tail protection" docs/DOCS_STATUS.md 'Stale tail responses cannot replace the'
+require_contains "runtime changelog exposes TUI Live Runs overlay" docs/captain-tools/runtime-changelog.md 'Full Ratatui now opens the same inventory through `/runs`'
+require_contains "full TUI implements Live Runs overlay command" crates/captain-cli/src/tui/mod.rs 'fn open_live_runs(&mut self)'
+require_contains "standalone TUI intercepts Live Runs command" crates/captain-cli/src/tui/chat_runner.rs 'fn handle_tool_runs_slash(&mut self'
+require_contains "TUI Live Runs shares operator projection" crates/captain-cli/src/tui/screens/live_runs.rs 'OperatorToolRunTail'
+require_contains "TUI Live Runs rejects stale tail responses" crates/captain-cli/src/tui/screens/live_runs.rs 'self.loading_tail_for.as_deref() != Some(run_id)'
+require_contains "TUI Live Runs requires explicit confirmation" crates/captain-cli/src/tui/screens/live_runs.rs "KeyCode::Char('y')"
+require_contains "kernel proves TUI Live Runs cancellation actor" crates/captain-kernel/src/kernel_handle_tool_runs.rs 'tui_cancellation_aborts_the_task_and_uses_the_fixed_audit_actor'
+require_contains "English README exposes TUI Live Runs" README.md '<code>/runs</code>'
+require_contains "French README exposes TUI Live Runs" README.fr.md '<code>/runs</code>'
+require_contains "Spanish README exposes TUI Live Runs" README.es.md '<code>/runs</code>'
+require_contains "Chinese README exposes TUI Live Runs" README.zh.md '<code>/runs</code>'
 require_not_contains "architecture has no stale schema v5 claim" docs/architecture.md "schema v5"
 require_not_contains "architecture has no removed migrate crate" docs/architecture.md "captain-migrate"
 require_not_contains "architecture has no stale endpoint count" docs/architecture.md "76 endpts"
@@ -822,6 +925,17 @@ require_contains "approval rules use crash-safe writes" crates/captain-kernel/sr
 require_contains "approval rules persist no raw action field" crates/captain-types/src/approval.rs 'pub action_digest: String'
 require_contains "approval API exposes rule revocation" crates/captain-api/src/server_governance_routes.rs '"/api/approvals/rules/{id}"'
 require_contains "Telegram approval keyboard exposes durable deny" crates/captain-channels/src/telegram_callbacks.rs 'approval:deny_always:'
+require_contains "approval suggestions are opt-in by default" crates/captain-types/src/approval_suggestions.rs 'enabled: false'
+require_contains "approval suggestions exclude High and Critical risk" crates/captain-types/src/approval_suggestions.rs 'RiskLevel::Low | RiskLevel::Medium'
+require_contains "approval suggestion consent creates an exact allow rule" crates/captain-kernel/src/approval.rs 'effect: ApprovalRuleEffect::Allow'
+require_contains "approval suggestion boot reconciles committed rules" crates/captain-kernel/src/approval.rs 'remove_covered_bindings'
+require_pretest_not_contains "approval suggestion store persists no display description" crates/captain-kernel/src/approval_suggestions.rs 'action_summary'
+require_pretest_not_contains "approval suggestion store persists no raw description" crates/captain-kernel/src/approval_suggestions.rs 'description'
+require_not_contains "approval suggestions do not shape the LLM prompt" crates/captain-kernel/src/kernel_llm_prompt.rs 'ApprovalSuggestion'
+require_contains "configuration documents approval suggestions as core-only" docs/configuration.md 'This checkpoint is an internal ALPHA12 contract.'
+require_contains "security docs pin suggestion no-authority boundary" docs/security.md 'A pending suggestion has no authority'
+require_contains "DOC2 classifies approval suggestions as core-only" docs/DOCS_STATUS.md 'core-only approval-suggestion store'
+require_contains "runtime changelog avoids claiming suggestion surfaces" docs/captain-tools/runtime-changelog.md 'controls are not yet claimed by this checkpoint'
 require_not_contains "CapSpec contract has no stale open-matrix claim" docs/CAPTAIN_FORGE_CAPSPEC.md 'broad real certification matrix is still open'
 require_not_contains "runtime changelog has no stale open CapSpec gate" docs/captain-tools/runtime-changelog.md 'broad real certification matrix remains required'
 require_contains "configuration documents external secret registry" docs/configuration.md '$CAPTAIN_HOME/secret-sources.toml'

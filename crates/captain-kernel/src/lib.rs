@@ -5,6 +5,9 @@
 
 pub mod approval;
 mod approval_rules;
+#[cfg(test)]
+mod approval_suggestion_manager_tests;
+mod approval_suggestions;
 pub mod auth;
 pub mod auto_reply;
 pub mod background;
@@ -57,3 +60,4 @@ pub use kernel::BudgetConfigUpdateError;
 pub use kernel::CaptainKernel;
 pub use kernel::CompactionProgressSink;
 pub use kernel::DeliveryTracker;
+pub use kernel::ToolRunOperatorSurface;

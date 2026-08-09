@@ -222,12 +222,12 @@ where
                 Ok(0) => break,
                 Ok(n) => {
                     capture.total_bytes = capture.total_bytes.saturating_add(n);
+                    emit_tool_chunk(label, &String::from_utf8_lossy(&buf[..n]));
                     let accepted = n.min(max_output_bytes.saturating_sub(capture.bytes.len()));
                     if accepted == 0 {
                         continue;
                     }
                     let chunk = buf[..accepted].to_vec();
-                    emit_tool_chunk(label, &String::from_utf8_lossy(&chunk));
                     capture.bytes.extend_from_slice(&chunk);
                     let _ = tx.try_send(event(chunk));
                 }

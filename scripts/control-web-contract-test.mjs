@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
@@ -96,6 +98,25 @@ const snapshot = statusSnapshot({
       violations: [],
     },
   },
+  deployment: {
+    profile: 'vps',
+    public_url: 'https://agent.example.com',
+    https: true,
+    reverse_proxy: 'caddy',
+    readiness: {
+      state: 'degraded',
+      checked_at: '2026-08-08T12:00:00Z',
+      duration_ms: 325,
+      next_check_at: '2026-08-08T12:05:00Z',
+      checks: [{
+        id: 'public_health',
+        status: 'warning',
+        summary: 'Public health is degraded',
+        remediation: 'Inspect health detail.',
+      }],
+      operator_actions: ['Inspect health detail.'],
+    },
+  },
   budget: {
     total_tokens_used: 12345,
     limited_agents: 4,
@@ -138,6 +159,11 @@ assert.equal(snapshot.execution.effectiveMode, 'allowlist');
 assert.equal(snapshot.execution.hostAllowed, true);
 assert.equal(snapshot.execution.docker.enabled, true);
 assert.equal(snapshot.execution.docker.availability, 'checked_on_invocation');
+assert.equal(snapshot.deployment.profile, 'vps');
+assert.equal(snapshot.deployment.publicUrl, 'https://agent.example.com');
+assert.equal(snapshot.deployment.readiness.state, 'degraded');
+assert.equal(snapshot.deployment.readiness.checks[0].id, 'public_health');
+assert.deepEqual(snapshot.deployment.readiness.actions, ['Inspect health detail.']);
 assert.equal(snapshot.budget.provider.state, 'warning');
 assert.equal(snapshot.budget.provider.reported, true);
 assert.equal(snapshot.budget.provider.items[0].primary.windowSeconds, 18000);
@@ -239,6 +265,10 @@ const shellSource = await readFile(
   new URL('../crates/captain-api/static/js/app/components/Shell.js', import.meta.url),
   'utf8',
 );
+const artifactDrawerSource = await readFile(
+  new URL('../crates/captain-api/static/js/app/components/ArtifactDrawer.js', import.meta.url),
+  'utf8',
+);
 const nativeCapabilitiesSource = await readFile(
   new URL('../crates/captain-api/static/js/app/views/NativeCapabilities.js', import.meta.url),
   'utf8',
@@ -261,6 +291,11 @@ const projectRuntimeSource = await readFile(
 );
 assert.match(apiSource, /budget:\s*\(\)\s*=>\s*request\('\/api\/budget'\)/);
 assert.match(apiSource, /modelUpdates:\s*\(\)\s*=>\s*request\('\/api\/models\/updates'\)/);
+assert.match(apiSource, /artifacts:\s*\(limit = 50\).*\/api\/artifacts/);
+assert.match(apiSource, /artifactVersions:/);
+assert.match(apiSource, /\$\{encodeURIComponent\(artifactId\)\}\/versions/);
+assert.match(apiSource, /artifactPreviewUrl:/);
+assert.match(apiSource, /artifactDownloadUrl:/);
 assert.match(apiSource, /decideModelUpdate:.*\/api\/models\/updates\/decision/);
 assert.match(apiSource, /nativeCapabilities:.*\/api\/capabilities\/native/);
 assert.match(apiSource, /decideNativeCapability:/);
@@ -275,6 +310,15 @@ assert.match(shellSource, /session_strategy/);
 assert.match(shellSource, /Nouvelle session/);
 assert.match(shellSource, /Résumé compact/);
 assert.match(shellSource, /Conserver/);
+assert.match(shellSource, /ArtifactDrawer/);
+assert.match(shellSource, /aria-label="Ouvrir les fichiers produits"/);
+assert.match(artifactDrawerSource, /role="dialog"/);
+assert.match(artifactDrawerSource, /sandbox=""/);
+assert.match(artifactDrawerSource, /referrerPolicy="no-referrer"/);
+assert.match(artifactDrawerSource, /api\.artifactVersions\(selectedId\)/);
+assert.match(artifactDrawerSource, /api\.artifactPreviewUrl/);
+assert.match(artifactDrawerSource, /api\.artifactDownloadUrl/);
+assert.doesNotMatch(artifactDrawerSource, /dangerouslySetInnerHTML|innerHTML\s*=/);
 assert.match(nativeCapabilitiesSource, /expected_hash:\s*item\.pending_hash/);
 assert.match(nativeCapabilitiesSource, /include_source:\s*includeSource/);
 assert.match(nativeCapabilitiesSource, /if \(!disableArmed\)/);
@@ -311,4 +355,4 @@ assert.equal(unauthorizedSignals, 1);
 globalThis.fetch = originalFetch;
 globalThis.window = originalWindow;
 
-console.log('Captain Control contract passed: six hubs, proof-backed Projects, live Status, and explicit operator decisions.');
+console.log('Captain Control contract passed: six hubs, verified artifacts, proof-backed Projects, live Status, and explicit operator decisions.');

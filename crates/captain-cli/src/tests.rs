@@ -92,18 +92,28 @@ api_key_env = "GROQ_API_KEY"
 #[test]
 fn test_setup_public_url_normalization() {
     assert_eq!(
-        setup_normalize_public_url("captain.example.com"),
+        setup_normalize_public_url("captain.example.com").unwrap(),
         Some("https://captain.example.com".to_string())
     );
+    assert!(setup_normalize_public_url("http://captain.example.com/").is_err());
+    assert_eq!(setup_normalize_public_url("none").unwrap(), None);
     assert_eq!(
-        setup_normalize_public_url("http://captain.example.com/"),
-        Some("http://captain.example.com".to_string())
-    );
-    assert_eq!(setup_normalize_public_url("none"), None);
-    assert_eq!(
-        setup_public_host("https://captain.example.com/path"),
+        setup_public_host("https://captain.example.com"),
         Some("captain.example.com".to_string())
     );
+    for invalid in [
+        "https://captain.example.com/path",
+        "https://user@captain.example.com",
+        "https://captain.example.com:8443",
+        "https://127.0.0.1",
+        "https://captain_example.com",
+        "https://-captain.example.com",
+    ] {
+        assert!(
+            setup_normalize_public_url(invalid).is_err(),
+            "{invalid} must be rejected"
+        );
+    }
 }
 
 #[test]
@@ -226,6 +236,37 @@ fn test_setup_vps_with_domain_keeps_api_local_and_writes_caddyfile() {
     restore_env_var("CAPTAIN_DOMAIN", previous_domain);
     restore_env_var("CAPTAIN_REVERSE_PROXY", previous_reverse_proxy);
     restore_env_var("CAPTAIN_WEB_TERMINAL_SHELL", previous_shell);
+}
+
+#[test]
+fn test_setup_vps_domain_rebinds_custom_api_port_to_loopback() {
+    let _guard = setup_env_test_lock().lock().unwrap();
+    let previous_public_url = std::env::var("CAPTAIN_PUBLIC_URL").ok();
+    let previous_domain = std::env::var("CAPTAIN_DOMAIN").ok();
+    std::env::set_var("CAPTAIN_DOMAIN", "captain.example.com");
+    std::env::remove_var("CAPTAIN_PUBLIC_URL");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write_config_if_missing(home, "groq", "llama-3.3-70b-versatile", "GROQ_API_KEY");
+    std::fs::write(
+        home.join("config.toml"),
+        std::fs::read_to_string(home.join("config.toml"))
+            .unwrap()
+            .replace(
+                "api_listen = \"127.0.0.1:50051\"",
+                "api_listen = \"0.0.0.0:50098\"",
+            ),
+    )
+    .unwrap();
+
+    let outcome = setup_configure_product_surface(home, "vps", None, false).unwrap();
+    assert_eq!(outcome.api_listen, "127.0.0.1:50098");
+    let caddyfile = std::fs::read_to_string(outcome.caddyfile_path.unwrap()).unwrap();
+    assert!(caddyfile.contains("reverse_proxy 127.0.0.1:50098"));
+
+    restore_env_var("CAPTAIN_PUBLIC_URL", previous_public_url);
+    restore_env_var("CAPTAIN_DOMAIN", previous_domain);
 }
 
 #[test]

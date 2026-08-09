@@ -20,6 +20,8 @@ fn slash_filtered_default_promotes_core_commands_only() {
     assert!(matches.contains(&"/learning"));
     assert!(matches.contains(&"/capabilities"));
     assert!(matches.contains(&"/dashboard"));
+    assert!(matches.contains(&"/artifacts"));
+    assert!(matches.contains(&"/runs"));
     assert!(!matches.contains(&"/agents"));
     assert!(!matches.contains(&"/sessions"));
     assert!(!matches.contains(&"/settings"));
@@ -56,6 +58,14 @@ fn longest_common_prefix_handles_empty_input() {
 #[test]
 fn slash_command_hint_covers_core_commands() {
     assert_eq!(slash_command_hint("/status"), "état du daemon");
+    assert_eq!(
+        slash_command_hint("/artifacts"),
+        "fichiers produits vérifiés"
+    );
+    assert_eq!(
+        slash_command_hint("/runs"),
+        "exécutions d'outils observables"
+    );
     assert_eq!(slash_command_hint("/unknown"), "");
 }
 

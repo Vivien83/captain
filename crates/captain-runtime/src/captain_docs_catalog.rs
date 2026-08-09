@@ -55,8 +55,12 @@ pub const SHELL_PROCESS_FAMILY_TOOLS: &[&str] = &[
     "shell_exec",
     "execute_code",
     "tool_run_start",
+    "tool_run_retry",
     "tool_run_status",
     "tool_run_result",
+    "tool_run_read",
+    "tool_run_tail",
+    "tool_run_search",
     "tool_run_cancel",
     "tool_run_list",
     "process_start",
@@ -74,6 +78,7 @@ pub const SHELL_PROCESS_FAMILY_TOOLS: &[&str] = &[
 /// `docs/captain-tools/network.md`. Covers outbound HTTP plus search-engine
 /// abstraction; the SSRF allowlist contract is documented next to each.
 pub const NETWORK_FAMILY_TOOLS: &[&str] = &[
+    "web_citation_audit",
     "web_research_batch",
     "web_download",
     "web_fetch",
@@ -331,10 +336,17 @@ pub const MULTIMEDIA_FAMILY_TOOLS: &[&str] = &[
     "video_analyze",
 ];
 
-/// D.19 — Native document generation. Audit prose lives in
+/// D.19 — Native document generation and immutable artifact delivery. Audit prose lives in
 /// `docs/captain-tools/document.md`.
-pub const DOCUMENT_FAMILY_TOOLS: &[&str] =
-    &["document_pipeline", "document_create", "document_extract"];
+pub const DOCUMENT_FAMILY_TOOLS: &[&str] = &[
+    "document_pipeline",
+    "document_create",
+    "document_extract",
+    "artifact_publish",
+    "artifact_list",
+    "artifact_inspect",
+    "artifact_deliver",
+];
 
 /// D.20 — Native Gmail access and durable Gmail-to-agent automations.
 /// Audit prose lives in `docs/captain-tools/email.md`.

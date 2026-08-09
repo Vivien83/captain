@@ -205,7 +205,7 @@ require_file_literal "branch protection requires an up-to-date base" "$GITHUB_GO
 require_file_literal "personal-repository protection omits organization-only bypass allowances" "$GITHUB_GOVERNANCE" 'has("bypass_pull_request_allowances") | not'
 require_file_literal "branch protection rejects force pushes" "$GITHUB_GOVERNANCE" 'allow_force_pushes: false'
 require_file_literal "branch protection rejects branch deletion" "$GITHUB_GOVERNANCE" 'allow_deletions: false'
-require_file_literal "repository discovery names self-hosted autonomous AI" "$GITHUB_DISCOVERABILITY" 'Self-hosted autonomous AI agent OS in Rust'
+require_file_literal "repository discovery names Captain Agent OS and local-first autonomous AI" "$GITHUB_DISCOVERABILITY" 'Captain Agent OS: self-hosted, local-first autonomous AI agent runtime in Rust'
 require_file_literal "repository discovery pins the product homepage" "$GITHUB_DISCOVERABILITY" 'HOMEPAGE="https://captainagent.fr/"'
 require_file_literal "repository discovery classifies the public project" "$GITHUB_DISCOVERABILITY" '"workflow-automation"'
 require_file_literal "local gate verifies policies at the exact base SHA" "$LOCAL_PR_GATE" 'contents/$relative?ref=$BASE_SHA'
@@ -262,6 +262,12 @@ require_file_literal "release smoke rejects protected HTTP errors" "$EXCELLENCE_
 require_file_absent_literal "release smoke never forges sessions from password hashes" "$EXCELLENCE_SMOKE" 'password_hash'
 require_file_absent_literal "release smoke never signs obsolete session tokens" "$EXCELLENCE_SMOKE" 'openssl dgst'
 require_file_literal "release smoke preserves absolute artifact roots" "$EXCELLENCE_SMOKE" '/*) doc_path="$WORKDIR/excellence-smoke.md"'
+require_file_literal "release smoke validates the external JSON boundary" "$EXCELLENCE_SMOKE" 'mcp_external_json()'
+require_file_literal "release smoke uses the current web preview parameter" "$EXCELLENCE_SMOKE" '"preview_chars":600'
+require_file_literal "release smoke requires citation-ready web evidence" "$EXCELLENCE_SMOKE" '.retrieval_status == "retrieved" and .citation_ready == true'
+require_file_literal "release smoke requires a web evidence checksum" "$EXCELLENCE_SMOKE" '.content_sha256 | test("^[0-9a-f]{64}$")'
+require_file_absent_literal "release smoke rejects the obsolete web result parameter" "$EXCELLENCE_SMOKE" 'max_results_per_query'
+require_file_absent_literal "release smoke rejects the obsolete web fetch parameter" "$EXCELLENCE_SMOKE" 'fetch_char_limit'
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
 require_shell_syntax "$RELEASE_ALL"
 require_shell_syntax "$LOCAL_PUBLISHER"

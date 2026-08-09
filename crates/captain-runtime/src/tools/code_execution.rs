@@ -225,14 +225,13 @@ where
             Ok(0) => break,
             Ok(n) => {
                 total_bytes = total_bytes.saturating_add(n);
+                emit_tool_chunk(stream_name, &String::from_utf8_lossy(&buf[..n]));
                 let accepted = n.min(max_output_bytes.saturating_sub(collected.len()));
                 if accepted == 0 {
                     continue;
                 }
                 let bytes = &buf[..accepted];
                 collected.extend_from_slice(bytes);
-                let chunk = String::from_utf8_lossy(bytes).to_string();
-                emit_tool_chunk(stream_name, &chunk);
                 let _ = tx.try_send(event(bytes.to_vec()));
             }
             Err(_) => break,

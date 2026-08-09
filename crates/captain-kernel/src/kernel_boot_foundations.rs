@@ -6,7 +6,7 @@ use crate::error::{KernelError, KernelResult};
 use crate::metering::MeteringEngine;
 use crate::supervisor::Supervisor;
 use crate::triggers::TriggerEngine;
-use captain_memory::MemorySubstrate;
+use captain_memory::{artifacts::ArtifactStore, MemorySubstrate};
 use captain_runtime::audit::AuditLog;
 use captain_types::config::{BroadcastConfig, KernelConfig, KernelMode};
 use std::path::PathBuf;
@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 pub(super) struct BootCore {
     pub(super) memory: Arc<MemorySubstrate>,
+    pub(super) artifact_store: Arc<ArtifactStore>,
     pub(super) supervisor: Supervisor,
     pub(super) background: BackgroundExecutor,
     pub(super) audit_log: Arc<AuditLog>,
@@ -66,6 +67,11 @@ pub(super) fn prepare_boot_config(mut config: KernelConfig) -> KernelResult<Kern
 
 pub(super) fn build_boot_core(config: &KernelConfig) -> KernelResult<BootCore> {
     let memory = open_boot_memory(config)?;
+    let artifact_store = Arc::new(
+        ArtifactStore::open(config.data_dir.join("artifacts")).map_err(|error| {
+            KernelError::BootFailed(format!("Artifact store unavailable: {error}"))
+        })?,
+    );
     let credential_resolver = build_boot_credential_resolver(config)?;
     let metering = Arc::new(MeteringEngine::new(Arc::new(
         captain_memory::usage::UsageStore::new(memory.usage_conn()),
@@ -100,6 +106,7 @@ pub(super) fn build_boot_core(config: &KernelConfig) -> KernelResult<BootCore> {
         triggers: TriggerEngine::with_file_trigger_persistence(&config.home_dir),
         process_manager: build_boot_process_manager(config),
         memory,
+        artifact_store,
         supervisor,
         background,
         metering,

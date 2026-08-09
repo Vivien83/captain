@@ -158,6 +158,19 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             serde_json::json!({"status": "unavailable", "error": error})
         }
     };
+    let artifact_status = match state.kernel.operator_artifact_status().await {
+        Ok(status) => match serde_json::to_value(status) {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::warn!(error = %error, "artifact status serialization failed");
+                serde_json::json!({"healthy": false, "error": "artifact status unavailable"})
+            }
+        },
+        Err(error) => {
+            tracing::warn!(error = %error, "artifact status unavailable");
+            serde_json::json!({"healthy": false, "error": "artifact store unavailable"})
+        }
+    };
     let runtime_health_status = build_runtime_health_status(
         llm_driver_ready,
         &channel_status,
@@ -222,6 +235,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     status_payload["budget"] = budget_status;
     status_payload["streaming"] = crate::stream_metrics::status_json();
     status_payload["tool_runs"] = captain_runtime::tool_runs::global_registry().status_summary();
+    status_payload["artifacts"] = artifact_status;
     status_payload["runtime_update"] = runtime_update_status;
     status_payload["outbound_delivery"] = outbound_delivery_status;
     status_payload["runtime_health"] = runtime_health_status;

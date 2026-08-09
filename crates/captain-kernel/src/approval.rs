@@ -4,6 +4,7 @@ use captain_types::approval::{
     is_valid_approval_action_digest, normalize_approval_reason, ApprovalDecision, ApprovalOutcome,
     ApprovalPolicy, ApprovalRequest, ApprovalResponse, ApprovalRule, ApprovalRuleEffect, RiskLevel,
 };
+use captain_types::approval_suggestions::{ApprovalSuggestion, ApprovalSuggestionStatus};
 use chrono::Utc;
 use dashmap::DashMap;
 use std::path::Path;
@@ -12,6 +13,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::approval_rules::ApprovalRuleStore;
+use crate::approval_suggestions::ApprovalSuggestionStore;
 use captain_runtime::audit::{AuditAction, AuditLog};
 
 /// Max pending requests per agent.
@@ -26,6 +28,8 @@ pub struct ApprovalManager {
     /// a session-scoped allow or deny decision.
     session_cache: DashMap<ApprovalActionKey, ApprovalOutcome>,
     rules: ApprovalRuleStore,
+    suggestions: ApprovalSuggestionStore,
+    suggestion_error: RwLock<Option<String>>,
     audit_log: Option<Arc<AuditLog>>,
     resolution_lock: Mutex<()>,
 }
@@ -59,6 +63,8 @@ impl ApprovalManager {
             policy: RwLock::new(policy),
             session_cache: DashMap::new(),
             rules: ApprovalRuleStore::in_memory(),
+            suggestions: ApprovalSuggestionStore::in_memory(),
+            suggestion_error: RwLock::new(None),
             audit_log: None,
             resolution_lock: Mutex::new(()),
         }
@@ -70,11 +76,35 @@ impl ApprovalManager {
         captain_home: &Path,
         audit_log: Arc<AuditLog>,
     ) -> Result<Self, String> {
+        let rules = ApprovalRuleStore::load(captain_home.join("approval-rules.json"))?;
+        let suggestion_path = captain_home.join("approval-suggestions.json");
+        let (suggestions, mut suggestion_error) = match ApprovalSuggestionStore::load(
+            suggestion_path,
+        ) {
+            Ok(store) => (store, None),
+            Err(error) => {
+                warn!(error = %error, "Approval suggestions disabled by persistence circuit breaker");
+                (ApprovalSuggestionStore::in_memory(), Some(error))
+            }
+        };
+        if suggestion_error.is_none() {
+            let covered = rules
+                .list()
+                .into_iter()
+                .map(|rule| (rule.agent_id, rule.tool_name, rule.action_digest))
+                .collect();
+            if let Err(error) = suggestions.remove_covered_bindings(&covered) {
+                warn!(error = %error, "Approval suggestions disabled during boot reconciliation");
+                suggestion_error = Some(error);
+            }
+        }
         Ok(Self {
             pending: DashMap::new(),
             policy: RwLock::new(policy),
             session_cache: DashMap::new(),
-            rules: ApprovalRuleStore::load(captain_home.join("approval-rules.json"))?,
+            rules,
+            suggestions,
+            suggestion_error: RwLock::new(suggestion_error),
             audit_log: Some(audit_log),
             resolution_lock: Mutex::new(()),
         })
@@ -338,6 +368,7 @@ impl ApprovalManager {
             rule_id: None,
         };
         self.persist_outcome(&request, &mut outcome, &actor)?;
+        let suggestion = self.record_approval_suggestion(&request, decision);
         let (_, pending) = self
             .pending
             .remove(&request_id)
@@ -349,6 +380,7 @@ impl ApprovalManager {
             decided_by: Some(actor.clone()),
             reason: outcome.reason.clone(),
             rule_id: outcome.rule_id,
+            suggestion,
         };
         let _ = pending.sender.send(outcome.clone());
         self.audit_outcome(&request, &outcome, &actor, "operator");
@@ -372,6 +404,180 @@ impl ApprovalManager {
     /// List durable exact-action rules without exposing raw action payloads.
     pub fn list_rules(&self) -> Vec<ApprovalRule> {
         self.rules.list()
+    }
+
+    /// List pending, exact-action suggestions without raw action material.
+    pub fn list_suggestions(&self) -> Vec<ApprovalSuggestion> {
+        if self.ensure_suggestions_available().is_err() {
+            return Vec::new();
+        }
+        let policy = self
+            .policy
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .suggestions
+            .clone();
+        if !policy.enabled || policy.validate().is_err() {
+            return Vec::new();
+        }
+        self.suggestions
+            .list_pending(&policy, Utc::now())
+            .into_iter()
+            .filter(|suggestion| {
+                self.rules
+                    .matching(
+                        &suggestion.agent_id,
+                        &suggestion.tool_name,
+                        &suggestion.action_digest,
+                    )
+                    .is_none()
+            })
+            .collect()
+    }
+
+    pub fn suggestion_status(&self) -> ApprovalSuggestionStatus {
+        let policy = self
+            .policy
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .suggestions
+            .clone();
+        let policy_valid = policy.validate().is_ok();
+        let enabled = policy.enabled;
+        let blocked = self
+            .suggestion_error
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some();
+        ApprovalSuggestionStatus {
+            enabled,
+            healthy: !blocked && policy_valid,
+            pending_count: if blocked || !enabled || !policy_valid {
+                0
+            } else {
+                self.list_suggestions().len()
+            },
+            blocked_reason: if blocked {
+                Some("approval suggestion persistence is unavailable".to_string())
+            } else if !policy_valid {
+                Some("approval suggestion policy is invalid".to_string())
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Convert one pending suggestion into the existing revocable exact rule.
+    pub fn accept_suggestion(
+        &self,
+        id: Uuid,
+        decided_by: Option<&str>,
+    ) -> Result<ApprovalRule, String> {
+        let actor = normalize_actor(decided_by)?;
+        let _resolution = self
+            .resolution_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.ensure_suggestions_available()?;
+        let policy = self
+            .policy
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .suggestions
+            .clone();
+        if !policy.enabled {
+            return Err(
+                "approval suggestions are disabled; enable them explicitly first".to_string(),
+            );
+        }
+        policy.validate()?;
+        let pending = self
+            .suggestions
+            .pending_for_accept(id, &policy, Utc::now())
+            .ok_or_else(|| format!("No pending approval suggestion with id {id}"))?;
+
+        if let Some(existing) = self.rules.matching(
+            &pending.suggestion.agent_id,
+            &pending.suggestion.tool_name,
+            &pending.suggestion.action_digest,
+        ) {
+            if existing.effect != ApprovalRuleEffect::Allow {
+                return Err("a durable deny already covers this exact action".to_string());
+            }
+            if let Err(error) = self.suggestions.remove(id) {
+                self.trip_suggestion_circuit(error);
+            }
+            return Ok(existing);
+        }
+
+        let rule = self.rules.upsert(ApprovalRule {
+            id: pending.proposed_rule_id,
+            effect: ApprovalRuleEffect::Allow,
+            agent_id: pending.suggestion.agent_id.clone(),
+            tool_name: pending.suggestion.tool_name.clone(),
+            action_digest: pending.suggestion.action_digest.clone(),
+            created_at: Utc::now(),
+            created_by: actor.clone(),
+            reason: None,
+        })?;
+        if let Err(error) = self.suggestions.remove(id) {
+            self.trip_suggestion_circuit(error);
+        }
+        if let Some(audit) = self.audit_log.as_ref() {
+            audit.record_or_alert(
+                rule.agent_id.clone(),
+                AuditAction::ApprovalDecision,
+                format!(
+                    "suggestion_id={id} rule_id={} tool={} action_digest={} actor={actor}",
+                    rule.id, rule.tool_name, rule.action_digest
+                ),
+                "suggestion-accepted",
+            );
+        }
+        Ok(rule)
+    }
+
+    pub fn dismiss_suggestion(
+        &self,
+        id: Uuid,
+        decided_by: Option<&str>,
+    ) -> Result<Option<ApprovalSuggestion>, String> {
+        let actor = normalize_actor(decided_by)?;
+        let _resolution = self
+            .resolution_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.ensure_suggestions_available()?;
+        let policy = self
+            .policy
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .suggestions
+            .clone();
+        if !policy.enabled {
+            return Err(
+                "approval suggestions are disabled; enable them explicitly first".to_string(),
+            );
+        }
+        policy.validate()?;
+        let dismissed = self
+            .suggestions
+            .dismiss(id, &policy, Utc::now())
+            .inspect_err(|error| {
+                self.trip_suggestion_circuit(error.clone());
+            })?;
+        if let (Some(audit), Some(suggestion)) = (self.audit_log.as_ref(), dismissed.as_ref()) {
+            audit.record_or_alert(
+                suggestion.agent_id.clone(),
+                AuditAction::ApprovalDecision,
+                format!(
+                    "suggestion_id={} tool={} action_digest={} actor={actor}",
+                    suggestion.id, suggestion.tool_name, suggestion.action_digest
+                ),
+                "suggestion-dismissed",
+            );
+        }
+        Ok(dismissed)
     }
 
     /// Revoke one durable rule and record the operator action.
@@ -409,6 +615,60 @@ impl ApprovalManager {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    fn record_approval_suggestion(
+        &self,
+        request: &ApprovalRequest,
+        decision: ApprovalDecision,
+    ) -> Option<ApprovalSuggestion> {
+        if self.ensure_suggestions_available().is_err() {
+            return None;
+        }
+        let policy = self
+            .policy
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .suggestions
+            .clone();
+        if !policy.enabled {
+            return None;
+        }
+        if let Err(error) = policy.validate() {
+            warn!(error = %error, "Approval suggestion policy is invalid");
+            return None;
+        }
+        match self
+            .suggestions
+            .observe(&policy, request, decision, Utc::now())
+        {
+            Ok(suggestion) => suggestion,
+            Err(error) => {
+                self.trip_suggestion_circuit(error);
+                None
+            }
+        }
+    }
+
+    fn ensure_suggestions_available(&self) -> Result<(), String> {
+        if self
+            .suggestion_error
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+        {
+            Err("approval suggestion persistence is unavailable".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn trip_suggestion_circuit(&self, error: String) {
+        warn!(error = %error, "Approval suggestion persistence circuit breaker opened");
+        *self
+            .suggestion_error
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
     }
 
     /// Classify the risk level of a tool invocation.
@@ -520,6 +780,7 @@ mod tests {
             timeout_secs: 30,
             auto_approve_autonomous: false,
             auto_approve: false,
+            suggestions: Default::default(),
         };
         let mgr = ApprovalManager::new(policy);
         assert!(mgr.requires_approval("file_write"));
@@ -604,6 +865,7 @@ mod tests {
             timeout_secs: 120,
             auto_approve_autonomous: true,
             auto_approve: false,
+            suggestions: Default::default(),
         };
         mgr.update_policy(new_policy);
 
@@ -750,6 +1012,7 @@ mod tests {
             timeout_secs: 60,
             auto_approve_autonomous: false,
             auto_approve: false,
+            suggestions: Default::default(),
         };
         let mgr = ApprovalManager::new(policy);
         let req = make_request("agent-x", "file_write", 60);

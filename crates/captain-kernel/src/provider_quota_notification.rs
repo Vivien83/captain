@@ -250,6 +250,8 @@ fn window_label(
     }
 }
 
+// `is_multiple_of` is newer than Captain's declared Rust 1.75 MSRV.
+#[allow(clippy::manual_is_multiple_of)]
 fn duration_label(seconds: u64, french: bool) -> Option<String> {
     if seconds == 0 {
         return None;

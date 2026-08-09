@@ -5,9 +5,12 @@
 //! `ChatState`, `chat::draw()`, event spawning, and the theme system.
 
 use super::event::{self, AppEvent};
+use super::event_artifacts;
+use super::event_tool_runs;
 use super::screens::chat::{
     self, ChatAction, ChatMouseAction, ChatState, PendingAskUser, PendingSuggestedReplies, Role,
 };
+use super::screens::{artifacts, live_runs};
 use super::session_runtime::{
     public_session_label, restore_public_session_messages, LoadedSession,
 };
@@ -165,6 +168,8 @@ impl StandaloneChat {
                     }
                 }
             }
+            AppEvent::ArtifactsLoaded(result) => self.handle_artifacts_loaded(result),
+            AppEvent::ToolRunsLoaded(result) => self.handle_tool_runs_loaded(result),
             AppEvent::ProviderQuotasLoaded(result) => match result {
                 Ok(status) => self.chat.provider_quota_status = status,
                 Err(error) => {
@@ -729,6 +734,12 @@ impl StandaloneChat {
             "/sessions" | "/tasks" => {
                 self.handle_sessions_slash(lang);
             }
+            "/artifacts" => {
+                self.handle_artifacts_slash(lang);
+            }
+            "/runs" => {
+                self.handle_tool_runs_slash(lang);
+            }
             "/resume" => {
                 if let Some(backend) = self.backend_ref() {
                     event::spawn_resolve_session(backend, args.to_string(), self.event_tx.clone());
@@ -1189,6 +1200,64 @@ impl StandaloneChat {
         }
         self.chat
             .push_message(Role::System, slash_info::sessions_list_message(lines, lang));
+    }
+
+    fn handle_artifacts_slash(&mut self, lang: crate::i18n::Lang) {
+        let Some(backend) = self.backend_ref() else {
+            self.chat.push_message(
+                Role::System,
+                slash_standalone::no_active_connection_message().to_string(),
+            );
+            return;
+        };
+        self.chat.status_msg = Some(match lang {
+            crate::i18n::Lang::Fr => "Chargement des fichiers produits...".to_string(),
+            crate::i18n::Lang::En => "Loading produced files...".to_string(),
+        });
+        event_artifacts::spawn_fetch_inventory(backend, self.event_tx.clone());
+    }
+
+    fn handle_artifacts_loaded(
+        &mut self,
+        result: Result<captain_types::artifact::ArtifactInventory, String>,
+    ) {
+        self.chat.status_msg = None;
+        match result {
+            Ok(inventory) => self.chat.push_message(
+                Role::System,
+                artifacts::chat_inventory_message(&inventory, crate::i18n::current()),
+            ),
+            Err(error) => self.chat.status_msg = Some(error),
+        }
+    }
+
+    fn handle_tool_runs_slash(&mut self, lang: crate::i18n::Lang) {
+        let Some(backend) = self.backend_ref() else {
+            self.chat.push_message(
+                Role::System,
+                slash_standalone::no_active_connection_message().to_string(),
+            );
+            return;
+        };
+        self.chat.status_msg = Some(match lang {
+            crate::i18n::Lang::Fr => "Chargement des executions d'outils...".to_string(),
+            crate::i18n::Lang::En => "Loading tool runs...".to_string(),
+        });
+        event_tool_runs::spawn_fetch_runs(backend, self.event_tx.clone());
+    }
+
+    fn handle_tool_runs_loaded(
+        &mut self,
+        result: Result<Vec<captain_runtime::tool_run_operator::OperatorToolRun>, String>,
+    ) {
+        self.chat.status_msg = None;
+        match result {
+            Ok(items) => self.chat.push_message(
+                Role::System,
+                live_runs::chat_runs_message(&items, crate::i18n::current()),
+            ),
+            Err(error) => self.chat.status_msg = Some(error),
+        }
     }
 
     fn handle_agents_slash(&mut self, lang: crate::i18n::Lang) {
@@ -2088,6 +2157,106 @@ mod tests {
         state.handle_sessions_slash(crate::i18n::Lang::En);
 
         assert_eq!(last_system_message_text(&state), "Not connected.");
+    }
+
+    #[test]
+    fn artifacts_event_renders_a_bounded_safe_standalone_summary() {
+        use captain_types::artifact::{
+            ArtifactInventory, ArtifactPreviewKind, ArtifactStoreStatus, ArtifactVersion,
+        };
+
+        let mut state = standalone_chat();
+        state.handle_artifacts_loaded(Ok(ArtifactInventory {
+            items: vec![ArtifactVersion {
+                artifact_id: uuid::Uuid::new_v4(),
+                version: 2,
+                agent_id: "captain".to_string(),
+                session_id: None,
+                title: "Release report".to_string(),
+                filename: "report.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                preview_kind: ArtifactPreviewKind::Markdown,
+                size_bytes: 4096,
+                sha256: "a".repeat(64),
+                created_at: chrono::Utc::now(),
+                summary: Some("must not be rendered as payload".to_string()),
+            }],
+            status: ArtifactStoreStatus {
+                healthy: true,
+                artifacts: 1,
+                versions: 2,
+                bytes: 4096,
+                invalid_entries: 0,
+                recovered_staging_entries: 0,
+                max_artifact_bytes: 50 * 1024 * 1024,
+                max_total_bytes: 512 * 1024 * 1024,
+            },
+        }));
+
+        let message = last_system_message_text(&state);
+        assert!(message.contains("Release report"));
+        assert!(message.contains("Control Web"));
+        assert!(!message.contains("must not be rendered as payload"));
+    }
+
+    #[test]
+    fn artifacts_slash_is_intercepted_before_the_model_in_standalone_chat() {
+        let mut state = standalone_chat();
+
+        state.handle_slash_command("/artifacts");
+
+        assert_eq!(
+            last_system_message_text(&state),
+            slash_standalone::no_active_connection_message()
+        );
+    }
+
+    #[test]
+    fn runs_event_renders_only_bounded_operator_metadata() {
+        use captain_runtime::{tool_run_operator::OperatorToolRun, tool_runs::ToolRunStatus};
+
+        let mut state = standalone_chat();
+        state.handle_tool_runs_loaded(Ok(vec![OperatorToolRun {
+            run_id: "toolrun-demo".to_string(),
+            tool_name: "shell_exec".to_string(),
+            status: ToolRunStatus::Running,
+            detached: true,
+            cancellable: true,
+            started_at_unix_ms: 1,
+            finished_at_unix_ms: None,
+            elapsed_ms: 5_000,
+            caller_agent_id: Some("captain".to_string()),
+            origin_tool_use_id: None,
+            input_sha256: Some("must-not-be-labeled".to_string()),
+            retry_of_run_id: None,
+            retry_attempt: 0,
+            is_error: None,
+            result_available: false,
+            result_truncated: false,
+            output_available: true,
+            output_stored_bytes: Some(12),
+            output_total_bytes: Some(12),
+            output_sha256: None,
+            output_capped: false,
+            output_redacted: true,
+        }]));
+
+        let message = last_system_message_text(&state);
+        assert!(message.contains("toolrun-demo"));
+        assert!(message.contains("Control Web"));
+        assert!(!message.contains("must-not-be-labeled"));
+    }
+
+    #[test]
+    fn runs_slash_is_intercepted_before_the_model_in_standalone_chat() {
+        let mut state = standalone_chat();
+
+        state.handle_slash_command("/runs");
+
+        assert_eq!(
+            last_system_message_text(&state),
+            slash_standalone::no_active_connection_message()
+        );
     }
 
     #[test]

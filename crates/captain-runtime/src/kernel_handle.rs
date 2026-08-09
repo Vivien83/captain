@@ -107,6 +107,44 @@ pub trait KernelHandle: Send + Sync {
         Vec::new()
     }
 
+    /// Publish one immutable artifact version for the calling agent.
+    async fn artifact_publish(
+        &self,
+        _caller_agent_id: &str,
+        _request: captain_memory::artifacts::PublishArtifactRequest,
+    ) -> Result<captain_types::artifact::ArtifactVersion, String> {
+        Err("artifact storage is not available on this kernel".to_string())
+    }
+
+    /// List the calling agent's latest artifact versions.
+    async fn artifact_list(
+        &self,
+        _caller_agent_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<captain_types::artifact::ArtifactVersion>, String> {
+        Err("artifact storage is not available on this kernel".to_string())
+    }
+
+    /// Inspect and checksum-verify one artifact version owned by the caller.
+    async fn artifact_inspect(
+        &self,
+        _caller_agent_id: &str,
+        _artifact_id: uuid::Uuid,
+        _version: Option<u32>,
+    ) -> Result<captain_types::artifact::ArtifactVersion, String> {
+        Err("artifact storage is not available on this kernel".to_string())
+    }
+
+    /// Resolve a checksum-verified payload without exposing its path to the model.
+    async fn artifact_payload(
+        &self,
+        _caller_agent_id: &str,
+        _artifact_id: uuid::Uuid,
+        _version: Option<u32>,
+    ) -> Result<(captain_types::artifact::ArtifactVersion, std::path::PathBuf), String> {
+        Err("artifact storage is not available on this kernel".to_string())
+    }
+
     /// Global execution policy floor. Per-agent policies may narrow ordinary
     /// command authority, but they cannot weaken this deployment profile.
     fn global_exec_policy(&self) -> captain_types::config::ExecPolicy {

@@ -1,10 +1,9 @@
-//! Persistence for detached tool runs (`tool_run_start`) — survives a
-//! Captain restart, unlike the in-memory-only registry in
-//! `crates/captain-runtime/src/tool_runs.rs`.
+//! Persistence for observable tool runs.
 //!
-//! Only detached runs are persisted here. Foreground runs are tied to a
-//! live request/response cycle and can't be resumed after a restart
-//! regardless, so persisting them would be pointless.
+//! The historical module/table name is retained for migration compatibility,
+//! but both foreground and detached runs are persisted. Foreground work cannot
+//! resume after a restart; its metadata and completed evidence remain useful
+//! for audit, debugging, and avoiding unnecessary re-execution.
 
 use captain_types::error::{CaptainError, CaptainResult};
 use rusqlite::Connection;
@@ -23,6 +22,34 @@ pub struct DetachedToolRunRecord {
     pub is_error: Option<bool>,
     pub result: Option<String>,
     pub result_truncated: bool,
+    pub detached: bool,
+    pub input_sha256: Option<String>,
+    pub output_file_name: Option<String>,
+    pub output_stored_bytes: Option<u64>,
+    pub output_total_bytes: Option<u64>,
+    pub output_sha256: Option<String>,
+    pub output_capped: bool,
+    pub output_redacted: bool,
+    pub retry_of_run_id: Option<String>,
+    pub retry_attempt: u32,
+}
+
+/// Terminal metadata persisted for a tool run.
+///
+/// Named fields keep output evidence from being attached in the wrong order.
+#[derive(Debug, Clone, Copy)]
+pub struct DetachedToolRunCompletion<'a> {
+    pub status: &'a str,
+    pub is_error: Option<bool>,
+    pub result: Option<&'a str>,
+    pub result_truncated: bool,
+    pub output_file_name: Option<&'a str>,
+    pub output_stored_bytes: Option<u64>,
+    pub output_total_bytes: Option<u64>,
+    pub output_sha256: Option<&'a str>,
+    pub output_capped: bool,
+    pub output_redacted: bool,
+    pub finished_at_unix_ms: i64,
 }
 
 fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<DetachedToolRunRecord> {
@@ -37,11 +64,27 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<DetachedToolRunRecord>
         is_error: row.get(7)?,
         result: row.get(8)?,
         result_truncated: row.get(9)?,
+        detached: row.get(10)?,
+        input_sha256: row.get(11)?,
+        output_file_name: row.get(12)?,
+        output_stored_bytes: row
+            .get::<_, Option<i64>>(13)?
+            .map(|value| value.max(0) as u64),
+        output_total_bytes: row
+            .get::<_, Option<i64>>(14)?
+            .map(|value| value.max(0) as u64),
+        output_sha256: row.get(15)?,
+        output_capped: row.get(16)?,
+        output_redacted: row.get(17)?,
+        retry_of_run_id: row.get(18)?,
+        retry_attempt: row.get::<_, i64>(19)?.clamp(0, u32::MAX as i64) as u32,
     })
 }
 
 const SELECT_COLUMNS: &str = "run_id, tool_name, status, caller_agent_id, origin_tool_use_id, \
-     started_at, finished_at, is_error, result, result_truncated";
+     started_at, finished_at, is_error, result, result_truncated, detached, input_sha256, \
+     output_file_name, output_stored_bytes, output_total_bytes, output_sha256, \
+     output_capped, output_redacted, retry_of_run_id, retry_attempt";
 
 /// Detached tool run store backed by SQLite.
 #[derive(Clone)]
@@ -54,7 +97,7 @@ impl DetachedToolRunStore {
         Self { conn }
     }
 
-    /// Record a newly started detached run as `running`. Best-effort by
+    /// Record a newly started run as `running`. Best-effort by
     /// design — callers should log-and-continue on error rather than fail
     /// the tool call itself.
     #[allow(clippy::too_many_arguments)]
@@ -64,6 +107,36 @@ impl DetachedToolRunStore {
         tool_name: &str,
         caller_agent_id: Option<&str>,
         origin_tool_use_id: Option<&str>,
+        detached: bool,
+        input_sha256: Option<&str>,
+        started_at_unix_ms: i64,
+    ) -> CaptainResult<()> {
+        self.upsert_running_with_retry(
+            run_id,
+            tool_name,
+            caller_agent_id,
+            origin_tool_use_id,
+            detached,
+            input_sha256,
+            None,
+            0,
+            started_at_unix_ms,
+        )
+    }
+
+    /// Record a run with an explicit immediate retry parent. Raw tool input is
+    /// deliberately absent; callers persist only its digest.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_running_with_retry(
+        &self,
+        run_id: &str,
+        tool_name: &str,
+        caller_agent_id: Option<&str>,
+        origin_tool_use_id: Option<&str>,
+        detached: bool,
+        input_sha256: Option<&str>,
+        retry_of_run_id: Option<&str>,
+        retry_attempt: u32,
         started_at_unix_ms: i64,
     ) -> CaptainResult<()> {
         let conn = self
@@ -72,14 +145,23 @@ impl DetachedToolRunStore {
             .map_err(|e| CaptainError::Internal(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO detached_tool_runs
-             (run_id, tool_name, status, caller_agent_id, origin_tool_use_id, started_at, finished_at, is_error, result, result_truncated)
-             VALUES (?1, ?2, 'running', ?3, ?4, ?5, NULL, NULL, NULL, 0)",
+             (run_id, tool_name, status, caller_agent_id, origin_tool_use_id,
+              started_at, finished_at, is_error, result, result_truncated,
+              detached, input_sha256, output_file_name, output_stored_bytes,
+              output_total_bytes, output_sha256, output_capped, output_redacted,
+              retry_of_run_id, retry_attempt)
+             VALUES (?1, ?2, 'running', ?3, ?4, ?5, NULL, NULL, NULL, 0,
+                     ?6, ?7, NULL, NULL, NULL, NULL, 0, 0, ?8, ?9)",
             rusqlite::params![
                 run_id,
                 tool_name,
                 caller_agent_id,
                 origin_tool_use_id,
-                started_at_unix_ms
+                started_at_unix_ms,
+                detached,
+                input_sha256,
+                retry_of_run_id,
+                retry_attempt,
             ],
         )
         .map_err(|e| CaptainError::Memory(e.to_string()))?;
@@ -90,11 +172,7 @@ impl DetachedToolRunStore {
     pub fn mark_finished(
         &self,
         run_id: &str,
-        status: &str,
-        is_error: Option<bool>,
-        result: Option<&str>,
-        result_truncated: bool,
-        finished_at_unix_ms: i64,
+        completion: DetachedToolRunCompletion<'_>,
     ) -> CaptainResult<()> {
         let conn = self
             .conn
@@ -102,15 +180,28 @@ impl DetachedToolRunStore {
             .map_err(|e| CaptainError::Internal(e.to_string()))?;
         conn.execute(
             "UPDATE detached_tool_runs
-             SET status = ?2, is_error = ?3, result = ?4, result_truncated = ?5, finished_at = ?6
+             SET status = ?2, is_error = ?3, result = ?4, result_truncated = ?5,
+                 output_file_name = ?6, output_stored_bytes = ?7,
+                 output_total_bytes = ?8, output_sha256 = ?9,
+                 output_capped = ?10, output_redacted = ?11, finished_at = ?12
              WHERE run_id = ?1",
             rusqlite::params![
                 run_id,
-                status,
-                is_error,
-                result,
-                result_truncated,
-                finished_at_unix_ms
+                completion.status,
+                completion.is_error,
+                completion.result,
+                completion.result_truncated,
+                completion.output_file_name,
+                completion
+                    .output_stored_bytes
+                    .map(|value| value.min(i64::MAX as u64) as i64),
+                completion
+                    .output_total_bytes
+                    .map(|value| value.min(i64::MAX as u64) as i64),
+                completion.output_sha256,
+                completion.output_capped,
+                completion.output_redacted,
+                completion.finished_at_unix_ms
             ],
         )
         .map_err(|e| CaptainError::Memory(e.to_string()))?;
@@ -241,7 +332,15 @@ mod tests {
     fn records_and_finishes_a_run() {
         let store = setup();
         store
-            .upsert_running("run-1", "shell_exec", Some("agent-1"), Some("tc-1"), 1000)
+            .upsert_running(
+                "run-1",
+                "shell_exec",
+                Some("agent-1"),
+                Some("tc-1"),
+                false,
+                Some("abc"),
+                1000,
+            )
             .unwrap();
 
         let recent = store.list_recent(10).unwrap();
@@ -249,32 +348,91 @@ mod tests {
         assert_eq!(recent[0].status, "running");
 
         store
-            .mark_finished("run-1", "completed", Some(false), Some("ok"), false, 2000)
+            .mark_finished(
+                "run-1",
+                DetachedToolRunCompletion {
+                    status: "completed",
+                    is_error: Some(false),
+                    result: Some("ok"),
+                    result_truncated: false,
+                    output_file_name: Some("toolrun-run-1.log"),
+                    output_stored_bytes: Some(2),
+                    output_total_bytes: Some(2),
+                    output_sha256: Some("def"),
+                    output_capped: false,
+                    output_redacted: true,
+                    finished_at_unix_ms: 2000,
+                },
+            )
             .unwrap();
 
         let recent = store.list_recent(10).unwrap();
         assert_eq!(recent[0].status, "completed");
         assert_eq!(recent[0].result.as_deref(), Some("ok"));
         assert_eq!(recent[0].finished_at_unix_ms, Some(2000));
+        assert!(!recent[0].detached);
+        assert_eq!(recent[0].input_sha256.as_deref(), Some("abc"));
+        assert_eq!(recent[0].output_stored_bytes, Some(2));
+        assert!(recent[0].output_redacted);
+    }
+
+    #[test]
+    fn retry_lineage_roundtrips_without_raw_input() {
+        let store = setup();
+        store
+            .upsert_running_with_retry(
+                "run-retry",
+                "shell_exec",
+                Some("captain"),
+                None,
+                true,
+                Some("digest"),
+                Some("run-parent"),
+                1,
+                3_000,
+            )
+            .unwrap();
+
+        let record = store.list_recent(1).unwrap().remove(0);
+        assert_eq!(record.retry_of_run_id.as_deref(), Some("run-parent"));
+        assert_eq!(record.input_sha256.as_deref(), Some("digest"));
+        assert_eq!(record.retry_attempt, 1);
+        assert!(record.result.is_none());
     }
 
     #[test]
     fn reconciles_still_running_rows_as_interrupted() {
         let store = setup();
         store
-            .upsert_running("run-crash", "ssh_exec", Some("agent-1"), None, 1000)
+            .upsert_running(
+                "run-crash",
+                "ssh_exec",
+                Some("agent-1"),
+                None,
+                true,
+                None,
+                1000,
+            )
             .unwrap();
         store
-            .upsert_running("run-done", "cargo", Some("agent-1"), None, 1000)
+            .upsert_running("run-done", "cargo", Some("agent-1"), None, true, None, 1000)
             .unwrap();
         store
             .mark_finished(
                 "run-done",
-                "completed",
-                Some(false),
-                Some("ok"),
-                false,
-                1500,
+                DetachedToolRunCompletion {
+                    status: "completed",
+                    is_error: Some(false),
+                    result: Some("ok"),
+                    result_truncated: false,
+                    output_file_name: None,
+                    output_stored_bytes: None,
+                    output_total_bytes: None,
+                    output_sha256: None,
+                    output_capped: false,
+                    output_redacted: false,
+                    finished_at_unix_ms: 1500,
+                },
             )
             .unwrap();
 
@@ -294,10 +452,10 @@ mod tests {
     fn list_recent_orders_newest_first() {
         let store = setup();
         store
-            .upsert_running("run-old", "cargo", None, None, 1000)
+            .upsert_running("run-old", "cargo", None, None, true, None, 1000)
             .unwrap();
         store
-            .upsert_running("run-new", "npm", None, None, 2000)
+            .upsert_running("run-new", "npm", None, None, false, None, 2000)
             .unwrap();
 
         let recent = store.list_recent(10).unwrap();
@@ -310,21 +468,29 @@ mod tests {
         let store = setup();
         for (run_id, started_at) in [("run-old", 1_000), ("run-mid", 2_000), ("run-new", 3_000)] {
             store
-                .upsert_running(run_id, "cargo", None, None, started_at)
+                .upsert_running(run_id, "cargo", None, None, true, None, started_at)
                 .unwrap();
             store
                 .mark_finished(
                     run_id,
-                    "completed",
-                    Some(false),
-                    Some("ok"),
-                    false,
-                    started_at + 100,
+                    DetachedToolRunCompletion {
+                        status: "completed",
+                        is_error: Some(false),
+                        result: Some("ok"),
+                        result_truncated: false,
+                        output_file_name: None,
+                        output_stored_bytes: None,
+                        output_total_bytes: None,
+                        output_sha256: None,
+                        output_capped: false,
+                        output_redacted: false,
+                        finished_at_unix_ms: started_at + 100,
+                    },
                 )
                 .unwrap();
         }
         store
-            .upsert_running("run-active", "ssh_exec", None, None, 4_000)
+            .upsert_running("run-active", "ssh_exec", None, None, true, None, 4_000)
             .unwrap();
 
         assert_eq!(store.prune_terminal_history(2).unwrap(), 1);

@@ -162,6 +162,7 @@ started = time.monotonic()
 quit_step = 0
 output = bytearray()
 status = None
+screen_ready = False
 
 try:
     child_pgid = os.getpgid(pid)
@@ -208,7 +209,7 @@ def stop_child_after_timeout():
 
 while True:
     elapsed = time.monotonic() - started
-    if quit_step == 0 and elapsed >= startup:
+    if quit_step == 0 and screen_ready and elapsed >= startup:
         os.write(fd, b"\x03")
         quit_step = 1
     elif quit_step == 1 and elapsed >= startup + 0.2:
@@ -230,6 +231,7 @@ while True:
             pass
         else:
             output.extend(data)
+            screen_ready = any(marker in output for marker in (b"Captain", b"Chat", b"Projects"))
 
     if reap_child():
         break

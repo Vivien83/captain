@@ -272,6 +272,8 @@ pub(crate) fn is_write_tool_that_must_not_be_masked(name: &str) -> bool {
             | "email_automation_rule_set_enabled"
             | "email_automation_rule_remove"
             | "email_automation_delivery_requeue"
+            | "artifact_publish"
+            | "artifact_deliver"
     )
 }
 
@@ -298,6 +300,8 @@ mod tests {
         assert!(is_write_tool_that_must_not_be_masked(
             "email_automation_delivery_requeue"
         ));
+        assert!(is_write_tool_that_must_not_be_masked("artifact_publish"));
+        assert!(is_write_tool_that_must_not_be_masked("artifact_deliver"));
     }
 
     #[test]

@@ -37,16 +37,30 @@ impl SecuritySection {
 
 // ── Built-in feature definitions ────────────────────────────────────────────
 
+pub(crate) struct ExecutionSecuritySummary<'a> {
+    pub profile: &'a str,
+    pub configured_policy_mode: &'a str,
+    pub policy_mode: &'a str,
+    pub critical_mode: &'a str,
+    pub isolation_level: &'a str,
+    pub os_isolation: bool,
+    pub docker_enabled: bool,
+    pub docker_untrusted_ready: bool,
+}
+
 pub(crate) fn features_for_execution_summary(
-    profile: &str,
-    configured_policy_mode: &str,
-    policy_mode: &str,
-    critical_mode: &str,
-    isolation_level: &str,
-    os_isolation: bool,
-    docker_enabled: bool,
-    docker_untrusted_ready: bool,
+    summary: ExecutionSecuritySummary<'_>,
 ) -> Vec<SecurityFeature> {
+    let ExecutionSecuritySummary {
+        profile,
+        configured_policy_mode,
+        policy_mode,
+        critical_mode,
+        isolation_level,
+        os_isolation,
+        docker_enabled,
+        docker_untrusted_ready,
+    } = summary;
     vec![
         // Core
         SecurityFeature {
@@ -174,16 +188,16 @@ fn builtin_features() -> Vec<SecurityFeature> {
     let posture = policy.host_execution_posture();
     let docker =
         captain_types::config::DockerSandboxConfig::default().isolation_posture(policy.profile);
-    features_for_execution_summary(
-        posture.profile.as_str(),
-        posture.configured_policy_mode.as_str(),
-        posture.policy_mode.as_str(),
-        posture.critical_mode.as_str(),
-        posture.isolation_level,
-        posture.os_isolation,
-        docker.enabled,
-        docker.untrusted_profile_ready,
-    )
+    features_for_execution_summary(ExecutionSecuritySummary {
+        profile: posture.profile.as_str(),
+        configured_policy_mode: posture.configured_policy_mode.as_str(),
+        policy_mode: posture.policy_mode.as_str(),
+        critical_mode: posture.critical_mode.as_str(),
+        isolation_level: posture.isolation_level,
+        os_isolation: posture.os_isolation,
+        docker_enabled: docker.enabled,
+        docker_untrusted_ready: docker.untrusted_profile_ready,
+    })
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -382,16 +396,16 @@ mod tests {
 
     #[test]
     fn skill_phrase_review_is_presented_as_advisory() {
-        let features = features_for_execution_summary(
-            "personal_workstation",
-            "full",
-            "full",
-            "safe",
-            "host_process",
-            false,
-            false,
-            false,
-        );
+        let features = features_for_execution_summary(ExecutionSecuritySummary {
+            profile: "personal_workstation",
+            configured_policy_mode: "full",
+            policy_mode: "full",
+            critical_mode: "safe",
+            isolation_level: "host_process",
+            os_isolation: false,
+            docker_enabled: false,
+            docker_untrusted_ready: false,
+        });
         let review = features
             .iter()
             .find(|feature| feature.name == "Advisory Skill Phrase Review")

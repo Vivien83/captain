@@ -148,7 +148,7 @@ impl GmailCredentialManager {
             match persisted {
                 PersistRefreshOutcome::Persisted(record) => {
                     return Ok(GmailCredentialContext {
-                        record,
+                        record: *record,
                         tokens: refreshed,
                     });
                 }
@@ -246,7 +246,7 @@ struct CredentialSnapshot {
 }
 
 enum PersistRefreshOutcome {
-    Persisted(GmailAccountRecord),
+    Persisted(Box<GmailAccountRecord>),
     ConcurrentChange,
 }
 
@@ -362,7 +362,7 @@ fn persist_refreshed_tokens(
     if !outcome.cleanup_warnings.is_empty() {
         warn!(alias = %outcome.record.summary.alias, warnings = ?outcome.cleanup_warnings, "Gmail credential cleanup remains pending");
     }
-    Ok(PersistRefreshOutcome::Persisted(outcome.record))
+    Ok(PersistRefreshOutcome::Persisted(Box::new(outcome.record)))
 }
 
 fn select_account(

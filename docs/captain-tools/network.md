@@ -6,16 +6,56 @@
 
 ## Tools
 
+### `web_citation_audit`
+
+Deterministic final gate for sourced research. Call it after drafting, with the
+draft plus the exact source URLs and verbatim evidence quotes copied from pages
+that `web_research_batch` marked `citation_ready`. It refetches up to twelve
+independent sources concurrently and checks:
+
+- every inline Markdown citation URL belongs to the submitted source set;
+- each cited page still returns a successful non-empty response;
+- submitted evidence quotes occur in the retrieved page text after harmless
+  whitespace/Markdown normalization;
+- a configurable share of prose sentences declares provenance through an
+  inline citation or `[unverified]`;
+- the canonical `Sources` block is rendered from audited URLs instead of being
+  reconstructed from model memory.
+
+| Field | Required | Notes |
+|---|---|---|
+| `draft` | yes | Up to 50,000 bytes. Put the exact Markdown source link immediately after the supported sentence. |
+| `sources` | yes | 1-12 `{url,title?,quotes?}` records. URLs must come from retrieved evidence; max three quotes and 1,000 characters per quote. |
+| `min_coverage` | no | `0..1`, default `0.5`. Counts cited and explicitly `[unverified]` prose sentences. |
+| `require_evidence` | no | Default `true`; every cited source must carry at least one quote found verbatim in the refetched page. |
+
+`valid=true` certifies URL identity, successful retrieval, declared provenance,
+and verbatim evidence presence. It deliberately does **not** claim semantic
+entailment or factual truth: Captain must still compare the claim with the
+quote, disclose contradictions, and retain `[unverified]` on unsupported
+load-bearing claims. The tool is a sequential phase boundary because it depends
+on a completed source set and draft; only its independent source fetches run in
+parallel.
+
 ### `web_research_batch`
 
-Grouped research rail: runs up to five `web_search` queries, extracts result
-URLs, and fetches a bounded set of pages in the same tool call. It requires at
-least one non-empty `queries` entry; explicit `urls` can be added to force-fetch
-known sources alongside the discovered results. It returns compact previews plus
-URLs so the agent can synthesize with sources without spending separate
-search/fetch turns. Use individual `web_fetch` only when an exact page needs a
-deeper second pass. For PDF/report/dataset links, use `web_download` and then
-`document_extract`; do not cite a binary document from the URL alone.
+Grouped research rail: runs up to five independent `web_search` queries in
+parallel, deduplicates canonical URLs, then fetches up to ten selected pages in
+parallel. Explicit `urls` are always considered for retrieval; `auto_fetch=false`
+keeps discovered search hits as discovery-only candidates.
+
+Each source receives a stable URL-derived `source_id`, discovery queries and
+providers, canonical and final URLs, HTTP status, retrieval timestamp, retained
+content SHA-256, bounded preview and `citation_markdown`. The latter exists only
+when a successful non-empty page was actually read. Search snippets and
+provider-generated summaries remain explicitly `discovery_only` and are never
+citation-ready. The coverage block reports fetched/failed sources and independent
+domains without pretending that successful HTTP retrieval proves a claim.
+
+Use individual `web_fetch` only when an exact page needs a deeper second pass.
+For important, disputed, high-stakes, or explicitly fact-checked output, finish
+with `web_citation_audit`. For PDF/report/dataset links, use `web_download` and
+then `document_extract`; do not cite a binary document from the URL alone.
 
 ### `web_download`
 
@@ -46,7 +86,10 @@ Outbound HTTP request with anti-SSRF protection. The default for talking to a pu
 | `headers` | no | Object map; common ones: `Authorization`, `Content-Type`, `User-Agent`. |
 | `body` | no | String body for `POST`/`PUT`/`PATCH`. JSON, form-encoded, or raw — Captain decides. |
 
-`GET` responses on `text/html` are converted to readable Markdown automatically. Other methods and content types pass through as raw bytes/strings.
+`GET` responses on `text/html` are converted to readable Markdown automatically.
+The response exposes HTTP status, final URL, retrieval time and the SHA-256 of
+the retained content before the untrusted-content body. Other methods and
+content types pass through as raw strings.
 
 For a local API — the daemon itself, MCP servers on `127.0.0.1`, … — use **`shell_exec` with `curl`** instead: `web_fetch` blocks loopback by design.
 
@@ -59,7 +102,10 @@ Multi-provider web search (Tavily → Brave → Perplexity → DuckDuckGo) with 
 | `query` | yes | Natural-language or keyword query (`"meilleure lib Rust pour HTTP async 2025"`). |
 | `max_results` | no | Default 5, capped at 20. |
 
-Each result is `{title, url, snippet}`. Use this to find URLs, vet recent docs, or sanity-check a fact; once you have a URL feed it back through `web_fetch`.
+Each result carries `source_id`, title, original/canonical URL and snippet in a
+typed evidence envelope. Every result is marked `discovery_only` and
+`citation_ready=false`. Use this to find URLs or vet recent docs; fetch the page
+before citing it.
 
 ## Sandbox
 
@@ -71,12 +117,12 @@ Each result is `{title, url, snippet}`. Use this to find URLs, vet recent docs, 
 ## Limites
 
 - `web_fetch` and `web_download` follow redirects (default 10). Each hop is re-validated against the SSRF allowlist; a redirect chain that lands on `169.254.169.254` (cloud metadata) is rejected mid-chain.
-- Response body cap: 5 MB. Larger payloads return `"response too large"` rather than streaming — fall back to `shell_exec` + `curl -o` if you genuinely need a big file.
+- Response body cap: 10 MB by default. The limit is enforced both from `Content-Length` and after reading a response whose length was unknown. Larger payloads return `"response too large"`; use `web_download` for a bounded source artifact.
 - `web_download` is for larger source files and defaults to 25 MB with a hard cap of 100 MB. It writes only inside the workspace sandbox and refuses overwrite by default.
 - Default request timeout: 30 s. There is no per-tool override; long-running fetches must use `process_start` with `curl --max-time`.
 - `web_fetch` does **not** retry on 5xx by itself. Wrap it in your own retry logic only when the API documents that a retry is safe (idempotent verbs, idempotency tokens, …).
 - `web_search` returns at most 20 results — for paginated discovery, run several queries with refined keywords rather than asking for more.
-- All providers fail closed: when the configured API key is missing or invalid the tool returns the upstream error; it does not silently skip to the next provider unless the failure mode is `429` / `503`.
+- An explicitly selected provider fails closed on its own error. `search_provider = "auto"` tries configured Tavily, Brave and Perplexity providers in order, then the zero-config DuckDuckGo fallback; each fallback is logged without exposing credentials.
 
 ## Exemples
 
@@ -94,9 +140,26 @@ web_fetch({
 
 ```
 web_search({"query": "ratatui mouse capture example", "max_results": 3})
-→ [{"title": "...", "url": "https://docs.rs/ratatui/...", "snippet": "..."}, ...]
+→ {"results":[{"source_id":"SRC-...","url":"https://docs.rs/ratatui/...","retrieval_status":"discovery_only","citation_ready":false}, ...]}
 web_fetch({"url": "https://docs.rs/ratatui/..."})
-→ Markdown-converted page body.
+→ HTTP status + final URL + retrieval time + SHA-256 + Markdown-converted page body.
+```
+
+### Grounded research then audit
+
+```
+web_research_batch({"queries":["primary specification", "independent analysis"], "max_fetches":5})
+→ sources include only fetched pages with citation_ready=true and exact citation_markdown values
+
+web_citation_audit({
+  "draft":"The supported claim.[Primary source](https://example.com/spec)",
+  "sources":[{
+    "url":"https://example.com/spec",
+    "title":"Primary source",
+    "quotes":["Exact supporting sentence copied from the retrieved page."]
+  }]
+})
+→ {"valid":true,"sources_markdown":"## Sources\n...","scope":"..."}
 ```
 
 ### Error case — SSRF block on a private IP

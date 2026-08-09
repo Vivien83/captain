@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod approvals;
+pub mod artifacts;
 pub mod audit;
 pub mod budget;
 pub mod channels;
@@ -39,6 +40,7 @@ pub mod graph;
 pub mod hands;
 pub mod init_wizard;
 pub mod learning;
+pub mod live_runs;
 pub mod logs;
 pub mod memory;
 pub mod native_capabilities;

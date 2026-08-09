@@ -22,14 +22,14 @@ pub struct AgentLoopResult {
 
 impl AgentLoopResult {
     /// True iff at least one successful tool call already pushed content to
-    /// a channel during this turn (currently `channel_send`). Cron paths
+    /// a channel during this turn (`channel_send` or `artifact_deliver`). Cron paths
     /// use this to avoid re-delivering `response` on top of a message the
     /// agent has already sent through the tool: the canonical double-message
     /// fix on `AgentTurn` and `InlineWorkflow`.
     pub fn delivered_via_channel_tool(&self) -> bool {
-        self.tool_calls
-            .iter()
-            .any(|tc| !tc.is_error && tc.tool_name == "channel_send")
+        self.tool_calls.iter().any(|tc| {
+            !tc.is_error && matches!(tc.tool_name.as_str(), "channel_send" | "artifact_deliver")
+        })
     }
 }
 
@@ -73,6 +73,20 @@ mod tests {
     #[test]
     fn delivered_via_channel_tool_ignores_failed_channel_send() {
         let result = result(vec![record("channel_send", true)]);
+
+        assert!(!result.delivered_via_channel_tool());
+    }
+
+    #[test]
+    fn delivered_via_channel_tool_detects_successful_artifact_delivery() {
+        let result = result(vec![record("artifact_deliver", false)]);
+
+        assert!(result.delivered_via_channel_tool());
+    }
+
+    #[test]
+    fn delivered_via_channel_tool_ignores_failed_artifact_delivery() {
+        let result = result(vec![record("artifact_deliver", true)]);
 
         assert!(!result.delivered_via_channel_tool());
     }

@@ -167,6 +167,17 @@ fn draw_status_signals(f: &mut Frame, area: Rect, status: &StatusSnapshot) {
             Span::styled(native_status_label(status), native_status_style(status)),
         ]),
         Line::from(vec![
+            Span::styled("  Deployment ", theme::dim_style()),
+            Span::styled(
+                status.deployment_readiness_state.clone(),
+                state_style(&status.deployment_readiness_state),
+            ),
+            Span::styled(
+                format!("  {} check(s)", status.deployment_readiness_check_count),
+                theme::dim_style(),
+            ),
+        ]),
+        Line::from(vec![
             Span::styled("  Action     ", theme::dim_style()),
             Span::styled(operator_action_label(status), theme::dim_style()),
         ]),
@@ -211,8 +222,9 @@ fn dim_line(value: String) -> Line<'static> {
 
 fn state_style(state: &str) -> Style {
     match state.to_ascii_lowercase().as_str() {
-        "ok" | "running" | "idle" | "in-process" | "local" => Style::default().fg(theme::GREEN),
-        "watch" | "retrying" | "attention" | "draining" | "pending" => {
+        "ok" | "ready" | "not_configured" | "skipped" | "running" | "idle" | "in-process"
+        | "local" => Style::default().fg(theme::GREEN),
+        "watch" | "warning" | "degraded" | "retrying" | "attention" | "draining" | "pending" => {
             Style::default().fg(theme::YELLOW)
         }
         "warn" | "dead_letter" | "unavailable" | "failed" | "critical" => {
@@ -309,8 +321,9 @@ fn ready_label(value: Option<bool>) -> &'static str {
 
 fn operator_action_label(status: &StatusSnapshot) -> String {
     status
-        .consciousness_actions
+        .deployment_readiness_actions
         .first()
+        .or_else(|| status.consciousness_actions.first())
         .or_else(|| {
             status
                 .runtime_health_issues

@@ -19,6 +19,8 @@ use tracing::info;
 const PARALLEL_SAFE_TOOLS: &[&str] = &[
     "agent_find",
     "agent_list",
+    "artifact_inspect",
+    "artifact_list",
     "capability_search",
     "captain_docs",
     "document_extract",
@@ -39,12 +41,19 @@ const PARALLEL_SAFE_TOOLS: &[&str] = &[
     "skill_view",
     "system_time",
     "tool_run_list",
+    "tool_run_read",
     "tool_run_result",
+    "tool_run_search",
     "tool_run_status",
+    "tool_run_tail",
     "tool_search",
     "web_fetch",
     "web_search",
 ];
+
+// `web_citation_audit` is read-only but intentionally absent: it is a phase
+// boundary that consumes a completed research set and draft. Its independent
+// source fetches run concurrently inside the tool after that dependency holds.
 
 /// True only when a tool has an explicit, reviewed read-only contract.
 pub fn is_parallel_safe(tool_name: &str) -> bool {
@@ -147,13 +156,20 @@ mod tests {
         assert!(is_side_effect("browser_select"));
         assert!(is_side_effect("browser_hover"));
         assert!(is_side_effect("tool_run_start"));
+        assert!(is_side_effect("tool_run_retry"));
         assert!(is_side_effect("tool_run_cancel"));
         assert!(is_side_effect("ask_user"));
         assert!(is_side_effect("document_create"));
+        assert!(is_side_effect("artifact_publish"));
+        assert!(is_side_effect("artifact_deliver"));
         assert!(is_side_effect("memory_forget"));
         assert!(is_side_effect("browser_batch"));
         assert!(is_side_effect("browser_wait"));
         assert!(is_side_effect("browser_close"));
+        assert!(
+            is_side_effect("web_citation_audit"),
+            "citation audit must fence the completed draft and source set it depends on"
+        );
     }
 
     #[test]
@@ -163,6 +179,8 @@ mod tests {
         assert!(!is_side_effect("memory_recall"));
         assert!(!is_side_effect("tool_run_status"));
         assert!(!is_side_effect("tool_run_result"));
+        assert!(!is_side_effect("artifact_list"));
+        assert!(!is_side_effect("artifact_inspect"));
     }
 
     #[test]

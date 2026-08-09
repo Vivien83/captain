@@ -6,6 +6,9 @@ pub mod a2a_ops;
 pub mod agent_definitions;
 pub mod agent_dispatch;
 pub mod agent_ops;
+pub mod artifact_definitions;
+pub mod artifact_dispatch;
+pub mod artifact_ops;
 pub mod automation_dispatch;
 pub mod browser_definitions;
 pub mod browser_dispatch;
@@ -134,6 +137,7 @@ pub mod update_definitions;
 pub mod update_dispatch;
 pub mod video_ops;
 pub mod voice_ops;
+pub mod web_citation_audit;
 pub mod web_credentials_ops;
 pub mod web_definitions;
 pub mod web_dispatch;
@@ -154,6 +158,11 @@ pub(crate) use agent_ops::{
     tool_agent_watch, tool_fleet_close_manager, tool_fleet_configure_autoscale,
     tool_fleet_create_manager, tool_fleet_list_managers, tool_fleet_metrics,
     tool_fleet_set_mission,
+};
+pub use artifact_definitions::artifact_tool_definitions;
+pub(crate) use artifact_dispatch::dispatch_artifact_tool;
+pub(crate) use artifact_ops::{
+    tool_artifact_deliver, tool_artifact_inspect, tool_artifact_list, tool_artifact_publish,
 };
 pub(crate) use automation_dispatch::dispatch_automation_tool;
 pub use browser_definitions::browser_tool_definitions;
@@ -371,13 +380,14 @@ pub(crate) use system_bug_ops::{
 pub use tool_run_definitions::tool_run_tool_definitions;
 pub(crate) use tool_run_dispatch::dispatch_tool_run_tool;
 pub(crate) use tool_run_ops::{
-    tool_run_cancel, tool_run_list, tool_run_result, tool_run_start, tool_run_status,
-    ToolRunStartContext,
+    tool_run_cancel, tool_run_list, tool_run_read, tool_run_result, tool_run_retry,
+    tool_run_search, tool_run_start, tool_run_status, tool_run_tail, ToolRunStartContext,
 };
 pub use update_definitions::update_tool_definitions;
 pub(crate) use update_dispatch::dispatch_system_update;
 pub(crate) use video_ops::tool_video_analyze;
 pub(crate) use voice_ops::{tool_speech_to_text, tool_text_to_speech};
+pub(crate) use web_citation_audit::tool_web_citation_audit;
 pub(crate) use web_credentials_ops::tool_web_credentials_update;
 #[cfg(test)]
 pub(crate) use web_credentials_ops::{hash_web_password, write_web_credentials_config};

@@ -236,6 +236,27 @@ Control, API, TUI, and Telegram can revoke a rule by ID; decisions, automatic
 rule applications, and revocations enter the audit hash chain with actor,
 source, digest, and rule ID.
 
+Approval suggestions are a separate opt-in observation rail and are disabled
+by default. Disabled means no observations are recorded. When enabled, the
+core counts only one-time Low or Medium approvals with the exact same agent,
+canonical tool, and complete action digest. High/Critical actions, denials,
+session decisions, and durable decisions cannot train or silently widen a
+rule. A pending suggestion has no authority; only a later, explicit operator
+acceptance can create the existing exact revocable rule. Dismissal creates no
+rule.
+
+The suggestion store is bounded to 256 candidates and 1 MiB, uses synchronized
+atomic replacement, requires an owner-only regular file, rejects symlinks, and
+persists no raw action, preview, description, result, or prompt material. Its
+optional persistence has its own circuit breaker: corruption disables and
+hides suggestions while ordinary one-time approval remains available. This
+rail does not shape the LLM prompt or make an LLM decide future authority.
+Boot reconciliation removes a stale candidate already covered by a durable
+exact rule, closing the power-loss window between the two atomic files.
+Authenticated operator controls are deliberately not claimed by this core-only
+checkpoint; they must preserve the same consent and exact-binding boundary when
+added.
+
 ### 2.7 Durable Delegation Lineage
 
 Detached delegation does not trust process-local depth alone. While a delegated
@@ -635,12 +656,15 @@ http://example.com              ->  example.com:80
 
 ### 7.6 Protected Web Context
 
-The native `web_fetch`, `web_search`, and `web_research_batch` tools execute
-only through the `WebToolsContext` built by the kernel. If that protected
-context is unavailable, the request fails closed with an explicit runtime
-error. Captain does not create a fallback HTTP client with weaker redirect or
-SSRF rules. `web_download` uses its own bounded download engine, which applies
-the same URL and resolved-address checks before every redirect.
+The native `web_fetch`, `web_search`, `web_research_batch`, and
+`web_citation_audit` tools execute only through the `WebToolsContext` built by
+the kernel. If that protected context is unavailable, the request fails closed
+with an explicit runtime error. Captain does not create a fallback HTTP client
+with weaker redirect or SSRF rules. Citation auditing refetches only the bounded
+public URLs that passed the same content/secret guard; submitted draft text and
+evidence quotes are compared locally and are never sent as request parameters.
+`web_download` uses its own bounded download engine, which applies the same URL
+and resolved-address checks before every redirect.
 
 ---
 
@@ -858,13 +882,26 @@ The `security_headers` middleware is applied to **all** API responses:
 
 ```rust
 pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
+    let artifact_payload_kind = artifact_payload_kind(request.uri().path());
+    let artifact_preview = artifact_payload_kind == Some(ArtifactPayloadKind::Preview);
+    let artifact_payload = artifact_payload_kind.is_some();
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert(
+        "x-frame-options",
+        if artifact_preview { "SAMEORIGIN" } else { "DENY" }.parse().unwrap(),
+    );
     headers.insert("x-xss-protection", "0".parse().unwrap());
-    headers.insert("content-security-policy", /* CSP policy */);
-    headers.insert("referrer-policy", "strict-origin-when-cross-origin".parse().unwrap());
+    if !artifact_payload || !headers.contains_key("content-security-policy") {
+        headers.insert("content-security-policy", CONTENT_SECURITY_POLICY.parse().unwrap());
+    }
+    headers.insert(
+        "referrer-policy",
+        if artifact_payload { "no-referrer" } else { "strict-origin-when-cross-origin" }
+            .parse()
+            .unwrap(),
+    );
     headers.insert("cache-control", "no-store, no-cache, must-revalidate".parse().unwrap());
     response
 }
@@ -873,10 +910,10 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
 | Header | Value | Protects Against |
 |--------|-------|------------------|
 | `X-Content-Type-Options` | `nosniff` | MIME type sniffing attacks |
-| `X-Frame-Options` | `DENY` | Clickjacking via iframes |
+| `X-Frame-Options` | `DENY`; `SAMEORIGIN` only on the exact artifact preview route | Clickjacking while permitting the sandboxed Control preview |
 | `X-XSS-Protection` | `0` | Disable legacy filters that can mutate otherwise safe markup |
-| `Content-Security-Policy` | See below | XSS, code injection, data exfiltration |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` | Referrer leakage |
+| `Content-Security-Policy` | See below; artifact payloads use a stricter sandbox | XSS, code injection, data exfiltration |
+| `Referrer-Policy` | `strict-origin-when-cross-origin`; `no-referrer` for artifact payloads | Referrer leakage |
 | `Cache-Control` | `no-store, no-cache, must-revalidate` | Sensitive data caching |
 
 ### 10.1 CSP Breakdown
@@ -910,6 +947,64 @@ discarded. Links are restricted to HTTP(S), `mailto`, or `tel`, then receive
 labels use Preact text nodes. `scripts/control-xss-smoke.mjs` runs malicious
 probes through all three paths in Chromium under the production CSP.
 | `form-action` | `'self'` | Restrict form submission targets |
+
+### 10.2 Immutable Artifact Preview and Download
+
+Artifact inventory, preview, and download endpoints are authenticated by the
+global private-route middleware. The route handlers never return Captain's
+managed paths. Before any payload leaves the daemon, the store reads the exact
+version into bounded memory and verifies the returned byte count and SHA-256
+against its immutable manifest. Responses use private no-store caching,
+`nosniff`, `no-referrer`, a digest `ETag`, and same-origin resource policy.
+
+Text and Markdown are valid-UTF-8 checked and HTML-escaped before rendering.
+Raw HTML remains untrusted: the response CSP starts with `sandbox`, grants no
+`allow-scripts` or `allow-same-origin`, has `default-src 'none'`, and permits
+only inline style plus `data:` image/media/font resources. Raster images and
+PDFs use the same sandbox boundary. SVG and unknown active formats are never
+previewed and return `415`; they remain attachment downloads.
+
+The exact path shape
+`/api/artifacts/{uuid}/versions/{positive-version}/preview` receives
+`frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` so Control can frame
+the isolated document. Download uses `frame-ancestors 'none'` and `DENY`.
+Malformed or unrelated paths cannot preserve a handler-supplied CSP and fall
+back to the global deny-framing policy. There is no destructive artifact API;
+versions are immutable and are not silently pruned.
+
+### 10.3 Live Runs Operator Boundary
+
+Every `/api/tool-runs` route remains behind the global API-key or authenticated
+Web-session middleware. API and local operator surfaces use the same selective
+runtime response type and never serialize the internal snapshot directly. Raw
+tool input, result text and preview, output filename, and managed path are
+absent; only an optional input SHA-256 and bounded integrity/state metadata
+cross the boundary.
+
+Tail reads accept at most 200 lines and return at most 32 KiB on a UTF-8
+boundary. The durable output store applies normal ANSI removal and secret
+redaction first. The API performs a second secret-pattern scan and replaces the
+entire tail with a fixed marker if recognizable secret material remains. The
+local TUI uses that same tail function rather than maintaining a weaker copy.
+Read or integrity errors are logged internally but become a path-free fixed
+error.
+
+`POST /api/tool-runs/{run_id}/cancel` can succeed only while the run is active
+and owns a real abort handle. The capability check and state transition occur
+under one registry lock, so a foreground call without cancellation authority
+cannot be reported as stopped. Successful, not-found, not-active, and
+not-cancellable outcomes for validated IDs enter the hash-chained audit log
+through one kernel boundary as fixed `operator:api` or `operator:tui`
+`ToolInvoke` events without raw input or output.
+
+The full Ratatui `/runs` overlay cannot bypass that authority. It renders the
+shared projection, accepts a tail only when its `run_id` still matches the
+current selection, replaces residual terminal control characters, and requires
+`x` followed by `y` before dispatching cancellation. The standalone chat and
+Web terminal route is read-only and bounded to twelve metadata rows; it has no
+tail or cancellation command. None of these surfaces introduces retry,
+Telegram delivery, provider delivery, raw input, result preview, filename, or
+managed path exposure.
 
 ---
 
@@ -950,8 +1045,11 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("GET", "/api/peers")                         => 2,
         ("GET", "/api/config")                        => 2,
         ("GET", "/api/usage")                         => 3,
+        ("GET", p) if p.starts_with("/api/tool-runs") => 3,
         ("GET", p) if p.starts_with("/api/audit")     => 5,
         ("POST", "/api/agents")                       => 50,
+        ("POST", p) if p.starts_with("/api/tool-runs/")
+            && p.ends_with("/cancel")                 => 10,
         ("POST", p) if p.contains("/message")         => 30,
         ("POST", p) if p.contains("/run")             => 100,
         ("POST", "/api/skills/uninstall")             => 10,
@@ -1520,6 +1618,22 @@ the concrete non-wildcard listen address, hosts derived from configured
 origins, and the host in `deployment.public_url` are accepted. Missing,
 ambiguous, malformed, and undeclared hosts return `400`. This check is the DNS
 rebinding boundary; CORS alone is not treated as one.
+
+### 17.5 Deployment Readiness Egress
+
+The daemon's public deployment check is bounded egress, not a generic fetcher.
+It accepts only the already validated `deployment.public_url`, appends the
+fixed `/api/health` path, disables redirects and environment proxies, resolves
+DNS under a timeout, rejects non-public addresses, and pins the request to the
+validated address so a second DNS answer cannot retarget it. TLS keeps the
+configured hostname for SNI and certificate validation. Response bodies are
+capped at 64 KiB and must match the minimal health schema.
+
+Only fixed summaries, status, timestamps and deduplicated remediations are
+persisted. Resolved IPs, raw transport errors, body content and internal cache
+identity are never exposed by `/api/status`. The private snapshot is atomically
+replaced, rejects symlinks and malformed or stale semantic state, and is bound
+to both deployment configuration and the running Captain version.
 
 ---
 

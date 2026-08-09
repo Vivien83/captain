@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 bash
 ```
 
 ## Global Options
@@ -76,6 +76,27 @@ may remain callable by an exact name for existing operators, but they are not
 listed as primary product paths.
 
 Use `F1`-`F6` or `Tab`/`Shift+Tab` to switch primary hubs. Inside a hub, use `Alt+1`..`Alt+N` or `Alt+Left`/`Alt+Right` to switch subviews. In Chat, `Tab` still completes slash commands when the current draft starts with `/`.
+
+`/artifacts` opens the global read-only **Fichiers produits** overlay without
+adding a seventh hub. It refreshes the checksum-bound inventory every fifteen
+seconds, preserves the selected artifact across refreshes, and lets the
+operator move through exact immutable versions with the arrow keys. `r`
+refreshes immediately and `Esc` closes the overlay. The terminal renders only
+bounded metadata and never interprets artifact payloads or active content;
+sandboxed preview and verified download remain in authenticated Control Web.
+Standalone `captain chat`, including the VPS Web terminal, intercepts the same
+command locally and prints at most twelve recent metadata rows instead of
+forwarding it to the model.
+
+`/runs` opens the global **Live Runs** overlay, still without adding a seventh
+hub. `Left`/`Right` selects All, Running, Failed, Interrupted, or Cancelled;
+`Up`/`Down` selects a run; `PgUp`/`PgDn` inspects the shared bounded redacted
+tail; and `r` refreshes. `x` only arms cancellation for an active run carrying
+a real abort handle, then `y` confirms; `n` or `Esc` keeps it running and the
+daemon/kernel revalidates the handle atomically. Standalone `captain chat` and
+the VPS Web terminal intercept `/runs` before the model and return at most
+twelve metadata-only rows. Tail and cancellation stay in the full TUI or
+authenticated Control Web.
 
 In `Automation > Approbations`, `o`, `s`, and `A` authorize once, for the
 current daemon session, or through a durable rule. `R`, `D`, and `X` open a
@@ -213,7 +234,7 @@ captain status [--json]
 
 **Behavior:**
 
-- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, provider-reported subscription windows, the durable outbound-response ledger, and the Captain release monitor.
+- If a daemon is running: queries `GET /api/status` and displays agent count, provider, model, LLM readiness, auth mode, configured channels, media/TTS summary, uptime, API URL, operational paths, active agents, Captain's internal rolling token guard, provider-reported subscription windows, the durable outbound-response ledger, the Captain release monitor, and cached deployment readiness with its first operator action.
 - If no daemon is running: boots an in-process kernel and shows persisted state. Displays a warning that the daemon is not running.
 - The principal `captain` agent is expected to match the global `[default_model]`. On startup, Captain repairs stale persisted principal-agent manifests so `captain status` does not report a global provider/model that differs from the active Captain agent.
 - Provider subscription state is never inferred from local usage. `unavailable`
@@ -248,7 +269,7 @@ captain update [--check] [--yes] [--version <release-tag>]
 |---|---|
 | `--check` | Resolve the compatible release channel without installing. |
 | `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
-| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.11`. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.12`. |
 
 Stable installations do not opt into prereleases. An existing prerelease may
 advance to a newer prerelease or the corresponding stable version. The archive
@@ -273,7 +294,7 @@ captain status --json | jq '.runtime_update'
 Run diagnostic checks on the Captain installation.
 
 ```
-captain doctor [--json] [--repair]
+captain doctor [--json] [--repair] [--full]
 ```
 
 **Options:**
@@ -282,6 +303,7 @@ captain doctor [--json] [--repair]
 |---|---|
 | `--json` | Output results as JSON for scripting. |
 | `--repair` | Attempt to auto-fix issues (create missing directories, config, remove stale files). Prompts for confirmation before each repair. |
+| `--full` | Include the authenticated daemon inventory and cached deployment-readiness checks. |
 
 **Checks performed:**
 
@@ -292,6 +314,12 @@ agent manifests, provider credentials/readiness, active channel configuration
 (Telegram, Discord, Signal, Email), config/environment consistency, native
 runtime dependencies, and local toolchain availability. Use `--json` when an
 operator or test needs the exact checks exposed by the installed build.
+When `--full` reaches a running daemon, it also reports the cached public
+deployment state and up to three deduplicated remediations. `pending` and
+`degraded` remain warnings, an absent public domain is explicitly
+`not_configured`, and a configured deployment in `failed` state makes the
+doctor result fail. Doctor reads the same cache as Control and does not launch
+DNS or HTTP probes itself.
 
 **Example:**
 

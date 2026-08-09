@@ -62,11 +62,14 @@ Do not infer independence merely because calls appeared in the same model
 response. If one call needs another call's output, keep them sequential. For
 long-running dependency graphs, use detached runs and declare `depends_on`.
 
-### Detached tool runs
+### Live tool runs
 
-Use detached tool runs when an eligible diagnostic, build, SSH check, or package
-command may run longer than one agent turn, or when several independent checks
-can run in parallel without depending on each other's results.
+Every foreground and detached tool call receives a durable `run_id`. Its bounded
+preview remains available through status/result, while output beyond that preview
+is retained outside the model context. Use an explicit detached run when an
+eligible diagnostic, build, SSH check, or package command may run longer than one
+agent turn, or when several independent checks can run without depending on each
+other's results.
 
 Eligible first-level target tools:
 
@@ -84,7 +87,7 @@ Start one eligible tool in the background and return a `run_id` immediately.
 
 | Field | Required | Notes |
 |---|---|---|
-| `tool` | yes | Target tool name, for example `shell_exec` or `ssh_exec`. |
+| `tool_name` | yes | Target tool name, for example `shell_exec` or `ssh_exec`. |
 | `input` | yes | JSON input passed to the target tool. The target tool's normal validation still applies. |
 | `depends_on` | no | Array of `run_id`s that must already be `completed` successfully before this run may start. |
 
@@ -105,15 +108,67 @@ Read the current state of a run: `running`, `completed`, `failed`, or
 #### `tool_run_result`
 
 Read the bounded result of a completed/failed/cancelled/interrupted run, or the
-current state if it is still running.
+current state if it is still running. `output_available` indicates that retained
+evidence can be queried without re-running the tool.
 
 | Field | Required | Notes |
 |---|---|---|
 | `run_id` | yes | The id returned by `tool_run_start`. |
 
+#### `tool_run_retry`
+
+Explicitly retry an eligible `failed`, `cancelled`, or `interrupted` Live Run.
+The Live Runs ledger never stores raw tool input, so the caller must provide it
+again and its SHA-256 must exactly match the source run. The same caller agent,
+tool allowlist, execution policy, approvals, and target validation apply to the
+new detached run.
+
+| Field | Required | Notes |
+|---|---|---|
+| `run_id` | yes | Terminal source run. Successfully completed runs cannot be retried. |
+| `input` | yes | Exact prior JSON input. Changed input is a new intention and must use `tool_run_start`. |
+| `acknowledge_uncertain_effect` | interrupted only | Must equal `run_id` after inspecting evidence and deciding that repeating a possibly completed external effect is acceptable. |
+| `reason` | no | Short operator-safe retry reason. |
+
+The new row exposes `retry_of_run_id` and a durable `retry_attempt`; Captain
+allows at most three retries in one lineage. Missing ancestors cannot reset that
+circuit breaker. There is no automatic replay after restart.
+
+#### `tool_run_read`
+
+Read one bounded page from the retained output of a foreground or detached run.
+
+| Field | Required | Notes |
+|---|---|---|
+| `run_id` | yes | Any run id returned in tool-run metadata. |
+| `start_line` | no | One-based first line, default 1. |
+| `max_lines` | no | Page size, default 100 and maximum 500. |
+
+#### `tool_run_tail`
+
+Read the latest retained lines while a run is active or after it finishes. This
+is the normal progress inspection path for a live run.
+
+| Field | Required | Notes |
+|---|---|---|
+| `run_id` | yes | Any run id returned in tool-run metadata. |
+| `max_lines` | no | Number of final lines, default 100 and maximum 500. |
+
+#### `tool_run_search`
+
+Search retained output and return only matching lines.
+
+| Field | Required | Notes |
+|---|---|---|
+| `run_id` | yes | Any run id returned in tool-run metadata. |
+| `query` | yes | Non-empty literal text. |
+| `max_matches` | no | Maximum matches, default 20 and maximum 100. |
+| `case_sensitive` | no | Default false. |
+
 #### `tool_run_cancel`
 
-Cancel a running detached tool.
+Cancel a running detached tool. Already captured partial output remains
+inspectable rather than being replaced by the cancellation message.
 
 | Field | Required | Notes |
 |---|---|---|
@@ -121,14 +176,38 @@ Cancel a running detached tool.
 
 #### `tool_run_list`
 
-List recent detached tool runs. The newest 200 terminal runs survive restarts;
-every still-running row is retained and becomes `interrupted` after a restart.
+List recent foreground and detached tool runs. The newest 200 terminal runs
+survive restarts; every still-running row is retained and becomes `interrupted` after a restart.
 Use this history before starting duplicate diagnostics.
 
 | Field | Required | Notes |
 |---|---|---|
 | `status` | no | Optional filter: `running`, `completed`, `failed`, `cancelled`, or `interrupted` after a Captain restart. |
 | `limit` | no | Maximum runs to return. |
+
+#### Output retention and integrity
+
+Large output is not injected into the model automatically. Captain keeps a
+100,000-character result preview and stores at most 5,000,000 bytes per run under
+the private `data/tool-runs/` directory. The directory has a 128 MiB total quota
+and seven-day TTL. Every retained representation is sanitized: partial previews,
+small SQLite results, streamed evidence and non-streamed final results. Final
+files are stripped of terminal escapes, checked against the runtime secret
+policy, redacted where a supported secret shape is recognized, written through a
+synchronized temporary file, and referenced by SHA-256 in the SQLite run ledger.
+Reads verify that checksum. A secret shape that remains after redaction fails
+closed: the result becomes an explicit withheld marker and no unsafe durable
+file is exposed. At boot, an older terminal row is sanitized in memory and
+rewritten before it can be served again.
+
+An active run uses an owner-only `.part` file. It is never returned directly;
+live reads sanitize a bounded snapshot first. At boot, persisted `running` rows
+first become `interrupted`; Captain then sanitizes and checksum-commits their
+matching partial or already-renamed final evidence, attaches it to SQLite, and
+only then removes unrelated partial files. This preserves useful power-loss
+evidence without replaying unknown side effects. Stream forwarding is bounded at
+the same per-run limit before asynchronous queueing, so an unbounded child cannot
+turn retained-output safety into unbounded runtime memory.
 
 #### `docker_exec`
 

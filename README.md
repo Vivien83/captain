@@ -39,7 +39,8 @@ Telegram, or Discord.
 
 <table>
 <tr><td width="220"><b>One binary, one daemon</b></td><td>A compiled Rust core orchestrates agents, tools, memory, channels, schedules, and approvals. Starts in seconds, idles light, survives reboots as a native service (launchd/systemd), and updates itself — ask it to in chat, approve, done.</td></tr>
-<tr><td><b>Durable work</b></td><td>Projects, goals, checkpoints, workflows, and detached tool runs are persisted. Committed control-plane state uses SQLite WAL/FULL or synchronized atomic files; after a restart, incomplete detached work becomes inspectable as <code>interrupted</code> instead of disappearing or being replayed blindly.</td></tr>
+<tr><td><b>Durable work</b></td><td>Projects, goals, checkpoints, workflows, and foreground or detached Live Runs are persisted. Long tool output stays outside the model context in bounded, redacted, checksum-verified evidence that Captain can read, search, or tail later. After a restart, incomplete work becomes inspectable as <code>interrupted</code> instead of disappearing or being replayed blindly. Retries are explicit, digest-bound and audited; uncertain interrupted effects require acknowledgement. An authenticated operator API exposes metadata and a bounded sanitized tail, and can cancel only an active run backed by a real abort handle. Control opens the same private inventory from its global top bar, with filters, live refresh, bounded text-only tails, and cancellation only when the runtime reports the run as actually cancellable. Full Ratatui exposes that inventory through <code>/runs</code> with stale-tail protection and two-step cancellation; standalone chat and the Web terminal stay metadata-only and bounded.</td></tr>
+<tr><td><b>Grounded research</b></td><td>Grouped research searches and retrieves independent sources concurrently, but keeps dependent verification ordered. Search snippets stay discovery-only; a source becomes citation-ready only after a successful page read with final URL, timestamp, and content SHA-256. For important claims, Captain refetches cited pages, rejects invented links or quotes absent from the source, measures declared provenance, and renders the Sources block from audited URLs. The audit certifies retrieval and verbatim evidence presence, never semantic truth by assertion.</td></tr>
 <tr><td><b>Real execution, guarded</b></td><td>Shell, files, SSH, browser automation, web research, code execution, documents, and media. Sensitive calls use approvals; critical shell patterns are blocked; budgets limit tokens, cost, and tool-call rate. Captain shows its durable rolling guard separately from provider-owned subscription windows; Codex percentages and reset times come from official live account and response signals, never a copied quota table. Compact Chat status gives each provider-wide window and each limit matching the active model its own gauge; other model-specific families are summarized as outside the active model, while Status and Budget remain exhaustive. Ratatui, Web Control, and the retained desktop compatibility wrapper share that contract. Independent read-only tools may run concurrently, while dependent or side-effecting work remains ordered.</td></tr>
 <tr><td><b>Readable native capabilities</b></td><td>Drop a reviewed <code>*.captain</code> file into a global or project <code>.captain/</code> directory and Captain hot-loads it as a typed <code>cap_*</code> tool. Captain Forge keeps dependencies, permissions, approvals, durable DAG execution, crash recovery, revision history, rollback, and exact operator decisions under kernel control.</td></tr>
 <tr><td><b>Memory that follows the conversation</b></td><td>Session recall, durable user facts, project state, a knowledge graph, and optional local ONNX embeddings provide bounded context without dumping raw history into every turn. Accepted facts enter a local continuity journal first, remain available during a MemPalace outage, and resynchronize automatically with bounded backoff.</td></tr>
@@ -55,15 +56,15 @@ Telegram, or Discord.
 ## Quick Install
 
 Current public early-access release:
-[v0.1.0-alpha.11](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11).
-Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11`;
+[v0.1.0-alpha.12](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.12).
+Immutable Docker image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12`;
 moving alpha channel: `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 bash
 ```
 
 The official repository, release assets, checksums, and container image are
@@ -97,15 +98,21 @@ Unix installers.
 ```bash
 export ANTHROPIC_API_KEY=...       # or any supported provider key
 export TELEGRAM_BOT_TOKEN=...      # optional — see below
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 CAPTAIN_PROFILE=vps \
+    CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 bash
 ```
 
-The `vps` profile installs a systemd service, starts it, and validates
-health. If a Telegram token is present, Captain validates it against the
+The `vps` profile installs a systemd service, starts it, and validates health.
+If a Telegram token is present, Captain validates it against the
 Telegram API, discovers your chat from the bot's pending messages, and
 **sends you a confirmation message — your first contact with your agent
 happens on your phone, seconds after install.**
+
+Alpha 12 can manage one public HTTPS domain end to end. Create its DNS record
+first, then set `CAPTAIN_DOMAIN` as above or answer the interactive installer
+prompt. Captain keeps its API on loopback, configures Caddy transactionally,
+and finishes only after public TLS, Control, health, and version parity pass.
 
 ### Headless VPS with your ChatGPT subscription (Codex, no API key)
 
@@ -115,8 +122,9 @@ installs everything (binary, systemd service) without starting the daemon
 yet, so the readiness check below doesn't run before you've logged in:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=vps CAPTAIN_YES=1 CAPTAIN_START=0 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 CAPTAIN_PROFILE=vps \
+    CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # prints a URL + code — open it on your phone, no local browser needed
 systemctl start captain    # non-root install: systemctl --user start captain
@@ -132,7 +140,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
 ```
 
 First boot generates the daemon API key and persists it — along with all
@@ -148,8 +156,8 @@ or privileged mode. Pull and run the immutable image with:
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.12 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.12 docker compose up -d
 ```
 
 Configure the chosen model provider after first boot. Add host access only as
@@ -210,6 +218,12 @@ without a click. Host updates verify the release SHA-256, while Docker and
 unsupported platforms stay operator-owned and are checked again. The durable
 monitor state is visible in `captain status` and `GET /api/status`.
 
+On a configured public domain, Captain also checks local/public ports and
+health, DNS, TLS, reverse-proxy routing, and exact version parity every five
+minutes. `captain doctor --full`, API Status, and Control read the same
+crash-safe snapshot and show concrete remediation without exposing raw network
+errors.
+
 ---
 
 ## What You Can Ask It
@@ -246,6 +260,7 @@ tool runs that the agent can revisit, cancel, or order with dependencies.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Headless installs, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | External tool servers and transport contract |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and their fixes |
+| [0.1.0-alpha.12 Release Notes](docs/releases/v0.1.0-alpha.12.md) | Durable Live Runs, grounded research, verified artifacts, and managed VPS domains |
 | [0.1.0-alpha.11 Release Notes](docs/releases/v0.1.0-alpha.11.md) | Native email, durable integrations, audit closure, and local CI |
 | [0.1.0-alpha.10 Release Notes](docs/releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |
 | [0.1.0-alpha.9 Release Notes](docs/releases/v0.1.0-alpha.9.md) | Durable workflow learning and native release updates |

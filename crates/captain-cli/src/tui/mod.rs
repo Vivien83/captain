@@ -14,10 +14,12 @@ mod default_agent;
 pub mod diff_render;
 mod error_route;
 pub mod event;
+mod event_artifacts;
 mod event_memory;
 mod event_messages;
 mod event_native_capabilities;
 mod event_stream;
+mod event_tool_runs;
 mod file_upload;
 mod hub_key_state;
 mod hub_nav;
@@ -113,9 +115,10 @@ use render_state::{
     MainDrawRoute, OverlayDrawRoute,
 };
 use screens::{
-    agents, approvals, audit, budget, channels, chat, comms, cron, dashboard, extensions, graph,
-    hands, learning, logs, memory, native_capabilities, peers, projects, security, sessions,
-    settings, skills, skills_proposed, templates, triggers, usage, welcome, wizard, workflows,
+    agents, approvals, artifacts, audit, budget, channels, chat, comms, cron, dashboard,
+    extensions, graph, hands, learning, live_runs, logs, memory, native_capabilities, peers,
+    projects, security, sessions, settings, skills, skills_proposed, templates, triggers, usage,
+    welcome, wizard, workflows,
 };
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
@@ -191,6 +194,12 @@ struct App {
     /// Phase-f.13: modal overlay. When `Some(tab)`, the chat stays
     /// rendered underneath and the named tab's screen is drawn on top. Esc pops.
     overlay_tab: Option<Tab>,
+    /// Global read-only immutable artifact browser. It is deliberately an
+    /// overlay rather than a seventh operational hub.
+    artifact_overlay_open: bool,
+    /// Global Live Runs operator overlay. It shares the API-safe projection
+    /// with Control and never becomes another operational hub.
+    live_runs_overlay_open: bool,
     tab_scroll_offset: usize,
     config_path: Option<PathBuf>,
     should_quit: bool,
@@ -218,6 +227,8 @@ struct App {
     workflows: workflows::WorkflowState,
     triggers: triggers::TriggerState,
     sessions: sessions::SessionsState,
+    artifacts: artifacts::ArtifactsState,
+    live_runs: live_runs::LiveRunsState,
     memory: memory::MemoryState,
     learning: learning::LearningState,
     skills_proposed: skills_proposed::SkillsProposedState,
@@ -284,6 +295,8 @@ impl App {
             pending_restore_messages: None,
             pending_chat_replay: None,
             overlay_tab: None,
+            artifact_overlay_open: false,
+            live_runs_overlay_open: false,
             tab_scroll_offset: 0,
             config_path,
             should_quit: false,
@@ -300,6 +313,8 @@ impl App {
             workflows: workflows::WorkflowState::new(),
             triggers: triggers::TriggerState::new(),
             sessions: sessions::SessionsState::new(),
+            artifacts: artifacts::ArtifactsState::new(),
+            live_runs: live_runs::LiveRunsState::new(),
             memory: memory::MemoryState::new(),
             learning: learning::LearningState::new(),
             skills_proposed: skills_proposed::SkillsProposedState::new(),
@@ -543,6 +558,18 @@ impl App {
 
     fn handle_review_event(&mut self, ev: AppEvent) -> Option<AppEvent> {
         match ev {
+            AppEvent::ArtifactsLoaded(result) => self.handle_artifacts_loaded(result),
+            AppEvent::ArtifactVersionsLoaded {
+                artifact_id,
+                result,
+            } => self.handle_artifact_versions_loaded(artifact_id, result),
+            AppEvent::ToolRunsLoaded(result) => self.handle_tool_runs_loaded(result),
+            AppEvent::ToolRunTailLoaded { run_id, result } => {
+                self.handle_tool_run_tail_loaded(run_id, result)
+            }
+            AppEvent::ToolRunCancelled { run_id, result } => {
+                self.handle_tool_run_cancelled(run_id, result)
+            }
             AppEvent::SessionsLoaded(list) => self.handle_sessions_loaded(list),
             AppEvent::SessionLoaded(session) => self.handle_loaded_session(session),
             AppEvent::SessionDeleted(id) => self.handle_session_deleted(id),
@@ -958,6 +985,56 @@ impl App {
     fn handle_cron_job_mutated(&mut self, id: String, what: &'static str) {
         self.cron.status_msg = automation_status::cron_job_mutated_message(&id, what);
         self.refresh_cron();
+    }
+
+    fn handle_artifacts_loaded(
+        &mut self,
+        result: Result<captain_types::artifact::ArtifactInventory, String>,
+    ) {
+        let selected_artifact = self.artifacts.apply_inventory(result);
+        if self.artifact_overlay_open {
+            if let Some(artifact_id) = selected_artifact {
+                self.refresh_artifact_versions(artifact_id);
+            }
+        }
+    }
+
+    fn handle_artifact_versions_loaded(
+        &mut self,
+        artifact_id: uuid::Uuid,
+        result: Result<Vec<captain_types::artifact::ArtifactVersion>, String>,
+    ) {
+        self.artifacts.apply_versions(artifact_id, result);
+    }
+
+    fn handle_tool_runs_loaded(
+        &mut self,
+        result: Result<Vec<captain_runtime::tool_run_operator::OperatorToolRun>, String>,
+    ) {
+        let selected_run = self.live_runs.apply_runs(result);
+        if self.live_runs_overlay_open {
+            if let Some(run_id) = selected_run {
+                self.refresh_tool_run_tail(run_id);
+            }
+        }
+    }
+
+    fn handle_tool_run_tail_loaded(
+        &mut self,
+        run_id: String,
+        result: Result<captain_runtime::tool_run_operator::OperatorToolRunTail, String>,
+    ) {
+        self.live_runs.apply_tail(&run_id, result);
+    }
+
+    fn handle_tool_run_cancelled(
+        &mut self,
+        run_id: String,
+        result: Result<captain_runtime::tool_run_operator::OperatorToolRun, String>,
+    ) {
+        if self.live_runs.apply_cancel(&run_id, result).is_some() {
+            self.refresh_live_runs();
+        }
     }
 
     fn handle_sessions_loaded(&mut self, list: Vec<sessions::SessionInfo>) {
@@ -1448,6 +1525,12 @@ impl App {
         if self.handle_ctrl_c_key(key) {
             return;
         }
+        if self.handle_live_runs_overlay_key(key) {
+            return;
+        }
+        if self.handle_artifact_overlay_key(key) {
+            return;
+        }
         if self.handle_file_picker_key(key) {
             return;
         }
@@ -1516,6 +1599,35 @@ impl App {
             return true;
         }
         false
+    }
+
+    fn handle_artifact_overlay_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        if !self.artifact_overlay_open {
+            return false;
+        }
+        match self.artifacts.handle_key(key) {
+            artifacts::ArtifactsAction::Continue => {}
+            artifacts::ArtifactsAction::Close => self.artifact_overlay_open = false,
+            artifacts::ArtifactsAction::Refresh => self.refresh_artifacts(),
+            artifacts::ArtifactsAction::LoadVersions(artifact_id) => {
+                self.refresh_artifact_versions(artifact_id)
+            }
+        }
+        true
+    }
+
+    fn handle_live_runs_overlay_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        if !self.live_runs_overlay_open {
+            return false;
+        }
+        match self.live_runs.handle_key(key) {
+            live_runs::LiveRunsAction::Continue => {}
+            live_runs::LiveRunsAction::Close => self.live_runs_overlay_open = false,
+            live_runs::LiveRunsAction::Refresh => self.refresh_live_runs(),
+            live_runs::LiveRunsAction::LoadTail(run_id) => self.refresh_tool_run_tail(run_id),
+            live_runs::LiveRunsAction::Cancel(run_id) => self.cancel_tool_run(run_id),
+        }
+        true
     }
 
     fn handle_main_global_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
@@ -1979,6 +2091,13 @@ impl App {
                 _ => {}
             }
         }
+
+        if self.artifact_overlay_open && self.artifacts.tick() {
+            self.refresh_artifacts();
+        }
+        if self.live_runs_overlay_open && self.live_runs.tick() {
+            self.refresh_live_runs();
+        }
     }
 
     fn tick_screen_route(&mut self, route: ScreenTickRoute) {
@@ -2039,6 +2158,77 @@ impl App {
 
     fn close_overlay(&mut self) {
         self.apply_overlay_state(overlay_state_after_close());
+    }
+
+    fn open_artifacts(&mut self) {
+        self.overlay_tab = None;
+        self.file_picker = None;
+        self.live_runs_overlay_open = false;
+        self.artifact_overlay_open = true;
+        self.refresh_artifacts();
+    }
+
+    fn open_live_runs(&mut self) {
+        self.overlay_tab = None;
+        self.file_picker = None;
+        self.artifact_overlay_open = false;
+        self.live_runs_overlay_open = true;
+        self.refresh_live_runs();
+    }
+
+    fn refresh_artifacts(&mut self) {
+        if self.artifacts.loading_inventory {
+            return;
+        }
+        let Some(backend) = self.backend.to_ref() else {
+            self.artifacts.error = "No backend connected".to_string();
+            return;
+        };
+        self.artifacts.begin_inventory_load();
+        event_artifacts::spawn_fetch_inventory(backend, self.event_tx.clone());
+    }
+
+    fn refresh_artifact_versions(&mut self, artifact_id: uuid::Uuid) {
+        let Some(backend) = self.backend.to_ref() else {
+            self.artifacts.error = "No backend connected".to_string();
+            return;
+        };
+        if !self.artifacts.begin_versions_load(artifact_id) {
+            return;
+        }
+        event_artifacts::spawn_fetch_versions(backend, artifact_id, self.event_tx.clone());
+    }
+
+    fn refresh_live_runs(&mut self) {
+        if self.live_runs.loading_runs {
+            return;
+        }
+        let Some(backend) = self.backend.to_ref() else {
+            self.live_runs.error = "No backend connected".to_string();
+            return;
+        };
+        self.live_runs.begin_runs_load();
+        event_tool_runs::spawn_fetch_runs(backend, self.event_tx.clone());
+    }
+
+    fn refresh_tool_run_tail(&mut self, run_id: String) {
+        let Some(backend) = self.backend.to_ref() else {
+            self.live_runs.error = "No backend connected".to_string();
+            return;
+        };
+        if !self.live_runs.begin_tail_load(&run_id) {
+            return;
+        }
+        event_tool_runs::spawn_fetch_tail(backend, run_id, self.event_tx.clone());
+    }
+
+    fn cancel_tool_run(&mut self, run_id: String) {
+        let Some(backend) = self.backend.to_ref() else {
+            self.live_runs
+                .apply_cancel(&run_id, Err("No backend connected".to_string()));
+            return;
+        };
+        event_tool_runs::spawn_cancel_run(backend, run_id, self.event_tx.clone());
     }
 
     fn apply_overlay_state(&mut self, state: OverlayState) {
@@ -4730,6 +4920,14 @@ impl App {
 
     fn handle_utility_slash_command(&mut self, command: &str, args: &str) -> bool {
         match command {
+            "/artifacts" => {
+                self.open_artifacts();
+                true
+            }
+            "/runs" => {
+                self.open_live_runs();
+                true
+            }
             // Phase N.1 — copie la dernière réponse agent dans le clipboard.
             "/copy" => {
                 self.handle_copy_slash(args);
@@ -5389,6 +5587,15 @@ impl App {
                 }
             }
         }
+
+        if self.artifact_overlay_open {
+            let inner = chrome::draw_overlay_shell(frame, content, "Artifacts");
+            artifacts::draw(frame, inner, &mut self.artifacts);
+        }
+        if self.live_runs_overlay_open {
+            let inner = chrome::draw_overlay_shell(frame, content, "Live Runs");
+            live_runs::draw(frame, inner, &mut self.live_runs);
+        }
     }
 
     fn draw_main_content(&mut self, frame: &mut ratatui::Frame, content: Rect) {
@@ -5738,6 +5945,85 @@ mod app_event_route_tests {
                 crate::i18n::current()
             )
         );
+    }
+
+    #[test]
+    fn artifacts_slash_opens_the_global_read_only_overlay_without_a_new_tab() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(None, tx);
+        app.phase = Phase::Main;
+        app.active_tab = Tab::Chat;
+
+        app.handle_slash_command("/artifacts");
+
+        assert!(app.artifact_overlay_open);
+        assert_eq!(app.active_tab, Tab::Chat);
+        assert_eq!(TABS.len(), 6);
+        assert_eq!(app.artifacts.error, "No backend connected");
+    }
+
+    #[test]
+    fn runs_slash_opens_the_global_operator_overlay_without_a_new_tab() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(None, tx);
+        app.phase = Phase::Main;
+        app.active_tab = Tab::Chat;
+        app.artifact_overlay_open = true;
+
+        app.handle_slash_command("/runs");
+
+        assert!(app.live_runs_overlay_open);
+        assert!(!app.artifact_overlay_open);
+        assert_eq!(app.active_tab, Tab::Chat);
+        assert_eq!(TABS.len(), 6);
+        assert_eq!(app.live_runs.error, "No backend connected");
+    }
+
+    #[test]
+    fn closed_artifacts_overlay_does_not_start_a_follow_up_version_read() {
+        use captain_types::artifact::{
+            ArtifactInventory, ArtifactPreviewKind, ArtifactStoreStatus, ArtifactVersion,
+        };
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut app = App::new(None, tx);
+        app.artifacts.loading_inventory = true;
+        let artifact_id = uuid::Uuid::new_v4();
+
+        app.handle_artifacts_loaded(Ok(ArtifactInventory {
+            items: vec![ArtifactVersion {
+                artifact_id,
+                version: 1,
+                agent_id: "captain".to_string(),
+                session_id: None,
+                title: "Report".to_string(),
+                filename: "report.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                preview_kind: ArtifactPreviewKind::Markdown,
+                size_bytes: 12,
+                sha256: "a".repeat(64),
+                created_at: chrono::Utc::now(),
+                summary: None,
+            }],
+            status: ArtifactStoreStatus {
+                healthy: true,
+                artifacts: 1,
+                versions: 1,
+                bytes: 12,
+                invalid_entries: 0,
+                recovered_staging_entries: 0,
+                max_artifact_bytes: 50 * 1024 * 1024,
+                max_total_bytes: 512 * 1024 * 1024,
+            },
+        }));
+
+        assert!(!app.artifact_overlay_open);
+        assert!(!app.artifacts.loading_inventory);
+        assert_eq!(
+            app.artifacts.selected_artifact().unwrap().artifact_id,
+            artifact_id
+        );
+        assert!(app.artifacts.error.is_empty());
     }
 
     #[test]

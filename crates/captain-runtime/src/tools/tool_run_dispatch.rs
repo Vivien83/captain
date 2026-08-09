@@ -6,8 +6,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{
-    tool_run_cancel, tool_run_list, tool_run_result, tool_run_start, tool_run_status,
-    ToolRunStartContext,
+    tool_run_cancel, tool_run_list, tool_run_read, tool_run_result, tool_run_retry,
+    tool_run_search, tool_run_start, tool_run_status, tool_run_tail, ToolRunStartContext,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -22,22 +22,26 @@ pub(crate) async fn dispatch_tool_run_tool(
     exec_policy: Option<&ExecPolicy>,
 ) -> Result<String, String> {
     match tool_name {
-        "tool_run_start" => {
-            tool_run_start(
-                input,
-                ToolRunStartContext {
-                    kernel: kernel.cloned(),
-                    allowed_tools: allowed_tools.map(|tools| tools.to_vec()),
-                    caller_agent_id: caller_agent_id.map(str::to_string),
-                    allowed_env_vars: allowed_env_vars.unwrap_or(&[]).to_vec(),
-                    workspace_root: workspace_root.map(Path::to_path_buf),
-                    exec_policy: exec_policy.cloned(),
-                },
-            )
-            .await
+        "tool_run_start" | "tool_run_retry" => {
+            let context = ToolRunStartContext {
+                kernel: kernel.cloned(),
+                allowed_tools: allowed_tools.map(|tools| tools.to_vec()),
+                caller_agent_id: caller_agent_id.map(str::to_string),
+                allowed_env_vars: allowed_env_vars.unwrap_or(&[]).to_vec(),
+                workspace_root: workspace_root.map(Path::to_path_buf),
+                exec_policy: exec_policy.cloned(),
+            };
+            if tool_name == "tool_run_start" {
+                tool_run_start(input, context).await
+            } else {
+                tool_run_retry(input, context).await
+            }
         }
         "tool_run_status" => tool_run_status(input),
         "tool_run_result" => tool_run_result(input),
+        "tool_run_read" => tool_run_read(input),
+        "tool_run_tail" => tool_run_tail(input),
+        "tool_run_search" => tool_run_search(input),
         "tool_run_cancel" => tool_run_cancel(input),
         "tool_run_list" => tool_run_list(input),
         other => Err(format!("Unknown tool run tool: {other}")),

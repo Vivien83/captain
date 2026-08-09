@@ -23,7 +23,7 @@ your personal or self-hosted AI system.
 |---|---|---|
 | `core` | Minimal local install | CLI, config, daemon basics |
 | `desktop` | Mac/Linux workstation | Local chat, TUI, web terminal, channels |
-| `vps` | Server deployment | Service install, restart behavior, optional domain/HTTPS |
+| `vps` | Server deployment | Service install, restart behavior, managed domain/HTTPS |
 | `full-media` | Media-heavy setup | Adds extra dependencies for audio/media workflows |
 
 Most users should start with `desktop` on a local machine or `vps` on a server.
@@ -35,34 +35,33 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.11` explicitly.
+below pins `v0.1.0-alpha.12` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 \
-    CAPTAIN_PROFILE=vps \
-    CAPTAIN_DOMAIN=captain.example.com \
-    bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 CAPTAIN_PROFILE=vps bash
 ```
 
 The VPS profile installs the binary, prepares local state, runs setup, and
-installs a service when supported. With `CAPTAIN_DOMAIN`, Captain can prepare
-domain/HTTPS wiring where the host supports it.
+installs a systemd service. Alpha 12 can also activate one managed public HTTPS
+domain: set `CAPTAIN_DOMAIN` for unattended setup or answer the interactive
+prompt. See [GitHub + VPS Install](deployment/github-vps-install.md) for DNS,
+firewall, rollback, and readiness requirements.
 
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.11"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.12"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -89,8 +88,8 @@ For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \
@@ -218,7 +217,11 @@ explicitly enabled, not exposed by accident.
 
 `captain setup` creates the initial web username/password in
 `~/.captain/initial-credentials.txt`. Opening either surface shows the login
-prompt first. To rotate the login from a conversation, ask Captain to change or generate web terminal
+prompt first. The installer prints the username and this owner-only file path,
+not the generated password or daemon API key in plain terminal logs. Browser
+login uses the username/password pair and creates its session token
+automatically; the daemon Bearer key is reserved for CLI/API clients. To rotate
+the login from a conversation, ask Captain to change or generate web terminal
 credentials; it uses the native `web_credentials_update` tool and updates
 `config.toml` as the source of truth. Password rotation also advances
 Captain's private browser-session epoch, so every previously issued web

@@ -86,6 +86,8 @@ gate_chat() {
     --test captain-cli compaction_progress \
     --run-script scripts/control-web-audit.sh \
     --run-script scripts/control-xss-smoke.mjs \
+    --run-script scripts/control-artifact-drawer-smoke.mjs \
+    --run-script scripts/control-live-runs-smoke.mjs \
     --run-script scripts/control-chat-performance-smoke.mjs \
     --run-script scripts/compaction-progress-terminal-smoke.mjs \
     --script-check scripts/tui-smoke.sh \

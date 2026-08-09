@@ -10,7 +10,7 @@ use crate::web_search::WebToolsContext;
 
 use super::{
     check_url_content_guard, ensure_no_secret_literal, render_error_with_suggestion,
-    tool_web_download, tool_web_research_batch,
+    tool_web_citation_audit, tool_web_download, tool_web_research_batch,
 };
 
 const WEB_CONTEXT_UNAVAILABLE: &str =
@@ -31,6 +31,10 @@ pub(crate) async fn dispatch_web_tool(
     caller_agent_id: Option<&str>,
 ) -> WebDispatchOutcome {
     match tool_name {
+        "web_citation_audit" => WebDispatchOutcome::Result(match web_ctx {
+            Some(ctx) => tool_web_citation_audit(input, ctx).await,
+            None => Err(WEB_CONTEXT_UNAVAILABLE.to_string()),
+        }),
         "web_research_batch" => WebDispatchOutcome::Result(match web_ctx {
             Some(ctx) => tool_web_research_batch(input, ctx).await,
             None => Err(WEB_CONTEXT_UNAVAILABLE.to_string()),
@@ -113,6 +117,13 @@ mod tests {
     #[tokio::test]
     async fn protected_web_tools_fail_closed_without_context() {
         let cases = [
+            (
+                "web_citation_audit",
+                serde_json::json!({
+                    "draft": "A sourced statement.[Example](https://example.com)",
+                    "sources": [{"url": "https://example.com", "quotes": []}]
+                }),
+            ),
             (
                 "web_fetch",
                 serde_json::json!({"url": "https://example.com"}),

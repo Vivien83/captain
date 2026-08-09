@@ -96,6 +96,11 @@ fn fallback_tool_reason(tool_name: &str) -> &'static str {
         | "browser_batch" => "Inspect or operate a browser page for the current task.",
         "ask_user" => "Ask the user for missing context before continuing.",
         "channel_send" => "Notify the user through an external channel.",
+        "artifact_publish" => "Publish a durable immutable artifact for later reuse.",
+        "artifact_list" | "artifact_inspect" => {
+            "Inspect durable artifacts owned by the current agent."
+        }
+        "artifact_deliver" => "Deliver a verified artifact through an external channel.",
         "goal_create" | "goal_status" | "goal_pause" | "goal_resume" | "goal_delete" => {
             "Manage an autonomous goal requested by the user."
         }
@@ -184,6 +189,18 @@ mod tests {
         assert_eq!(
             recorded[0].reason,
             "Verify the edited runtime path before committing."
+        );
+    }
+
+    #[test]
+    fn artifact_tools_have_actionable_fallback_reasons() {
+        assert_eq!(
+            fallback_tool_reason("artifact_publish"),
+            "Publish a durable immutable artifact for later reuse."
+        );
+        assert_eq!(
+            fallback_tool_reason("artifact_deliver"),
+            "Deliver a verified artifact through an external channel."
         );
     }
 

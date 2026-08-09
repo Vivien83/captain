@@ -380,22 +380,39 @@ fn extract_session_cookie(request: &Request<Body>) -> Option<String> {
 
 /// Security headers middleware — applied to ALL API responses.
 pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
+    let request_path = request.uri().path().to_string();
+    let artifact_payload_kind = artifact_payload_kind(&request_path);
+    let artifact_preview = artifact_payload_kind == Some(ArtifactPayloadKind::Preview);
+    let artifact_payload = artifact_payload_kind.is_some();
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert(
+        "x-frame-options",
+        if artifact_preview {
+            "SAMEORIGIN".parse().unwrap()
+        } else {
+            "DENY".parse().unwrap()
+        },
+    );
     // Legacy browser XSS filters can mutate otherwise safe markup. Captain
     // relies on its strict CSP and explicit output sanitization instead.
     headers.insert("x-xss-protection", "0".parse().unwrap());
     // Browser scripts are immutable same-origin assets. Inline style remains
     // necessary for bounded dynamic layout values emitted by the UI runtime.
-    headers.insert(
-        "content-security-policy",
-        CONTENT_SECURITY_POLICY.parse().unwrap(),
-    );
+    if !artifact_payload || !headers.contains_key("content-security-policy") {
+        headers.insert(
+            "content-security-policy",
+            CONTENT_SECURITY_POLICY.parse().unwrap(),
+        );
+    }
     headers.insert(
         "referrer-policy",
-        "strict-origin-when-cross-origin".parse().unwrap(),
+        if artifact_payload {
+            "no-referrer".parse().unwrap()
+        } else {
+            "strict-origin-when-cross-origin".parse().unwrap()
+        },
     );
     headers.insert(
         "cache-control",
@@ -406,6 +423,40 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
         "max-age=63072000; includeSubDomains".parse().unwrap(),
     );
     response
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtifactPayloadKind {
+    Preview,
+    Download,
+}
+
+fn artifact_payload_kind(path: &str) -> Option<ArtifactPayloadKind> {
+    let mut segments = path.split('/');
+    if segments.next() != Some("")
+        || segments.next() != Some("api")
+        || segments.next() != Some("artifacts")
+    {
+        return None;
+    }
+    let artifact_id = segments.next()?;
+    if segments.next() != Some("versions") {
+        return None;
+    }
+    let version = segments.next()?;
+    let action = segments.next()?;
+    if segments.next().is_some() {
+        return None;
+    }
+    uuid::Uuid::parse_str(artifact_id).ok()?;
+    if version.parse::<u32>().ok()? == 0 {
+        return None;
+    }
+    match action {
+        "preview" => Some(ArtifactPayloadKind::Preview),
+        "download" => Some(ArtifactPayloadKind::Download),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -454,6 +505,79 @@ mod tests {
             CONTENT_SECURITY_POLICY
         );
         assert_eq!(response.headers()["x-xss-protection"], "0");
+    }
+
+    #[tokio::test]
+    async fn artifact_payload_headers_preserve_only_exact_route_csp() {
+        const ARTIFACT_ID: &str = "01234567-89ab-cdef-0123-456789abcdef";
+        const PREVIEW_CSP: &str = "sandbox; default-src 'none'; frame-ancestors 'self'";
+        const DOWNLOAD_CSP: &str = "sandbox; default-src 'none'; frame-ancestors 'none'";
+
+        async fn response_with_csp(csp: &'static str) -> Response<Body> {
+            Response::builder()
+                .header("content-security-policy", csp)
+                .body(Body::empty())
+                .unwrap()
+        }
+
+        let app = axum::Router::new()
+            .route(
+                &format!("/api/artifacts/{ARTIFACT_ID}/versions/1/preview"),
+                axum::routing::get(|| async { response_with_csp(PREVIEW_CSP).await }),
+            )
+            .route(
+                &format!("/api/artifacts/{ARTIFACT_ID}/versions/1/download"),
+                axum::routing::get(|| async { response_with_csp(DOWNLOAD_CSP).await }),
+            )
+            .route(
+                "/api/artifacts/not-a-uuid/versions/1/preview",
+                axum::routing::get(|| async { response_with_csp("default-src *").await }),
+            )
+            .layer(axum::middleware::from_fn(security_headers));
+
+        let preview = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get(format!(
+                    "/api/artifacts/{ARTIFACT_ID}/versions/1/preview"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.headers()["content-security-policy"], PREVIEW_CSP);
+        assert_eq!(preview.headers()["x-frame-options"], "SAMEORIGIN");
+        assert_eq!(preview.headers()["referrer-policy"], "no-referrer");
+
+        let download = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get(format!(
+                    "/api/artifacts/{ARTIFACT_ID}/versions/1/download"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download.headers()["content-security-policy"], DOWNLOAD_CSP);
+        assert_eq!(download.headers()["x-frame-options"], "DENY");
+        assert_eq!(download.headers()["referrer-policy"], "no-referrer");
+
+        let invalid = app
+            .oneshot(
+                axum::http::Request::get("/api/artifacts/not-a-uuid/versions/1/preview")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            invalid.headers()["content-security-policy"],
+            CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(invalid.headers()["x-frame-options"], "DENY");
     }
 
     #[test]

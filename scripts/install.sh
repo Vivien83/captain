@@ -27,6 +27,11 @@
 #   CAPTAIN_ADMIN_PASSWORD — dashboard admin password (generated if unset)
 #   CAPTAIN_DAEMON_API_KEY — CLI/API bearer token (generated if unset)
 #   CAPTAIN_PUBLIC_URL / CAPTAIN_DOMAIN — optional VPS HTTPS URL/domain
+#   CAPTAIN_INSTALL_PROXY — 0/false/no to leave reverse-proxy provisioning to the operator
+#   CAPTAIN_DNS_CHECK    — 0/false/no to skip the pre-install DNS resolution check
+#   CAPTAIN_DNS_WAIT_SECONDS — DNS propagation wait before failing (default: 60)
+#   CAPTAIN_HTTPS_WAIT_SECONDS — public HTTPS readiness wait (default: 180)
+#   CAPTAIN_CONFIGURE_FIREWALL — 0/false/no to avoid opening HTTP/HTTPS in ufw/firewalld
 #   CAPTAIN_WEB_TERMINAL_SHELL — 1/true/yes to expose raw shell mode in /terminal
 #   CAPTAIN_EMBEDDINGS_INSTALL — 0/false/no to skip native local embeddings runtime install
 #   CAPTAIN_MEMPALACE_INSTALL — 0/false/no to skip managed MemPalace (default: install)
@@ -43,6 +48,9 @@ INSTALL_DIR="${CAPTAIN_INSTALL_DIR:-}"
 PROFILE="${CAPTAIN_PROFILE:-}"
 SETUP_RAN=0
 DETECTED_LOCAL_BUNDLE=0
+VPS_DOMAIN=""
+VPS_PUBLIC_URL=""
+CADDY_PROVISIONED=0
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR=""
 REPO_ROOT=""
@@ -65,6 +73,13 @@ fail() {
 is_yes() {
     case "${1:-}" in
         1|true|TRUE|yes|YES|y|Y) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_false() {
+    case "${1:-}" in
+        0|false|FALSE|no|NO|n|N) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -118,7 +133,7 @@ should_install_proxy() {
         0|false|FALSE|no|NO|n|N) return 1 ;;
     esac
     [ "$PROFILE" = "vps" ] || return 1
-    [ -n "${CAPTAIN_PUBLIC_URL:-}${CAPTAIN_DOMAIN:-}" ] || return 1
+    [ -n "${VPS_DOMAIN:-}" ] || return 1
     return 0
 }
 
@@ -153,6 +168,176 @@ prompt_tty() {
     printf "%s" "$prompt" > /dev/tty
     IFS= read -r CAPTAIN_TTY_ANSWER < /dev/tty || CAPTAIN_TTY_ANSWER=""
     return 0
+}
+
+normalize_vps_domain() {
+    raw=$(printf '%s' "${1:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    while [ "${raw%/}" != "$raw" ]; do
+        raw=${raw%/}
+    done
+    case "$raw" in
+        [Hh][Tt][Tt][Pp][Ss]://*) raw=${raw#*://} ;;
+        [Hh][Tt][Tt][Pp]://*)
+            echo "  Invalid domain: managed Captain Web access requires HTTPS." >&2
+            return 1
+            ;;
+        *://*)
+            echo "  Invalid domain: only an HTTPS URL or a bare DNS hostname is accepted." >&2
+            return 1
+            ;;
+    esac
+    case "$raw" in
+        ""|*/*|*\?*|*\#*|*@*|*:*|*\**)
+            echo "  Invalid domain: use only a hostname such as captain.example.com." >&2
+            return 1
+            ;;
+    esac
+    domain=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+    if ! printf '%s\n' "$domain" | LC_ALL=C awk '
+        length($0) > 253 { exit 1 }
+        index($0, ".") == 0 { exit 1 }
+        {
+            count = split($0, labels, ".")
+            if (count < 2) exit 1
+            all_numeric = (count == 4)
+            for (i = 1; i <= count; i++) {
+                if (length(labels[i]) < 1 || length(labels[i]) > 63) exit 1
+                if (labels[i] !~ /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/) exit 1
+                if (labels[i] !~ /^[0-9]+$/) all_numeric = 0
+            }
+            if (all_numeric) exit 1
+        }
+    '; then
+        echo "  Invalid domain: every DNS label must be 1-63 letters, digits, or internal hyphens." >&2
+        return 1
+    fi
+    printf '%s' "$domain"
+}
+
+setup_answer_domain() {
+    answers=${CAPTAIN_SETUP_ANSWERS:-}
+    [ -n "$answers" ] && [ -f "$answers" ] || return 0
+    value=$(toml_section_string deployment public_url "$answers")
+    [ -n "$value" ] || value=$(toml_section_string deployment domain "$answers")
+    [ -n "$value" ] || value=$(toml_top_string public_url "$answers")
+    [ -n "$value" ] || value=$(toml_top_string domain "$answers")
+    printf '%s' "$value"
+}
+
+prepare_vps_domain() {
+    [ "$PROFILE" = "vps" ] || return 0
+
+    domain_prompted=0
+    public_raw=${CAPTAIN_PUBLIC_URL:-}
+    domain_raw=${CAPTAIN_DOMAIN:-}
+    answers_raw=$(setup_answer_domain)
+    if [ -z "$public_raw" ] && [ -z "$domain_raw" ]; then
+        domain_raw=$answers_raw
+    fi
+
+    if [ -z "$public_raw" ] && [ -z "$domain_raw" ] \
+        && ! is_yes "${CAPTAIN_YES:-}" \
+        && ! is_false "${CAPTAIN_SETUP:-ask}" \
+        && [ -r /dev/tty ]; then
+        domain_prompted=1
+        echo "" > /dev/tty
+        if prompt_tty "  Public domain for Captain Web (optional, e.g. captain.example.com): "; then
+            domain_raw=$CAPTAIN_TTY_ANSWER
+        fi
+    fi
+
+    if [ -z "$public_raw" ] && [ -z "$domain_raw" ]; then
+        if [ "$domain_prompted" = "1" ]; then
+            CAPTAIN_DOMAIN=none
+            export CAPTAIN_DOMAIN
+        fi
+        return 0
+    fi
+    if [ -n "$public_raw" ]; then
+        VPS_DOMAIN=$(normalize_vps_domain "$public_raw") \
+            || fail "CAPTAIN_PUBLIC_URL is not a safe public HTTPS domain."
+    fi
+    if [ -n "$domain_raw" ]; then
+        normalized_domain=$(normalize_vps_domain "$domain_raw") \
+            || fail "CAPTAIN_DOMAIN is not a safe public DNS hostname."
+        if [ -n "$VPS_DOMAIN" ] && [ "$VPS_DOMAIN" != "$normalized_domain" ]; then
+            fail "CAPTAIN_PUBLIC_URL and CAPTAIN_DOMAIN refer to different hosts."
+        fi
+        VPS_DOMAIN=$normalized_domain
+    fi
+
+    VPS_PUBLIC_URL="https://$VPS_DOMAIN"
+    CAPTAIN_DOMAIN=$VPS_DOMAIN
+    CAPTAIN_PUBLIC_URL=$VPS_PUBLIC_URL
+    export CAPTAIN_DOMAIN CAPTAIN_PUBLIC_URL
+}
+
+validate_wait_seconds() {
+    name=$1
+    value=$2
+    case "$value" in
+        ""|*[!0-9]*) fail "$name must be an integer number of seconds." ;;
+    esac
+    [ "$value" -le 900 ] || fail "$name cannot exceed 900 seconds."
+}
+
+resolve_domain_ips() {
+    domain=$1
+    command -v getent >/dev/null 2>&1 || return 1
+    {
+        getent ahostsv4 "$domain" 2>/dev/null || true
+        getent ahostsv6 "$domain" 2>/dev/null || true
+    } | awk '{print $1}' | sed '/^$/d' | sort -u
+}
+
+wait_for_domain_dns() {
+    is_false "${CAPTAIN_DNS_CHECK:-1}" && {
+        echo "  DNS preflight explicitly skipped; public HTTPS will still be verified end to end."
+        return 0
+    }
+    wait_seconds=${CAPTAIN_DNS_WAIT_SECONDS:-60}
+    validate_wait_seconds CAPTAIN_DNS_WAIT_SECONDS "$wait_seconds"
+    elapsed=0
+    while :; do
+        resolved_ips=$(resolve_domain_ips "$VPS_DOMAIN" || true)
+        if [ -n "$resolved_ips" ]; then
+            echo "  DNS resolves $VPS_DOMAIN to: $(printf '%s' "$resolved_ips" | tr '\n' ' ')"
+            return 0
+        fi
+        [ "$elapsed" -lt "$wait_seconds" ] || break
+        if [ "$elapsed" -eq 0 ]; then
+            echo "  Waiting for DNS records for $VPS_DOMAIN..."
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    fail "No A or AAAA record resolves for $VPS_DOMAIN after ${wait_seconds}s. Point the domain to this VPS, wait for DNS propagation, then retry."
+}
+
+proxy_port_listeners() {
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -H -ltn 2>/dev/null | awk '
+        {
+            address = $4
+            if (address ~ /:80$/ || address ~ /:443$/) print
+        }
+    '
+}
+
+preflight_vps_proxy() {
+    should_install_proxy || return 0
+    [ "$OS" = "linux" ] || fail "Automatic public-domain provisioning is supported on Linux VPS hosts."
+    command -v systemctl >/dev/null 2>&1 \
+        || fail "Automatic HTTPS requires a systemd-based VPS. Set CAPTAIN_INSTALL_PROXY=0 only when managing the reverse proxy yourself."
+    is_false "${CAPTAIN_SETUP:-ask}" \
+        && fail "A public domain requires Captain setup. Remove CAPTAIN_SETUP=0 or set CAPTAIN_INSTALL_PROXY=0."
+
+    wait_for_domain_dns
+    listeners=$(proxy_port_listeners)
+    if [ -n "$listeners" ] && ! systemctl is-active --quiet caddy.service 2>/dev/null; then
+        echo "$listeners" >&2
+        fail "Ports 80 or 443 are already in use by a service other than managed Caddy. Keep that proxy and rerun with CAPTAIN_INSTALL_PROXY=0, or free both ports."
+    fi
 }
 
 run_initial_setup() {
@@ -285,6 +470,12 @@ run_privileged() {
     fi
 }
 
+install_file_privileged() {
+    install_tool=$(type -P install 2>/dev/null || true)
+    [ -n "$install_tool" ] || fail "The system 'install' utility is required."
+    run_privileged "$install_tool" "$@"
+}
+
 detect_platform() {
     case "$INSTALL_SOURCE" in
         auto|local|git) ;;
@@ -385,6 +576,66 @@ resolve_install_dir() {
     fi
 }
 
+install_caddy_package() {
+    command -v caddy >/dev/null 2>&1 && return 0
+    echo "  Installing Caddy for managed HTTPS..."
+
+    if command -v apt-get >/dev/null 2>&1; then
+        if ! run_privileged apt-get install -y caddy; then
+            echo "  Caddy is not in the configured APT repositories; enabling Caddy's official stable repository."
+            run_privileged apt-get install -y \
+                debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+            caddy_repo_tmp=$(mktemp -d)
+            if ! curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+                -o "$caddy_repo_tmp/caddy.gpg.key" \
+                || ! curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+                    -o "$caddy_repo_tmp/caddy-stable.list"; then
+                rm -rf "$caddy_repo_tmp"
+                fail "Could not download Caddy's official signed APT repository metadata."
+            fi
+            if ! grep -Fq 'https://dl.cloudsmith.io/public/caddy/stable/deb/debian' \
+                "$caddy_repo_tmp/caddy-stable.list"; then
+                rm -rf "$caddy_repo_tmp"
+                fail "Caddy repository metadata did not contain the expected official Cloudsmith URL."
+            fi
+            if ! gpg --batch --yes --dearmor \
+                --output "$caddy_repo_tmp/caddy-stable-archive-keyring.gpg" \
+                "$caddy_repo_tmp/caddy.gpg.key"; then
+                rm -rf "$caddy_repo_tmp"
+                fail "Could not parse Caddy's official repository signing key."
+            fi
+            install_file_privileged -m 0644 \
+                "$caddy_repo_tmp/caddy-stable-archive-keyring.gpg" \
+                /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+            install_file_privileged -m 0644 \
+                "$caddy_repo_tmp/caddy-stable.list" \
+                /etc/apt/sources.list.d/caddy-stable.list
+            rm -rf "$caddy_repo_tmp"
+            run_privileged apt-get update
+            run_privileged apt-get install -y caddy
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        run_privileged dnf install -y dnf-plugins-core
+        run_privileged dnf copr enable -y @caddy/caddy
+        run_privileged dnf install -y caddy
+    elif command -v yum >/dev/null 2>&1; then
+        run_privileged yum install -y yum-plugin-copr
+        run_privileged yum copr enable -y @caddy/caddy
+        run_privileged yum install -y caddy
+    elif command -v pacman >/dev/null 2>&1; then
+        run_privileged pacman -Sy --needed --noconfirm caddy
+    elif command -v zypper >/dev/null 2>&1; then
+        run_privileged zypper install -y caddy
+    elif command -v apk >/dev/null 2>&1; then
+        run_privileged apk add --no-cache caddy
+    else
+        fail "No supported package manager can install Caddy automatically. Set CAPTAIN_INSTALL_PROXY=0 only when supplying an existing HTTPS proxy."
+    fi
+
+    command -v caddy >/dev/null 2>&1 || fail "Caddy installation completed without a usable caddy command."
+    caddy version >/dev/null 2>&1 || fail "The installed Caddy binary failed its version probe."
+}
+
 install_packages() {
     should_install_deps || return 0
 
@@ -418,8 +669,10 @@ install_packages() {
     if [ "$PROFILE" = "vps" ] && should_install_service && ! command -v systemctl >/dev/null 2>&1; then
         MISSING="$MISSING systemd"
     fi
+    NEED_CADDY=0
     if should_install_proxy && ! command -v caddy >/dev/null 2>&1; then
         MISSING="$MISSING caddy"
+        NEED_CADDY=1
     fi
     if [ "$OS" = "linux" ] && ! has_shared_lib "libssl.so.3"; then
         MISSING="$MISSING libssl.so.3"
@@ -448,7 +701,6 @@ install_packages() {
     if command -v apt-get >/dev/null 2>&1; then
         PKGS="ca-certificates curl tar"
         echo "$MISSING" | grep -q " systemd" && PKGS="$PKGS systemd"
-        echo "$MISSING" | grep -q " caddy" && PKGS="$PKGS caddy"
         echo "$MISSING" | grep -q " libssl.so.3" && PKGS="$PKGS libssl3 openssl"
         [ "$PROFILE" = "full-media" ] && PKGS="$PKGS python3 nodejs"
         if should_install_voice; then
@@ -459,7 +711,6 @@ install_packages() {
     elif command -v dnf >/dev/null 2>&1; then
         PKGS="ca-certificates curl tar"
         echo "$MISSING" | grep -q " systemd" && PKGS="$PKGS systemd"
-        echo "$MISSING" | grep -q " caddy" && PKGS="$PKGS caddy"
         echo "$MISSING" | grep -q " libssl.so.3" && PKGS="$PKGS openssl-libs"
         [ "$PROFILE" = "full-media" ] && PKGS="$PKGS python3 nodejs"
         should_install_voice && PKGS="$PKGS python3 python3-pip libsndfile"
@@ -467,7 +718,6 @@ install_packages() {
     elif command -v yum >/dev/null 2>&1; then
         PKGS="ca-certificates curl tar"
         echo "$MISSING" | grep -q " systemd" && PKGS="$PKGS systemd"
-        echo "$MISSING" | grep -q " caddy" && PKGS="$PKGS caddy"
         echo "$MISSING" | grep -q " libssl.so.3" && PKGS="$PKGS openssl-libs"
         [ "$PROFILE" = "full-media" ] && PKGS="$PKGS python3 nodejs"
         should_install_voice && PKGS="$PKGS python3 python3-pip libsndfile"
@@ -475,7 +725,6 @@ install_packages() {
     elif command -v pacman >/dev/null 2>&1; then
         PKGS="ca-certificates curl tar"
         echo "$MISSING" | grep -q " systemd" && PKGS="$PKGS systemd"
-        echo "$MISSING" | grep -q " caddy" && PKGS="$PKGS caddy"
         echo "$MISSING" | grep -q " libssl.so.3" && PKGS="$PKGS openssl"
         [ "$PROFILE" = "full-media" ] && PKGS="$PKGS python nodejs"
         should_install_voice && PKGS="$PKGS python python-pip libsndfile ffmpeg"
@@ -483,14 +732,12 @@ install_packages() {
     elif command -v zypper >/dev/null 2>&1; then
         PKGS="ca-certificates curl tar"
         echo "$MISSING" | grep -q " systemd" && PKGS="$PKGS systemd"
-        echo "$MISSING" | grep -q " caddy" && PKGS="$PKGS caddy"
         echo "$MISSING" | grep -q " libssl.so.3" && PKGS="$PKGS libopenssl3"
         [ "$PROFILE" = "full-media" ] && PKGS="$PKGS python3 nodejs"
         should_install_voice && PKGS="$PKGS python3 python3-pip libsndfile1 ffmpeg"
         run_privileged zypper install -y $PKGS
     elif command -v apk >/dev/null 2>&1; then
         PKGS="ca-certificates curl tar"
-        echo "$MISSING" | grep -q " caddy" && PKGS="$PKGS caddy"
         echo "$MISSING" | grep -q " libssl.so.3" && PKGS="$PKGS openssl-libs"
         [ "$PROFILE" = "full-media" ] && PKGS="$PKGS python3 nodejs"
         should_install_voice && PKGS="$PKGS python3 py3-pip py3-virtualenv libsndfile ffmpeg"
@@ -498,6 +745,8 @@ install_packages() {
     else
         fail "No supported package manager found to install:$MISSING"
     fi
+
+    [ "$NEED_CADDY" = "1" ] && install_caddy_package
 }
 
 install_linux_service() {
@@ -708,39 +957,328 @@ detect_vps_public_host() {
     printf '%s' '<IP_DU_VPS>'
 }
 
-print_web_terminal_access() {
+render_managed_caddy_fragment() {
+    domain=$1
+    port=$2
+    cat <<EOF
+# Managed by the Captain installer. Re-run the installer to update this block.
+$domain {
+  encode zstd gzip
+  reverse_proxy 127.0.0.1:$port
+}
+EOF
+}
+
+render_caddy_root_with_import() {
+    source_file=$1
+    import_glob=$2
+    if [ -f "$source_file" ]; then
+        awk '
+            $0 == "# BEGIN CAPTAIN MANAGED IMPORT" { skipping = 1; next }
+            $0 == "# END CAPTAIN MANAGED IMPORT" { skipping = 0; next }
+            !skipping { print }
+        ' "$source_file"
+    fi
+    cat <<EOF
+
+# BEGIN CAPTAIN MANAGED IMPORT
+import $import_glob
+# END CAPTAIN MANAGED IMPORT
+EOF
+}
+
+validate_managed_caddy_markers() {
+    source_file=$1
+    awk '
+        BEGIN { state = 0; begin_count = 0; end_count = 0; invalid = 0 }
+        $0 == "# BEGIN CAPTAIN MANAGED IMPORT" {
+            begin_count++
+            if (state != 0 || begin_count > 1) invalid = 1
+            state = 1
+            next
+        }
+        $0 == "# END CAPTAIN MANAGED IMPORT" {
+            end_count++
+            if (state != 1 || end_count > 1) invalid = 1
+            state = 2
+            next
+        }
+        END {
+            if (begin_count != end_count || state == 1 || invalid) exit 1
+        }
+    ' "$source_file"
+}
+
+restore_caddy_transaction() {
+    root_path=$1
+    fragment_path=$2
+    root_backup=$3
+    fragment_backup=$4
+    root_existed=$5
+    fragment_existed=$6
+    if [ "$root_existed" = "1" ]; then
+        install_file_privileged -m 0644 "$root_backup" "$root_path"
+    else
+        run_privileged rm -f "$root_path"
+    fi
+    if [ "$fragment_existed" = "1" ]; then
+        install_file_privileged -m 0644 "$fragment_backup" "$fragment_path"
+    else
+        run_privileged rm -f "$fragment_path"
+    fi
+}
+
+provision_vps_proxy() {
+    should_install_proxy || return 0
+    command -v caddy >/dev/null 2>&1 || fail "Caddy is required for managed HTTPS but is not installed."
+    systemd_system_available \
+        || fail "Managed HTTPS requires the system Caddy service under systemd."
+
+    captain_home=${CAPTAIN_HOME:-$HOME/.captain}
+    cfg="$captain_home/config.toml"
+    generated_caddy="$captain_home/deploy/Caddyfile"
+    [ -f "$cfg" ] || fail "Captain setup did not create $cfg; the public domain cannot be activated."
+    [ -s "$generated_caddy" ] \
+        || fail "Captain setup did not generate $generated_caddy; rerun captain setup with CAPTAIN_DOMAIN=$VPS_DOMAIN."
+    configured_url=$(toml_section_string deployment public_url "$cfg")
+    [ "$configured_url" = "$VPS_PUBLIC_URL" ] \
+        || fail "Captain config declares '$configured_url' instead of '$VPS_PUBLIC_URL'; refusing to expose a mismatched host."
+
+    api_listen=$(toml_top_string api_listen "$cfg")
+    case "$api_listen" in
+        127.0.0.1:*) api_port=${api_listen##*:} ;;
+        *) fail "Managed public access requires api_listen on 127.0.0.1, found '$api_listen'." ;;
+    esac
+    case "$api_port" in
+        ""|*[!0-9]*) fail "Invalid Captain API port in $cfg: '$api_port'." ;;
+    esac
+    [ "$api_port" -ge 1 ] && [ "$api_port" -le 65535 ] \
+        || fail "Captain API port is outside 1-65535: $api_port."
+
+    caddy_root=${CAPTAIN_CADDYFILE:-/etc/caddy/Caddyfile}
+    caddy_dir=$(dirname "$caddy_root")
+    caddy_fragment_dir=${CAPTAIN_CADDY_SNIPPET_DIR:-$caddy_dir/captain.d}
+    caddy_fragment="$caddy_fragment_dir/captain.caddy"
+    case "$caddy_root" in
+        /*) ;;
+        *) fail "CAPTAIN_CADDYFILE must be an absolute path." ;;
+    esac
+    case "$caddy_fragment_dir" in
+        /*) ;;
+        *) fail "CAPTAIN_CADDY_SNIPPET_DIR must be an absolute path." ;;
+    esac
+    case "$caddy_root$caddy_fragment_dir" in
+        *[[:space:]]*) fail "Managed Caddy paths cannot contain whitespace." ;;
+    esac
+    caddy_exec=$(systemctl show caddy.service --property=ExecStart --value 2>/dev/null || true)
+    case "$caddy_exec" in
+        *"--config $caddy_root"*|*"--config=$caddy_root"*) ;;
+        *)
+            fail "caddy.service does not load $caddy_root. Set CAPTAIN_INSTALL_PROXY=0 to preserve this custom Caddy service, or set CAPTAIN_CADDYFILE to its real config path."
+            ;;
+    esac
+
+    tx_dir=$(mktemp -d)
+    root_backup="$tx_dir/Caddyfile.before"
+    fragment_backup="$tx_dir/captain.caddy.before"
+    root_source="$tx_dir/Caddyfile.source"
+    new_root="$tx_dir/Caddyfile.new"
+    new_fragment="$tx_dir/captain.caddy.new"
+    root_existed=0
+    fragment_existed=0
+    if run_privileged test -f "$caddy_root"; then
+        root_existed=1
+        run_privileged cat "$caddy_root" > "$root_backup"
+        cp "$root_backup" "$root_source"
+    else
+        : > "$root_source"
+    fi
+    if run_privileged test -f "$caddy_fragment"; then
+        fragment_existed=1
+        run_privileged cat "$caddy_fragment" > "$fragment_backup"
+    fi
+
+    if ! validate_managed_caddy_markers "$root_source"; then
+        rm -rf "$tx_dir"
+        fail "$caddy_root contains a malformed Captain-managed import block; no change was made."
+    fi
+
+    render_managed_caddy_fragment "$VPS_DOMAIN" "$api_port" > "$new_fragment"
+    render_caddy_root_with_import "$root_source" "$caddy_fragment_dir/*.caddy" > "$new_root"
+    service_was_active=0
+    service_was_enabled=0
+    systemctl is-active --quiet caddy.service 2>/dev/null && service_was_active=1
+    systemctl is-enabled --quiet caddy.service 2>/dev/null && service_was_enabled=1
+
+    if ! run_privileged mkdir -p "$caddy_dir" "$caddy_fragment_dir" \
+        || ! install_file_privileged -m 0644 "$new_fragment" "$caddy_fragment" \
+        || ! install_file_privileged -m 0644 "$new_root" "$caddy_root"; then
+        restore_caddy_transaction "$caddy_root" "$caddy_fragment" \
+            "$root_backup" "$fragment_backup" "$root_existed" "$fragment_existed"
+        rm -rf "$tx_dir"
+        fail "Could not stage the Captain Caddy configuration. The previous files were restored."
+    fi
+
+    caddy_bin=$(command -v caddy)
+    if ! run_privileged "$caddy_bin" validate --config "$caddy_root" --adapter caddyfile; then
+        restore_caddy_transaction "$caddy_root" "$caddy_fragment" \
+            "$root_backup" "$fragment_backup" "$root_existed" "$fragment_existed"
+        [ "$service_was_active" = "0" ] \
+            || run_privileged systemctl reload caddy.service >/dev/null 2>&1 || true
+        rm -rf "$tx_dir"
+        fail "Caddy rejected the Captain site configuration. The previous configuration was restored."
+    fi
+
+    if ! run_privileged systemctl enable caddy.service >/dev/null; then
+        restore_caddy_transaction "$caddy_root" "$caddy_fragment" \
+            "$root_backup" "$fragment_backup" "$root_existed" "$fragment_existed"
+        [ "$service_was_enabled" = "1" ] \
+            || run_privileged systemctl disable caddy.service >/dev/null 2>&1 || true
+        rm -rf "$tx_dir"
+        fail "Could not enable caddy.service. The previous configuration was restored."
+    fi
+    if [ "$service_was_active" = "1" ]; then
+        caddy_action=reload
+    else
+        caddy_action=start
+    fi
+    if ! run_privileged systemctl "$caddy_action" caddy.service; then
+        restore_caddy_transaction "$caddy_root" "$caddy_fragment" \
+            "$root_backup" "$fragment_backup" "$root_existed" "$fragment_existed"
+        if [ "$service_was_active" = "1" ]; then
+            run_privileged systemctl reload caddy.service >/dev/null 2>&1 || true
+        else
+            run_privileged systemctl stop caddy.service >/dev/null 2>&1 || true
+        fi
+        [ "$service_was_enabled" = "1" ] \
+            || run_privileged systemctl disable caddy.service >/dev/null 2>&1 || true
+        rm -rf "$tx_dir"
+        fail "Caddy could not activate the Captain site. The previous configuration was restored."
+    fi
+
+    rm -rf "$tx_dir"
+    CADDY_PROVISIONED=1
+    echo "  Managed HTTPS proxy activated: $VPS_PUBLIC_URL"
+}
+
+configure_vps_firewall() {
+    should_install_proxy || return 0
+    is_false "${CAPTAIN_CONFIGURE_FIREWALL:-1}" && {
+        echo "  Host firewall changes explicitly skipped."
+        return 0
+    }
+    if command -v ufw >/dev/null 2>&1 \
+        && ufw status 2>/dev/null | head -1 | grep -qi 'active'; then
+        run_privileged ufw allow 80/tcp >/dev/null
+        run_privileged ufw allow 443/tcp >/dev/null
+        echo "  Opened TCP 80/443 in ufw."
+    elif command -v firewall-cmd >/dev/null 2>&1 \
+        && systemctl is-active --quiet firewalld.service 2>/dev/null; then
+        run_privileged firewall-cmd --permanent --add-service=http >/dev/null
+        run_privileged firewall-cmd --permanent --add-service=https >/dev/null
+        run_privileged firewall-cmd --reload >/dev/null
+        echo "  Opened HTTP/HTTPS services in firewalld."
+    fi
+}
+
+health_version_from_json() {
+    printf '%s' "$1" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+verify_public_web_access() {
+    should_install_proxy || return 0
+    [ "$CADDY_PROVISIONED" = "1" ] || fail "Managed HTTPS was requested but not provisioned."
+    should_start_service || {
+        echo "  Public HTTPS is configured; final readiness is deferred until Captain is started."
+        return 0
+    }
+
     cfg="${CAPTAIN_HOME:-$HOME/.captain}/config.toml"
+    api_listen=$(toml_top_string api_listen "$cfg")
+    api_port=${api_listen##*:}
+    local_health=$(curl -fsS --connect-timeout 3 --max-time 8 \
+        "http://127.0.0.1:$api_port/api/health" 2>/dev/null || true)
+    local_version=$(health_version_from_json "$local_health")
+    [ -n "$local_version" ] || fail "Captain's local health endpoint did not return a version."
+
+    wait_seconds=${CAPTAIN_HTTPS_WAIT_SECONDS:-180}
+    validate_wait_seconds CAPTAIN_HTTPS_WAIT_SECONDS "$wait_seconds"
+    elapsed=0
+    remote_health=""
+    echo "  Waiting for the public TLS certificate and Captain Web..."
+    while [ "$elapsed" -le "$wait_seconds" ]; do
+        remote_health=$(curl --proto '=https' --tlsv1.2 -fsS \
+            --connect-timeout 5 --max-time 12 \
+            "$VPS_PUBLIC_URL/api/health" 2>/dev/null || true)
+        remote_version=$(health_version_from_json "$remote_health")
+        if [ -n "$remote_version" ] && [ "$remote_version" = "$local_version" ] \
+            && printf '%s' "$remote_health" \
+                | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+            if curl --proto '=https' --tlsv1.2 -fsS \
+                --connect-timeout 5 --max-time 12 \
+                "$VPS_PUBLIC_URL/" >/dev/null 2>&1; then
+                echo "  Captain Web verified end to end: $VPS_PUBLIC_URL/"
+                return 0
+            fi
+        fi
+        [ "$elapsed" -lt "$wait_seconds" ] || break
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+
+    echo "  Caddy status:" >&2
+    systemctl status caddy.service --no-pager --lines=8 >&2 2>/dev/null || true
+    echo "  Recent Caddy logs:" >&2
+    journalctl -u caddy.service --no-pager -n 20 >&2 2>/dev/null || true
+    fail "HTTPS did not become ready at $VPS_PUBLIC_URL after ${wait_seconds}s. Check public DNS and provider firewall rules for TCP 80/443, then run: systemctl reload caddy"
+}
+
+print_web_terminal_access() {
+    captain_home="${CAPTAIN_HOME:-$HOME/.captain}"
+    cfg="$captain_home/config.toml"
     [ -f "$cfg" ] || return 0
 
     api_listen=$(toml_top_string api_listen "$cfg")
     [ -n "$api_listen" ] || api_listen="127.0.0.1:50051"
     public_url=$(toml_section_string deployment public_url "$cfg")
+    web_username=$(toml_section_string auth username "$cfg")
+    credentials_file="$captain_home/initial-credentials.txt"
 
     echo ""
-    echo "  Web terminal:"
+    echo "  Captain Web:"
     if [ -n "$public_url" ]; then
         public_url="${public_url%/}"
-        echo "    $public_url/terminal"
-        return 0
+        echo "    $public_url/"
+        echo "    Terminal: $public_url/terminal"
+    else
+        port="${api_listen##*:}"
+        case "$api_listen" in
+            0.0.0.0:*|\[::\]:*)
+                host=$(detect_vps_public_host)
+                echo "    http://$host:$port/terminal"
+                ;;
+            127.0.0.1:*|localhost:*)
+                echo "    http://127.0.0.1:$port/terminal"
+                if [ "$PROFILE" = "vps" ]; then
+                    echo "    From your workstation: ssh -L $port:127.0.0.1:$port root@<VPS_IP>"
+                fi
+                ;;
+            *)
+                echo "    http://$api_listen/terminal"
+                ;;
+        esac
     fi
 
-    port="${api_listen##*:}"
-    case "$api_listen" in
-        0.0.0.0:*|\[::\]:*)
-            host=$(detect_vps_public_host)
-            echo "    http://$host:$port/terminal"
-            echo "    Login: utilise l'identifiant admin configuré pendant l'installation."
-            ;;
-        127.0.0.1:*|localhost:*)
-            echo "    http://127.0.0.1:$port/terminal"
-            if [ "$PROFILE" = "vps" ]; then
-                echo "    Depuis ton Mac: ssh -L $port:127.0.0.1:$port root@<IP_DU_VPS>"
-            fi
-            ;;
-        *)
-            echo "    http://$api_listen/terminal"
-            ;;
-    esac
+    if [ -n "$web_username" ]; then
+        echo "    Browser authentication: username + password"
+        echo "    Username: $web_username"
+        if [ -f "$credentials_file" ]; then
+            echo "    Initial password details: $credentials_file (owner-only)"
+        else
+            echo "    Password: the value supplied during setup"
+        fi
+        echo "    API bearer key: for CLI/API clients; it is not pasted into the browser login"
+    fi
 }
 
 sha256_file() {
@@ -889,12 +1427,22 @@ install() {
         fail "Local install requested, but no captain-$PLATFORM.tar.gz bundle was found next to install.sh. Place both files in the same directory or set CAPTAIN_BUNDLE_PATH."
     fi
     resolve_profile
+    prepare_vps_domain
+    preflight_vps_proxy
     resolve_install_dir
 
     echo ""
     echo "  Captain Installer"
     echo "  =================="
     echo "  Profile: $PROFILE"
+    if [ -n "$VPS_DOMAIN" ]; then
+        echo "  Domain:  $VPS_DOMAIN"
+        if should_install_proxy; then
+            echo "  HTTPS:   managed by Caddy"
+        else
+            echo "  HTTPS:   external proxy (CAPTAIN_INSTALL_PROXY=0)"
+        fi
+    fi
     if [ "$DETECTED_LOCAL_BUNDLE" = "1" ]; then
         echo "  Source:  local bundle ($(basename "$CAPTAIN_BUNDLE_PATH"))"
     elif [ "$INSTALL_SOURCE" = "git" ]; then
@@ -1124,6 +1672,9 @@ install() {
     fi
 
     start_linux_service
+    provision_vps_proxy
+    configure_vps_firewall
+    verify_public_web_access
     verify_llm_ready_after_start
 
     if is_yes "${CAPTAIN_RUN_DOCTOR:-}"; then
@@ -1152,4 +1703,6 @@ install() {
     echo ""
 }
 
-install
+if ! is_yes "${CAPTAIN_INSTALL_LIBRARY_ONLY:-}"; then
+    install
+fi

@@ -29,6 +29,7 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
+url = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 flate2 = { workspace = true }

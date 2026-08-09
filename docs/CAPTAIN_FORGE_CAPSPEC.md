@@ -97,6 +97,12 @@ Templates are data substitution, not code. Format 1 accepts only:
 - A step tool must be listed in `permissions.tools`.
 - File, network, SSH, shell, memory, and secret tools require their matching
   scopes.
+- `web_search` requires the named network scope `search`. A
+  `web_research_batch` that automatically fetches search results additionally
+  requires the explicit broad public-Web scope `*`; with `auto_fetch = false`,
+  `search` is sufficient. Explicit research and citation-audit URLs are always
+  checked one by one against `network_hosts` (`*` remains protected by the
+  runtime's anti-SSRF boundary).
 - `web_download` requires both an allowed network host and an allowed write
   path. URL credentials and path traversal are rejected before dispatch.
 - A source cannot downgrade the kernel's minimum effect classification.

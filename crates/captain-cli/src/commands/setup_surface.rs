@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use url::Url;
 
 use super::setup_support::{
     setup_config_string, setup_env_or_answer_any, setup_env_or_answer_bool, setup_read_config_value,
@@ -56,8 +57,8 @@ pub(crate) fn setup_configure_product_surface(
 
     let existing_api_listen =
         setup_config_string(setup_read_config_value(captain_dir).as_ref(), "api_listen");
-    let options = setup_collect_surface_options(profile, answers, interactive);
-    let plan = setup_deployment_plan(profile, answers, options, existing_api_listen);
+    let options = setup_collect_surface_options(profile, answers, interactive)?;
+    let plan = setup_deployment_plan(profile, answers, options, existing_api_listen)?;
     setup_apply_surface_config(captain_dir, profile, &plan)?;
     let caddyfile_path = setup_write_surface_artifacts(captain_dir, profile, &plan)?;
     setup_print_surface_summary(&plan, caddyfile_path.as_ref());
@@ -69,7 +70,7 @@ fn setup_collect_surface_options(
     profile: &str,
     answers: Option<&toml::Value>,
     interactive: bool,
-) -> SetupSurfaceOptions {
+) -> Result<SetupSurfaceOptions, String> {
     let configured_url = setup_env_or_answer_any(
         "CAPTAIN_PUBLIC_URL",
         answers,
@@ -78,13 +79,16 @@ fn setup_collect_surface_options(
     .or_else(|| {
         setup_env_or_answer_any("CAPTAIN_DOMAIN", answers, &["deployment.domain", "domain"])
     });
+    let should_prompt_for_public_url = configured_url.is_none();
     let mut public_url = configured_url
         .as_deref()
-        .and_then(setup_normalize_public_url);
+        .map(setup_normalize_public_url)
+        .transpose()?
+        .flatten();
 
-    if interactive && profile == "vps" && public_url.is_none() {
+    if interactive && profile == "vps" && should_prompt_for_public_url {
         let answer = prompt_input("  Domaine public VPS (optionnel, ex: captain.example.com) : ");
-        public_url = setup_normalize_public_url(&answer);
+        public_url = setup_normalize_public_url(&answer)?;
     }
 
     let mut shell_enabled = setup_env_or_answer_bool(
@@ -112,11 +116,11 @@ fn setup_collect_surface_options(
     )
     .unwrap_or_else(|| "caddy".to_string());
 
-    SetupSurfaceOptions {
+    Ok(SetupSurfaceOptions {
         public_url,
         shell_enabled,
         reverse_proxy,
-    }
+    })
 }
 
 fn setup_deployment_plan(
@@ -124,7 +128,7 @@ fn setup_deployment_plan(
     answers: Option<&toml::Value>,
     options: SetupSurfaceOptions,
     existing_api_listen: Option<String>,
-) -> SetupDeploymentPlan {
+) -> Result<SetupDeploymentPlan, String> {
     let SetupSurfaceOptions {
         public_url,
         shell_enabled,
@@ -148,7 +152,14 @@ fn setup_deployment_plan(
     // profile-driven switches (e.g. dropping a VPS domain to go direct-IP)
     // would never take effect on a second `captain setup` run.
     let api_listen = match existing_api_listen {
-        Some(value) if value != "0.0.0.0:50051" && value != "127.0.0.1:50051" => value,
+        Some(value) if value != "0.0.0.0:50051" && value != "127.0.0.1:50051" => {
+            if public_url.is_some() {
+                let port = setup_listen_port(&value)?;
+                format!("127.0.0.1:{port}")
+            } else {
+                value
+            }
+        }
         _ => default_api_listen.to_string(),
     };
     let api_port = api_listen
@@ -165,14 +176,26 @@ fn setup_deployment_plan(
         None
     };
 
-    SetupDeploymentPlan {
+    Ok(SetupDeploymentPlan {
         public_url,
         direct_url,
         api_listen,
         shell_enabled,
         reverse_proxy,
         https,
-    }
+    })
+}
+
+fn setup_listen_port(api_listen: &str) -> Result<u16, String> {
+    let raw = api_listen
+        .rsplit(':')
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("invalid API listen address: {api_listen}"))?;
+    raw.parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+        .ok_or_else(|| format!("invalid API listen port in {api_listen}"))
 }
 
 fn setup_apply_surface_config(
@@ -247,7 +270,7 @@ fn setup_write_surface_artifacts(
     if profile == "vps" {
         plan.public_url
             .as_deref()
-            .map(|url| setup_write_vps_caddyfile(captain_dir, url))
+            .map(|url| setup_write_vps_caddyfile(captain_dir, url, &plan.api_listen))
             .transpose()
     } else {
         Ok(None)
@@ -274,32 +297,70 @@ fn setup_print_surface_summary(plan: &SetupDeploymentPlan, caddyfile_path: Optio
     }
 }
 
-pub(crate) fn setup_normalize_public_url(raw: &str) -> Option<String> {
+pub(crate) fn setup_normalize_public_url(raw: &str) -> Result<Option<String>, String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty()
         || trimmed.eq_ignore_ascii_case("none")
         || trimmed.eq_ignore_ascii_case("local")
     {
-        return None;
+        return Ok(None);
     }
-    if trimmed.contains("://") {
-        Some(trimmed.to_string())
+    let candidate = if trimmed.contains("://") {
+        trimmed.to_string()
     } else {
-        Some(format!("https://{trimmed}"))
+        format!("https://{trimmed}")
+    };
+    let parsed = Url::parse(&candidate).map_err(|_| {
+        "invalid public domain; use a hostname such as captain.example.com".to_string()
+    })?;
+    if parsed.scheme() != "https" {
+        return Err("the public Captain URL must use HTTPS".to_string());
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("the public Captain URL cannot contain credentials".to_string());
+    }
+    if parsed.port().is_some() {
+        return Err("the managed public Captain URL cannot contain a custom port".to_string());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() || parsed.path() != "/" {
+        return Err("the public Captain URL must contain only a domain".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "the public Captain URL has no domain".to_string())?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    validate_public_dns_name(&host)?;
+    Ok(Some(format!("https://{host}")))
 }
 
 pub(crate) fn setup_public_host(public_url: &str) -> Option<String> {
-    let without_scheme = public_url
-        .strip_prefix("https://")
-        .or_else(|| public_url.strip_prefix("http://"))
-        .unwrap_or(public_url);
-    without_scheme
-        .split('/')
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    let parsed = Url::parse(public_url).ok()?;
+    let host = parsed
+        .host_str()?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    validate_public_dns_name(&host).ok()?;
+    Some(host)
+}
+
+fn validate_public_dns_name(host: &str) -> Result<(), String> {
+    if host.len() > 253 || !host.contains('.') || host.parse::<std::net::IpAddr>().is_ok() {
+        return Err("use a public DNS hostname, not localhost or an IP address".to_string());
+    }
+    for label in host.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(format!("invalid DNS label in public domain: {label}"));
+        }
+    }
+    Ok(())
 }
 
 fn setup_detect_vps_public_host(answers: Option<&toml::Value>) -> String {
@@ -348,12 +409,20 @@ fn setup_detect_vps_public_host(answers: Option<&toml::Value>) -> String {
     "<IP_DU_VPS>".to_string()
 }
 
-fn setup_write_vps_caddyfile(captain_dir: &Path, public_url: &str) -> Result<PathBuf, String> {
+fn setup_write_vps_caddyfile(
+    captain_dir: &Path,
+    public_url: &str,
+    api_listen: &str,
+) -> Result<PathBuf, String> {
     let host = setup_public_host(public_url).ok_or_else(|| "invalid public URL".to_string())?;
+    let port = setup_listen_port(api_listen)?;
+    if !api_listen.starts_with("127.0.0.1:") && !api_listen.starts_with("[::1]:") {
+        return Err("a public VPS deployment must keep the Captain API on loopback".to_string());
+    }
     let deploy_dir = captain_dir.join("deploy");
     std::fs::create_dir_all(&deploy_dir).map_err(|e| format!("create deploy dir: {e}"))?;
     let path = deploy_dir.join("Caddyfile");
-    let contents = format!("{host} {{\n  encode zstd gzip\n  reverse_proxy 127.0.0.1:50051\n}}\n");
+    let contents = format!("{host} {{\n  encode zstd gzip\n  reverse_proxy 127.0.0.1:{port}\n}}\n");
     std::fs::write(&path, contents).map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }

@@ -179,16 +179,52 @@ WHY: extracts evidence from source files inside the workspace; prevents guessing
 SKIP: image-only/scanned PDFs without OCR, or creating deliverables (document_create/document_pipeline)."
     },
 
+    ToolDoc { name: "artifact_publish", doc: "\
+WHEN: a final workspace file must survive restart, remain versioned, or be reopened/downloaded from another surface.
+WHY: creates an immutable kernel-owned copy bound to the real agent/session and to the SHA-256 of inspected content.
+SKIP: scratch/intermediate files. Wait for this result before artifact_deliver; the two calls are dependent and sequential."
+    },
+
+    ToolDoc { name: "artifact_list", doc: "\
+WHEN: find durable outputs previously published by the active agent.
+WHY: returns owned latest versions without filesystem discovery or path leakage.
+SKIP: looking for ordinary workspace files (file_list/file_search)."
+    },
+
+    ToolDoc { name: "artifact_inspect", doc: "\
+WHEN: verify an owned artifact version before reuse or delivery.
+WHY: checks immutable metadata, size, and SHA-256; independent inspections are parallel-safe.
+SKIP: publishing a new version or delivering it."
+    },
+
+    ToolDoc { name: "artifact_deliver", doc: "\
+WHEN: send a previously published artifact through Telegram, Discord, Signal, or Email.
+WHY: uploads the checksum-verified managed payload without exposing its local path.
+SKIP: before artifact_publish completes, or when artifact_id/version are unknown; this is an external side effect and stays sequential."
+    },
+
     ToolDoc { name: "file_delete", doc: "\
 WHEN: explicitly asked to remove a file, or cleaning up temp artifacts you created.
 WHY: irreversible — confirm scope matches exactly what the user authorized.
 SKIP: deleting files you did not create or did not inspect. If user intent is ambiguous, ask."
     },
 
+    ToolDoc { name: "web_research_batch", doc: "\
+WHEN: research, synthesis, comparison, current-state report, or any answer that needs several external sources.
+WHY: runs independent searches/fetches concurrently and returns stable source ids plus citation-ready retrieval evidence.
+SKIP: one known URL (web_fetch) or a draft that already needs final evidence checking (web_citation_audit)."
+    },
+
+    ToolDoc { name: "web_citation_audit", doc: "\
+WHEN: before delivering important, disputed, high-stakes, or explicitly fact-checked research after drafting with citation-ready sources.
+WHY: refetches cited URLs and deterministically checks inline source identity, provenance coverage, and exact evidence quotes.
+SKIP: discovery before a draft exists. A valid audit proves retrieval and verbatim presence, not semantic entailment; keep unsupported load-bearing claims marked [unverified]."
+    },
+
     ToolDoc { name: "web_search", doc: "\
 WHEN: current events, library docs, prices, versions — facts that change over time.
 WHY: breadth — better than a single URL when you don't know the source.
-SKIP: for a specific known URL (use web_fetch directly) or facts already in knowledge/memory."
+SKIP: for a specific known URL (use web_fetch directly), deep multi-source research (web_research_batch), or facts already in knowledge/memory. Search snippets are discovery-only."
     },
 
     ToolDoc { name: "web_fetch", doc: "\

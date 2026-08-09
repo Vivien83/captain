@@ -50,6 +50,30 @@ export const api = {
     { method: 'PUT', body: JSON.stringify({ effort }) },
   ),
   status: () => request('/api/status'),
+  toolRuns: (status, limit = 50) => request(withQuery('/api/tool-runs', { status, limit })),
+  toolRun: (runId) => request(`/api/tool-runs/${encodeURIComponent(runId)}`),
+  toolRunTail: (runId, maxLines = 80) => request(withQuery(
+    `/api/tool-runs/${encodeURIComponent(runId)}/tail`,
+    { max_lines: maxLines },
+  )),
+  cancelToolRun: (runId) => request(
+    `/api/tool-runs/${encodeURIComponent(runId)}/cancel`,
+    { method: 'POST' },
+  ),
+  artifacts: (limit = 50) => request(withQuery('/api/artifacts', { limit })),
+  artifact: (artifactId, version) => request(withQuery(
+    `/api/artifacts/${encodeURIComponent(artifactId)}`,
+    { version },
+  )),
+  artifactVersions: (artifactId) => request(
+    `/api/artifacts/${encodeURIComponent(artifactId)}/versions`,
+  ),
+  artifactPreviewUrl: (artifactId, version) => (
+    `/api/artifacts/${encodeURIComponent(artifactId)}/versions/${encodeURIComponent(version)}/preview`
+  ),
+  artifactDownloadUrl: (artifactId, version) => (
+    `/api/artifacts/${encodeURIComponent(artifactId)}/versions/${encodeURIComponent(version)}/download`
+  ),
   usage: () => request('/api/usage/summary'),
   budget: () => request('/api/budget'),
   modelUpdates: () => request('/api/models/updates'),

@@ -137,6 +137,12 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
         }
         "chat_stream_batcher.mjs" => Some(include_str!("../static/js/app/chat_stream_batcher.mjs")),
         "components/Shell.js" => Some(include_str!("../static/js/app/components/Shell.js")),
+        "components/ArtifactDrawer.js" => Some(include_str!(
+            "../static/js/app/components/ArtifactDrawer.js"
+        )),
+        "components/LiveRunsDrawer.js" => Some(include_str!(
+            "../static/js/app/components/LiveRunsDrawer.js"
+        )),
         "components/Login.js" => Some(include_str!("../static/js/app/components/Login.js")),
         "components/Markdown.js" => Some(include_str!("../static/js/app/components/Markdown.js")),
         "components/ToolCard.js" => Some(include_str!("../static/js/app/components/ToolCard.js")),
@@ -194,6 +200,8 @@ mod control_app_asset_tests {
             "chat_stream_batcher.mjs",
             "components/Login.js",
             "components/Shell.js",
+            "components/ArtifactDrawer.js",
+            "components/LiveRunsDrawer.js",
             "views/Automation.js",
             "views/Workflows.js",
             "views/Capabilities.js",

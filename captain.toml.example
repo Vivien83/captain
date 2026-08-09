@@ -192,6 +192,13 @@ timeout_secs = 60
 auto_approve_autonomous = true
 auto_approve = true
 
+# Opt-in only. Disabled means no approval-learning observation is recorded.
+[approval.suggestions]
+enabled = false
+minimum_approvals = 3
+observation_window_hours = 720
+dismissal_cooldown_hours = 168
+
 [exec_policy]
 profile = "personal_workstation"           # personal_workstation | remote_operator | untrusted_execution
 mode = "allowlist"                         # deny | allowlist | full

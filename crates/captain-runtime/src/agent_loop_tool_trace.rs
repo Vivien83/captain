@@ -23,6 +23,7 @@ pub fn tool_emoji(tool_name: &str) -> &'static str {
         "knowledge_query" | "knowledge_add_entity" | "knowledge_add_relation" => "🔍",
         "web_search" | "web_fetch" | "web_research_batch" | "web_download" => "🌐",
         "document_create" | "document_extract" | "document_pipeline" => "📄",
+        "artifact_publish" | "artifact_list" | "artifact_inspect" | "artifact_deliver" => "📦",
         "browser_navigate"
         | "browser_click"
         | "browser_type"
@@ -84,6 +85,18 @@ pub fn tool_input_preview(tool_name: &str, input: &serde_json::Value) -> String 
             .or_else(|| input["document"]["title"].as_str())
             .unwrap_or("")
             .to_string(),
+        "artifact_publish" => input["title"]
+            .as_str()
+            .or_else(|| input["path"].as_str())
+            .unwrap_or("")
+            .to_string(),
+        "artifact_inspect" => input["artifact_id"].as_str().unwrap_or("").to_string(),
+        "artifact_deliver" => format!(
+            "{} → {}",
+            input["artifact_id"].as_str().unwrap_or("?"),
+            input["channel"].as_str().unwrap_or("?"),
+        ),
+        "artifact_list" => "owned artifacts".to_string(),
         "memory_store" => input["key"].as_str().unwrap_or("").to_string(),
         "memory_recall" | "knowledge_query" => input["query"].as_str().unwrap_or("").to_string(),
         "agent_send" | "agent_spawn" | "agent_delegate" => input["agent"]
@@ -242,6 +255,16 @@ mod tests {
             &serde_json::json!({"save_path": "/tmp/shot.png"}),
         );
         assert_eq!(screenshot, "📸 screenshot: /tmp/shot.png");
+
+        let artifact = format_tool_trace(
+            "artifact_deliver",
+            &serde_json::json!({
+                "artifact_id": "9e9afb94-dc24-48a5-a2b8-4f72190411d1",
+                "channel": "telegram"
+            }),
+        );
+        assert!(artifact.starts_with("📦 artifact_deliver:"));
+        assert!(artifact.contains("telegram"));
 
         let unknown_mcp = format_tool_trace(
             "mcp_mempalace_search",

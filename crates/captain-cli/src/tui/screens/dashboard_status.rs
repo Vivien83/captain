@@ -41,6 +41,9 @@ pub struct StatusSnapshot {
     pub shutdown_status: String,
     pub disk_available_gib: Option<f64>,
     pub disk_cleanup_recommended: bool,
+    pub deployment_readiness_state: String,
+    pub deployment_readiness_check_count: u64,
+    pub deployment_readiness_actions: Vec<String>,
     pub native_embeddings_ready: Option<bool>,
     pub native_voice_tts_ready: Option<bool>,
     pub native_voice_stt_ready: Option<bool>,
@@ -89,6 +92,16 @@ impl StatusSnapshot {
             shutdown_status: string_at(body, "/shutdown/status", "unknown"),
             disk_available_gib: optional_f64_at(body, "/disk/available_gib"),
             disk_cleanup_recommended: bool_at(body, "/disk/cleanup_recommended"),
+            deployment_readiness_state: string_at(body, "/deployment/readiness/state", "unknown"),
+            deployment_readiness_check_count: body
+                .pointer("/deployment/readiness/checks")
+                .and_then(Value::as_array)
+                .map(|checks| checks.len() as u64)
+                .unwrap_or(0),
+            deployment_readiness_actions: string_vec_at(
+                body,
+                "/deployment/readiness/operator_actions",
+            ),
             native_embeddings_ready: optional_bool_at(body, "/native_embeddings/ready"),
             native_voice_tts_ready: optional_bool_at(body, "/native_voice/tts_ready"),
             native_voice_stt_ready: optional_bool_at(body, "/native_voice/stt_ready"),
@@ -241,6 +254,13 @@ mod tests {
             },
             "shutdown": {"status": "idle"},
             "disk": {"available_gib": 42.9, "cleanup_recommended": false},
+            "deployment": {
+                "readiness": {
+                    "state": "degraded",
+                    "checks": [{"id": "tls", "status": "warning"}],
+                    "operator_actions": ["Inspect public TLS."]
+                }
+            },
             "native_embeddings": {"ready": false},
             "native_voice": {"tts_ready": true, "stt_ready": true},
             "budget": {"total_tokens_used": 12345},
@@ -259,6 +279,12 @@ mod tests {
         assert_eq!(snapshot.consciousness_signals, vec!["goals_escalated:1"]);
         assert_eq!(snapshot.streaming_last_first_token_ms, Some(3200));
         assert_eq!(snapshot.native_embeddings_ready, Some(false));
+        assert_eq!(snapshot.deployment_readiness_state, "degraded");
+        assert_eq!(snapshot.deployment_readiness_check_count, 1);
+        assert_eq!(
+            snapshot.deployment_readiness_actions,
+            vec!["Inspect public TLS."]
+        );
         assert_eq!(snapshot.goals_escalated, 1);
     }
 

@@ -341,6 +341,7 @@ pub(crate) fn build_deployment_status(config: &KernelConfig) -> serde_json::Valu
         "public_url": config.deployment.public_url,
         "https": config.deployment.https,
         "reverse_proxy": config.deployment.reverse_proxy,
+        "readiness": crate::deployment_readiness::status_value(config),
     })
 }
 
@@ -658,5 +659,25 @@ mod tests {
         let protected = build_status_auth(&config);
         assert_eq!(protected.auth_mode, "api_key");
         assert!(protected.auth_enabled);
+    }
+
+    #[test]
+    fn deployment_status_exposes_readiness_without_internal_cache_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = KernelConfig {
+            home_dir: temp.path().join("home"),
+            data_dir: temp.path().join("data"),
+            ..KernelConfig::default()
+        };
+        config.deployment.profile = "vps".to_string();
+        config.deployment.public_url = "https://agent.example.com".to_string();
+        config.deployment.reverse_proxy = "caddy".to_string();
+
+        let deployment = build_deployment_status(&config);
+
+        assert_eq!(deployment["readiness"]["state"], "pending");
+        assert!(deployment["readiness"]["checks"].is_array());
+        assert!(deployment["readiness"].get("schema_version").is_none());
+        assert!(deployment["readiness"].get("config_fingerprint").is_none());
     }
 }

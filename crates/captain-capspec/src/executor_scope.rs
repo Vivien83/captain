@@ -67,6 +67,8 @@ pub(crate) fn validate_step_scope(
             validate_path_field(input, "path", "", &permissions.write_paths, workspace)
         }),
         "web_search" => validate_named_scope("search", &permissions.network_hosts, "network"),
+        "web_research_batch" => validate_web_research_batch(input, &permissions.network_hosts),
+        "web_citation_audit" => validate_citation_sources(input, &permissions.network_hosts),
         tool if tool.starts_with("ssh_") => validate_text_field(
             input,
             &["host", "alias"],
@@ -184,6 +186,10 @@ fn validate_network_url(input: &Value, scopes: &[String]) -> Result<(), String> 
         .get("url")
         .and_then(Value::as_str)
         .ok_or_else(|| "missing URL field 'url'".to_string())?;
+    validate_network_url_value(raw, scopes)
+}
+
+fn validate_network_url_value(raw: &str, scopes: &[String]) -> Result<(), String> {
     let url = url::Url::parse(raw).map_err(|error| format!("invalid URL: {error}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!("URL scheme '{}' is not allowed", url.scheme()));
@@ -202,8 +208,75 @@ fn validate_network_url(input: &Value, scopes: &[String]) -> Result<(), String> 
     }
 }
 
+fn validate_web_research_batch(input: &Value, scopes: &[String]) -> Result<(), String> {
+    let has_query = input
+        .get("query")
+        .and_then(Value::as_str)
+        .is_some_and(|query| !query.trim().is_empty())
+        || input
+            .get("queries")
+            .and_then(Value::as_array)
+            .is_some_and(|queries| {
+                queries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|query| !query.trim().is_empty())
+            });
+    let urls = input.get("urls").and_then(Value::as_array);
+    let has_url = urls.is_some_and(|urls| !urls.is_empty());
+    if !has_query && !has_url {
+        return Err("web_research_batch requires a query or explicit URL".to_string());
+    }
+
+    if has_query {
+        validate_named_scope("search", scopes, "network")?;
+        let auto_fetch = input
+            .get("auto_fetch")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let max_fetches = input
+            .get("max_fetches")
+            .and_then(Value::as_u64)
+            .unwrap_or(5);
+        if auto_fetch && max_fetches > 0 {
+            validate_named_scope("*", scopes, "dynamic network")?;
+        }
+    }
+
+    if let Some(urls) = urls {
+        for url in urls {
+            let raw = url
+                .as_str()
+                .ok_or_else(|| "web_research_batch URLs must be strings".to_string())?;
+            validate_network_url_value(raw.trim(), scopes)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_citation_sources(input: &Value, scopes: &[String]) -> Result<(), String> {
+    let sources = input
+        .get("sources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "web_citation_audit requires sources".to_string())?;
+    if sources.is_empty() {
+        return Err("web_citation_audit requires at least one source".to_string());
+    }
+    for source in sources {
+        let raw = source
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "web_citation_audit source is missing URL".to_string())?;
+        validate_network_url_value(raw.trim(), scopes)?;
+    }
+    Ok(())
+}
+
 fn host_matches(scope: &str, host: &str) -> bool {
     let scope = scope.trim().to_ascii_lowercase();
+    if scope == "*" {
+        return true;
+    }
     match scope.strip_prefix("*.") {
         Some(suffix) => host != suffix && host.ends_with(&format!(".{suffix}")),
         None => scope == host,
@@ -357,6 +430,90 @@ mod tests {
         assert!(validate_network_url(
             &json!({"url": "https://example.com.attacker.test"}),
             &scopes
+        )
+        .is_err());
+        assert!(validate_network_url(
+            &json!({"url": "https://any-public-host.example/path"}),
+            &["*".to_string()]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn grouped_research_separates_search_from_dynamic_fetch_authority() {
+        let search_only = PermissionSet {
+            network_hosts: vec!["search".to_string()],
+            ..PermissionSet::default()
+        };
+        assert!(validate_step_scope(
+            &step("web_research_batch"),
+            &json!({"query": "release notes", "auto_fetch": false}),
+            &search_only,
+            None,
+        )
+        .is_ok());
+        assert!(validate_step_scope(
+            &step("web_research_batch"),
+            &json!({"query": "release notes"}),
+            &search_only,
+            None,
+        )
+        .is_err());
+
+        let open_research = PermissionSet {
+            network_hosts: vec!["search".to_string(), "*".to_string()],
+            ..PermissionSet::default()
+        };
+        assert!(validate_step_scope(
+            &step("web_research_batch"),
+            &json!({"query": "release notes"}),
+            &open_research,
+            None,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn grounded_research_checks_every_explicit_source_host() {
+        let permissions = PermissionSet {
+            network_hosts: vec!["example.com".to_string()],
+            ..PermissionSet::default()
+        };
+        assert!(validate_step_scope(
+            &step("web_research_batch"),
+            &json!({"urls": ["https://example.com/a"], "auto_fetch": false}),
+            &permissions,
+            None,
+        )
+        .is_ok());
+        assert!(validate_step_scope(
+            &step("web_research_batch"),
+            &json!({"urls": ["https://example.com/a", "https://outside.test/b"]}),
+            &permissions,
+            None,
+        )
+        .is_err());
+        assert!(validate_step_scope(
+            &step("web_citation_audit"),
+            &json!({
+                "draft": "Audited draft",
+                "sources": [{"url": "https://example.com/a"}]
+            }),
+            &permissions,
+            None,
+        )
+        .is_ok());
+        assert!(validate_step_scope(
+            &step("web_citation_audit"),
+            &json!({
+                "draft": "Audited draft",
+                "sources": [
+                    {"url": "https://example.com/a"},
+                    {"url": "https://outside.test/b"}
+                ]
+            }),
+            &permissions,
+            None,
         )
         .is_err());
     }

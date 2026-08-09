@@ -144,9 +144,9 @@ fn setup_configure_surface_or_exit(
 ) -> SetupDeploymentOutcome {
     setup_configure_product_surface(captain_dir, profile, answers, interactive).unwrap_or_else(
         |e| {
-            ui::error_with_fix(
-                &format!("Configuration surface web : {e}"),
-                "Vérifie les permissions de ~/.captain/config.toml",
+                ui::error_with_fix(
+                    &format!("Configuration surface web : {e}"),
+                    "Utilise un domaine public sans chemin (ex: captain.example.com) et vérifie les permissions de ~/.captain/config.toml",
             );
             std::process::exit(1);
         },
@@ -462,7 +462,7 @@ fn setup_configure_surface_noninteractive_or_exit(
     setup_configure_product_surface(captain_dir, profile, answers, false).unwrap_or_else(|e| {
         ui::error_with_fix(
             &format!("Web surface setup failed: {e}"),
-            "Check permissions on ~/.captain/config.toml.",
+            "Use a path-free public domain (for example captain.example.com) and check permissions on ~/.captain/config.toml.",
         );
         std::process::exit(1);
     })

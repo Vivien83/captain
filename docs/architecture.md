@@ -57,7 +57,7 @@ operator surfaces
 |-------|-------------|
 | **captain-types** | Shared contracts for agents, capabilities, events, tools, configuration, signing, model catalog, MCP/A2A compatibility, web, and agent-as-service. Config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
 | **captain-capspec** | Captain Forge compiler, versioned capability registry, hot-reload watcher, encrypted durable DAG executor, approval boundary, run recovery, and rollback state for readable `.captain` files. Primitive steps are invoked only through `captain-runtime`'s central ToolRunner. |
-| **captain-memory** | SQLite-backed durable substrate for KV memory, semantic search, graph entities/relations, sessions, tasks, usage, canonical cross-channel context, projects, and detached tool-run history. Ordered migrations upgrade existing databases to the current schema at boot. |
+| **captain-memory** | SQLite-backed durable substrate for KV memory, semantic search, graph entities/relations, sessions, tasks, usage, canonical cross-channel context, projects, and detached tool-run history. It also owns the bounded immutable artifact store beside the database. Ordered migrations upgrade existing databases to the current schema at boot. |
 | **captain-runtime** | Agent execution engine for streaming/non-streaming LLM turns, fail-closed native tool parallelism, durable tool-use boundaries, loop guards, session repair, compaction, detached tool supervision, built-in tools, WASM, MCP/A2A compatibility, web access, audit, and embeddings. Defines `KernelHandle` to avoid circular dependencies. |
 | **captain-kernel** | Central coordinator for registry, scheduler, capabilities, event bus, supervisor, workflows/triggers/crons, metering/budgets, configured model selection, authentication, background work, project/goals, agent API provisioning, checkpoint recovery, and graceful shutdown. Boot reconciles interrupted detached work and restores persistent agents/sessions. |
 | **captain-api** | Axum REST/WS/SSE server, agent-as-service ingress/egress, OpenAI-compatible API, authenticated six-hub Control web app, health/status, and frozen compatibility routes. Middleware covers authentication, request ids/logging, rate limiting, security headers, and health redaction. |
@@ -97,6 +97,8 @@ When `CaptainKernel::boot_with_config()` is called (either by the daemon or in-p
    - Open SQLite database (captain.db)
    - Run ordered schema migrations to the current runtime version
    - Set memory decay rate
+   - Open the immutable artifact store, remove only incomplete staging entries,
+     and fail boot if its durable root is unusable
 
 4. Initialize LLM driver
    - Read API key from environment variable
@@ -138,9 +140,15 @@ When `CaptainKernel::boot_with_config()` is called (either by the daemon or in-p
     - Inject PromptOnly skill context into system prompts
 
 11. Initialize web tools context
-    - Create WebSearchEngine (4-provider cascading: Tavily->Brave->Perplexity->DDG)
-    - Create WebFetchEngine (SSRF-protected)
-    - Bundle as WebToolsContext
+   - Create WebSearchEngine (4-provider cascading: Tavily->Brave->Perplexity->DDG)
+   - Create WebFetchEngine (SSRF-protected, redirect-aware, bounded-body evidence)
+   - Bundle as WebToolsContext
+   - Search results carry canonical URL-derived IDs and remain discovery-only
+   - Grouped research parallelizes independent searches/fetches, then emits
+     citation-ready status, final URL, timestamp and content SHA-256
+   - Citation audit runs only after the source set and draft exist; it refetches
+     independent sources concurrently and checks URL identity, provenance
+     coverage and verbatim evidence without claiming semantic entailment
 
 12. Restore persisted agents
     - Load all agents from SQLite
@@ -316,10 +324,18 @@ Configured via `LoopGuardConfig`.
 Tool limits are tool-specific. One-shot shell/SSH/code paths use bounded review
 windows and hard caps; intentional servers/watchers use supervised
 `process_start`; eligible long diagnostics use detached `tool_run_start` and
-can be revisited after later turns. Before PRE hooks or execution, the runtime
+can be revisited after later turns. Every foreground or detached call is also a
+durable Live Run: SQLite records its input digest and lifecycle, while large
+output stays outside model context in a private, bounded, redacted and
+checksum-verified evidence file queried through read/tail/search. Before PRE
+hooks or execution, the runtime
 persists the assistant `ToolUse` turn and a session-scoped checkpoint. Recovery
 never assumes that an unknown side effect failed and never injects one
-session's checkpoint into another session.
+session's checkpoint into another session. A retry is a new, explicit Live Run:
+the caller resupplies the input, its digest must match, retry ownership and
+lineage are persisted, and an interrupted source requires acknowledgement that
+the prior external effect may already have happened. The kernel never replays
+that uncertainty by itself.
 
 Native parallel execution is fail-closed. Only explicitly classified
 independent read-only calls can overlap during their EXEC phase; PRE and POST
@@ -450,13 +466,63 @@ A shared task queue for multi-agent collaboration:
   every successful migration one-shot while leaving failed imports retryable.
 - **Canonical sessions**: Cross-channel memory. `CanonicalSession` tracks a user's conversation context across multiple channels. Compaction produces summaries that are injected into system prompts and stored in `canonical_sessions`.
 
+### Immutable Artifact Store
+
+User-facing outputs live outside SQLite as immutable version directories under
+the Captain data root. Publication copies one final workspace file into a
+private staging directory, synchronizes payload and manifest, then atomically
+renames the complete version into visibility. Boot removes only reserved
+incomplete staging entries. No mutable global index is needed for recovery.
+
+One kernel-owned `ArtifactStore` is the only authority. Agent tools are scoped
+to their registered agent and active session; authenticated operator surfaces
+may inventory all agents but never receive a managed path. A payload consumed
+by preview, download, or channel delivery is read into bounded memory and its
+size plus SHA-256 are verified against the immutable manifest after the read,
+closing path-check/time-of-read gaps.
+
+The store allows at most 50 MiB per version, 2,048 versions, and 512 MiB total.
+It counts corrupt payloads toward quota and reports them unhealthy instead of
+silently pruning older data. Text and HTML Web previews are additionally
+limited to 2 MiB and isolated by a route-specific browser sandbox; SVG and
+unknown active formats are download-only.
+
 ### SQLite Architecture
 
 All memory operations go through `Arc<Mutex<Connection>>` with Tokio's
 `spawn_blocking` for async bridging. Ordered schema migrations run
 automatically at boot. They cover current durable contracts such as canonical
-sessions, projects, checkpoints, and detached tool runs; operators should not
-couple integrations to a hard-coded schema version.
+sessions, projects, checkpoints, and foreground/detached Live Runs; operators
+should not couple integrations to a hard-coded schema version. Interrupted Live
+Runs recover matching owner-only output evidence before unrelated partial files
+are removed, while the run itself is never replayed automatically.
+
+The authenticated Live Runs operator API reads this process-wide registry but
+does not inherit its full internal representation. API and local TUI adapters
+share one runtime-owned projection that omits raw input, result/preview, output
+filename, and managed path. The shared tail function is line- and byte-bounded,
+redacted, and fails closed on a residual secret signal. Operator cancellation
+crosses one kernel mutation method that accepts only an active entry with a
+live abort handle and records the fixed API or TUI origin plus success/refusal
+outcome in the hash chain. This keeps disk authority and external delivery
+outside the observability route.
+
+Control Web reads that same projection through a global Live Runs drawer. The
+drawer polls only while visible, keeps the newest 200 selective records, and
+requests at most 200 tail lines for one selected run. Tail bytes are inserted
+as text nodes, never HTML. A cancel control exists only for an API record whose
+`cancellable` bit came from a live abort handle; the server revalidates that
+condition atomically. This is a global operator overlay beside the artifact
+drawer, not a seventh hub and not an alternate execution authority.
+
+Full Ratatui uses the same projection and tail function through a global
+`/runs` overlay. Its five filters are local, polling stops when the overlay is
+closed, and a tail response carries the selected `run_id` so an older response
+cannot overwrite a newer selection. Cancellation is a two-key `x` then `y`
+decision and reaches the same kernel authority with the fixed `operator:tui`
+identity. Standalone `captain chat` deliberately exposes only a bounded
+metadata summary: it has no one-step cancellation or raw tail path, which also
+keeps the embedded VPS terminal within the same operator boundary.
 
 A file-backed database opens in WAL mode with `synchronous=FULL`, a five-second
 busy timeout, and both `fullfsync` and `checkpoint_fullfsync` enabled. A
@@ -480,8 +546,14 @@ recovered as interrupted, retried according to its idempotency contract, or
 require operator review. Arbitrary project-file edits and remote systems keep
 their own durability semantics. The repository's
 `scripts/persistence-power-loss-smoke.sh` boots an isolated daemon, commits
-memory/project/config state, sends the process `SIGKILL`, restarts the same
-home, and checks the recovered values plus SQLite `integrity_check`.
+memory/project/config state and a detached cross-surface session, sends the
+process `SIGKILL`, then restarts the same home. It reads and activates that
+exact session, proves that the pre-crash audit tip remains in the same valid
+hash-chain epoch, and finishes with SQLite `integrity_check`. The same cut
+leaves a synthetic Live Run and partial owner-only capture in flight. Boot
+reconciles it to `interrupted`, finalizes only its matching evidence through
+the retention sanitizer, exposes no raw result/input/path, and keeps automatic
+replay and terminal cancellation disabled.
 
 ---
 
@@ -1033,6 +1105,33 @@ surfaces:
   Learning, Capabilities, and Status;
 - the authenticated Control web app served by `captain-api`, with the same six
   hubs and the same `/api/status` operational contract.
+
+Control's global top bar can open the `Fichiers produits` drawer without
+adding a seventh hub. The drawer consumes the authenticated artifact inventory
+and exact-version endpoints, keeps metadata and selection in the existing
+Preact shell, and delegates payload rendering to the server-generated preview.
+Supported previews run in an empty-sandbox, no-referrer iframe; SVG and unknown
+active formats are download-only. The server verifies size and SHA-256 again
+before either preview or download, so the browser never receives a managed
+artifact path or becomes an integrity authority.
+
+The full Ratatui TUI consumes the same operator authority through a global
+`/artifacts` overlay, preserving the six-hub navigation. It lists the immutable
+inventory, exact versions, integrity metadata and provenance but never renders
+payload content. Standalone `captain chat`, including the Web terminal, exposes
+only a bounded metadata summary. Both terminal paths direct preview and
+download to authenticated Control Web, avoiding misleading server-side file
+writes from a remote terminal.
+
+Deployment readiness follows the same single-authority pattern. A bounded
+daemon worker probes local health independently from the public chain, while
+public DNS, pinned TLS connection, reverse-proxy route, health payload and
+version comparison remain sequential. It atomically replaces one private,
+configuration-and-version-bound snapshot every five minutes. `/api/status`,
+`captain doctor --full`, CLI/Ratatui Status, and Control only project that
+verified cache; they do not perform network I/O when a user polls or opens
+Status. Stale snapshots are degraded and raw DNS/transport errors, resolved
+addresses and cache internals never cross the operator API.
 
 CLI and external channels call the same kernel. Agent-as-service clients use
 the per-agent ingress/egress API. The `captain-desktop` Tauri crate is retained

@@ -719,8 +719,13 @@ pub(crate) async fn run_tokio_command(
         }
     };
     let (activity_tx, mut activity_rx) = tokio::sync::mpsc::channel(32);
-    let stdout_task = tokio::spawn(read_pipe(stdout, max_output_bytes, activity_tx.clone()));
-    let stderr_task = tokio::spawn(read_pipe(stderr, max_output_bytes, activity_tx));
+    let stdout_task = tokio::spawn(read_pipe(
+        stdout,
+        "stdout",
+        max_output_bytes,
+        activity_tx.clone(),
+    ));
+    let stderr_task = tokio::spawn(read_pipe(stderr, "stderr", max_output_bytes, activity_tx));
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
     let mut idle_deadline = (no_output_timeout_secs > 0)
@@ -810,6 +815,7 @@ impl CapturedPipe {
 
 async fn read_pipe<R>(
     mut pipe: R,
+    stream_name: &'static str,
     max_output_bytes: usize,
     activity: tokio::sync::mpsc::Sender<()>,
 ) -> CapturedPipe
@@ -826,6 +832,10 @@ where
             Ok(0) | Err(_) => break,
             Ok(read) => {
                 total_bytes = total_bytes.saturating_add(read);
+                crate::tools::emit_tool_chunk(
+                    stream_name,
+                    &String::from_utf8_lossy(&buffer[..read]),
+                );
                 let remaining = max_output_bytes.saturating_sub(bytes.len());
                 bytes.extend_from_slice(&buffer[..read.min(remaining)]);
                 let _ = activity.try_send(());

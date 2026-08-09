@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.11}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.12}"
 CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
@@ -326,6 +326,7 @@ docs_audit() {
 release_workflow_audit() {
     run "$ROOT_DIR/scripts/release-workflow-audit.sh"
     run "$ROOT_DIR/scripts/local-pr-gate-test.sh"
+    run "$ROOT_DIR/scripts/install-vps-domain-test.sh"
 }
 
 dependency_audit() {

@@ -289,6 +289,25 @@ pub enum AppEvent {
     // ── New screen events ──────────────────────────────────────────────────
     /// Sessions loaded.
     SessionsLoaded(Vec<SessionInfo>),
+    /// Immutable artifact inventory loaded for TUI/standalone representation.
+    ArtifactsLoaded(Result<captain_types::artifact::ArtifactInventory, String>),
+    /// Exact immutable versions loaded for the currently selected artifact.
+    ArtifactVersionsLoaded {
+        artifact_id: uuid::Uuid,
+        result: Result<Vec<captain_types::artifact::ArtifactVersion>, String>,
+    },
+    /// Selective metadata for the global Live Runs operator overlay.
+    ToolRunsLoaded(Result<Vec<captain_runtime::tool_run_operator::OperatorToolRun>, String>),
+    /// Bounded, redacted output tail for one selected run.
+    ToolRunTailLoaded {
+        run_id: String,
+        result: Result<captain_runtime::tool_run_operator::OperatorToolRunTail, String>,
+    },
+    /// Result of a confirmed cancellation through the shared kernel authority.
+    ToolRunCancelled {
+        run_id: String,
+        result: Result<captain_runtime::tool_run_operator::OperatorToolRun, String>,
+    },
     /// One persisted session loaded and ownership-resolved for chat restore.
     SessionLoaded(LoadedSession),
     /// Session deleted.
@@ -4131,14 +4150,16 @@ fn security_features_from_status(body: &serde_json::Value) -> Vec<SecurityFeatur
     let docker = &execution["docker"];
 
     super::screens::security::features_for_execution_summary(
-        profile,
-        configured_policy_mode,
-        policy_mode,
-        critical_mode,
-        isolation_level,
-        os_isolation,
-        docker["enabled"].as_bool().unwrap_or(false),
-        docker["untrusted_profile_ready"].as_bool().unwrap_or(false),
+        super::screens::security::ExecutionSecuritySummary {
+            profile,
+            configured_policy_mode,
+            policy_mode,
+            critical_mode,
+            isolation_level,
+            os_isolation,
+            docker_enabled: docker["enabled"].as_bool().unwrap_or(false),
+            docker_untrusted_ready: docker["untrusted_profile_ready"].as_bool().unwrap_or(false),
+        },
     )
 }
 
@@ -4163,14 +4184,16 @@ pub fn spawn_fetch_security(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                 .docker
                 .isolation_posture(kernel.config.exec_policy.profile);
             let features = super::screens::security::features_for_execution_summary(
-                posture.profile.as_str(),
-                posture.configured_policy_mode.as_str(),
-                posture.policy_mode.as_str(),
-                posture.critical_mode.as_str(),
-                posture.isolation_level,
-                posture.os_isolation,
-                docker.enabled,
-                docker.untrusted_profile_ready,
+                super::screens::security::ExecutionSecuritySummary {
+                    profile: posture.profile.as_str(),
+                    configured_policy_mode: posture.configured_policy_mode.as_str(),
+                    policy_mode: posture.policy_mode.as_str(),
+                    critical_mode: posture.critical_mode.as_str(),
+                    isolation_level: posture.isolation_level,
+                    os_isolation: posture.os_isolation,
+                    docker_enabled: docker.enabled,
+                    docker_untrusted_ready: docker.untrusted_profile_ready,
+                },
             );
             let _ = tx.send(AppEvent::SecurityLoaded(features));
         }

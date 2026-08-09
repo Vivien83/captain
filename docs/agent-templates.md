@@ -26,7 +26,7 @@ Canonical minimal manifest:
 name = "veille-technologique"
 description = "Agent specialise dans la veille technologique."
 module = "builtin:chat"
-tool_allowlist = ["web_research_batch", "web_fetch", "memory_recall", "memory_save"]
+tool_allowlist = ["web_research_batch", "web_citation_audit", "web_fetch", "memory_recall", "memory_save"]
 
 [model]
 provider = "codex"

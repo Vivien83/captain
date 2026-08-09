@@ -7,7 +7,8 @@ use crate::agent_loop_policy::{effective_tool_policy, manifest_subagent_depth};
 use crate::agent_loop_tool_finish::{finish_tool_call, FinishToolCallInput};
 use crate::agent_loop_tool_results::{append_tool_result_turn, interim_save_tool_turn};
 use crate::agent_loop_tool_runtime::{
-    run_tool_with_timeout_guard, spawn_tool_progress_forwarder, tool_timeout_guard_secs,
+    run_tool_with_timeout_guard, spawn_tool_progress_forwarder, spawn_tool_run_stream_forwarder,
+    tool_timeout_guard_secs,
 };
 use crate::agent_loop_tool_turn::append_tool_use_assistant_turn;
 use crate::context_budget::ContextBudget;
@@ -170,27 +171,42 @@ async fn run_non_streaming_tool_call(
         Some(caller_id_str.to_string()),
         Some(tool_call.id.clone()),
         false,
+        Some(crate::tool_runs::input_digest(&tool_call.input)),
     );
-    let exec_fut = tool_runner::with_origin_channel(
-        origin_channel.cloned(),
-        tool_runner::execute_tool(
-            &tool_call.id,
-            &tool_call.name,
-            &tool_call.input,
-            kernel,
-            effective_allowlist,
-            Some(caller_id_str),
-            skill_registry,
-            mcp_connections,
-            web_ctx,
-            browser_ctx,
-            allowed_env_vars(hand_allowed_env),
-            workspace_root,
-            media_engine,
-            effective_exec_policy,
-            tts_engine,
-            docker_config,
-            process_manager,
+    let (run_stream_tx, run_stream_rx) = mpsc::channel(64);
+    let stream_forwarder = spawn_tool_run_stream_forwarder(run_stream_rx, None, run_id.clone());
+    let stream_ctx = Some(crate::tool_runner::ToolStreamCtx::new(
+        tool_call.id.clone(),
+        run_stream_tx.clone(),
+    ));
+    let (progress_tx, progress_rx) = mpsc::channel(16);
+    let progress_forwarder = spawn_tool_progress_forwarder(progress_rx, run_stream_tx.clone());
+    let exec_fut = tool_runner::with_progress_sink(
+        progress_tx,
+        crate::tool_runner::TOOL_STREAM.scope(
+            stream_ctx,
+            tool_runner::with_origin_channel(
+                origin_channel.cloned(),
+                tool_runner::execute_tool(
+                    &tool_call.id,
+                    &tool_call.name,
+                    &tool_call.input,
+                    kernel,
+                    effective_allowlist,
+                    Some(caller_id_str),
+                    skill_registry,
+                    mcp_connections,
+                    web_ctx,
+                    browser_ctx,
+                    allowed_env_vars(hand_allowed_env),
+                    workspace_root,
+                    media_engine,
+                    effective_exec_policy,
+                    tts_engine,
+                    docker_config,
+                    process_manager,
+                ),
+            ),
         ),
     );
     let exec_fut = tool_runner::with_agent_lineage_depth(subagent_depth, exec_fut);
@@ -201,6 +217,9 @@ async fn run_non_streaming_tool_call(
         exec_fut,
     )
     .await;
+    let _ = progress_forwarder.await;
+    drop(run_stream_tx);
+    let _ = stream_forwarder.await;
     crate::tool_runs::global_registry().finish(&run_id, &result);
     (result, tool_start.elapsed().as_millis() as u64)
 }
@@ -232,13 +251,17 @@ async fn run_streaming_tool_call(
         Some(caller_id_str.to_string()),
         Some(tool_call.id.clone()),
         false,
+        Some(crate::tool_runs::input_digest(&tool_call.input)),
     );
-    let stream_ctx = Some(crate::tool_runner::ToolStreamCtx {
-        tool_use_id: tool_call.id.clone(),
-        tx: stream_tx.clone(),
-    });
+    let (run_stream_tx, run_stream_rx) = mpsc::channel(64);
+    let stream_forwarder =
+        spawn_tool_run_stream_forwarder(run_stream_rx, Some(stream_tx.clone()), run_id.clone());
+    let stream_ctx = Some(crate::tool_runner::ToolStreamCtx::new(
+        tool_call.id.clone(),
+        run_stream_tx.clone(),
+    ));
     let (progress_tx, progress_rx) = mpsc::channel(16);
-    let _progress_forwarder = spawn_tool_progress_forwarder(progress_rx, stream_tx.clone());
+    let progress_forwarder = spawn_tool_progress_forwarder(progress_rx, run_stream_tx.clone());
     let exec_fut = tool_runner::with_progress_sink(
         progress_tx,
         crate::tool_runner::TOOL_STREAM.scope(
@@ -275,6 +298,9 @@ async fn run_streaming_tool_call(
         exec_fut,
     )
     .await;
+    let _ = progress_forwarder.await;
+    drop(run_stream_tx);
+    let _ = stream_forwarder.await;
     crate::tool_runs::global_registry().finish(&run_id, &result);
     (result, tool_start.elapsed().as_millis() as u64)
 }

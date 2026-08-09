@@ -16,6 +16,8 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Approval Endpoints](#approval-endpoints)
 - [Template Endpoints](#template-endpoints)
 - [System Endpoints](#system-endpoints)
+- [Live Run Endpoints](#live-run-endpoints)
+- [Artifact Endpoints](#artifact-endpoints)
 - [Model Catalog Endpoints](#model-catalog-endpoints)
 - [Provider Configuration Endpoints](#provider-configuration-endpoints)
 - [Native Capability Endpoints](#native-capability-endpoints)
@@ -69,10 +71,12 @@ configuration.
 Every other route is private, including `/terminal`, `/config`, frozen
 agent-to-agent discovery/task compatibility surfaces, detailed health/status,
 agents, sessions, approvals, budgets, logs, models/providers, and the GitHub
-Copilot OAuth start/poll flow. Agent-to-agent discovery reveals manifests and
-task state; the OAuth flow can persist a provider credential, so neither is
-treated as self-authenticating. Control returns to its login screen when any
-protected request reports `401`.
+Copilot OAuth start/poll flow. Artifact inventory, previews, downloads, and
+every `/api/tool-runs` route are also private. Agent-to-agent discovery reveals
+manifests and task state; the
+OAuth flow can persist a provider credential, so neither is treated as
+self-authenticating. Control returns to its login screen when any protected
+request reports `401`.
 
 ### Browser Sessions
 
@@ -1200,7 +1204,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.11"
+  "version": "0.1.0-alpha.12"
 }
 ```
 
@@ -1217,7 +1221,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.11",
+  "version": "0.1.0-alpha.12",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -1249,7 +1253,8 @@ provider, uptime, path, deployment, and access fields:
 |---|---|
 | `runtime_health` | Roll-up `state`, structured `issues`, and deduplicated `operator_actions` |
 | `agents`, `active_runs`, `active_processes` | Registered agents and currently supervised work |
-| `tool_runs` | Counts for running/completed/failed/cancelled/interrupted plus payload-free recent metadata |
+| `tool_runs` | Counts for running/completed/failed/cancelled/interrupted plus payload-free recent metadata, input digest, retained-output integrity fields, and retry lineage |
+| `artifacts` | Immutable artifact/version counts, payload bytes, integrity health, invalid entries, recovered staging count, and hard size quotas; never payloads or managed paths |
 | `workload` | Projects, goals, crons, triggers, and automation delivery/dead-letter state |
 | `agent_api` | Agent-as-service egress queue/readiness summary |
 | `budget` | Captain internal token/cost guards plus separately persisted provider-reported subscription windows and operator actions |
@@ -1258,6 +1263,7 @@ provider, uptime, path, deployment, and access fields:
 | `streaming` | Active/completed stream timing telemetry |
 | `disk`, `shutdown` | Free-space policy and graceful-drain state |
 | `runtime_update` | Last successful release check, next 12-hour check, pending version, detached-install state, and notification retry/dead-letter counts |
+| `deployment.readiness` | Cached local/public port, DNS, TLS, reverse-proxy routing, health, version-parity and freshness checks with bounded operator actions |
 | `outbound_delivery` | Exact final-response transport state: pending, attempting, delivered, dead, possible duplicate, oldest pending age, and bounded last error |
 | `native_voice`, `native_embeddings`, `media`, `tts` | Native capability readiness |
 
@@ -1283,6 +1289,22 @@ historical failures alone do not keep operational awareness in warning state.
     "issues": [],
     "operator_actions": []
   },
+  "deployment": {
+    "profile": "vps",
+    "public_url": "https://captain.example.com",
+    "https": true,
+    "reverse_proxy": "caddy",
+    "readiness": {
+      "state": "ready",
+      "checked_at": "2026-08-08T12:00:00Z",
+      "duration_ms": 284,
+      "next_check_at": "2026-08-08T12:05:00Z",
+      "checks": [
+        { "id": "dns", "status": "ok", "summary": "The public domain resolves safely" }
+      ],
+      "operator_actions": []
+    }
+  },
   "tool_runs": {
     "running": 0,
     "completed": 4,
@@ -1291,13 +1313,23 @@ historical failures alone do not keep operational awareness in warning state.
     "interrupted": 0,
     "recent": []
   },
+  "artifacts": {
+    "healthy": true,
+    "artifacts": 3,
+    "versions": 7,
+    "bytes": 18432,
+    "invalid_entries": 0,
+    "recovered_staging_entries": 0,
+    "max_artifact_bytes": 52428800,
+    "max_total_bytes": 536870912
+  },
   "runtime_update": {
     "last_checked_at": "2026-07-20T08:00:00Z",
     "last_success_at": "2026-07-20T08:00:00Z",
     "next_check_at": "2026-07-20T20:00:00Z",
     "last_error": null,
     "consecutive_failures": 0,
-    "pending_version": "0.1.0-alpha.11",
+    "pending_version": "0.1.0-alpha.12",
     "update_in_progress": false,
     "undelivered_notifications": 1,
     "dead_notifications": 0
@@ -1361,6 +1393,16 @@ historical failures alone do not keep operational awareness in warning state.
   "agents": []
 }
 ```
+
+Deployment probes run in a bounded daemon worker after startup and every five
+minutes. `/api/status` only reads the crash-safe owner-only cache; polling
+Status therefore never starts DNS or HTTP work. Public DNS is resolved under a
+timeout, every selected address passes the outbound SSRF policy, the request is
+pinned to that address with redirects and environment proxies disabled, and
+the health body is capped at 64 KiB. The projection omits resolved addresses,
+raw network errors, cache paths, schema identity, and its configuration
+fingerprint. A changed configuration or Captain version invalidates the cache;
+an overdue check becomes `degraded` instead of preserving a stale `ready`.
 
 The example window durations are illustrative values returned by the provider,
 not Captain defaults. With no official observation,
@@ -1591,6 +1633,164 @@ Delete a specific session and its conversation history.
   "session_id": "s1b2c3d4-..."
 }
 ```
+
+---
+
+## Live Run Endpoints
+
+These operator endpoints require the normal daemon API key or an authenticated
+Web session. API and local operator surfaces share one explicit runtime
+projection rather than serializing the internal run record: raw tool input,
+result text or preview, output file name, and managed filesystem path are never
+returned. An input SHA-256 may be present so an operator can compare intent
+without recovering that input.
+
+### GET /api/tool-runs
+
+List recent foreground and detached runs, newest first. `limit` defaults to 50
+and must be between 1 and 200. Optional `status` accepts `running`, `completed`,
+`failed`, `cancelled`, or `interrupted`.
+
+```http
+GET /api/tool-runs?status=running&limit=20
+```
+
+Each item includes identity, state, timestamps, elapsed time, caller and tool
+use IDs when available, input digest, retry lineage, error/truncation flags,
+and checksum/size/redaction metadata for retained output. It never includes the
+result itself.
+
+### GET /api/tool-runs/{run_id}
+
+Return the same selective metadata for one bounded `toolrun-*` identifier.
+Unknown valid identifiers return `404`; malformed identifiers return `400`.
+
+### GET /api/tool-runs/{run_id}/tail
+
+Read only the sanitized suffix of retained output. `max_lines` defaults to 80
+and must be between 1 and 200. The returned `content` is also capped at 32 KiB
+on a UTF-8 boundary. `content_truncated`, `content_withheld`, and `sanitized`
+make the boundary explicit. If a defense-in-depth scan still recognizes secret
+material after normal Live Run redaction, Captain returns a fixed withheld
+marker instead of the text. Disk paths and internal read errors do not cross
+the API boundary.
+
+### POST /api/tool-runs/{run_id}/cancel
+
+Cancel only a currently running task that still has a live runtime abort
+handle. Validation and the `cancelled` transition are atomic. Foreground work
+that Captain cannot actually interrupt and already-terminal work return `409`
+without changing state. The request crosses the same kernel mutation boundary
+as an in-process TUI cancellation. Successful and rejected valid-ID attempts
+are appended to the hash-chained audit trail with their fixed operator surface
+and `ToolInvoke` outcome; no raw input or result enters the audit event.
+
+Live Run reads cost 3 GCRA tokens and cancellation costs 10. There is no route
+that retries a run or sends its output to Telegram, a provider, or another
+external destination.
+
+Captain Control consumes only this private projection through the global top
+bar's **Live Runs** drawer. It polls while open, filters terminal and active
+states locally, renders tail content as text rather than HTML, and displays the
+cancel action only when `cancellable` is true. Closing the drawer stops its
+polling. It remains an operator drawer, not a seventh product hub.
+
+The full Ratatui `/runs` overlay consumes the same response types for daemon
+and in-process modes. It polls only while open, ignores stale tails for a
+previous selection, renders tail bytes as terminal-safe text, and requires an
+explicit `x` then `y` confirmation before cancellation. Standalone
+`captain chat` and the embedded Web terminal only print a summary capped at
+twelve selective metadata rows; they do not expose tail or cancellation.
+
+---
+
+## Artifact Endpoints
+
+These authenticated operator endpoints expose immutable, user-facing output
+versions without disclosing Captain's managed filesystem paths. Inventory and
+version-list responses contain metadata only. Inspection, preview, and
+download re-read the selected payload and verify both its byte count and
+SHA-256 digest immediately before returning it.
+
+### GET /api/artifacts
+
+List the newest version of each artifact across registered agents. `limit`
+defaults to 50 and must be between 1 and 200.
+
+```http
+GET /api/artifacts?limit=20
+```
+
+```json
+{
+  "items": [
+    {
+      "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
+      "version": 2,
+      "agent_id": "captain",
+      "session_id": "session-1",
+      "title": "Deployment report",
+      "filename": "deployment-report.md",
+      "mime_type": "text/markdown",
+      "preview_kind": "markdown",
+      "size_bytes": 8192,
+      "sha256": "<64 lowercase hex characters>",
+      "created_at": "2026-08-08T12:00:00Z"
+    }
+  ],
+  "status": {
+    "healthy": true,
+    "artifacts": 1,
+    "versions": 2,
+    "bytes": 12288,
+    "invalid_entries": 0,
+    "recovered_staging_entries": 0,
+    "max_artifact_bytes": 52428800,
+    "max_total_bytes": 536870912
+  }
+}
+```
+
+### GET /api/artifacts/{id}
+
+Inspect the latest version, or one exact immutable version with
+`?version=N`. Version zero is invalid. The response includes typed
+`versions`, `download`, and optional `preview` links; a download-only format
+returns `null` for `preview`.
+
+### GET /api/artifacts/{id}/versions
+
+List all immutable manifests for one artifact, newest first. This metadata
+operation does not read payload bytes; consume a version through inspect,
+preview, or download when integrity verification matters.
+
+### GET /api/artifacts/{id}/versions/{version}/preview
+
+Return a bounded, browser-safe representation of one verified version.
+
+| Kind | Preview contract |
+|---|---|
+| text, Markdown | Valid UTF-8 is HTML-escaped into a passive `<pre>` document |
+| HTML | Original UTF-8 bytes are isolated by CSP `sandbox` with no script authority and no network authority |
+| raster image, PDF | Verified bytes are served inline with their declared MIME type |
+| SVG or unknown/active format | `415 preview_unavailable`; use the download endpoint |
+
+Text, Markdown, and HTML previews are limited to 2 MiB. The preview endpoint
+uses `frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN`, `no-referrer`,
+`nosniff`, and private no-store caching so Control can embed it without
+granting same-origin script authority to the artifact.
+
+### GET /api/artifacts/{id}/versions/{version}/download
+
+Return the exact verified bytes as an attachment. The response includes a
+quoted SHA-256 `ETag`, UTF-8-safe `Content-Disposition`, `nosniff`,
+`no-referrer`, private no-store caching, CSP `sandbox`, and
+`frame-ancestors 'none'`. The store permits at most 50 MiB per version and
+512 MiB total.
+
+There is intentionally no artifact mutation or deletion endpoint in this
+contract. Publishing creates a new immutable version; Captain neither rewrites
+nor silently prunes an older version.
 
 ---
 
@@ -3088,8 +3288,8 @@ Every response includes security headers:
 
 | Header | Value |
 |--------|-------|
-| `Content-Security-Policy` | Same-origin scripts only; inline/evaluated JavaScript, script attributes, objects, base mutation, and framing denied |
-| `X-Frame-Options` | `DENY` |
+| `Content-Security-Policy` | Same-origin scripts only on normal responses; exact artifact preview/download routes preserve their stricter sandbox policy |
+| `X-Frame-Options` | `DENY`, except `SAMEORIGIN` for the exact sandboxed artifact preview route |
 | `X-Content-Type-Options` | `nosniff` |
 | `X-XSS-Protection` | `0` (legacy mutation filter disabled; CSP and sanitization are authoritative) |
 | `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` |
@@ -3136,6 +3336,17 @@ as source of truth when validating exact route availability.
 | GET | `/api/tools` | List available tools |
 | GET | `/api/config` | Configuration (secrets redacted) |
 | GET | `/api/peers` | List OFP wire peers |
+| **Live Runs** | | |
+| GET | `/api/tool-runs` | List selective metadata for recent tool runs |
+| GET | `/api/tool-runs/{run_id}` | Inspect one run without raw input or result |
+| GET | `/api/tool-runs/{run_id}/tail` | Read a sanitized tail capped at 200 lines and 32 KiB |
+| POST | `/api/tool-runs/{run_id}/cancel` | Audit and cancel one active actually cancellable run |
+| **Artifacts** | | |
+| GET | `/api/artifacts` | List latest immutable artifact versions and store health |
+| GET | `/api/artifacts/{id}` | Inspect one latest or exact version |
+| GET | `/api/artifacts/{id}/versions` | List immutable versions newest-first |
+| GET | `/api/artifacts/{id}/versions/{version}/preview` | Preview verified passive content in a browser sandbox |
+| GET | `/api/artifacts/{id}/versions/{version}/download` | Download exact checksum-verified bytes |
 | **Agents** | | |
 | GET | `/api/agents` | List agents |
 | POST | `/api/agents` | Spawn agent |

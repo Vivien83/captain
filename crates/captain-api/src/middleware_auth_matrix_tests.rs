@@ -119,6 +119,9 @@ fn every_operational_read_from_the_previous_policy_is_private() {
         "/a2a/tasks/01234567",
         "/api/health/detail",
         "/api/status",
+        "/api/tool-runs",
+        "/api/tool-runs/toolrun-01234567-89ab-cdef-0123-456789abcdef",
+        "/api/tool-runs/toolrun-01234567-89ab-cdef-0123-456789abcdef/tail",
         "/api/agents",
         "/api/profiles",
         "/api/sessions",
@@ -144,6 +147,11 @@ fn every_operational_read_from_the_previous_policy_is_private() {
         "/api/a2a/agents",
         "/api/uploads/example",
         "/api/logs/stream",
+        "/api/artifacts",
+        "/api/artifacts/01234567-89ab-cdef-0123-456789abcdef",
+        "/api/artifacts/01234567-89ab-cdef-0123-456789abcdef/versions",
+        "/api/artifacts/01234567-89ab-cdef-0123-456789abcdef/versions/1/preview",
+        "/api/artifacts/01234567-89ab-cdef-0123-456789abcdef/versions/1/download",
         "/api/providers/github-copilot/oauth/poll/example",
     ] {
         assert!(
@@ -155,6 +163,10 @@ fn every_operational_read_from_the_previous_policy_is_private() {
     assert!(!is_public_endpoint(
         &Method::POST,
         "/api/providers/github-copilot/oauth/start"
+    ));
+    assert!(!is_public_endpoint(
+        &Method::POST,
+        "/api/tool-runs/toolrun-01234567-89ab-cdef-0123-456789abcdef/cancel"
     ));
 }
 

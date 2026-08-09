@@ -38,6 +38,9 @@ pub use crate::approval_routes::{
     create_approval, list_approvals, reject_always_request, reject_request, reject_session_request,
     revoke_approval_rule, CreateApprovalRequest,
 };
+pub use crate::artifact_routes::{
+    download_artifact, inspect_artifact, list_artifact_versions, list_artifacts, preview_artifact,
+};
 pub use crate::audit_routes::{audit_recent, audit_verify, logs_stream};
 pub use crate::binding_routes::{add_binding, list_bindings, remove_binding};
 pub use crate::capspec_routes::{
@@ -117,6 +120,9 @@ pub use crate::telegram_topic_routes::{
 };
 pub use crate::template_routes::{get_template, list_templates};
 pub use crate::tool_routes::list_tools;
+pub use crate::tool_run_routes::{
+    cancel_tool_run, inspect_tool_run, list_tool_runs, tail_tool_run,
+};
 pub use crate::trigger_routes::{
     create_file_trigger, create_trigger, delete_file_trigger, delete_trigger, list_file_triggers,
     list_triggers, update_file_trigger, update_trigger,

@@ -49,7 +49,12 @@ pub(crate) fn validate_scoped_permission(
         Some("permissions.write_paths")
     } else if matches!(
         tool,
-        "web_fetch" | "web_search" | "web_download" | "browser_navigate"
+        "web_fetch"
+            | "web_search"
+            | "web_research_batch"
+            | "web_citation_audit"
+            | "web_download"
+            | "browser_navigate"
     ) && permissions.network_hosts.is_empty()
     {
         Some("permissions.network_hosts")
@@ -94,6 +99,8 @@ pub fn reviewed_effect(tool: &str) -> Effect {
             | "glob"
             | "web_fetch"
             | "web_search"
+            | "web_research_batch"
+            | "web_citation_audit"
             | "document_extract"
             | "memory_recall"
             | "memory_context_batch"
@@ -154,5 +161,19 @@ mod tests {
     fn known_mutators_cannot_be_marked_read() {
         assert_eq!(reviewed_effect("file_write"), Effect::Write);
         assert_eq!(reviewed_effect("shell_exec"), Effect::Destructive);
+    }
+
+    #[test]
+    fn grounded_research_tools_require_network_authority_and_remain_read_only() {
+        let permissions = PermissionSet {
+            tools: vec!["web_research_batch".to_string()],
+            ..PermissionSet::default()
+        };
+        assert!(
+            validate_scoped_permission("research", "web_research_batch", &permissions).is_err()
+        );
+        assert!(validate_scoped_permission("audit", "web_citation_audit", &permissions).is_err());
+        assert_eq!(reviewed_effect("web_research_batch"), Effect::Read);
+        assert_eq!(reviewed_effect("web_citation_audit"), Effect::Read);
     }
 }

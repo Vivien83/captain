@@ -65,6 +65,26 @@ pub(crate) fn spawn_tool_progress_forwarder(
     })
 }
 
+pub(crate) fn spawn_tool_run_stream_forwarder(
+    mut stream_rx: mpsc::Receiver<StreamEvent>,
+    mut downstream: Option<mpsc::Sender<StreamEvent>>,
+    run_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = stream_rx.recv().await {
+            if let StreamEvent::ToolOutputDelta { stream, chunk, .. } = &event {
+                crate::tool_runs::global_registry().append_chunk(&run_id, stream, chunk);
+            }
+            if let Some(sender) = downstream.as_ref() {
+                match sender.try_send(event) {
+                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => downstream = None,
+                }
+            }
+        }
+    })
+}
+
 fn format_tool_progress_chunk(progress: &tool_runner::ToolProgressEvent) -> String {
     let message = progress.message.trim();
     if !message.is_empty() {

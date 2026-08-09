@@ -4,9 +4,9 @@
 //! Pipeline: SSRF check → cache lookup → HTTP GET → detect HTML →
 //! html_to_markdown() → truncate → wrap_external_content() → cache → return
 
-use crate::str_utils::safe_truncate_str;
 use crate::web_cache::WebCache;
-use crate::web_content::{html_to_markdown, wrap_external_content};
+use crate::web_content::html_to_markdown;
+use crate::web_evidence::{sha256_text, WebPageEvidence};
 use captain_types::config::WebFetchConfig;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -57,17 +57,43 @@ impl WebFetchEngine {
         headers: Option<&serde_json::Map<String, serde_json::Value>>,
         body: Option<&str>,
     ) -> Result<String, String> {
+        Ok(self
+            .fetch_evidence_with_options(url, method, headers, body)
+            .await?
+            .render_tool_result())
+    }
+
+    pub(crate) async fn fetch_evidence(&self, url: &str) -> Result<WebPageEvidence, String> {
+        self.fetch_evidence_with_options(url, "GET", None, None)
+            .await
+    }
+
+    pub(crate) async fn fetch_evidence_with_options(
+        &self,
+        url: &str,
+        method: &str,
+        headers: Option<&serde_json::Map<String, serde_json::Value>>,
+        body: Option<&str>,
+    ) -> Result<WebPageEvidence, String> {
         let method_upper = method.to_uppercase();
 
         // Step 1: SSRF protection — BEFORE any network I/O
         check_ssrf(url)?;
 
         // Step 2: Cache lookup (only for GET)
-        let cache_key = format!("fetch:{}:{}", method_upper, url);
-        if method_upper == "GET" {
+        let cache_key = format!("fetch-evidence:v1:{}:{}", method_upper, url);
+        let cacheable = method_upper == "GET"
+            && match headers {
+                Some(headers) => headers.is_empty(),
+                None => true,
+            }
+            && body.is_none();
+        if cacheable {
             if let Some(cached) = self.cache.get(&cache_key) {
-                debug!(url, "Fetch cache hit");
-                return Ok(cached);
+                if let Ok(evidence) = serde_json::from_str::<WebPageEvidence>(&cached) {
+                    debug!(url, "Fetch evidence cache hit");
+                    return Ok(evidence);
+                }
             }
         }
 
@@ -159,9 +185,17 @@ impl WebFetchEngine {
             .to_string();
 
         let resp_body = resp
-            .text()
+            .bytes()
             .await
             .map_err(|e| format!("Failed to read response body: {e}"))?;
+        if resp_body.len() > self.config.max_response_bytes {
+            return Err(format!(
+                "Response too large: {} bytes (max {})",
+                resp_body.len(),
+                self.config.max_response_bytes
+            ));
+        }
+        let resp_body = String::from_utf8_lossy(&resp_body).into_owned();
 
         // Step 4: For GET requests, detect HTML and convert to Markdown.
         // For non-GET (API calls), return raw body — don't mangle JSON/XML responses.
@@ -180,28 +214,40 @@ impl WebFetchEngine {
         };
 
         // Step 5: Truncate (char-boundary-safe to avoid panics on multi-byte UTF-8)
-        let truncated = if processed.len() > self.config.max_chars {
-            format!(
-                "{}... [truncated, {} total chars]",
-                safe_truncate_str(&processed, self.config.max_chars),
-                processed.len()
-            )
+        let content_chars = processed.chars().count();
+        let is_truncated = content_chars > self.config.max_chars;
+        let retained = if is_truncated {
+            processed.chars().take(self.config.max_chars).collect()
         } else {
             processed
         };
-
-        // Step 6: Wrap with external content markers
-        let result = format!(
-            "HTTP {status}\n\n{}",
-            wrap_external_content(url, &truncated)
-        );
+        let retained_chars = retained.chars().count();
+        let content = if is_truncated {
+            format!("{retained}... [truncated, {content_chars} total chars]")
+        } else {
+            retained
+        };
+        let evidence = WebPageEvidence {
+            requested_url: url.to_string(),
+            final_url: current_url,
+            status: status.as_u16(),
+            content_type,
+            retrieved_at: chrono::Utc::now().to_rfc3339(),
+            content_sha256: sha256_text(&content),
+            content_chars,
+            retained_chars,
+            truncated: is_truncated,
+            content,
+        };
 
         // Step 7: Cache (only GET responses)
-        if method_upper == "GET" {
-            self.cache.put(cache_key, result.clone());
+        if cacheable {
+            if let Ok(serialized) = serde_json::to_string(&evidence) {
+                self.cache.put(cache_key, serialized);
+            }
         }
 
-        Ok(result)
+        Ok(evidence)
     }
 }
 

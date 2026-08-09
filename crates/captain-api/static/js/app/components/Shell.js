@@ -1,16 +1,24 @@
 import { h } from '/assets/app/vendor/preact.module.js';
-import { useState, useEffect } from '/assets/app/vendor/hooks.module.js';
+import { useCallback, useState, useEffect } from '/assets/app/vendor/hooks.module.js';
 import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
 import { getState, setState, subscribe, toast } from '../store.js';
 import { PRIMARY_HUBS, hubForRoute } from '../control_contract.mjs';
+import { ArtifactDrawer } from './ArtifactDrawer.js';
+import { LiveRunsDrawer } from './LiveRunsDrawer.js';
 
 const html = htm.bind(h);
 
 export function Shell({ route, children }) {
   const [st, setSt] = useState(getState());
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [artifactDrawerOpen, setArtifactDrawerOpen] = useState(false);
+  const [artifactCount, setArtifactCount] = useState(0);
+  const [liveRunsDrawerOpen, setLiveRunsDrawerOpen] = useState(false);
+  const [liveRunCount, setLiveRunCount] = useState(0);
   const [modelUpdates, setModelUpdates] = useState(null);
+  const closeArtifactDrawer = useCallback(() => setArtifactDrawerOpen(false), []);
+  const closeLiveRunsDrawer = useCallback(() => setLiveRunsDrawerOpen(false), []);
   useEffect(() => subscribe((s) => setSt({ ...s })), []);
 
   // Agents + daemon status, refreshed lazily.
@@ -20,6 +28,8 @@ export function Shell({ route, children }) {
         const [agents, status] = await Promise.all([api.agents(), api.status()]);
         const list = agents.agents || agents || [];
         const patch = { agents: list, daemon: { ok: true, version: status.version || '' } };
+        setArtifactCount(Number(status.artifacts && status.artifacts.artifacts) || 0);
+        setLiveRunCount(Number(status.tool_runs && status.tool_runs.running) || 0);
         if (!getState().currentAgentId && list.length) {
           const captain = list.find((a) => a.name === 'captain') || list[0];
           patch.currentAgentId = captain.id;
@@ -110,6 +120,22 @@ export function Shell({ route, children }) {
             <span class="bg-activity"><span class="spinner"></span> ${st.backgroundActivity.length} en arrière-plan</span>
           `}
           <span class="spacer"></span>
+          <button class="ghost live-runs-trigger" title="Exécutions en cours" aria-label="Ouvrir les Live Runs"
+            aria-expanded=${liveRunsDrawerOpen} onClick=${() => {
+              setArtifactDrawerOpen(false);
+              setLiveRunsDrawerOpen(true);
+            }}>
+            <span aria-hidden="true">▶</span>
+            ${liveRunCount > 0 && html`<span class="live-runs-trigger-count">${liveRunCount > 99 ? '99+' : liveRunCount}</span>`}
+          </button>
+          <button class="ghost artifact-trigger" title="Fichiers produits" aria-label="Ouvrir les fichiers produits"
+            aria-expanded=${artifactDrawerOpen} onClick=${() => {
+              setLiveRunsDrawerOpen(false);
+              setArtifactDrawerOpen(true);
+            }}>
+            <span aria-hidden="true">▤</span>
+            ${artifactCount > 0 && html`<span class="artifact-trigger-count">${artifactCount > 99 ? '99+' : artifactCount}</span>`}
+          </button>
           ${route === 'chat' && st.agents.length > 1 && html`
             <select value=${st.currentAgentId || ''}
               onChange=${(e) => setState({ currentAgentId: e.target.value, currentSessionId: null })}>
@@ -122,6 +148,11 @@ export function Shell({ route, children }) {
         `}
         ${children}
       </div>
+
+      <${ArtifactDrawer} open=${artifactDrawerOpen} onClose=${closeArtifactDrawer}
+        onCount=${setArtifactCount} />
+      <${LiveRunsDrawer} open=${liveRunsDrawerOpen} onClose=${closeLiveRunsDrawer}
+        onRunningCount=${setLiveRunCount} />
 
       <div class="toasts">
         ${st.toasts.map((t) => html`<div class="toast ${t.kind}" key=${t.id}>${t.text}</div>`)}

@@ -6,6 +6,80 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.12] - 2026-08-09
+
+Early-access release focused on durable tool execution, evidence-grounded Web
+research, immutable artifacts, managed VPS domains, and continuous deployment
+readiness.
+
+### Added
+
+- Foreground and detached tool calls now share one durable Live Runs ledger.
+  Bounded, secret-redacted and checksum-verified output stays outside the model
+  context and remains readable, searchable, or tail-able after a surface
+  disconnect. Explicit retries are input-digest-bound; interrupted effects
+  require uncertainty acknowledgement and never replay automatically.
+- Authenticated `/api/tool-runs` routes expose selective metadata and a tail
+  capped at 200 lines and 32 KiB, without raw input, raw result, preview,
+  filename, or managed path. Control Web consumes this contract from a global
+  drawer and cancellation succeeds only for an active run with a real abort
+  handle.
+- `web_research_batch` now distinguishes discovery-only search snippets from
+  fetched, citation-ready evidence with canonical/final URL, HTTP status,
+  retrieval time and content SHA-256. The dependent `web_citation_audit`
+  refetches sources, rejects invented URLs or missing quotes, measures inline
+  provenance, and preserves unsourced claims as `[unverified]`.
+- User files can be published as immutable checksum-bound artifact versions,
+  delivered through existing native channel authority, inspected through
+  authenticated APIs, previewed under a sandboxed Web CSP, and downloaded
+  only after byte-count and SHA-256 verification. Control adds a global
+  artifact drawer and Ratatui adds a metadata-only `/artifacts` overlay.
+- The VPS installer accepts one public `CAPTAIN_DOMAIN`, keeps Captain on
+  loopback, configures Caddy transactionally, preserves existing sites, opens
+  an active host firewall, validates TLS plus public/local version parity, and
+  reports the owner-only browser credentials path without echoing secrets.
+- A continuous Deployment Readiness worker checks local/public health, DNS,
+  TLS, reverse-proxy routing, ports and exact version parity every five
+  minutes. Doctor, CLI/Ratatui Status, API Status and Control read the same
+  private crash-safe snapshot with deduplicated remediation actions.
+- A global Ratatui `/runs` overlay now exposes the authenticated Live Runs
+  inventory without adding another hub. It provides local status filters,
+  bounded redacted tails, stale-response protection, and two-step confirmed
+  cancellation only for runs backed by a live abort handle. Standalone
+  `captain chat` and the Web terminal receive a metadata-only summary capped at
+  twelve rows.
+- The core can now form disabled-by-default approval suggestions from repeated
+  one-time Low/Medium approvals bound to the exact agent, tool, and complete
+  action digest. It persists no raw action, never changes a prompt or authority
+  by itself, and requires a separate explicit acceptance to create an existing
+  revocable exact rule. Boot reconciles a rule committed immediately before
+  power loss with its stale suggestion. This checkpoint does not yet claim
+  operator-facing list, accept, or dismiss controls.
+
+### Security
+
+- Live Runs operator access stays behind Captain's existing API-key or Web
+  session authentication. Its projection omits raw action and output fields,
+  applies a second bounded-tail secret scan, and sends nothing to Telegram or a
+  model provider.
+- Artifact preview is fail-closed: text and Markdown are escaped, HTML/raster/
+  PDF use CSP `sandbox`, SVG and unknown active formats are download-only, and
+  no destructive artifact route or silent pruning policy is included.
+
+### Reliability
+
+- Boot reconciles every unfinished tool call to `interrupted`, finalizes only
+  matching partial evidence, sanitizes legacy retained rows, and refuses an
+  unredactable value instead of exposing a raw fallback.
+- The reproducible daemon power-loss smoke now uses a private ephemeral API
+  key instead of relying on obsolete credentialless loopback access. Its real
+  `SIGKILL` cycle additionally proves that a detached cross-surface session can
+  be reopened and activated, that the pre-crash audit tip remains in the same
+  valid audit epoch, and that SQLite integrity is preserved. A synthetic
+  in-flight Live Run is also restored as `interrupted`: its partial owner-only
+  capture is finalized and redacted, remains discoverable through the private
+  operator API, and cannot be ambiguously cancelled after restart.
+
 ## [0.1.0-alpha.11] - 2026-08-08
 
 Early-access release focused on secure extensibility, durable external
@@ -564,7 +638,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.11...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.12...HEAD
+[0.1.0-alpha.12]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.11...v0.1.0-alpha.12
 [0.1.0-alpha.11]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.10...v0.1.0-alpha.11
 [0.1.0-alpha.10]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.9...v0.1.0-alpha.10
 [0.1.0-alpha.9]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.8...v0.1.0-alpha.9

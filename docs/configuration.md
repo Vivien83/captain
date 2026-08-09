@@ -152,6 +152,22 @@ authentication. On a VPS, keep Captain behind HTTPS and a reviewed reverse
 proxy, restrict firewall access, and use generated credentials. Do not disable
 auth to make a remote setup easier.
 
+When `captain setup --profile vps` receives `CAPTAIN_DOMAIN` or
+`CAPTAIN_PUBLIC_URL`, it accepts only a path-free HTTPS DNS hostname and writes
+`deployment.public_url`. The API is forced back to `127.0.0.1` while preserving
+an explicitly customized port, and the generated Caddy upstream uses that same
+port. The host release installer can activate this configuration through the
+transactional managed-Caddy path described in
+[GitHub + VPS Install](deployment/github-vps-install.md).
+
+Once the daemon runs, it verifies the effective deployment every five minutes:
+local API port and health, public DNS, TLS, public port, reverse-proxy routing,
+public health, and exact Captain version parity. The crash-safe snapshot lives
+under `data/health/deployment-readiness.json`, is private to the Captain owner,
+and is invalidated by any relevant configuration or binary-version change.
+Inspect its public-safe projection with `captain doctor --full`,
+`captain status --json | jq '.deployment.readiness'`, or Control's Status hub.
+
 ```toml
 api_listen = "0.0.0.0:50051"
 
@@ -373,6 +389,42 @@ captain doctor --full
 Use `captain config schema` for the typed `[approval]` and `[exec_policy]`
 fields supported by the installed version. Do not copy permissive examples
 from an older release or enable broad host access as a convenience.
+
+Alpha 12 also contains the disabled-by-default core for exact approval
+suggestions:
+
+```toml
+[approval.suggestions]
+enabled = false
+minimum_approvals = 3
+observation_window_hours = 720
+dismissal_cooldown_hours = 168
+```
+
+When disabled, Captain records no learning observation. When explicitly
+enabled, only repeated one-time approvals for the same agent, canonical tool,
+complete action digest, and Low or Medium risk can become a suggestion. The
+default requires three approvals within thirty days. A denial, session-scoped
+choice, durable choice, or escalation to High/Critical clears that candidate.
+A changed digest starts a distinct candidate and can never merge with the
+first. High and Critical actions are never learned.
+
+A suggestion grants no authority and does not alter prompts, model routing, or
+tool visibility. Accepting one must be a separate operator action; it creates
+the existing exact, revocable approval rule rather than broadening
+`allow_always`. Dismissal grants nothing and starts a seven-day cooldown. The
+core stores only identifiers, timestamps, risk, and the action digest in the
+owner-only `approval-suggestions.json`; it stores no raw input, preview,
+description, or model output. Corruption or persistence failure opens only the
+suggestion circuit breaker and never blocks or upgrades the operator's current
+one-time decision. If power is lost after an accepted exact rule commits but
+before its candidate is removed, boot reconciles the two stores and removes the
+stale suggestion without changing the rule.
+
+This checkpoint is an internal ALPHA12 contract. Operator list, accept, and
+dismiss controls are not yet claimed as available by the current source docs;
+keep the feature disabled outside development until those authenticated
+surfaces land.
 
 ## Web, Browser, and Media
 

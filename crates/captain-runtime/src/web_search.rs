@@ -8,7 +8,7 @@
 //! secrets from memory on drop.
 
 use crate::web_cache::WebCache;
-use crate::web_content::wrap_external_content;
+use crate::web_evidence::{WebSearchEvidence, WebSearchResultEvidence};
 use captain_types::config::{SearchProvider, WebConfig};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -43,11 +43,31 @@ impl WebSearchEngine {
 
     /// Perform a web search using the configured provider (or auto-fallback).
     pub async fn search(&self, query: &str, max_results: usize) -> Result<String, String> {
+        self.search_evidence(query, max_results)
+            .await?
+            .render_tool_result()
+    }
+
+    /// Perform a search while preserving provider and URL provenance for
+    /// downstream grouped research and citation auditing.
+    pub(crate) async fn search_evidence(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<WebSearchEvidence, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("web_search requires a non-empty query".to_string());
+        }
+        let max_results = max_results.clamp(1, 20);
+
         // Check cache first
-        let cache_key = format!("search:{}:{}", query, max_results);
+        let cache_key = format!("search-evidence:v1:{}:{}", query, max_results);
         if let Some(cached) = self.cache.get(&cache_key) {
-            debug!(query, "Search cache hit");
-            return Ok(cached);
+            if let Ok(evidence) = serde_json::from_str::<WebSearchEvidence>(&cached) {
+                debug!(query, "Search evidence cache hit");
+                return Ok(evidence);
+            }
         }
 
         let result = match self.config.search_provider {
@@ -58,9 +78,10 @@ impl WebSearchEngine {
             SearchProvider::Auto => self.search_auto(query, max_results).await,
         };
 
-        // Cache successful results
-        if let Ok(ref content) = result {
-            self.cache.put(cache_key, content.clone());
+        if let Ok(ref evidence) = result {
+            if let Ok(serialized) = serde_json::to_string(evidence) {
+                self.cache.put(cache_key, serialized);
+            }
         }
 
         result
@@ -68,7 +89,11 @@ impl WebSearchEngine {
 
     /// Auto-select provider based on available API keys.
     /// Priority: Tavily → Brave → Perplexity → DuckDuckGo
-    async fn search_auto(&self, query: &str, max_results: usize) -> Result<String, String> {
+    async fn search_auto(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<WebSearchEvidence, String> {
         // Tavily first (AI-agent-native)
         if resolve_api_key(&self.config.tavily.api_key_env).is_some() {
             debug!("Auto: trying Tavily");
@@ -102,7 +127,11 @@ impl WebSearchEngine {
     }
 
     /// Search via Brave Search API.
-    async fn search_brave(&self, query: &str, max_results: usize) -> Result<String, String> {
+    async fn search_brave(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<WebSearchEvidence, String> {
         let api_key =
             resolve_api_key(&self.config.brave.api_key_env).ok_or("Brave API key not set")?;
 
@@ -145,25 +174,35 @@ impl WebSearchEngine {
             return Err(format!("No results found for '{query}' (Brave)."));
         }
 
-        let mut output = format!("Search results for '{query}' (Brave):\n\n");
-        for (i, r) in results.iter().enumerate().take(max_results) {
-            let title = r["title"].as_str().unwrap_or("");
-            let url = r["url"].as_str().unwrap_or("");
-            let desc = r["description"].as_str().unwrap_or("");
-            output.push_str(&format!(
-                "{}. {}\n   URL: {}\n   {}\n\n",
-                i + 1,
-                title,
-                url,
-                desc
-            ));
+        let evidence_results = results
+            .iter()
+            .take(max_results)
+            .filter_map(|result| {
+                WebSearchResultEvidence::new(
+                    result["title"].as_str().unwrap_or(""),
+                    result["url"].as_str().unwrap_or(""),
+                    result["description"].as_str().unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
+        if evidence_results.is_empty() {
+            return Err(format!("No valid result URLs found for '{query}' (Brave)."));
         }
 
-        Ok(wrap_external_content("brave-search", &output))
+        Ok(WebSearchEvidence::new(
+            query,
+            "brave",
+            None,
+            evidence_results,
+        ))
     }
 
     /// Search via Tavily API (AI-agent-native search).
-    async fn search_tavily(&self, query: &str, max_results: usize) -> Result<String, String> {
+    async fn search_tavily(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<WebSearchEvidence, String> {
         let api_key =
             resolve_api_key(&self.config.tavily.api_key_env).ok_or("Tavily API key not set")?;
 
@@ -192,38 +231,38 @@ impl WebSearchEngine {
             .await
             .map_err(|e| format!("Tavily JSON parse failed: {e}"))?;
 
-        let mut output = format!("Search results for '{query}' (Tavily):\n\n");
-
-        // Include AI-generated answer if available
-        if let Some(answer) = data["answer"].as_str() {
-            if !answer.is_empty() {
-                output.push_str(&format!("AI Summary: {answer}\n\n"));
-            }
-        }
-
+        let provider_summary = data["answer"]
+            .as_str()
+            .map(str::trim)
+            .filter(|answer| !answer.is_empty())
+            .map(str::to_string);
         let results = data["results"].as_array().cloned().unwrap_or_default();
-        for (i, r) in results.iter().enumerate().take(max_results) {
-            let title = r["title"].as_str().unwrap_or("");
-            let url = r["url"].as_str().unwrap_or("");
-            let content = r["content"].as_str().unwrap_or("");
-            output.push_str(&format!(
-                "{}. {}\n   URL: {}\n   {}\n\n",
-                i + 1,
-                title,
-                url,
-                content
-            ));
-        }
+        let evidence_results = results
+            .iter()
+            .take(max_results)
+            .filter_map(|result| {
+                WebSearchResultEvidence::new(
+                    result["title"].as_str().unwrap_or(""),
+                    result["url"].as_str().unwrap_or(""),
+                    result["content"].as_str().unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
 
-        if results.is_empty() && !output.contains("AI Summary") {
+        if evidence_results.is_empty() && provider_summary.is_none() {
             return Err(format!("No results found for '{query}' (Tavily)."));
         }
 
-        Ok(wrap_external_content("tavily-search", &output))
+        Ok(WebSearchEvidence::new(
+            query,
+            "tavily",
+            provider_summary,
+            evidence_results,
+        ))
     }
 
     /// Search via Perplexity AI (chat completions endpoint).
-    async fn search_perplexity(&self, query: &str) -> Result<String, String> {
+    async fn search_perplexity(&self, query: &str) -> Result<WebSearchEvidence, String> {
         let api_key = resolve_api_key(&self.config.perplexity.api_key_env)
             .ok_or("Perplexity API key not set")?;
 
@@ -252,32 +291,39 @@ impl WebSearchEngine {
             .await
             .map_err(|e| format!("Perplexity JSON parse failed: {e}"))?;
 
-        let answer = data["choices"][0]["message"]["content"]
+        let provider_summary = data["choices"][0]["message"]["content"]
             .as_str()
-            .unwrap_or("")
-            .to_string();
+            .map(str::trim)
+            .filter(|answer| !answer.is_empty())
+            .map(str::to_string);
+        let evidence_results = data["citations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|citation| citation.as_str())
+            .filter_map(|url| WebSearchResultEvidence::new("Perplexity citation", url, ""))
+            .collect::<Vec<_>>();
 
-        if answer.is_empty() {
-            return Ok(format!("No answer for '{query}' (Perplexity)."));
+        if provider_summary.is_none() && evidence_results.is_empty() {
+            return Err(format!(
+                "No answer or citations found for '{query}' (Perplexity)."
+            ));
         }
 
-        let mut output = format!("Search results for '{query}' (Perplexity AI):\n\n{answer}\n");
-
-        // Include citations if available
-        if let Some(citations) = data["citations"].as_array() {
-            output.push_str("\nSources:\n");
-            for (i, c) in citations.iter().enumerate() {
-                if let Some(url) = c.as_str() {
-                    output.push_str(&format!("  {}. {}\n", i + 1, url));
-                }
-            }
-        }
-
-        Ok(wrap_external_content("perplexity-search", &output))
+        Ok(WebSearchEvidence::new(
+            query,
+            "perplexity",
+            provider_summary,
+            evidence_results,
+        ))
     }
 
     /// Search via DuckDuckGo HTML (no API key needed).
-    async fn search_duckduckgo(&self, query: &str, max_results: usize) -> Result<String, String> {
+    async fn search_duckduckgo(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<WebSearchEvidence, String> {
         debug!(query, "Searching via DuckDuckGo HTML");
 
         let resp = self
@@ -289,29 +335,31 @@ impl WebSearchEngine {
             .await
             .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
 
+        if !resp.status().is_success() {
+            return Err(format!("DuckDuckGo returned {}", resp.status()));
+        }
+
         let body = resp
             .text()
             .await
             .map_err(|e| format!("Failed to read DDG response: {e}"))?;
 
         let results = parse_ddg_results(&body, max_results);
+        let evidence_results = results
+            .iter()
+            .filter_map(|(title, url, snippet)| WebSearchResultEvidence::new(title, url, snippet))
+            .collect::<Vec<_>>();
 
-        if results.is_empty() {
+        if evidence_results.is_empty() {
             return Err(format!("No results found for '{query}'."));
         }
 
-        let mut output = format!("Search results for '{query}':\n\n");
-        for (i, (title, url, snippet)) in results.iter().enumerate() {
-            output.push_str(&format!(
-                "{}. {}\n   URL: {}\n   {}\n\n",
-                i + 1,
-                title,
-                url,
-                snippet
-            ));
-        }
-
-        Ok(output)
+        Ok(WebSearchEvidence::new(
+            query,
+            "duckduckgo",
+            None,
+            evidence_results,
+        ))
     }
 }
 

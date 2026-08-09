@@ -83,6 +83,7 @@ fn print_daemon_runtime(body: &serde_json::Value) {
     print_disk_summary(body);
     print_execution_summary(&body["execution"]);
     print_runtime_update_summary(body);
+    print_deployment_readiness_summary(body);
     let channels = &body["channels"];
     let configured = channels["configured_count"]
         .as_u64()
@@ -124,6 +125,50 @@ fn print_daemon_runtime(body: &serde_json::Value) {
     );
     print_native_capability_summary(body);
     ui::kv("Media", &media_summary(body));
+}
+
+fn deployment_readiness_summary(
+    body: &serde_json::Value,
+) -> Option<(bool, String, Option<String>)> {
+    let readiness = body.pointer("/deployment/readiness")?;
+    let state = readiness.get("state")?.as_str()?;
+    let check_count = readiness
+        .get("checks")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let checked = readiness
+        .get("checked_at")
+        .and_then(serde_json::Value::as_str);
+    let summary = match (state, checked) {
+        ("not_configured", None) => {
+            format!("{state}; {check_count} checks; no public domain configured")
+        }
+        (_, Some(timestamp)) => format!("{state}; {check_count} checks; checked {timestamp}"),
+        (_, None) => format!("{state}; {check_count} checks; first probe pending"),
+    };
+    let action = readiness
+        .get("operator_actions")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|actions| actions.first())
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let warning = !matches!(state, "ready" | "not_configured");
+    Some((warning, summary, action))
+}
+
+fn print_deployment_readiness_summary(body: &serde_json::Value) {
+    let Some((warning, summary, action)) = deployment_readiness_summary(body) else {
+        return;
+    };
+    if warning {
+        ui::kv_warn("Deployment", &summary);
+    } else {
+        ui::kv_ok("Deployment", &summary);
+    }
+    if let Some(action) = action {
+        ui::hint(&action);
+    }
 }
 
 fn execution_summary(execution: &serde_json::Value) -> Option<String> {
@@ -955,6 +1000,51 @@ mod tests {
         assert_eq!(
             streaming_status_summary(&streaming).unwrap(),
             "active 1, completed 0, waiting for first completed stream"
+        );
+    }
+
+    #[test]
+    fn deployment_readiness_summary_is_concise_and_actionable() {
+        let body = serde_json::json!({
+            "deployment": {
+                "readiness": {
+                    "state": "degraded",
+                    "checked_at": "2026-08-08T12:00:00Z",
+                    "checks": [{"id": "tls"}, {"id": "public_health"}],
+                    "operator_actions": ["Inspect public TLS."]
+                }
+            }
+        });
+
+        assert_eq!(
+            deployment_readiness_summary(&body),
+            Some((
+                true,
+                "degraded; 2 checks; checked 2026-08-08T12:00:00Z".to_string(),
+                Some("Inspect public TLS.".to_string())
+            ))
+        );
+    }
+
+    #[test]
+    fn unconfigured_deployment_is_not_reported_as_a_failure() {
+        let body = serde_json::json!({
+            "deployment": {
+                "readiness": {
+                    "state": "not_configured",
+                    "checks": [],
+                    "operator_actions": []
+                }
+            }
+        });
+
+        assert_eq!(
+            deployment_readiness_summary(&body),
+            Some((
+                false,
+                "not_configured; 0 checks; no public domain configured".to_string(),
+                None
+            ))
         );
     }
 }

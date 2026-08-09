@@ -223,9 +223,7 @@ fn skip_wrapper_options(words: &[String], mut index: usize, options_with_value: 
         if !option.starts_with('-') {
             break;
         }
-        let consumes_next = options_with_value
-            .iter()
-            .any(|candidate| option == *candidate);
+        let consumes_next = options_with_value.contains(&option);
         index = index.saturating_add(if consumes_next { 2 } else { 1 });
     }
     index.min(words.len())
@@ -312,7 +310,7 @@ fn destructive_git_push(args: &[String]) -> bool {
     forced && protected_branch
 }
 
-fn shell_payload<'a>(args: &'a [String]) -> Option<&'a str> {
+fn shell_payload(args: &[String]) -> Option<&str> {
     args.iter().enumerate().find_map(|(index, arg)| {
         (arg == "-c" || arg.ends_with('c') && arg.starts_with('-'))
             .then(|| args.get(index.saturating_add(1)).map(String::as_str))

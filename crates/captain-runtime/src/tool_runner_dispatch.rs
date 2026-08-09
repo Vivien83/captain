@@ -11,16 +11,16 @@ use crate::mcp;
 use crate::media_understanding::MediaEngine;
 use crate::process_manager::ProcessManager;
 use crate::tools::{
-    dispatch_a2a_tool, dispatch_agent_tool, dispatch_automation_tool, dispatch_browser_tool,
-    dispatch_canvas_tool, dispatch_capspec_management_tool, dispatch_channel_tool,
-    dispatch_config_tool, dispatch_coordination_tool, dispatch_discovery_tool,
-    dispatch_docker_tool, dispatch_document_tool, dispatch_email_tool, dispatch_fallback_tool,
-    dispatch_file_tool, dispatch_goal_tool, dispatch_hand_tool, dispatch_improvement_tool,
-    dispatch_knowledge_tool, dispatch_location_tool, dispatch_media_tool, dispatch_memory_tool,
-    dispatch_package_tool, dispatch_peer_tool, dispatch_process_tool, dispatch_project_tool,
-    dispatch_shell_exec, dispatch_skill_runtime_tool, dispatch_ssh_tool, dispatch_system_update,
-    dispatch_tool_run_tool, dispatch_web_tool, tool_execute_code, tool_screenshot,
-    ShellDispatchOutcome, WebDispatchOutcome,
+    dispatch_a2a_tool, dispatch_agent_tool, dispatch_artifact_tool, dispatch_automation_tool,
+    dispatch_browser_tool, dispatch_canvas_tool, dispatch_capspec_management_tool,
+    dispatch_channel_tool, dispatch_config_tool, dispatch_coordination_tool,
+    dispatch_discovery_tool, dispatch_docker_tool, dispatch_document_tool, dispatch_email_tool,
+    dispatch_fallback_tool, dispatch_file_tool, dispatch_goal_tool, dispatch_hand_tool,
+    dispatch_improvement_tool, dispatch_knowledge_tool, dispatch_location_tool,
+    dispatch_media_tool, dispatch_memory_tool, dispatch_package_tool, dispatch_peer_tool,
+    dispatch_process_tool, dispatch_project_tool, dispatch_shell_exec, dispatch_skill_runtime_tool,
+    dispatch_ssh_tool, dispatch_system_update, dispatch_tool_run_tool, dispatch_web_tool,
+    tool_execute_code, tool_screenshot, ShellDispatchOutcome, WebDispatchOutcome,
 };
 use crate::tts::TtsEngine;
 use crate::web_search::WebToolsContext;
@@ -124,6 +124,16 @@ async fn dispatch_io_execution_tool(
             )
             .await
         }
+        "artifact_publish" | "artifact_list" | "artifact_inspect" | "artifact_deliver" => {
+            dispatch_artifact_tool(
+                request.tool_name,
+                request.input,
+                request.kernel,
+                request.workspace_root,
+                request.caller_agent_id,
+            )
+            .await
+        }
         _ => return None,
     };
 
@@ -134,7 +144,8 @@ async fn dispatch_network_shell_tool(
     request: &ToolDispatchRequest<'_>,
 ) -> Option<ToolDispatchOutcome> {
     match request.tool_name {
-        "web_research_batch" | "web_download" | "web_fetch" | "web_search" => Some(
+        "web_citation_audit" | "web_research_batch" | "web_download" | "web_fetch"
+        | "web_search" => Some(
             match dispatch_web_tool(
                 request.tool_use_id,
                 request.tool_name,
@@ -463,7 +474,8 @@ async fn dispatch_tool_run_supervision_tool(
     request: &ToolDispatchRequest<'_>,
 ) -> Option<ToolDispatchOutcome> {
     let result = match request.tool_name {
-        "tool_run_start" | "tool_run_status" | "tool_run_result" | "tool_run_cancel"
+        "tool_run_start" | "tool_run_retry" | "tool_run_status" | "tool_run_result"
+        | "tool_run_read" | "tool_run_tail" | "tool_run_search" | "tool_run_cancel"
         | "tool_run_list" => {
             dispatch_tool_run_tool(
                 request.tool_name,

@@ -15,6 +15,19 @@ pub(crate) fn mount_observability_routes(router: Router<Arc<AppState>>) -> Route
         )
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/version", axum::routing::get(routes::version))
+        .route("/api/tool-runs", axum::routing::get(routes::list_tool_runs))
+        .route(
+            "/api/tool-runs/{run_id}",
+            axum::routing::get(routes::inspect_tool_run),
+        )
+        .route(
+            "/api/tool-runs/{run_id}/tail",
+            axum::routing::get(routes::tail_tool_run),
+        )
+        .route(
+            "/api/tool-runs/{run_id}/cancel",
+            axum::routing::post(routes::cancel_tool_run),
+        )
         .route(
             "/api/processes/{process_id}",
             axum::routing::delete(routes::kill_process),

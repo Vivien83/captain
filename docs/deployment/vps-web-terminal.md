@@ -18,6 +18,36 @@ Architecture:
 - auth UX: embedded web-session login or API-key prompt;
 - layout: responsive desktop/mobile with dynamic viewport sizing.
 
+The same authenticated top bar opens a global **Live Runs** drawer. It lists
+only selective execution metadata, refreshes while visible, and renders the
+server-sanitized tail as bounded text. An interruption button appears only for
+an active run with a real cancellable runtime handle, and the daemon rechecks
+that condition before auditing the transition. Raw tool input, result preview,
+output filename, managed path, retry, Telegram delivery, and provider delivery
+are not exposed by this drawer.
+
+The authenticated Control top bar also exposes one global **Fichiers
+produits** drawer. It is not a seventh hub: the six operational hubs stay
+unchanged. The drawer refreshes the immutable inventory in place, lets the
+operator select an exact version, and provides a checksum-verified download.
+Passive previews use the authenticated same-origin endpoint inside an empty
+`sandbox` iframe with no referrer; SVG and unknown active formats remain
+download-only. Managed filesystem paths never reach the browser. On narrow
+mobile viewports, including foldable cover screens, the same drawer becomes a
+full-width stacked inventory and preview instead of overflowing horizontally.
+
+The embedded terminal runs standalone `captain chat`. Its `/artifacts` command
+returns a bounded, payload-free inventory summary and points back to the
+Control drawer; it does not write a download onto the VPS filesystem or render
+active content inside Ratatui. The browser drawer remains the authoritative
+preview and download surface.
+
+Its `/runs` command is also intercepted before the model. It returns at most
+twelve selective Live Runs metadata rows and directs the operator to full
+Ratatui or the authenticated Control drawer for a redacted tail and confirmed
+cancellation. The embedded terminal never gains a one-step stop command, raw
+input/result access, or a managed filesystem path.
+
 ## Configuration
 
 Fresh installs created through `captain setup --profile vps` or
@@ -27,6 +57,13 @@ Fresh installs created through `captain setup --profile vps` or
 - `[auth]` web terminal username/password session login;
 - `~/.captain/initial-credentials.txt` when setup generated initial secrets;
 - `/terminal` enabled in Captain chat mode by default.
+
+The browser never asks the operator to paste the daemon API key. It accepts the
+administrator username and password, then creates an HttpOnly browser session.
+At the end of a host install, Captain prints the username and the owner-only
+credentials-file path, but not secret values that could leak into SSH,
+cloud-init, or automation logs. The API key remains a separate credential for
+CLI and external API clients.
 
 ```toml
 [web_terminal]
@@ -122,9 +159,13 @@ captain.example.com {
 }
 ```
 
-When `CAPTAIN_DOMAIN` or `CAPTAIN_PUBLIC_URL` is provided during VPS setup,
-Captain also writes a ready-to-review Caddyfile to
-`~/.captain/deploy/Caddyfile`.
+`captain setup --profile vps` with `CAPTAIN_DOMAIN` or `CAPTAIN_PUBLIC_URL`
+writes a validated handoff Caddyfile to `~/.captain/deploy/Caddyfile`. The
+Alpha 12 `install.sh` goes further: it installs Caddy when needed, adds one
+idempotent managed import to `/etc/caddy/Caddyfile`, validates before reload,
+rolls back failed activation, and verifies the public `/api/health` plus Control
+root. An existing non-Caddy listener on `80/443` is never replaced; use
+`CAPTAIN_INSTALL_PROXY=0` and integrate the generated handoff manually.
 
 Keep the original `Host` header. The terminal WebSocket checks that the browser
 `Origin` host matches the request `Host`; changing the host header at the proxy

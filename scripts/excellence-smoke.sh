@@ -16,7 +16,7 @@ CAPTAIN_SMOKE_LLM="${CAPTAIN_SMOKE_LLM:-0}"
 CAPTAIN_SMOKE_TTS="${CAPTAIN_SMOKE_TTS:-0}"
 CAPTAIN_SMOKE_SSH_ALIAS="${CAPTAIN_SMOKE_SSH_ALIAS:-}"
 CAPTAIN_SMOKE_STRICT_RELEASE="${CAPTAIN_SMOKE_STRICT_RELEASE:-0}"
-EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.11}"
+EXPECTED_CHANGELOG="${CAPTAIN_SMOKE_CHANGELOG_VERSION:-0.1.0-alpha.12}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -274,6 +274,33 @@ mcp_text() {
   jq -er '.result.content[0].text'
 }
 
+mcp_external_json() {
+  local text opening boundary closing suffix
+
+  text=$(mcp_text) || return 1
+  opening=$(printf '%s\n' "$text" | sed -n '1p')
+  closing=$(printf '%s\n' "$text" | sed -n '$p')
+  boundary=${opening#<<<}
+  boundary=${boundary%>>>}
+
+  case "$boundary" in
+  EXTCONTENT_*) ;;
+  *) return 1 ;;
+  esac
+  suffix=${boundary#EXTCONTENT_}
+  if [ "${#suffix}" -ne 12 ]; then
+    return 1
+  fi
+  case "$suffix" in
+  *[!0-9a-f]*) return 1 ;;
+  esac
+  if [ "$opening" != "<<<$boundary>>>" ] || [ "$closing" != "<<</$boundary>>>" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "$text" | sed '1,2d;$d' | jq -ce 'if type == "object" then . else empty end'
+}
+
 assert_jq_eq() {
   local body="$1"
   local filter="$2"
@@ -412,17 +439,20 @@ mem_filtered=$(printf '%s' "$mem_text" | jq -r '.results[0].memory.filtered // 0
 note "match_count=$mem_matches filtered=$mem_filtered"
 
 title "6/8 Web research batch"
-web_args='{"queries":["example domain"],"urls":["https://example.com"],"max_results_per_query":1,"max_fetches":1,"fetch_char_limit":600}'
+web_args='{"urls":["https://example.com"],"max_fetches":1,"preview_chars":600}'
 web_resp=$(mcp_call "web" "web_research_batch" "$web_args") || {
   fail "web_research_batch call failed"
   finish
 }
-web_text=$(printf '%s' "$web_resp" | mcp_text 2>/dev/null) || {
-  fail "web_research_batch returned no MCP text"
+web_text=$(printf '%s' "$web_resp" | mcp_external_json 2>/dev/null) || {
+  fail "web_research_batch returned no valid external JSON envelope"
   finish
 }
-assert_jq_true "$web_text" '.fetched[0].url == "https://example.com"' "web batch fetched requested URL"
-assert_jq_true "$web_text" '.fetched[0].success == true' "web batch fetch succeeded"
+assert_jq_true "$web_text" '.success == true and .tool == "web_research_batch"' "web batch returned the typed evidence contract"
+assert_jq_true "$web_text" '[.sources[] | select(.url == "https://example.com/" and .explicit == true)] | length == 1' "web batch canonicalized the explicit source"
+assert_jq_true "$web_text" '[.sources[] | select(.url == "https://example.com/")][0] | .retrieval_status == "retrieved" and .citation_ready == true and (.http_status >= 200 and .http_status < 300)' "web batch retrieved citation-ready evidence"
+assert_jq_true "$web_text" '[.sources[] | select(.url == "https://example.com/")][0] | (.content_sha256 | test("^[0-9a-f]{64}$")) and (.citation_markdown == "[example.com](https://example.com/)")' "web batch retained checksum and canonical citation"
+assert_jq_true "$web_text" '.coverage.sources_fetched == 1 and .coverage.citation_ready == 1 and .coverage.ready_for_synthesis == true' "web batch coverage is synthesis-ready"
 
 title "7/8 Document pipeline"
 case "$WORKDIR" in

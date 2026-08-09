@@ -52,6 +52,9 @@ impl GmailDeliveryStatusArg {
     }
 }
 
+// Clap constructs one command variant at startup; boxing individual arguments
+// would complicate command handling without reducing steady-state memory.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum GmailRuleCommands {
     /// Create a deterministic mailbox rule for an agent.

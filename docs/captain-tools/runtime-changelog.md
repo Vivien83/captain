@@ -26,6 +26,146 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.12 — Durable Live Runs, grounded research, and managed VPS bootstrap
+
+Agent-facing changes:
+
+- Every foreground and detached tool call now enters the same durable Live Runs
+  ledger with its `run_id`, input digest, status and bounded result. A restart
+  turns unfinished work into `interrupted` instead of losing it or replaying an
+  unknown side effect.
+- Long stdout/stderr/progress is retained outside the LLM context in an
+  owner-only, checksum-verified and secret-sanitized store. `tool_run_read`,
+  `tool_run_tail` and `tool_run_search` inspect bounded slices while a run is
+  active or after completion; disconnecting one user surface does not stop
+  capture. Per-run, total-size and TTL limits bound disk use.
+- Secret sanitization now covers every retained representation, including a
+  running preview, a small final result and legacy terminal rows loaded from
+  SQLite. Legacy unsafe text is rewritten during boot, an unredactable result
+  is replaced by a fail-closed marker, and a non-streamed final result receives
+  checksum-bound output evidence instead of falling back to an unverified raw
+  database value.
+- Cancellation retains useful partial output. Status and result expose whether
+  durable evidence exists, how many bytes were observed/stored, whether it was
+  capped or redacted, and its SHA-256 without including raw output in global
+  status.
+- Authenticated `/api/tool-runs` endpoints expose selective run metadata and a
+  sanitized tail capped at 200 lines and 32 KiB without raw input, result,
+  filename, or managed path. Operator cancellation is accepted only for an
+  active run backed by a real abort handle; fixed success/refusal outcomes are
+  hash-chain audited, and the route sends nothing to Telegram or a provider.
+- API and local TUI adapters now share the same runtime-owned operator
+  projection and fail-closed tail sanitizer. API or TUI cancellation crosses
+  one kernel mutation boundary that preserves strict abort-handle validation
+  and records the fixed originating surface in the hash-chained audit trail.
+- Control's global top bar now opens a Live Runs operator drawer without adding
+  a seventh hub. It polls only while visible, filters active and terminal
+  states, inserts bounded tails as text, and exposes cancellation only when the
+  private API reports a real live abort handle. Desktop and 344 px foldable
+  Chromium smokes cover containment, redaction, XSS resistance, and the actual
+  cancellation transition.
+- Full Ratatui now opens the same inventory through `/runs` as a global
+  overlay, not a seventh hub. It refreshes only while visible, filters locally,
+  rejects stale tail responses, renders terminal-safe redacted text, and
+  requires `x` then `y` before cancellation. Standalone `captain chat` and the
+  Web terminal intercept `/runs` before the model and emit at most twelve
+  metadata-only rows; tail and cancellation stay in full Ratatui or Control.
+- The approval manager now has an opt-in, disabled-by-default suggestion core.
+  It can count repeated one-time Low/Medium approvals only when agent, tool and
+  complete action digest are identical. It stores no raw action, never changes
+  prompts or grants authority, and requires separate consent before creating
+  an existing exact revocable rule. Boot reconciles a rule committed before a
+  split-file power loss with its stale candidate. Operator-facing list, accept
+  and dismiss controls are not yet claimed by this checkpoint.
+- The isolated power-loss certification now authenticates through an
+  owner-only ephemeral daemon key and performs a real `SIGKILL`. After restart
+  it reopens and activates the exact detached session created before the cut,
+  verifies that the pre-crash audit tip still belongs to the same healthy
+  audit epoch, checks committed memory/project/config state, and finishes with
+  SQLite integrity verification. The same proof leaves one Live Run and its
+  partial owner-only capture in flight: boot restores it as `interrupted`,
+  finalizes redacted evidence, keeps it discoverable through the selective
+  operator projection, and refuses terminal cancellation or automatic replay.
+- Abrupt-stop recovery attaches a sanitized partial capture or an already
+  committed orphan final file to the interrupted SQLite row before removing
+  unrelated captures. Small streamed outputs remain inspectable after
+  completion, and forwarding is bounded before asynchronous queueing.
+- `tool_run_retry` provides an explicit, owner-scoped retry for eligible
+  failed/cancelled/interrupted runs. The caller must resupply the exact input;
+  Captain compares its digest without persisting raw input in that ledger.
+  Interrupted runs require an exact uncertainty acknowledgement, and durable
+  retry lineage has a three-attempt circuit breaker that survives history
+  pruning and restarts.
+- Web discovery now returns typed, URL-normalized evidence with stable source
+  IDs. Grouped research runs independent searches and page fetches concurrently,
+  then distinguishes discovery-only snippets from pages that actually returned
+  successful content. Citation-ready records expose final URL, HTTP status,
+  retrieval time, retained-content SHA-256 and exact Markdown citation text.
+- `web_citation_audit` is the dependent final gate for important or explicitly
+  fact-checked research. It refetches cited pages, rejects invented URLs and
+  evidence quotes absent from the retrieved text, measures inline provenance
+  coverage, preserves `[unverified]` claims, and renders the Sources block from
+  audited URLs. Its result states the boundary plainly: retrieval and verbatim
+  presence are certified; semantic entailment and factual truth still require
+  comparison of each claim with its evidence.
+- `artifact_publish` now promotes one final workspace file into an immutable,
+  checksum-bound version; `artifact_list`, `artifact_inspect`, and
+  `artifact_deliver` keep ownership, session provenance, and native channel
+  delivery inside the kernel authority. A successful channel delivery prevents
+  a cron or workflow from sending a duplicate textual final response.
+- Authenticated operator endpoints list artifacts and versions, inspect one
+  exact version, preview passive content, and download verified bytes without
+  exposing managed paths. The store rereads and validates returned byte count
+  plus SHA-256 after resolving the manifest, and `/api/status.artifacts`
+  reports bounded health and quota metadata without payloads.
+- Web preview is fail-closed: text and Markdown are escaped, raw HTML/raster/PDF
+  responses use CSP `sandbox`, exact preview framing is same-origin only, and
+  SVG or unknown active formats remain download-only. Normal routes cannot
+  preserve an arbitrary handler CSP. There is no artifact deletion API and no
+  silent pruning of immutable versions.
+- Control's top bar now opens a global `Fichiers produits` drawer without
+  adding a seventh hub. It refreshes immutable inventory and versions, shows
+  exact supported previews in an empty-sandbox/no-referrer iframe, and keeps a
+  direct verified download action. The layout is certified on desktop and a
+  344 px foldable viewport; active SVG remains download-only.
+- Full Ratatui Chat now opens the same immutable inventory through `/artifacts`
+  as a read-only overlay rather than a seventh hub. It refreshes every fifteen
+  seconds, navigates exact versions and renders metadata only. Standalone
+  `captain chat`, including the Web terminal, intercepts the command locally
+  and emits at most twelve payload-free rows; preview and verified download
+  remain in authenticated Control Web.
+- A VPS host install can now accept one `CAPTAIN_DOMAIN` and finish with the
+  authenticated Captain Control page available on managed HTTPS. Setup accepts
+  only a path-free public DNS hostname, keeps the daemon on loopback, and uses
+  the configured API port in its generated Caddy handoff.
+- The installer waits for DNS, refuses unrelated listeners on `80/443`, installs
+  Caddy, preserves existing sites through one idempotent managed import, and
+  validates before activation. File or service activation failures restore the
+  previous Caddy configuration.
+- Active `ufw` and `firewalld` host policies receive HTTP/HTTPS rules. DNS
+  records and VPS-provider firewalls remain operator-owned and are called out as
+  prerequisites rather than silently assumed.
+- Installation success now requires the public HTTPS health response to match
+  the local Captain version and the Control root to load. An explicit
+  `CAPTAIN_START=0` two-phase provider login configures HTTPS but truthfully
+  defers that final readiness probe until the daemon starts.
+- The final installer summary distinguishes browser username/password
+  authentication from the daemon API Bearer key. It prints the administrator
+  username and owner-only credentials-file path, never secret values; the
+  browser creates its HttpOnly session token after successful login.
+- Public deployments now receive continuous Deployment Readiness after the
+  installer exits. A bounded daemon worker checks local/public ports and
+  health, DNS, TLS, reverse-proxy routing and exact version parity after startup
+  and every five minutes. Independent local/public work is parallel, while the
+  dependent public chain remains ordered.
+- The worker atomically persists one owner-only snapshot bound to deployment
+  configuration and the running Captain version. Status marks overdue evidence
+  degraded and exposes only fixed checks, timestamps and deduplicated actions;
+  raw DNS/transport errors, resolved addresses and cache internals stay local.
+  `captain doctor --full`, CLI/Ratatui Status, `GET /api/status` under
+  `deployment.readiness`, and Control's Status hub consume that cache without
+  starting network work on each refresh.
+
 ### 0.1.0-alpha.11 — Secure extensibility and durable integrations
 
 Agent-facing changes:

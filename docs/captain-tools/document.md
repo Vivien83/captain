@@ -3,8 +3,9 @@
 > **Status:** audited (D.19).
 > See [`README.md`](README.md) for the index and drift policy.
 
-This family is Captain's native artifact rail for documents that should be
-delivered as files, not just answered inline in chat.
+This family creates workspace documents and promotes final files into Captain's
+immutable artifact store when they must remain inspectable, downloadable or
+deliverable after the current turn.
 
 ## Tools
 
@@ -68,6 +69,42 @@ Input styles:
 The tool returns JSON with `path`, `format`, `mime_type`, `size_bytes`, optional
 `pages`, and a `next_action` hint for sending the artifact.
 
+### `artifact_publish`
+
+Copy one final workspace file into Captain's crash-safe immutable store. A new
+artifact starts at version 1; passing an existing `artifact_id` owned by the same
+agent creates its next version without replacing earlier payloads.
+
+Input:
+
+- `path` and `title`: required;
+- `artifact_id`: optional UUID for a new version;
+- `filename`, `mime_type`, `summary`: optional presentation metadata.
+
+The tool scans UTF-8 content and metadata for literal secrets, computes the
+inspected SHA-256, and requires the store copy to match that digest. A source
+changed between inspection and copy is rejected. The 50 MiB per-file limit and
+the store quota fail closed without pruning prior versions.
+
+### `artifact_list` and `artifact_inspect`
+
+`artifact_list` returns only the calling agent's latest versions, with a maximum
+of 100 items. `artifact_inspect` selects an exact version, or the latest when
+`version` is omitted, and verifies payload size plus SHA-256 before returning
+metadata. These are reviewed read-only tools and independent calls may run in
+parallel.
+
+### `artifact_deliver`
+
+Upload a checksum-verified owned artifact through an active channel without
+exposing its managed local path. Images use the native image upload with a
+caption; other formats use the native file upload. `recipient` may be omitted
+only when the channel has a configured default.
+
+Publication and delivery are external or durable effects. They remain
+sequential fences: first wait for `artifact_publish`, then pass its returned
+`artifact_id` and `version` to `artifact_deliver`.
+
 ## Action
 
 Use `document_create` when the user asks for a PDF, DOCX, report, synthesis,
@@ -90,6 +127,10 @@ Use `document_extract` before citing or summarizing a downloaded PDF/report.
 The final answer or generated document must cite the original source URL/path
 actually read, not just the search result that discovered it.
 
+For a one-turn disposable send, `document_pipeline` remains available. For a
+deliverable that must survive restart and be reopened from another surface, use
+`document_create` -> `artifact_publish` -> `artifact_deliver` in that order.
+
 ## Sandbox
 
 `path` resolves through the workspace sandbox. Relative paths are rooted in the
@@ -102,6 +143,11 @@ explicitly provided.
 Like other write tools, `document_create` rejects obvious raw secrets in title,
 content, sections and citations. Store secrets with `secret_write` and reference
 the secret name instead of embedding values in a document.
+
+The immutable store is kernel-owned. Agent tools never receive its payload path,
+cannot read another agent's artifacts, and cannot forge the owning agent or
+session. Unknown active formats, including SVG, remain download-only until a
+sandboxed preview explicitly supports them.
 
 ## Limites
 
@@ -158,12 +204,21 @@ Create a DOCX from structured sections:
 }
 ```
 
-Send the generated artifact afterwards:
+Publish and send the generated artifact durably:
 
 ```json
 {
-  "channel": "telegram",
-  "message": "Voici le rapport.",
-  "file_path": "documents/market-research.pdf"
+  "path": "documents/market-research.pdf",
+  "title": "Market Research Summary"
+}
+```
+
+Then use the returned identity:
+
+```json
+{
+  "artifact_id": "9e9afb94-dc24-48a5-a2b8-4f72190411d1",
+  "version": 1,
+  "channel": "telegram"
 }
 ```

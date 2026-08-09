@@ -33,7 +33,7 @@ fn tool_definition(name: &str, description: &str, input_schema: Value) -> ToolDe
 fn document_create_tool_definition() -> ToolDefinition {
     tool_definition(
         "document_create",
-        "[DOCUMENT NATIF] Génère un document propre dans l'espace de travail, sans dépendre d'un binaire externe. À utiliser pour rapports de recherche, synthèses, factures simples, courriers, comptes rendus et livrables partageables. Formats supportés: pdf, docx, html, markdown. Accepte du contenu Markdown simple ou des sections structurées avec titres, paragraphes, listes, tableaux et sources. Refuse d'écraser un fichier existant sauf overwrite=true. Pour envoyer ensuite le fichier sur Telegram, Discord, Signal ou Email, utiliser channel_send avec file_path.",
+        "[DOCUMENT NATIF] Génère un document propre dans l'espace de travail, sans dépendre d'un binaire externe. À utiliser pour rapports de recherche, synthèses, factures simples, courriers, comptes rendus et livrables partageables. Formats supportés: pdf, docx, html, markdown. Accepte du contenu Markdown simple ou des sections structurées avec titres, paragraphes, listes, tableaux et sources. Refuse d'écraser un fichier existant sauf overwrite=true. Pour un livrable durable et réouvrable via Telegram, Discord, Signal ou Email, enchaîner artifact_publish puis artifact_deliver. Réserver channel_send avec file_path à un envoi jetable sur le tour courant.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -156,6 +156,8 @@ mod tests {
         assert_contains(&create.description, "sans dépendre d'un binaire externe");
         assert_contains(&create.description, "overwrite=true");
         assert_contains(&create.description, "Telegram, Discord, Signal ou Email");
+        assert_contains(&create.description, "artifact_publish");
+        assert_contains(&create.description, "artifact_deliver");
     }
 
     #[test]

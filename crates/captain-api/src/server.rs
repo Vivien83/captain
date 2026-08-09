@@ -73,6 +73,7 @@ fn app_state_from_bridge(
 }
 
 fn spawn_router_background_tasks(state: &Arc<AppState>, listen_addr: SocketAddr) {
+    crate::deployment_readiness::spawn(state.kernel.config.clone(), listen_addr);
     crate::server_runtime_adapters::spawn_integration_hot_reload(state.clone());
     crate::event_webhooks::spawn_outbound_webhook_dispatcher(state.clone());
     crate::agent_api_egress_queue::spawn_agent_api_egress_queue_drain(
@@ -152,6 +153,7 @@ fn mount_api_routes_tail(app: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     let app = crate::server_capability_routes::mount_capability_routes(app);
     let app = crate::server_maintenance_routes::mount_maintenance_routes(app);
     let app = crate::server_memory_graph_routes::mount_memory_graph_routes(app);
+    let app = crate::server_artifact_routes::mount_artifact_routes(app);
     let app = crate::server_control_routes::mount_control_routes(app);
     let app = crate::server_a2a_routes::mount_a2a_routes(app);
     let app = crate::server_integration_routes::mount_integration_routes(app);

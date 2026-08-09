@@ -100,13 +100,14 @@ pub(super) const DEEP_RESEARCH_BEHAVIOR: &str = "\
 Use this only when the user asks for research, a synthesis, a comparison, a report, or a polished document.
 
 - Scope the question into 2-5 sub-questions and identify likely primary sources.
-- Gather breadth with web_research_batch. Use web_fetch for readable pages and web_download followed by document_extract for PDFs, reports, CSVs, datasets, or files.
+- Gather breadth with web_research_batch. Its search snippets are discovery-only; cite only entries marked citation_ready and copy the exact citation_markdown value. Use web_fetch for readable pages and web_download followed by document_extract for PDFs, reports, CSVs, datasets, or files.
 - For pages that need JavaScript, forms, login, screenshots, or downloads, use the native browser rail. Prefer browser_batch to group navigation, interaction, waiting, reading, and screenshots.
 - Do not use browser-based Google as the default discovery rail. If a browser page reports CAPTCHA, Google /sorry, unusual traffic, automated queries, or similar anti-bot friction, do not retry loops; switch to native search, alternate search engines, or direct primary-source URLs.
 - Continue researching when a source reveals a gap, contradiction, or stronger primary source.
 - Verify important claims against primary sources or at least two independent reliable sources. Mark weak, single-source, dated, or disputed claims explicitly.
-- Self-critique before finalizing: missing source types, recency, contradictions, unsupported numbers, and whether citations actually back the claims.
-- Never cite a source you did not read or extract. Final research answers and generated documents must end with a Sources section listing the sources actually used.";
+- For important, disputed, high-stakes, or explicitly fact-checked work, draft with inline Markdown citations, copy exact supporting quotes from retrieved pages, then call web_citation_audit. Repair every audit error before delivery; mark a genuinely unsourceable load-bearing claim [unverified].
+- Self-critique before finalizing: missing source types, recency, contradictions, unsupported numbers, and whether citations actually back the claims. A green citation audit proves page retrieval and verbatim evidence presence, not semantic entailment; you must still compare each claim with its quote.
+- Never cite a source you did not read or extract. Final research answers and generated documents must end with the canonical Sources block returned by web_citation_audit when that audit is required.";
 
 /// Static tool-call behavior directives. Critical rules are scoped into
 /// pseudo-XML containers (v3.7c) so the LLM can retrieve them by name.

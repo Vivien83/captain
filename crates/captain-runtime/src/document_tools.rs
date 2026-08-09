@@ -202,7 +202,7 @@ pub async fn create_document(
         "pages": rendered.pages,
         "elements": document.elements.len(),
         "citations": document.citations.len(),
-        "next_action": "Use channel_send with file_path if the document should be sent to a chat channel."
+        "next_action": "Use artifact_publish to make this final document durable and versioned, then artifact_deliver to send it. Use channel_send with file_path only for a disposable one-turn send."
     })
     .to_string())
 }
@@ -1169,6 +1169,14 @@ mod tests {
         assert!(bytes.len() > 500);
         assert_eq!(value["format"], "pdf");
         assert_eq!(value["pages"], 1);
+        assert!(value["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("artifact_publish"));
+        assert!(value["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("artifact_deliver"));
     }
 
     #[tokio::test]

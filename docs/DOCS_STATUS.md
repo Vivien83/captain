@@ -4,6 +4,96 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Alpha 12 Release Candidate Contract
+
+The Alpha 12 release candidate adds a managed VPS-domain bootstrap. One
+`CAPTAIN_DOMAIN` now drives HTTPS-only setup, a loopback Captain API, Caddy
+installation and transactional configuration, optional host-firewall updates,
+and an end-to-end public Control readiness check. DNS records and
+provider-level firewall rules remain explicit operator prerequisites. This
+source contract is documented in [GitHub + VPS Install](deployment/github-vps-install.md)
+and is not retroactively claimed by the immutable Alpha 11 artifacts. It
+becomes a published release contract only after the clean release gate,
+sequential local bundles, GitHub/GHCR publication, and anonymous verification
+have all completed.
+The final host-install summary names the browser username/password contract,
+prints the owner-only initial-credentials path, and distinguishes the daemon
+Bearer key without echoing either secret into provisioning logs. Browser
+session tokens remain HttpOnly and are created automatically after login.
+
+The same Alpha 12 candidate carries the following core tranches.
+Foreground and detached tool calls share one crash-recoverable Live Runs
+ledger with bounded redacted output, explicit retry lineage, uncertainty
+acknowledgement, and operator-safe status. Grounded Web research separates
+discovery snippets from fetched evidence and requires a dependent citation
+audit before claims are presented as source-backed.
+Live Run sanitization applies to running previews, small final results and
+legacy SQLite rows as well as large output files. Unsafe legacy text is
+rewritten on hydration, an unredactable value is withheld, and non-streamed
+final output receives checksum-bound evidence when the durable store is active.
+Authenticated `/api/tool-runs` operator routes now expose only selective run
+metadata and a sanitized tail capped at 200 lines and 32 KiB. They omit input,
+result, preview, filename and managed path. Cancellation succeeds only for an
+active run with a real abort handle and all validated success/refusal outcomes
+are hash-chain audited. API and local TUI adapters now share the exact selective
+projection and tail sanitizer, while every cancellation crosses one kernel
+mutation boundary carrying a fixed operator-surface identity. These routes do
+not send content to Telegram, a model provider, or any other external
+destination.
+
+Control Web now consumes exactly that private projection from a global Live
+Runs drawer in the existing top bar. It refreshes only while open, filters run
+states, renders the bounded tail as text, and offers cancellation only when the
+record is backed by a live abort handle. It adds no seventh hub, provider send,
+Telegram destination, retry shortcut, raw input/result, filename or managed
+path. A production-asset Chromium smoke covers filters, redacted/XSS-safe tail,
+strict cancellation, desktop, and the 344 px foldable viewport.
+
+The full Ratatui TUI now opens the same private inventory through `/runs` as a
+global overlay rather than a seventh hub. It refreshes only while visible,
+filters locally, preserves selection, renders the shared redacted tail as
+terminal-safe text, and requires `x` then `y` before asking the kernel to stop
+an active actually cancellable run. Stale tail responses cannot replace the
+current selection. Standalone `captain chat`, including the VPS Web terminal,
+intercepts `/runs` before the model and returns at most twelve selective
+metadata rows; tail inspection and cancellation remain in the full TUI or
+authenticated Control Web.
+
+User-facing files can be promoted into an immutable, checksum-bound artifact
+store and delivered through native channels. Authenticated operator routes now
+provide metadata inventory, exact version inspection, sandboxed preview, and
+attachment download without exposing managed paths. Returned payload bytes are
+reverified after reading; text and HTML previews are capped at 2 MiB, SVG is
+download-only, and store health is available under `/api/status.artifacts`.
+No destructive artifact API exists in the current source contract. These
+ALPHA12 additions are not retroactively claimed by the immutable Alpha 11
+release.
+
+Control Web consumes that operator API through a global `Fichiers produits`
+drawer in the existing top bar; it does not add a seventh hub. The embedded
+component refreshes inventory and versions, frames only supported exact-version
+previews with an empty iframe sandbox and no referrer, and keeps direct verified
+download available. A production-asset Chromium smoke certifies desktop and
+344 px foldable layouts, version selection, blocked preview scripts,
+download-only SVG behavior, containment, and absence of page overflow.
+
+The full Ratatui TUI now exposes the same inventory through a global
+`/artifacts` read-only overlay without changing the six-hub product shape. It
+refreshes every fifteen seconds, preserves exact-version selection and renders
+metadata only. Standalone `captain chat` and the VPS Web terminal intercept
+`/artifacts` before the model and return at most twelve payload-free rows;
+sandboxed preview and verified download remain in authenticated Control Web.
+
+The ALPHA12 durability proof remains a full isolated-daemon test rather than a
+mock. It authenticates with an owner-only ephemeral key, commits memory,
+project, configuration and a detached canonical session, then sends the
+daemon `SIGKILL`. The second boot must reopen and activate that exact session,
+retain the pre-crash audit tip in the same healthy epoch, preserve every
+acknowledged value, and pass SQLite `integrity_check`. It must also reconcile
+a synthetic in-flight Live Run to `interrupted`, finalize and redact its
+matching partial capture, retain selective private-API discovery, and reject
+ambiguous cancellation or replay after restart.
+
 ## Current Public Release
 
 `v0.1.0-alpha.11` is the current public prerelease. It closes
@@ -717,6 +807,12 @@ kernel. Those decisions never pass through the LLM.
 Status is the operational cockpit backed by `/api/status`, including runtime health,
 active work, detached tool runs, agent API egress, budgets, channels,
 consciousness, streaming, disk, shutdown, and native media/embedding readiness.
+For a configured public domain it also shows the daemon's cached Deployment
+Readiness contract: local/public ports and health, DNS, TLS, reverse-proxy
+routing, version parity, freshness, timestamps and bounded actions. The worker
+runs after startup and every five minutes; Control, CLI/Ratatui Status and full
+doctor read the same crash-safe cache and never fan out network probes per UI
+refresh.
 Its budget surface keeps `Captain internal spend` separate from
 `Provider subscription (reported)` and preserves provider-reported dynamic
 windows and reset times. Full-screen Ratatui Chat and the xterm Web terminal
@@ -760,6 +856,19 @@ scanned, fail closed when corrupt, and revocable by ID. Denial reasons are
 bounded and reach the blocked agent. Raw actions are not persisted in rules or
 audit entries. The digest is computed from the complete untruncated tool input,
 never from its bounded display preview.
+
+The ALPHA12 source now also contains a core-only approval-suggestion store.
+It is opt-in and records nothing while disabled. When enabled, it counts only
+repeated one-time Low/Medium decisions for one exact agent/tool/action digest;
+High/Critical actions and every non-one-time decision are excluded. A pending
+suggestion grants no authority, does not shape a prompt, and can only become the
+existing exact revocable rule after separate operator consent. The bounded,
+owner-only store persists identifiers, timestamps, risk and digest but no raw
+action or result. Its circuit breaker hides optional suggestions without
+blocking the one-time approval path. Boot removes a stale candidate already
+covered by a committed exact rule after a split-file power loss. Operator
+list/accept/dismiss surfaces are not yet part of this checkpoint and are
+therefore not documented as ready.
 
 Codex model availability is live runtime state, not a fixed documentation
 list. With a Codex agent registered, the daemon refreshes the official catalog

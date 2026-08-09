@@ -7,6 +7,8 @@ pub mod agent;
 pub mod agent_api;
 pub mod agent_delegation;
 pub mod approval;
+pub mod approval_suggestions;
+pub mod artifact;
 pub mod capability;
 pub mod comms;
 pub mod compaction;

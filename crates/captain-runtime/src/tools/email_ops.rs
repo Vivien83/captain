@@ -607,9 +607,9 @@ fn workspace_candidate(raw_path: &str, workspace_root: &Path) -> PathBuf {
     }
 }
 
-fn update_effect(
-    input: &EmailUpdateInput,
-) -> Result<(Vec<String>, Vec<String>, Option<bool>), String> {
+type EmailUpdateEffect = (Vec<String>, Vec<String>, Option<bool>);
+
+fn update_effect(input: &EmailUpdateInput) -> Result<EmailUpdateEffect, String> {
     let fixed_action = !matches!(
         input.action,
         EmailUpdateAction::AddLabels | EmailUpdateAction::RemoveLabels

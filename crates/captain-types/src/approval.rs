@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::approval_suggestions::{ApprovalSuggestion, ApprovalSuggestionPolicy};
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -359,6 +361,8 @@ pub struct ApprovalResponse {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<ApprovalSuggestion>,
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +392,10 @@ pub struct ApprovalPolicy {
     /// Alias: if `auto_approve = true`, clears the require list at boot.
     #[serde(default, alias = "auto_approve")]
     pub auto_approve: bool,
+    /// Optional deterministic learning from repeated exact one-time approvals.
+    /// Disabled by default; no observations are persisted until enabled.
+    #[serde(default)]
+    pub suggestions: ApprovalSuggestionPolicy,
 }
 
 impl Default for ApprovalPolicy {
@@ -398,6 +406,7 @@ impl Default for ApprovalPolicy {
             timeout_secs: 60,
             auto_approve_autonomous: true,
             auto_approve: true,
+            suggestions: ApprovalSuggestionPolicy::default(),
         }
     }
 }
@@ -452,6 +461,8 @@ impl ApprovalPolicy {
     ///
     /// Returns `Ok(())` or an error message describing the first validation failure.
     pub fn validate(&self) -> Result<(), String> {
+        self.suggestions.validate()?;
+
         // -- timeout_secs --
         if self.timeout_secs < MIN_TIMEOUT_SECS {
             return Err(format!(
@@ -773,6 +784,7 @@ mod tests {
             decided_by: Some("admin@example.com".into()),
             reason: Some("Reviewed by operator".into()),
             rule_id: None,
+            suggestion: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ApprovalResponse = serde_json::from_str(&json).unwrap();
@@ -790,6 +802,7 @@ mod tests {
             decided_by: None,
             reason: None,
             rule_id: None,
+            suggestion: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ApprovalResponse = serde_json::from_str(&json).unwrap();
@@ -853,6 +866,7 @@ mod tests {
             timeout_secs: 60,
             auto_approve_autonomous: false,
             auto_approve: true,
+            suggestions: ApprovalSuggestionPolicy::default(),
         };
         assert!(!policy.require_approval.is_empty());
         policy.apply_shorthands();
@@ -980,6 +994,7 @@ mod tests {
             timeout_secs: 120,
             auto_approve_autonomous: true,
             auto_approve: false,
+            suggestions: ApprovalSuggestionPolicy::default(),
         };
         let json = serde_json::to_string(&policy).unwrap();
         let back: ApprovalPolicy = serde_json::from_str(&json).unwrap();

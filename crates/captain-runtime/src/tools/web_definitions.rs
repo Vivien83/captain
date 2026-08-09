@@ -5,8 +5,37 @@ use captain_types::tool::ToolDefinition;
 pub fn web_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
+            name: "web_citation_audit".to_string(),
+            description: "[AUDIT DE CITATIONS] Audite un brouillon après la recherche : refetch en parallèle les URLs citées, vérifie que chaque lien vient du jeu de sources, que les extraits fournis apparaissent réellement dans les pages et que la couverture de provenance atteint le seuil demandé. Retourne un bloc Sources canonique. Une réussite prouve la récupération et la présence verbatim, pas que la source implique sémantiquement l'affirmation. Pour un fait important, litigieux ou à enjeu, appeler cet outil après web_research_batch et avant la réponse finale ; corriger puis relancer si valid=false.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "draft": { "type": "string", "description": "Brouillon avec citations Markdown inline exactes, par exemple [Source](https://example.com), et [unverified] pour les affirmations non sourçables." },
+                    "sources": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 12,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "url": { "type": "string", "description": "URL citation_ready issue de web_research_batch." },
+                                "title": { "type": "string", "description": "Libellé humain de la source." },
+                                "quotes": { "type": "array", "maxItems": 3, "items": { "type": "string" }, "description": "Extraits exacts copiés depuis le contenu récupéré, jamais depuis un snippet de recherche." }
+                            },
+                            "required": ["url"]
+                        }
+                    },
+                    "min_coverage": { "type": "number", "minimum": 0, "maximum": 1, "description": "Part minimale des phrases de prose portant une citation ou [unverified]. Défaut 0.5." },
+                    "require_evidence": { "type": "boolean", "description": "Exiger au moins un extrait verbatim par source citée. Défaut true." }
+                },
+                "required": ["draft", "sources"]
+            }),
+        },
+        ToolDefinition {
             name: "web_research_batch".to_string(),
-            description: "[RECHERCHE WEB GROUPEE] Exécute plusieurs recherches web puis fetch automatiquement les meilleures URLs ou les URLs explicites, avec previews compactes et sources. À utiliser pour les demandes de recherche/synthèse avant de rédiger ou créer un document. Lecture réseau uniquement; refuse les URLs contenant secrets/tokens.".to_string(),
+            description: "[RECHERCHE WEB GROUPEE] Exécute en parallèle jusqu'à cinq recherches indépendantes puis récupère en parallèle un ensemble borné de pages. Retourne des sources dédupliquées avec ID stable, provenance de découverte, URL finale, statut HTTP, date, SHA-256, preview et citation_markdown uniquement quand la page a réellement été lue. Les snippets restent discovery_only et ne doivent jamais être cités. À utiliser avant toute recherche/synthèse ; pour les affirmations importantes, terminer avec web_citation_audit.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -61,4 +90,27 @@ pub fn web_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_research_tools_expose_grounding_contracts() {
+        let tools = web_tool_definitions();
+        let audit = tools
+            .iter()
+            .find(|tool| tool.name == "web_citation_audit")
+            .expect("citation audit must be registered");
+        let research = tools
+            .iter()
+            .find(|tool| tool.name == "web_research_batch")
+            .expect("grouped research must be registered");
+
+        assert_eq!(audit.input_schema["properties"]["sources"]["maxItems"], 12);
+        assert!(audit.description.contains("pas que la source implique"));
+        assert!(research.description.contains("discovery_only"));
+        assert!(research.description.contains("SHA-256"));
+    }
 }

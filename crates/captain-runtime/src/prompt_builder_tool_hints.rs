@@ -29,10 +29,27 @@ const TOOL_HINTS: &[(&str, &str)] = &[
         "extract text from a PDF or document source",
     ),
     ("document_pipeline", "create and optionally send a document"),
+    (
+        "artifact_publish",
+        "publish an immutable, versioned workspace artifact",
+    ),
+    ("artifact_list", "list the caller's durable artifacts"),
+    (
+        "artifact_inspect",
+        "verify one immutable artifact version by SHA-256",
+    ),
+    (
+        "artifact_deliver",
+        "deliver a verified artifact through an active channel",
+    ),
     // Web
     (
         "web_research_batch",
-        "run grouped web searches and compact fetches",
+        "run grouped web searches and return citation-ready evidence",
+    ),
+    (
+        "web_citation_audit",
+        "verify retrieval, inline citations, coverage, and verbatim evidence",
     ),
     ("web_search", "search the web for information"),
     ("web_fetch", "fetch a URL and get its content as markdown"),

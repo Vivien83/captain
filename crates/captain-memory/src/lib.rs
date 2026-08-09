@@ -8,6 +8,7 @@
 //! Agents interact with a single `Memory` trait that abstracts over all three stores.
 
 pub mod agent_delegation_jobs;
+pub mod artifacts;
 pub mod compaction_progress;
 pub mod consolidation;
 pub mod detached_tool_runs;

@@ -219,6 +219,8 @@ mod tests {
             channel_ready_count: 2,
             channel_total: 4,
             shutdown_status: "idle".to_string(),
+            deployment_readiness_state: "ready".to_string(),
+            deployment_readiness_check_count: 10,
             ..Default::default()
         };
 
@@ -234,5 +236,7 @@ mod tests {
         assert!(rendered.contains("Tool Runs"));
         assert!(rendered.contains("Agent API"));
         assert!(rendered.contains("Awareness"));
+        assert!(rendered.contains("Deployment"));
+        assert!(rendered.contains("10 check(s)"));
     }
 }

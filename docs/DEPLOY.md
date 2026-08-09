@@ -2,7 +2,7 @@
 
 Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
 container image. The current public early-access release is the prerelease
-`v0.1.0-alpha.11`; pin it explicitly because GitHub's `/releases/latest`
+`v0.1.0-alpha.12`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 
 ## Host Install
@@ -10,8 +10,8 @@ endpoint excludes prereleases.
 macOS, Linux, or a Linux VPS:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.11/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.11 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.12 CAPTAIN_PROFILE=desktop bash
 ```
 
 Use `CAPTAIN_PROFILE=vps` for a service-oriented server install. The installer
@@ -51,7 +51,14 @@ scripts/persistence-power-loss-smoke.sh
 ```
 
 The script uses an isolated temporary home and sends the candidate daemon a
-real `SIGKILL`; never aim an ad-hoc kill test at a personal or production home.
+real `SIGKILL`. It verifies committed memory, project and configuration state,
+then reopens and activates a detached cross-surface session. It also proves
+that the pre-crash audit tip remains in the same valid hash-chain epoch. An
+in-flight Live Run and its partial owner-only capture are recovered as
+`interrupted`; the API projection stays selective, the tail is redacted and
+the terminal run cannot be ambiguously cancelled. The smoke finishes with
+SQLite `integrity_check`. Never aim an ad-hoc kill test at a personal or
+production home.
 
 The macOS alpha binary is ad-hoc signed but not Apple-notarized. The Windows
 CLI zip is not Authenticode-signed. Verify the published SHA-256 sidecar before
@@ -62,14 +69,14 @@ approving first launch.
 The immutable image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
 
 docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
 ```
 
 The moving prerelease channel is `ghcr.io/vivien83/captain-agent-os:alpha`.
@@ -96,8 +103,8 @@ docker compose up -d --build
 To consume the published image without rebuilding:
 
 ```bash
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.11 docker compose up -d --no-build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.12 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.12 docker compose up -d --no-build
 ```
 
 The optional `personal`, `trusted`, and `yolo` overlays progressively grant
@@ -138,6 +145,13 @@ reverse proxy, firewall, WAF, or equivalent edge before exposing Captain.
 Do not expose port `50051` directly to the Internet without Captain auth and
 TLS termination.
 
+For a systemd VPS, the Alpha 12 installer can own this path end to end when
+`CAPTAIN_DOMAIN` is set. It validates DNS, refuses an unrelated listener on
+`80/443`, installs Caddy, updates one managed import with rollback, opens an
+active `ufw`/`firewalld`, and verifies the public health and Control page. See
+[GitHub + VPS Install](deployment/github-vps-install.md). DNS records and
+provider-level firewall rules remain external prerequisites.
+
 ## Update
 
 Host installs can rerun the pinned installer or use `captain update` after
@@ -155,7 +169,7 @@ candidate observable and checks again after the reminder. Pull the desired
 immutable tag and recreate the container:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
 docker rm -f captain
 # Re-run the same docker run command; captain-data preserves state.
 ```

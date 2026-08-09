@@ -221,14 +221,20 @@ fn test_account(config: Option<&Path>, alias: Option<&str>, json: bool) -> Resul
         .next()
         .ok_or_else(|| "No Gmail account is connected".to_string())?;
     let account_alias = record.summary.alias.clone();
-    let client = load_client(&state.vault, &record).map_err(|error| {
-        mark_reauth(&state, &account_alias, "credential_invalid");
-        error
-    })?;
-    let tokens = load_tokens(&state.vault, &record).map_err(|error| {
-        mark_reauth(&state, &account_alias, "credential_invalid");
-        error
-    })?;
+    let client = match load_client(&state.vault, &record) {
+        Ok(client) => client,
+        Err(error) => {
+            mark_reauth(&state, &account_alias, "credential_invalid");
+            return Err(error);
+        }
+    };
+    let tokens = match load_tokens(&state.vault, &record) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            mark_reauth(&state, &account_alias, "credential_invalid");
+            return Err(error);
+        }
+    };
     let profile = record.summary.access_profile;
     let expected_email = record.summary.email_address.clone();
     let client_key = record.client_vault_key.clone();

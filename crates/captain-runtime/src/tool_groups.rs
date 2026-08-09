@@ -29,6 +29,8 @@ const GROUP_MAPPINGS: &[(&str, &[(&str, &str)])] = &[
         "web",
         &[
             ("search", "web_search"),
+            ("research", "web_research_batch"),
+            ("audit", "web_citation_audit"),
             ("fetch", "web_fetch"),
             ("download", "web_download"),
         ],
@@ -239,9 +241,9 @@ const TOOL_GROUP_ROWS: &[ToolGroupRow] = &[
     },
     ToolGroupRow {
         name: "web",
-        description: "Web search, fetch, and download",
-        actions: &["search", "fetch", "download"],
-        detail: "Search the web, fetch a readable URL, or download a source file. Pass 'query' for search, 'url' for fetch/download.",
+        description: "Web research, citation audit, fetch, and download",
+        actions: &["search", "research", "audit", "fetch", "download"],
+        detail: "Search or research the web, audit a sourced draft, fetch a readable URL, or download a source file. Pass 'query' for search/research, 'draft' plus 'sources' for audit, and 'url' for fetch/download.",
     },
     ToolGroupRow {
         name: "document",

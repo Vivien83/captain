@@ -25,6 +25,8 @@ export function statusSnapshot(payload = {}) {
   const providerSubscriptions = objectAt(budget.provider_subscriptions);
   const execution = objectAt(body.execution);
   const docker = objectAt(execution.docker);
+  const deployment = objectAt(body.deployment);
+  const deploymentReadiness = objectAt(deployment.readiness);
   const providerQuotaItems = arrayAt(providerSubscriptions.items).map((item) => {
     const quota = objectAt(item);
     const window = (value) => {
@@ -160,6 +162,28 @@ export function statusSnapshot(payload = {}) {
         availability: stringAt(docker.runtime_availability, 'unknown'),
         untrustedReady: docker.untrusted_profile_ready === true,
         violations: stringsAt(docker.violations),
+      },
+    },
+    deployment: {
+      profile: stringAt(deployment.profile, 'local'),
+      publicUrl: stringAt(deployment.public_url),
+      https: deployment.https === true,
+      reverseProxy: stringAt(deployment.reverse_proxy),
+      readiness: {
+        state: stringAt(deploymentReadiness.state, 'unknown'),
+        checkedAt: stringAt(deploymentReadiness.checked_at),
+        nextCheckAt: stringAt(deploymentReadiness.next_check_at),
+        durationMs: optionalNumber(deploymentReadiness.duration_ms),
+        actions: stringsAt(deploymentReadiness.operator_actions),
+        checks: arrayAt(deploymentReadiness.checks).map((item) => {
+          const check = objectAt(item);
+          return {
+            id: stringAt(check.id, 'check'),
+            status: stringAt(check.status, 'pending'),
+            summary: stringAt(check.summary, 'Contrôle en attente'),
+            remediation: stringAt(check.remediation),
+          };
+        }),
       },
     },
     workload: {

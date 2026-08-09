@@ -4,6 +4,8 @@ use super::{
 };
 use sha2::{Digest, Sha256};
 
+// Keep canonical audit fields explicit at the single hash-construction boundary.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_entry(
     seq: u64,
     epoch: u64,

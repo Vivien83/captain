@@ -63,23 +63,18 @@ impl ExecutionProfile {
 /// Q.9 — High-level Captain security profile, chosen at `captain setup`
 /// (or via `/security` later). Independent of `ExecSecurityMode` (which
 /// controls which shell commands may run once reviewed).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CriticalMode {
     /// **Open** — a detected hyper-critical command may proceed after a
     /// content-bound, one-shot operator approval.
     Open,
     /// **Safe** (default) — hyper-critical commands are blocked outright.
+    #[default]
     #[serde(alias = "default")]
     Safe,
     /// **Paranoid** — every shell-affecting tool requires approval.
     Paranoid,
-}
-
-impl Default for CriticalMode {
-    fn default() -> Self {
-        Self::Safe
-    }
 }
 
 impl CriticalMode {

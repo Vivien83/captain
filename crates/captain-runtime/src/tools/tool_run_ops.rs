@@ -48,7 +48,8 @@ pub(crate) async fn tool_run_start(
     let reason = input["reason"]
         .as_str()
         .map(str::trim)
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let depends_on = parse_depends_on(input)?;
 
     assert_detachable_tool_allowed(target_tool, ctx.allowed_tools.as_deref())?;
@@ -56,16 +57,99 @@ pub(crate) async fn tool_run_start(
         return Ok(blocked);
     }
 
-    let registry = global_registry();
-    let run_id = registry.start(
+    launch_detached_tool_run(
         target_tool.to_string(),
+        target_input,
+        ctx,
+        reason,
+        depends_on,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn tool_run_retry(
+    input: &serde_json::Value,
+    ctx: ToolRunStartContext,
+) -> Result<String, String> {
+    let source_run_id = required_run_id(input)?;
+    let registry = global_registry();
+    let source = registry.validate_retry_source(source_run_id, ctx.caller_agent_id.as_deref())?;
+    assert_detachable_tool_allowed(&source.tool_name, ctx.allowed_tools.as_deref())?;
+
+    let target_input = input.get("input").cloned().ok_or(
+        "Missing 'input' parameter: the Live Runs ledger retains only its digest, so the input must be supplied again",
+    )?;
+    let supplied_digest = crate::tool_runs::input_digest(&target_input);
+    let Some(expected_digest) = source.input_sha256.as_deref() else {
+        return Err(format!(
+            "Tool run {source_run_id} predates input digests and cannot be retried safely. Start a new deliberate run instead."
+        ));
+    };
+    if supplied_digest != expected_digest {
+        return Err(format!(
+            "Retry input digest differs from tool run {source_run_id}. A retry must use the exact prior input; use tool_run_start for a corrected or intentionally changed action."
+        ));
+    }
+
+    if source.status == ToolRunStatus::Interrupted
+        && input["acknowledge_uncertain_effect"].as_str() != Some(source_run_id)
+    {
+        return Ok(serde_json::json!({
+            "status": "retry_confirmation_required",
+            "run_id": source_run_id,
+            "tool_name": source.tool_name,
+            "reason": "The prior process stopped before Captain could prove whether the external effect happened.",
+            "required_acknowledgement": {
+                "field": "acknowledge_uncertain_effect",
+                "value": source_run_id,
+            },
+            "next_actions": [
+                "Inspect tool_run_result and retained output before deciding.",
+                "Retry only after determining that repeating the action is acceptable."
+            ]
+        })
+        .to_string());
+    }
+
+    let reason = input["reason"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    launch_detached_tool_run(
+        source.tool_name,
+        target_input,
+        ctx,
+        reason,
+        Vec::new(),
+        Some(source_run_id.to_string()),
+    )
+    .await
+}
+
+async fn launch_detached_tool_run(
+    target_tool: String,
+    target_input: serde_json::Value,
+    ctx: ToolRunStartContext,
+    reason: Option<String>,
+    depends_on: Vec<String>,
+    retry_of_run_id: Option<String>,
+) -> Result<String, String> {
+    let input_sha256 = crate::tool_runs::input_digest(&target_input);
+
+    let registry = global_registry();
+    let run_id = registry.start_with_retry(
+        target_tool.clone(),
         ctx.caller_agent_id.clone(),
         None,
         true,
+        Some(input_sha256),
+        retry_of_run_id.clone(),
     );
     let task_run_id = run_id.clone();
     let task_registry = registry.clone();
-    let task_tool = target_tool.to_string();
+    let task_tool = target_tool.clone();
     // Captured before `ctx` moves into the detached execution below — used
     // afterwards to surface completion on the event bus and, if the caller
     // isn't already mid-turn, wake it up rather than leaving it to remember
@@ -100,9 +184,11 @@ pub(crate) async fn tool_run_start(
         "cancellable": true,
         "reason": reason,
         "depends_on": depends_on,
+        "retry_of_run_id": retry_of_run_id,
         "next_actions": [
             "Use tool_run_status with this run_id to check progress.",
             "Use tool_run_result when status is completed, failed, or cancelled.",
+            "Use tool_run_tail/tool_run_read/tool_run_search to inspect retained output without re-running the tool.",
             "Use tool_run_cancel if the run should be stopped."
         ],
     })
@@ -231,10 +317,10 @@ async fn execute_detached_tool_with_chunk_capture(
             }
         }
     });
-    let stream_ctx = Some(crate::tool_runner::ToolStreamCtx {
-        tool_use_id: run_id.to_string(),
-        tx: stream_tx,
-    });
+    let stream_ctx = Some(crate::tool_runner::ToolStreamCtx::new(
+        run_id.to_string(),
+        stream_tx,
+    ));
     let result = crate::tool_runner::TOOL_STREAM
         .scope(
             stream_ctx,
@@ -358,6 +444,48 @@ pub(crate) fn tool_run_result(input: &serde_json::Value) -> Result<String, Strin
     serde_json::to_string(&snapshot).map_err(|err| err.to_string())
 }
 
+pub(crate) fn tool_run_read(input: &serde_json::Value) -> Result<String, String> {
+    let run_id = required_run_id(input)?;
+    let start_line = input["start_line"].as_u64().unwrap_or(1).max(1) as usize;
+    let max_lines = input["max_lines"].as_u64().unwrap_or(100).clamp(1, 500) as usize;
+    let page = global_registry().read_output(run_id, start_line, max_lines)?;
+    serde_json::to_string(&page).map_err(|error| error.to_string())
+}
+
+pub(crate) fn tool_run_tail(input: &serde_json::Value) -> Result<String, String> {
+    let run_id = required_run_id(input)?;
+    let max_lines = input["max_lines"].as_u64().unwrap_or(100).clamp(1, 500) as usize;
+    let page = global_registry().tail_output(run_id, max_lines)?;
+    serde_json::to_string(&page).map_err(|error| error.to_string())
+}
+
+pub(crate) fn tool_run_search(input: &serde_json::Value) -> Result<String, String> {
+    let run_id = required_run_id(input)?;
+    let query = input["query"]
+        .as_str()
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .ok_or("Missing non-empty 'query' parameter")?;
+    let max_matches = input["max_matches"].as_u64().unwrap_or(20).clamp(1, 100) as usize;
+    let case_sensitive = input["case_sensitive"].as_bool().unwrap_or(false);
+    let matches = global_registry().search_output(run_id, query, max_matches, case_sensitive)?;
+    Ok(serde_json::json!({
+        "run_id": run_id,
+        "query": query,
+        "matches": matches,
+        "count": matches.len(),
+    })
+    .to_string())
+}
+
+fn required_run_id(input: &serde_json::Value) -> Result<&str, String> {
+    input["run_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+        .ok_or_else(|| "Missing non-empty 'run_id' parameter".to_string())
+}
+
 pub(crate) fn tool_run_cancel(input: &serde_json::Value) -> Result<String, String> {
     let run_id = input["run_id"]
         .as_str()
@@ -411,7 +539,7 @@ mod tests {
     #[test]
     fn tool_run_list_filters_status() {
         let registry = global_registry();
-        let run_id = registry.start("shell_exec", None, None, true);
+        let run_id = registry.start("shell_exec", None, None, true, None);
         let out = tool_run_list(&serde_json::json!({"status": "running", "limit": 1})).unwrap();
         assert!(out.contains(&run_id));
         registry.finish_with_content(&run_id, ToolRunStatus::Cancelled, true, "cleanup".into());
@@ -420,7 +548,7 @@ mod tests {
     #[test]
     fn dependency_response_blocks_until_required_run_completes() {
         let registry = global_registry();
-        let run_id = registry.start("shell_exec", None, None, true);
+        let run_id = registry.start("shell_exec", None, None, true, None);
 
         let blocked = blocking_dependency_response("ssh_exec", std::slice::from_ref(&run_id))
             .unwrap()
@@ -490,6 +618,118 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("detached-tool-run"));
+    }
+
+    #[tokio::test]
+    async fn tool_run_retry_requires_exact_input_and_interrupted_acknowledgement() {
+        let target_input = serde_json::json!({
+            "command": "sh -c 'printf interrupted-retry'",
+            "timeout_seconds": 1
+        });
+        let registry = global_registry();
+        let source_run_id = registry.start(
+            "shell_exec",
+            Some("agent-retry-ack".into()),
+            None,
+            true,
+            Some(crate::tool_runs::input_digest(&target_input)),
+        );
+        registry.finish_with_content(
+            &source_run_id,
+            ToolRunStatus::Interrupted,
+            true,
+            "power loss".into(),
+        );
+        let context = ToolRunStartContext {
+            kernel: None,
+            allowed_tools: Some(vec!["tool_run_retry".into(), "shell_exec".into()]),
+            caller_agent_id: Some("agent-retry-ack".into()),
+            allowed_env_vars: Vec::new(),
+            workspace_root: None,
+            exec_policy: Some(trusted_test_exec_policy()),
+        };
+
+        let changed = tool_run_retry(
+            &serde_json::json!({
+                "run_id": source_run_id,
+                "input": {"command": "printf changed"}
+            }),
+            context.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert!(changed.contains("digest differs"));
+
+        let confirmation = tool_run_retry(
+            &serde_json::json!({"run_id": source_run_id, "input": target_input}),
+            context,
+        )
+        .await
+        .unwrap();
+        let confirmation: serde_json::Value = serde_json::from_str(&confirmation).unwrap();
+        assert_eq!(confirmation["status"], "retry_confirmation_required");
+        assert_eq!(
+            confirmation["required_acknowledgement"]["value"],
+            source_run_id
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_run_retry_launches_exact_failed_action_with_lineage() {
+        let target_input = serde_json::json!({
+            "command": "sh -c 'printf exact-retry-ok'",
+            "timeout_seconds": 1
+        });
+        let registry = global_registry();
+        let source_run_id = registry.start(
+            "shell_exec",
+            Some("agent-retry-live".into()),
+            None,
+            true,
+            Some(crate::tool_runs::input_digest(&target_input)),
+        );
+        registry.finish_with_content(
+            &source_run_id,
+            ToolRunStatus::Failed,
+            true,
+            "transient failure".into(),
+        );
+
+        let out = tool_run_retry(
+            &serde_json::json!({
+                "run_id": source_run_id,
+                "input": target_input,
+                "reason": "retry transient failure"
+            }),
+            ToolRunStartContext {
+                kernel: None,
+                allowed_tools: Some(vec!["tool_run_retry".into(), "shell_exec".into()]),
+                caller_agent_id: Some("agent-retry-live".into()),
+                allowed_env_vars: Vec::new(),
+                workspace_root: None,
+                exec_policy: Some(trusted_test_exec_policy()),
+            },
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let retry_run_id = parsed["run_id"].as_str().unwrap();
+        assert_eq!(parsed["retry_of_run_id"], source_run_id);
+
+        for _ in 0..20 {
+            let status = registry.snapshot(retry_run_id).unwrap().status;
+            if status != ToolRunStatus::Running {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let result = registry.result(retry_run_id).unwrap();
+        assert_eq!(result.snapshot.status, ToolRunStatus::Completed);
+        assert_eq!(
+            result.snapshot.retry_of_run_id.as_deref(),
+            Some(source_run_id.as_str())
+        );
+        assert!(result.result.unwrap().contains("exact-retry-ok"));
     }
 
     /// Captures wake-up calls made after a detached tool_run completes, so

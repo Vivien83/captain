@@ -351,6 +351,12 @@ async fn test_status_endpoint() {
     assert_eq!(body["llm_driver_ready"], true);
     assert!(body["llm_driver_error"].is_null());
     assert_eq!(body["agents"].as_array().unwrap().len(), 1);
+    assert_eq!(body["artifacts"]["healthy"], true);
+    assert_eq!(body["artifacts"]["artifacts"], 0);
+    assert_eq!(body["artifacts"]["versions"], 0);
+    assert_eq!(body["artifacts"]["invalid_entries"], 0);
+    assert_eq!(body["artifacts"]["max_artifact_bytes"], 52_428_800);
+    assert_eq!(body["artifacts"]["max_total_bytes"], 536_870_912);
 }
 
 #[tokio::test]

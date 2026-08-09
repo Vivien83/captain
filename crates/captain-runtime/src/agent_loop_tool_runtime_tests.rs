@@ -167,3 +167,36 @@ async fn run_tool_with_timeout_guard_skips_outer_wall_when_disabled() {
     assert_eq!(actual.content, "own timeout handled");
     assert!(!actual.is_error);
 }
+
+#[tokio::test]
+async fn tool_run_capture_continues_after_downstream_disconnects() {
+    let registry = crate::tool_runs::global_registry();
+    let run_id = registry.start("shell_exec", None, None, false, None);
+    let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(4);
+    let (downstream_tx, downstream_rx) = tokio::sync::mpsc::channel(1);
+    drop(downstream_rx);
+    let forwarder = spawn_tool_run_stream_forwarder(stream_rx, Some(downstream_tx), run_id.clone());
+
+    for chunk in ["first\n", "second\n"] {
+        stream_tx
+            .send(StreamEvent::ToolOutputDelta {
+                tool_use_id: "tool-use-disconnect".into(),
+                stream: "stdout",
+                chunk: chunk.into(),
+            })
+            .await
+            .unwrap();
+    }
+    drop(stream_tx);
+    forwarder.await.unwrap();
+
+    let result = registry.result(&run_id).unwrap().result.unwrap();
+    assert!(result.contains("first"));
+    assert!(result.contains("second"));
+    registry.finish_with_content(
+        &run_id,
+        crate::tool_runs::ToolRunStatus::Cancelled,
+        true,
+        result,
+    );
+}

@@ -84,6 +84,7 @@ required_files=(
   SECURITY.md
   docs/release-provenance.md
   docs/repository-governance.md
+  docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
@@ -97,6 +98,7 @@ required_files=(
   docs/releases/v0.1.0-alpha.1.md
   scripts/check-markdown-links.mjs
   scripts/install.sh
+  scripts/install-vps-domain-test.sh
   scripts/install.ps1
   scripts/public-boundary-guard.sh
   scripts/release-provenance.sh
@@ -116,11 +118,11 @@ done
 pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
-  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.11' \
+  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.12' \
     "$ROOT_DIR/$readme" || fail "$readme does not link the immutable release"
-  grep -Fq 'releases/download/v0.1.0-alpha.11/install.sh' \
+  grep -Fq 'releases/download/v0.1.0-alpha.12/install.sh' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the release installer"
-  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11' \
+  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable release image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
@@ -129,9 +131,18 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
     fail "$readme still exposes the private development build"
   fi
 done
-grep -Fq '### 0.1.0-alpha.11' \
+grep -Fq '### 0.1.0-alpha.12' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
-  || fail "agent-facing changelog does not identify the public alpha"
+  || fail "agent-facing changelog does not identify the release candidate"
+grep -Fq '## Durable Live Runs' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "release candidate notes do not expose durable Live Runs"
+grep -Fq '## Managed VPS domains and readiness' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "release candidate notes do not expose managed VPS readiness"
+grep -Fq 'selective metadata and redacted tail are not sent' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
+  || fail "release candidate notes do not pin the authorized destination boundary"
 grep -Fq 'cd7f580a5e89ea77852468bc4fad9875f00dce61' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.11.md" \
   || fail "published release notes do not pin the Alpha 11 source commit"

@@ -362,7 +362,7 @@ const CODEX_COMPACT_RESEARCH_PROTOCOL: &str = "\
 - For generic discovery/search, use web_search or web_research_batch first. Use the browser rail for direct URLs, JS/forms/login/downloads/visual verification, not as a generic Google-search substitute.
 - For JS/forms/login/download flows, use browser_batch with native actions and screenshots/observe as needed.
 - If the browser hits CAPTCHA, Google /sorry, unusual-traffic, rate-limit, or anti-bot pages, stop retrying that path. Do not solve CAPTCHAs; switch to native search, Bing/DuckDuckGo, or direct source URLs and tell the user if the block matters.
-- Do not cite unread sources. Verify important claims with primary or independent sources, note weak/contradictory evidence, and end research answers/documents with Sources.";
+- Do not cite search snippets or unread sources. Cite only citation_ready pages. For important/disputed/high-stakes/fact-checked work, draft with exact inline Markdown links and page quotes, run web_citation_audit, repair failures, and keep unsupported claims [unverified]. A green audit proves retrieval and verbatim presence, not semantic entailment. End with its canonical Sources block.";
 
 const CODEX_COMPACT_MEMORY_PROTOCOL: &str = "\
 ## Memory Protocol

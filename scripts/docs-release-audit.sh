@@ -37,6 +37,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
   docs/releases/v0.1.0-alpha.9.md
@@ -155,23 +156,27 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current public release has an agent-facing changelog" \
+  "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.11"
+  "### 0.1.0-alpha.12"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.11'
+  '0.1.0-alpha.12'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.11'
+  '0.1.0-alpha.12'
 require_contains \
-  "public changelog exposes the published alpha" \
+  "public changelog exposes the release candidate" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.11] - 2026-08-08'
+  '## [0.1.0-alpha.12] - 2026-08-09'
 require_contains \
-  "reviewed public alpha notes exist" \
+  "reviewed release candidate notes exist" \
+  docs/releases/v0.1.0-alpha.12.md \
+  '# Captain 0.1.0-alpha.12'
+require_contains \
+  "historical alpha.11 notes remain available" \
   docs/releases/v0.1.0-alpha.11.md \
   '# Captain 0.1.0-alpha.11'
 require_contains \
@@ -431,6 +436,42 @@ require_contains \
   docs/releases/v0.1.0-alpha.11.md \
   '## External authorization boundary'
 require_contains \
+  "alpha.12 notes expose durable Live Runs" \
+  docs/releases/v0.1.0-alpha.12.md \
+  '## Durable Live Runs'
+require_contains \
+  "alpha.12 notes expose grounded research" \
+  docs/releases/v0.1.0-alpha.12.md \
+  '## Evidence-grounded Web research'
+require_contains \
+  "alpha.12 notes expose immutable artifacts" \
+  docs/releases/v0.1.0-alpha.12.md \
+  '## Immutable artifacts'
+require_contains \
+  "alpha.12 notes expose the managed-domain installer" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'CAPTAIN_DOMAIN=agent.example.com'
+require_contains \
+  "alpha.12 notes pin the authorized destination boundary" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'selective metadata and redacted tail are not sent'
+require_not_contains \
+  "current deployment docs do not call the domain rail post-Alpha 11" \
+  docs/deployment/github-vps-install.md \
+  'post-Alpha 11'
+require_not_contains \
+  "current getting-started guide does not call the domain rail post-Alpha 11" \
+  docs/getting-started.md \
+  'post-Alpha 11'
+require_not_contains \
+  "current troubleshooting does not call the domain rail post-Alpha 11" \
+  docs/troubleshooting.md \
+  'post-Alpha 11'
+require_not_contains \
+  "alpha.12 notes do not claim approval suggestion controls" \
+  docs/releases/v0.1.0-alpha.12.md \
+  'approval suggestion controls are available'
+require_contains \
   "release readiness executes workflow audit" \
   scripts/release-readiness.sh \
   'scripts/release-workflow-audit.sh'
@@ -466,20 +507,24 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.11/install.sh'
+    'releases/download/v0.1.0-alpha.12/install.sh'
   require_contains \
     "$readme pins the immutable prerelease image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.11'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
     'releases/latest/download/install.sh'
 done
 require_contains \
-  "security policy supports alpha.11" \
+  "security policy supports alpha.12" \
   SECURITY.md \
-  '| 0.1.0-alpha.11 | :white_check_mark: |'
+  '| 0.1.0-alpha.12 | :white_check_mark: |'
+require_contains \
+  "security policy retires alpha.11" \
+  SECURITY.md \
+  '| 0.1.0-alpha.11 | :x: |'
 require_contains \
   "security policy retires alpha.10" \
   SECURITY.md \

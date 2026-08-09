@@ -3,16 +3,17 @@
 use captain_types::tool::ToolDefinition;
 
 use super::{
-    a2a_tool_definitions, agent_tool_definitions, browser_tool_definitions,
-    capspec_management_tool_definitions, channel_tool_definitions, config_tool_definitions,
-    coordination_tool_definitions, discovery_tool_definitions, document_tool_definitions,
-    email_tool_definitions, file_tool_definitions, fleet_tool_definitions, goal_tool_definitions,
-    hand_tool_definitions, improvement_tool_definitions, knowledge_tool_definitions,
-    location_tool_definitions, mcp_tool_definitions, memory_tool_definitions,
-    meta_tool_definitions, multimedia_tool_definitions, package_tool_definitions,
-    peer_tool_definitions, project_tool_definitions, schedule_tool_definitions,
-    session_workspace_tool_definitions, shell_tool_definitions, skill_tool_definitions,
-    ssh_tool_definitions, tool_run_tool_definitions, update_tool_definitions, web_tool_definitions,
+    a2a_tool_definitions, agent_tool_definitions, artifact_tool_definitions,
+    browser_tool_definitions, capspec_management_tool_definitions, channel_tool_definitions,
+    config_tool_definitions, coordination_tool_definitions, discovery_tool_definitions,
+    document_tool_definitions, email_tool_definitions, file_tool_definitions,
+    fleet_tool_definitions, goal_tool_definitions, hand_tool_definitions,
+    improvement_tool_definitions, knowledge_tool_definitions, location_tool_definitions,
+    mcp_tool_definitions, memory_tool_definitions, meta_tool_definitions,
+    multimedia_tool_definitions, package_tool_definitions, peer_tool_definitions,
+    project_tool_definitions, schedule_tool_definitions, session_workspace_tool_definitions,
+    shell_tool_definitions, skill_tool_definitions, ssh_tool_definitions,
+    tool_run_tool_definitions, update_tool_definitions, web_tool_definitions,
 };
 
 pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
@@ -41,6 +42,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
     definitions.extend(skill_tool_definitions());
     definitions.extend(file_tool_definitions());
     definitions.extend(document_tool_definitions());
+    definitions.extend(artifact_tool_definitions());
     definitions.extend(web_tool_definitions());
     definitions.extend(package_tool_definitions());
     definitions.extend(ssh_tool_definitions());
