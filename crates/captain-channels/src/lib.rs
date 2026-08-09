@@ -46,7 +46,8 @@ mod telegram_workflow_learning;
 pub use telegram_ui::{
     render_telegram_ask_user_answer, render_telegram_ask_user_expired,
     render_telegram_ask_user_prompt, render_telegram_channel_error,
-    render_telegram_compaction_progress, render_telegram_workflow_learning_status,
+    render_telegram_compaction_progress, render_telegram_verification_status,
+    render_telegram_workflow_learning_status, TelegramVerificationPresentation,
 };
 mod tool_activity;
 pub mod twitch;

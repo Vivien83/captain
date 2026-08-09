@@ -224,6 +224,12 @@ pub enum Role {
     Tool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryVerificationStatus {
+    Verifying,
+    Correcting,
+}
+
 pub struct ChatState {
     /// Agent display name.
     pub agent_name: String,
@@ -257,6 +263,8 @@ pub struct ChatState {
     pub is_streaming: bool,
     /// Waiting for first token (shows "thinking..." spinner).
     pub thinking: bool,
+    /// Ephemeral delivery verification state. It never enters session replay.
+    pub delivery_verification: Option<DeliveryVerificationStatus>,
     /// Current tool being executed (spinner).
     pub active_tool: Option<String>,
     /// Spinner frame index.
@@ -429,6 +437,7 @@ impl ChatState {
             streaming_text: String::new(),
             is_streaming: false,
             thinking: false,
+            delivery_verification: None,
             active_tool: None,
             spinner_frame: 0,
             input: String::new(),
@@ -537,6 +546,7 @@ impl ChatState {
         self.streaming_text.clear();
         self.is_streaming = false;
         self.thinking = false;
+        self.delivery_verification = None;
         self.active_tool = None;
         self.spinner_frame = 0;
         self.input.clear();
@@ -925,6 +935,7 @@ impl ChatState {
         }
         self.is_streaming = false;
         self.thinking = false;
+        self.delivery_verification = None;
         self.active_tool = None;
         self.streaming_chars = 0;
         self.tool_input_buf.clear();
@@ -1026,6 +1037,7 @@ impl ChatState {
         });
         if self.active_tool.is_some()
             || self.thinking
+            || self.delivery_verification.is_some()
             || has_running_tool
             || self.compaction_progress.is_some()
         {
@@ -1043,6 +1055,7 @@ impl ChatState {
     /// `created_at` à chaque démarrage.
     pub fn start_session(&mut self, key: &str) {
         self.session_key = key.to_string();
+        self.delivery_verification = None;
         self.compaction_progress = None;
         self.last_compaction_terminal_id = None;
         self.authoritative_session_id = None;

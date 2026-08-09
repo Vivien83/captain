@@ -222,6 +222,7 @@ mod stream_metrics;
 pub mod streaming_channels;
 pub mod system_routes;
 pub mod telegram_topic_routes;
+mod telegram_verification;
 pub mod template_routes;
 pub mod timeline;
 pub mod tool_routes;

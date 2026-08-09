@@ -10,6 +10,14 @@ pub enum LoopPhase {
     ToolUse { tool_name: String },
     /// Agent is streaming tokens.
     Streaming,
+    /// Captain is evaluating ordered evidence before accepting delivery.
+    Verifying,
+    /// Captain withheld the draft and requested one bounded corrective pass.
+    Correcting,
+    /// Required delivery evidence was accepted.
+    VerificationVerified,
+    /// Delivery stopped at the verification circuit breaker.
+    VerificationIncomplete,
     /// Agent finished successfully.
     Done,
     /// Agent encountered an error.
@@ -47,6 +55,23 @@ pub(crate) fn notify_tool_use_phase(on_phase: Option<&PhaseCallback>, tool_name:
     callback(LoopPhase::ToolUse {
         tool_name: sanitize_tool_phase_name(tool_name),
     });
+}
+
+pub(crate) fn notify_delivery_verification_phase(
+    on_phase: Option<&PhaseCallback>,
+    phase: LoopPhase,
+) {
+    debug_assert!(matches!(
+        phase,
+        LoopPhase::Verifying
+            | LoopPhase::Correcting
+            | LoopPhase::VerificationVerified
+            | LoopPhase::VerificationIncomplete
+    ));
+    let Some(callback) = on_phase else {
+        return;
+    };
+    callback(phase);
 }
 
 fn sanitize_tool_phase_name(tool_name: &str) -> String {
@@ -125,5 +150,33 @@ mod tests {
     #[test]
     fn notify_tool_use_phase_allows_absent_callback() {
         notify_tool_use_phase(None, "shell_exec");
+    }
+
+    #[test]
+    fn delivery_verification_phases_are_forwarded_without_payload() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_cb = Arc::clone(&seen);
+        let callback: PhaseCallback = Arc::new(move |phase| {
+            seen_for_cb.lock().unwrap().push(phase);
+        });
+
+        for phase in [
+            LoopPhase::Verifying,
+            LoopPhase::Correcting,
+            LoopPhase::VerificationVerified,
+            LoopPhase::VerificationIncomplete,
+        ] {
+            notify_delivery_verification_phase(Some(&callback), phase);
+        }
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[
+                LoopPhase::Verifying,
+                LoopPhase::Correcting,
+                LoopPhase::VerificationVerified,
+                LoopPhase::VerificationIncomplete,
+            ]
+        );
     }
 }

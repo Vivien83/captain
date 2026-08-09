@@ -24,6 +24,7 @@ Use this index to find the right document quickly.
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS proxy contract |
 | [Release Provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
 | [Repository Governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.13 Release Notes](releases/v0.1.0-alpha.13.md) | Adaptive delivery verification, crash-safe evidence, and safer host updates |
 | [0.1.0-alpha.12 Release Notes](releases/v0.1.0-alpha.12.md) | Durable Live Runs, grounded research, verified artifacts, and managed VPS domains |
 | [0.1.0-alpha.11 Release Notes](releases/v0.1.0-alpha.11.md) | Native email, durable integrations, audit closure, and local CI |
 | [0.1.0-alpha.10 Release Notes](releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |

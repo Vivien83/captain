@@ -62,8 +62,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn test_manifest(provider: &str) -> AgentManifest {
-        let mut manifest = AgentManifest::default();
-        manifest.name = "captain".to_string();
+        let mut manifest = AgentManifest {
+            name: "captain".to_string(),
+            ..AgentManifest::default()
+        };
         manifest.model.provider = provider.to_string();
         manifest.model.system_prompt = "base prompt".to_string();
         manifest

@@ -122,6 +122,7 @@ fn quota_check_returns_agent_loop_result_after_first_iteration() {
         duration_ms: 12,
         input_summary: "{\"cmd\":\"true\"}".to_string(),
         output_summary: "ok".to_string(),
+        verification: None,
     }];
 
     let result = check_mid_loop_quota(&manifest, Some(&kernel), 3, &usage(), &recorded).unwrap();

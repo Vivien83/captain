@@ -2,6 +2,7 @@ use crate::agent_loop_iteration::{
     complete_iteration, stream_iteration, CompletionIterationInput, IterationCallOutcome,
     StreamingIterationInput,
 };
+use crate::agent_loop_stream_delivery::StreamDeliveryBuffer;
 use crate::context_budget::ContextBudget;
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
 use async_trait::async_trait;
@@ -175,6 +176,7 @@ async fn stream_iteration_drains_interjection_and_retries_codex_missing_tool_cal
     drop(input_tx);
     let user_input_rx = Some(std::sync::Arc::new(tokio::sync::Mutex::new(input_rx)));
     let mut watchdog_used = false;
+    let mut delivery_buffer = StreamDeliveryBuffer::default();
 
     let outcome = stream_iteration(StreamingIterationInput {
         manifest: &manifest,
@@ -192,6 +194,8 @@ async fn stream_iteration_drains_interjection_and_retries_codex_missing_tool_cal
         stream_tx: &stream_tx,
         user_input_rx: &user_input_rx,
         codex_missing_tool_watchdog_used: &mut watchdog_used,
+        hold_stream_delivery: false,
+        delivery_buffer: &mut delivery_buffer,
     })
     .await
     .unwrap();

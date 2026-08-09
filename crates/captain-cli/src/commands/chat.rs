@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use crate::{daemon_client, find_daemon, tui, ui};
@@ -113,6 +113,7 @@ fn cmd_plain_chat(base: &str, agent: Option<&str>) {
             .send();
 
         let mut printed_any = false;
+        let mut verification_line = PlainVerificationLine::new();
         match resp {
             Ok(resp) if resp.status().is_success() => {
                 struct RespReader(reqwest::blocking::Response);
@@ -125,13 +126,30 @@ fn cmd_plain_chat(base: &str, agent: Option<&str>) {
                 for line in reader.lines().map_while(Result::ok) {
                     if let Some(data) = line.strip_prefix("data: ") {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(signal) = plain_verification_signal(&json) {
+                                match signal {
+                                    PlainVerificationSignal::Show(label) => {
+                                        if printed_any && verification_line.enabled {
+                                            println!();
+                                            printed_any = false;
+                                        }
+                                        verification_line.show(label);
+                                    }
+                                    PlainVerificationSignal::Clear => {
+                                        verification_line.clear(false);
+                                    }
+                                }
+                                continue;
+                            }
                             if let Some(content) = json.get("content").and_then(|v| v.as_str()) {
+                                verification_line.clear(true);
                                 printed_any = true;
                                 print!("{content}");
                                 let _ = io::stdout().flush();
                             } else if let Some(kind) = json.get("type").and_then(|v| v.as_str()) {
                                 match kind {
                                     "tool_start" => {
+                                        verification_line.clear(false);
                                         let tool = json
                                             .get("tool")
                                             .and_then(|v| v.as_str())
@@ -145,6 +163,7 @@ fn cmd_plain_chat(base: &str, agent: Option<&str>) {
                                         printed_any = false;
                                     }
                                     "tool_result" => {
+                                        verification_line.clear(false);
                                         let tool = json
                                             .get("tool")
                                             .and_then(|v| v.as_str())
@@ -167,6 +186,7 @@ fn cmd_plain_chat(base: &str, agent: Option<&str>) {
                         }
                     }
                 }
+                verification_line.clear(false);
                 println!();
             }
             Ok(resp) => {
@@ -176,6 +196,58 @@ fn cmd_plain_chat(base: &str, agent: Option<&str>) {
                 println!("Erreur réseau: {e}");
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlainVerificationSignal {
+    Show(&'static str),
+    Clear,
+}
+
+fn plain_verification_signal(json: &serde_json::Value) -> Option<PlainVerificationSignal> {
+    match json.get("phase").and_then(serde_json::Value::as_str)? {
+        "verifying" => Some(PlainVerificationSignal::Show("Vérification du travail…")),
+        "correcting" => Some(PlainVerificationSignal::Show("Correction ciblée…")),
+        "verification_verified" | "verification_incomplete" | "done" | "error" => {
+            Some(PlainVerificationSignal::Clear)
+        }
+        _ => None,
+    }
+}
+
+struct PlainVerificationLine {
+    enabled: bool,
+    active: bool,
+}
+
+impl PlainVerificationLine {
+    fn new() -> Self {
+        Self {
+            enabled: io::stdout().is_terminal(),
+            active: false,
+        }
+    }
+
+    fn show(&mut self, label: &str) {
+        if !self.enabled {
+            return;
+        }
+        print!("\r\x1b[2KCaptain: {label}");
+        let _ = io::stdout().flush();
+        self.active = true;
+    }
+
+    fn clear(&mut self, restore_prompt: bool) {
+        if !self.enabled || !self.active {
+            return;
+        }
+        print!("\r\x1b[2K");
+        if restore_prompt {
+            print!("Captain: ");
+        }
+        let _ = io::stdout().flush();
+        self.active = false;
     }
 }
 
@@ -287,6 +359,26 @@ mod tests {
         assert_eq!(
             short_session_id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             "aaaaaaaa"
+        );
+    }
+
+    #[test]
+    fn plain_chat_maps_only_delivery_verification_phases() {
+        assert_eq!(
+            plain_verification_signal(&serde_json::json!({"phase": "verifying"})),
+            Some(PlainVerificationSignal::Show("Vérification du travail…"))
+        );
+        assert_eq!(
+            plain_verification_signal(&serde_json::json!({"phase": "correcting"})),
+            Some(PlainVerificationSignal::Show("Correction ciblée…"))
+        );
+        assert_eq!(
+            plain_verification_signal(&serde_json::json!({"phase": "verification_incomplete"})),
+            Some(PlainVerificationSignal::Clear)
+        );
+        assert_eq!(
+            plain_verification_signal(&serde_json::json!({"phase": "thinking"})),
+            None
         );
     }
 }

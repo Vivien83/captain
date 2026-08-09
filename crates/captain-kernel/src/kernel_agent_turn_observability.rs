@@ -469,6 +469,7 @@ mod tests {
             duration_ms: 42,
             input_summary: "input".to_string(),
             output_summary: "output".to_string(),
+            verification: None,
         }
     }
 

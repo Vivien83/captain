@@ -828,6 +828,31 @@ input:focus, textarea:focus {
 }
 .drop-active .composer { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-dim); }
 
+.delivery-verification {
+  min-height: 38px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+.delivery-verification strong { color: var(--gold-bright); }
+.delivery-verification-mark {
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--gold);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: verification-spin 760ms linear infinite;
+  flex-shrink: 0;
+}
+.delivery-verification.correcting .delivery-verification-mark { border-color: var(--warn); border-right-color: transparent; }
+@keyframes verification-spin { to { transform: rotate(360deg); } }
+
 .compaction-progress {
   padding: 8px 20px 9px;
   border-top: 1px solid var(--border);
@@ -870,6 +895,8 @@ input:focus, textarea:focus {
 @keyframes compaction-scan { from { left: 0; } to { left: 78%; } }
 
 @media (prefers-reduced-motion: reduce) {
+  .delivery-verification-mark { animation: none; border-right-color: var(--gold); }
+  .delivery-verification.correcting .delivery-verification-mark { border-right-color: var(--warn); }
   .compaction-progress-gauge > span { transition: none; }
   .compaction-progress-gauge.indeterminate > span { animation: none; left: 39%; }
 }
@@ -1647,6 +1674,7 @@ input:focus, textarea:focus {
     white-space: normal;
   }
   .compaction-progress { padding-inline: 14px; }
+  .delivery-verification { padding-inline: 14px; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; }
   .compaction-progress-head { align-items: flex-start; flex-wrap: wrap; gap: 3px 8px; }
   .reasoning-control { width: 100%; justify-content: space-between; }
   .reasoning-control select { min-width: 112px; max-width: min(180px, 55vw); }

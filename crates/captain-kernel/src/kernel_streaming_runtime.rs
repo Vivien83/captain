@@ -192,6 +192,10 @@ fn stream_phase_event(phase: &LoopPhase) -> StreamEvent {
         LoopPhase::Thinking => ("thinking".to_string(), None),
         LoopPhase::ToolUse { tool_name } => ("tool_use".to_string(), Some(tool_name.clone())),
         LoopPhase::Streaming => ("streaming".to_string(), None),
+        LoopPhase::Verifying => ("verifying".to_string(), None),
+        LoopPhase::Correcting => ("correcting".to_string(), None),
+        LoopPhase::VerificationVerified => ("verification_verified".to_string(), None),
+        LoopPhase::VerificationIncomplete => ("verification_incomplete".to_string(), None),
         LoopPhase::Done => ("done".to_string(), None),
         LoopPhase::Error => ("error".to_string(), None),
     };
@@ -389,6 +393,21 @@ mod tests {
                 assert_eq!(detail.as_deref(), Some("shell_exec"));
             }
             other => panic!("unexpected event: {other:?}"),
+        }
+
+        for (loop_phase, expected) in [
+            (LoopPhase::Verifying, "verifying"),
+            (LoopPhase::Correcting, "correcting"),
+            (LoopPhase::VerificationVerified, "verification_verified"),
+            (LoopPhase::VerificationIncomplete, "verification_incomplete"),
+        ] {
+            match stream_phase_event(&loop_phase) {
+                StreamEvent::PhaseChange { phase, detail } => {
+                    assert_eq!(phase, expected);
+                    assert!(detail.is_none());
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
         }
     }
 

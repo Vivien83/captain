@@ -214,7 +214,7 @@ const server = createServer(async (request, response) => {
   }
   if (pathname === '/api/status') {
     return json(response, {
-      version: 'v0.1.0-alpha.12',
+      version: 'v0.1.0-alpha.13',
       artifacts: { artifacts: 0 },
       tool_runs: { running: runs.filter((run) => run.status === 'running').length },
     });

@@ -4,6 +4,46 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Alpha 13 Release Candidate Contract
+
+Alpha 13 adds adaptive delivery verification to the existing agent loop. Pure
+conversation and read-only inspection keep their direct path. Once a turn has
+effectful receipts, Captain evaluates their order, scope, status, and evidence
+strength only at a useful milestone and before delivery. A mutation needs a
+newer relevant post-condition; a pending run or delegated job remains an
+inspection until its terminal result is observed.
+
+The policy is deterministic and bounded. Missing evidence generates a short
+fixed-gap correction nudge, with at most two correction rounds. A failed check,
+uncertain external effect, exhausted budget, or unavailable proof produces an
+explicit incomplete result instead of a success claim. Captain never replays an
+uncertain effect merely to manufacture evidence, and verification cannot
+bypass approvals, quotas, cancellation, iteration limits, or the configured
+model.
+
+Verification lifecycle state is committed before its presentation event.
+Durable rows contain only state, gap codes, receipt order, identifier digests,
+and timestamps. They contain no raw input, output, path, model draft, or hidden
+reasoning. Boot converts an unfinished lease to `verification_interrupted` and
+re-evaluates current state without replay. Projects, delegated jobs, immutable
+artifacts, and Live Runs use the same evidence-strength contract.
+
+Ratatui, standalone terminal chat, Web Control, Web terminal, and Telegram
+share transient `verifying`, `correcting`, `verification_verified`, and
+`verification_incomplete` phases. A fast successful verification stays silent;
+Telegram uses one Rich card only for a slow check, correction, or incomplete
+delivery. These signals never become chat-history messages.
+
+The candidate also hardens macOS self-update preflight and Wasmtime watchdog
+lifecycle, and keeps compact quota gauges bound to provider-wide windows plus
+the active model. Its selective streaming lock is implemented and certified:
+held segments require exact text plus one terminal event, replacements are
+single-delivery, and the direct path refuses a transport retry after its first
+visible delta. Alpha 13 is not yet the current public release: export and
+publication remain forbidden until the final release-readiness gate,
+sequential local bundles, GitHub/GHCR publication, and anonymous verification
+all pass on one clean revision.
+
 ## Alpha 12 Published Contract
 
 The published Alpha 12 release adds a managed VPS-domain bootstrap. One

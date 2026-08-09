@@ -41,6 +41,22 @@ fn thinking_and_active_tool_use_current_spinner_frame() {
 }
 
 #[test]
+fn delivery_verification_replaces_generic_thinking_without_history_noise() {
+    let mut state = ChatState::new();
+    state.thinking = true;
+    state.delivery_verification = Some(DeliveryVerificationStatus::Correcting);
+    state.spinner_frame = 1;
+    let mut lines = Vec::new();
+
+    push_live_transcript_lines(&mut lines, &state, 80);
+    let text = line_texts(&lines);
+
+    assert!(text.iter().any(|line| line.contains("correction ciblée")));
+    assert!(!text.iter().any(|line| line.contains("thinking")));
+    assert!(state.messages.is_empty());
+}
+
+#[test]
 fn streaming_token_estimate_and_last_cost_are_appended() {
     let mut state = ChatState::new();
     state.is_streaming = true;

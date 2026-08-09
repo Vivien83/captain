@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 43;
+const SCHEMA_VERSION: u32 = 44;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -181,6 +181,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 43 {
         migrate_v43(conn)?;
+    }
+
+    if current_version < 44 {
+        migrate_v44(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -2156,6 +2160,39 @@ fn migrate_v43(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 44: active work-verification registry for exact restart
+/// reconciliation. Full history remains in the append-only session event log;
+/// this table contains only operations that have no terminal event yet.
+fn migrate_v44(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS work_verification_active_operations (
+             operation_id TEXT PRIMARY KEY,
+             runtime_instance_id TEXT NOT NULL,
+             agent_id TEXT NOT NULL,
+             session_id TEXT NOT NULL,
+             payload TEXT NOT NULL,
+             started_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK(length(operation_id) BETWEEN 1 AND 128),
+             CHECK(length(runtime_instance_id) BETWEEN 1 AND 128),
+             CHECK(length(agent_id) BETWEEN 1 AND 128),
+             CHECK(length(session_id) BETWEEN 1 AND 128),
+             CHECK(length(payload) BETWEEN 2 AND 262144)
+         );
+         CREATE INDEX IF NOT EXISTS idx_work_verification_active_runtime
+             ON work_verification_active_operations(
+                 runtime_instance_id, started_at, operation_id
+             );
+         CREATE INDEX IF NOT EXISTS idx_work_verification_active_session
+             ON work_verification_active_operations(
+                 session_id, started_at, operation_id
+             );
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (44, datetime('now'), 'Add active work verification registry');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2243,6 +2280,7 @@ mod tests {
         assert!(tables.contains(&"entities".to_string()));
         assert!(tables.contains(&"relations".to_string()));
         assert!(tables.contains(&"sessions_events".to_string()));
+        assert!(tables.contains(&"work_verification_active_operations".to_string()));
         assert!(tables.contains(&"projects".to_string()));
         assert!(tables.contains(&"project_tasks".to_string()));
         assert!(tables.contains(&"milestones".to_string()));
@@ -2589,6 +2627,7 @@ mod tests {
         )
         .unwrap();
         create_legacy_audit_table(&conn);
+        migrate_v22(&conn).unwrap();
 
         run_migrations(&conn).unwrap();
         assert!(column_exists(&conn, "memory_writes", "operation"));
@@ -2628,6 +2667,7 @@ mod tests {
         )
         .unwrap();
         create_legacy_audit_table(&conn);
+        migrate_v22(&conn).unwrap();
 
         run_migrations(&conn).unwrap();
 

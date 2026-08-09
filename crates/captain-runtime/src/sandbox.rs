@@ -226,12 +226,46 @@ fn build_guest_store(
     Ok(store)
 }
 
-fn spawn_epoch_watchdog(engine: &Engine, timeout: u64) -> std::thread::JoinHandle<()> {
+struct EpochWatchdog {
+    cancel: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for EpochWatchdog {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn spawn_epoch_watchdog(engine: &Engine, timeout: u64) -> EpochWatchdog {
     let engine_clone = engine.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(timeout));
-        engine_clone.increment_epoch();
+    spawn_watchdog(std::time::Duration::from_secs(timeout), move || {
+        engine_clone.increment_epoch()
     })
+}
+
+fn spawn_watchdog(
+    timeout: std::time::Duration,
+    on_timeout: impl FnOnce() + Send + 'static,
+) -> EpochWatchdog {
+    let (cancel, cancelled) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        if matches!(
+            cancelled.recv_timeout(timeout),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ) {
+            on_timeout();
+        }
+    });
+    EpochWatchdog {
+        cancel: Some(cancel),
+        thread: Some(thread),
+    }
 }
 
 fn instantiate_guest_module(

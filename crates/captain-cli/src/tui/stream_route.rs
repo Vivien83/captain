@@ -1,4 +1,6 @@
-use super::screens::chat::{ChatState, PendingAskUser, PendingSuggestedReplies, Role};
+use super::screens::chat::{
+    ChatState, DeliveryVerificationStatus, PendingAskUser, PendingSuggestedReplies, Role,
+};
 use captain_runtime::llm_driver::StreamEvent;
 
 pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
@@ -32,17 +34,7 @@ pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
             chat.last_cache_creation_tokens = usage.cache_creation_tokens;
         }
         StreamEvent::PhaseChange { phase, detail } => {
-            if phase == "tool_use" {
-                if let Some(tool_name) = detail {
-                    chat.tool_start("", &tool_name);
-                }
-            } else if phase == "thinking" {
-                chat.thinking = true;
-            } else if phase == "model_fallback" {
-                if let Some(text) = detail.filter(|value| !value.trim().is_empty()) {
-                    chat.push_message(Role::Agent, text);
-                }
-            }
+            apply_phase_change(chat, &phase, detail);
         }
         StreamEvent::CompactionProgress { progress } => {
             chat.apply_compaction_progress(progress);
@@ -86,6 +78,34 @@ pub(crate) fn apply_stream_event(chat: &mut ChatState, ev: StreamEvent) {
         } => {
             chat.tool_output_delta(&tool_use_id, stream, &chunk);
         }
+    }
+}
+
+pub(crate) fn apply_phase_change(chat: &mut ChatState, phase: &str, detail: Option<String>) {
+    match phase {
+        "tool_use" => {
+            if let Some(tool_name) = detail {
+                chat.tool_start("", &tool_name);
+            }
+        }
+        "thinking" => chat.thinking = true,
+        "verifying" => {
+            chat.thinking = false;
+            chat.delivery_verification = Some(DeliveryVerificationStatus::Verifying);
+        }
+        "correcting" => {
+            chat.thinking = false;
+            chat.delivery_verification = Some(DeliveryVerificationStatus::Correcting);
+        }
+        "verification_verified" | "verification_incomplete" | "done" | "error" => {
+            chat.delivery_verification = None;
+        }
+        "model_fallback" => {
+            if let Some(text) = detail.filter(|value| !value.trim().is_empty()) {
+                chat.push_message(Role::Agent, text);
+            }
+        }
+        _ => {}
     }
 }
 

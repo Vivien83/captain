@@ -31,6 +31,7 @@ pub mod session;
 pub mod structured;
 pub mod todo;
 pub mod usage;
+pub mod work_verification_progress;
 pub mod workflow_learning;
 pub mod workflow_learning_control;
 pub mod workflow_learning_installation;

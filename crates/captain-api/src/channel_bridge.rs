@@ -26,7 +26,8 @@ use captain_channels::xmpp::XmppAdapter;
 use captain_channels::zulip::ZulipAdapter;
 use captain_channels::{
     render_telegram_ask_user_answer, render_telegram_ask_user_expired,
-    render_telegram_ask_user_prompt, render_telegram_compaction_progress, TelegramProgressDraft,
+    render_telegram_ask_user_prompt, render_telegram_compaction_progress,
+    render_telegram_verification_status, TelegramProgressDraft, TelegramVerificationPresentation,
 };
 // Wave 3
 use captain_channels::bluesky::BlueskyAdapter;
@@ -74,6 +75,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use crate::project_ask_answering::record_project_ask_answer_runtime;
+use crate::telegram_verification::TelegramVerificationGate;
 use captain_runtime::str_utils::safe_truncate_str;
 
 /// Wraps `CaptainKernel` to implement `ChannelBridgeHandle`.
@@ -443,6 +445,54 @@ async fn pump_telegram_live_stream(
     stream_error
 }
 
+async fn present_telegram_verification(
+    telegram: &TelegramAdapter,
+    progress_draft: Option<&TelegramProgressDraft>,
+    persistent_message_id: &mut Option<String>,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    presentation: TelegramVerificationPresentation,
+) -> bool {
+    let rendered = render_telegram_verification_status(presentation);
+    if persistent_message_id.is_none() {
+        if let Some(draft) = progress_draft {
+            match draft.refresh(&rendered).await {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(error) => {
+                    warn!(%error, "failed to refresh Telegram verification draft");
+                    return false;
+                }
+            }
+        }
+    }
+
+    let mut metadata = telegram_thread_metadata(thread_id);
+    metadata.insert("chat_id".to_string(), serde_json::json!(chat_id));
+    if let Some(message_id) = persistent_message_id.as_deref() {
+        if let Err(error) = telegram.edit_rich(message_id, &rendered, &metadata).await {
+            warn!(error = %error, "failed to update Telegram verification card");
+            return false;
+        }
+        return true;
+    }
+
+    let user = telegram_channel_user(chat_id);
+    match telegram
+        .send_rich(&user, ChannelContent::Text(rendered), &metadata)
+        .await
+    {
+        Ok(message_id) => {
+            *persistent_message_id = message_id;
+            true
+        }
+        Err(error) => {
+            warn!(error = %error, "failed to post Telegram verification card");
+            false
+        }
+    }
+}
+
 /// TG1 — forward every `StreamEvent` unchanged except Telegram-specific
 /// control events. `SuggestedReplies` arms a one-turn reply keyboard for the
 /// next persistent response; `AskUser` posts a blocking Rich card and
@@ -470,7 +520,60 @@ fn tee_ask_user_events_to_telegram(
 
     tokio::spawn(async move {
         let mut compaction_animation_tick = 0usize;
-        while let Some(event) = raw_rx.recv().await {
+        let mut verification_gate = TelegramVerificationGate::default();
+        let mut verification_message_id = None;
+        loop {
+            let event = if let Some(deadline) = verification_gate.deadline() {
+                tokio::select! {
+                    event = raw_rx.recv() => event,
+                    _ = tokio::time::sleep_until(deadline) => {
+                        if let Some(presentation) = verification_gate
+                            .deadline_elapsed(tokio::time::Instant::now())
+                        {
+                            let shown = present_telegram_verification(
+                                &telegram,
+                                progress_draft.as_ref(),
+                                &mut verification_message_id,
+                                chat_id,
+                                thread_id,
+                                presentation,
+                            )
+                            .await;
+                            if shown {
+                                if let Some(progress) = progress_draft.as_ref() {
+                                    progress.set_status_override(true);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                raw_rx.recv().await
+            };
+            let Some(event) = event else {
+                break;
+            };
+            if let StreamEvent::PhaseChange { phase, .. } = &event {
+                if let Some(presentation) =
+                    verification_gate.observe_phase(phase, tokio::time::Instant::now())
+                {
+                    let shown = present_telegram_verification(
+                        &telegram,
+                        progress_draft.as_ref(),
+                        &mut verification_message_id,
+                        chat_id,
+                        thread_id,
+                        presentation,
+                    )
+                    .await;
+                    if shown {
+                        if let Some(progress) = progress_draft.as_ref() {
+                            progress.set_status_override(true);
+                        }
+                    }
+                }
+            }
             if let StreamEvent::CompactionProgress { progress } = &event {
                 if let Some(draft) = progress_draft.as_ref() {
                     let rendered =
@@ -876,6 +979,7 @@ fn spawn_telegram_stream_progress_loop(
         loop {
             tokio::time::sleep(Duration::from_secs(TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS)).await;
             if progress.is_waiting_for_user()
+                || progress.has_status_override()
                 || progress.idle_for()
                     < Duration::from_secs(TELEGRAM_STREAM_PROGRESS_INITIAL_DELAY_SECS)
             {
@@ -4627,6 +4731,109 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("### ❓ Question"));
+    }
+
+    #[tokio::test]
+    async fn telegram_verification_correction_edits_one_rich_card() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/sendRichMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 71}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/bot123:ABC/editMessageText"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 71}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let telegram = test_telegram_adapter(Some(server.uri()));
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::channel(4);
+        let (mut forwarded, _) = super::tee_ask_user_events_to_telegram(
+            raw_rx,
+            telegram,
+            Arc::new(Mutex::new(HashMap::new())),
+            None,
+            Arc::new(Mutex::new(None)),
+            AgentId::new(),
+            Some("telegram|session:1".to_string()),
+            -42,
+            None,
+        );
+
+        raw_tx
+            .send(StreamEvent::PhaseChange {
+                phase: "correcting".to_string(),
+                detail: None,
+            })
+            .await
+            .unwrap();
+        raw_tx
+            .send(StreamEvent::PhaseChange {
+                phase: "verification_verified".to_string(),
+                detail: None,
+            })
+            .await
+            .unwrap();
+        drop(raw_tx);
+        while forwarded.recv().await.is_some() {}
+
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 2);
+        let first: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let second: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert!(first["rich_message"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Correction ciblée"));
+        assert!(second["rich_message"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Travail vérifié"));
+    }
+
+    #[tokio::test]
+    async fn telegram_quick_verification_emits_no_control_card() {
+        let telegram = test_telegram_adapter(Some("http://127.0.0.1:1".to_string()));
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::channel(4);
+        let (mut forwarded, _) = super::tee_ask_user_events_to_telegram(
+            raw_rx,
+            telegram,
+            Arc::new(Mutex::new(HashMap::new())),
+            None,
+            Arc::new(Mutex::new(None)),
+            AgentId::new(),
+            Some("telegram|session:1".to_string()),
+            -42,
+            None,
+        );
+
+        for phase in ["verifying", "verification_verified"] {
+            raw_tx
+                .send(StreamEvent::PhaseChange {
+                    phase: phase.to_string(),
+                    detail: None,
+                })
+                .await
+                .unwrap();
+        }
+        drop(raw_tx);
+
+        let mut phases = 0;
+        while forwarded.recv().await.is_some() {
+            phases += 1;
+        }
+        assert_eq!(phases, 2);
     }
 
     #[tokio::test]

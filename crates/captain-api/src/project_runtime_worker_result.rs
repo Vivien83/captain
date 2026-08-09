@@ -317,6 +317,9 @@ mod tests {
     use crate::project_runtime_workers::RUNTIME_WORKER_SPECS;
     use captain_memory::project::ProjectStatus;
     use captain_runtime::agent_loop::{AgentLoopResult, ToolCallRecord};
+    use captain_runtime::work_verification::{
+        EvidenceStrength, ToolVerificationReceipt, WorkEffect,
+    };
     use captain_types::message::{ReplyDirectives, TokenUsage};
 
     fn project() -> project::Project {
@@ -352,6 +355,14 @@ mod tests {
                 duration_ms: 7,
                 input_summary: "cargo test".to_string(),
                 output_summary: "ok".to_string(),
+                verification: Some(ToolVerificationReceipt {
+                    tool_call_id: "build-check".to_string(),
+                    sequence: 0,
+                    input_sha256: "a".repeat(64),
+                    effect: WorkEffect::Verification,
+                    evidence: EvidenceStrength::Check,
+                    scope_digests: vec!["workspace".to_string()],
+                }),
             }],
         }
     }

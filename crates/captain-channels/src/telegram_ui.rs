@@ -7,6 +7,46 @@ use captain_types::workflow_learning::{
 
 const COMPACTION_GAUGE_WIDTH: usize = 16;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelegramVerificationPresentation {
+    Verifying,
+    Correcting,
+    Verified,
+    Incomplete,
+}
+
+pub fn render_telegram_verification_status(
+    presentation: TelegramVerificationPresentation,
+) -> String {
+    let (icon, title, state, detail) = match presentation {
+        TelegramVerificationPresentation::Verifying => (
+            "🔎",
+            "Vérification du travail",
+            "En cours",
+            "Captain contrôle les preuves utiles avant de livrer.",
+        ),
+        TelegramVerificationPresentation::Correcting => (
+            "🛠",
+            "Correction ciblée",
+            "Résultat ajusté",
+            "Une preuve manquait. Captain corrige sans rejouer les effets externes.",
+        ),
+        TelegramVerificationPresentation::Verified => (
+            "✓",
+            "Travail vérifié",
+            "Validé",
+            "Les contrôles requis sont passés.",
+        ),
+        TelegramVerificationPresentation::Incomplete => (
+            "⚠️",
+            "Vérification incomplète",
+            "Livraison bornée",
+            "Captain signale clairement ce qui n'a pas pu être certifié.",
+        ),
+    };
+    format!("### {icon} {title}\n\n<b>{state}</b>\n\n<blockquote>{detail}</blockquote>")
+}
+
 pub fn render_telegram_ask_user_prompt(question: &str, has_buttons: bool) -> String {
     let title = if has_buttons {
         "Décision requise"
@@ -265,6 +305,22 @@ mod tests {
 
         let expired = render_telegram_ask_user_expired("Déployer ?");
         assert!(expired.starts_with("### ⏱ Question expirée"));
+    }
+
+    #[test]
+    fn verification_cards_are_bounded_and_never_include_runtime_payloads() {
+        for presentation in [
+            TelegramVerificationPresentation::Verifying,
+            TelegramVerificationPresentation::Correcting,
+            TelegramVerificationPresentation::Verified,
+            TelegramVerificationPresentation::Incomplete,
+        ] {
+            let rendered = render_telegram_verification_status(presentation);
+            assert!(rendered.starts_with("### "));
+            assert!(rendered.len() < 420);
+            assert!(!rendered.contains("tool_call"));
+            assert!(!rendered.contains("/Users/"));
+        }
     }
 
     fn compaction_progress(

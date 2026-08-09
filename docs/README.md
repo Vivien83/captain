@@ -54,6 +54,7 @@ counts when validating an installed runtime.
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
 | [Release provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
 | [Repository governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.13 release notes](releases/v0.1.0-alpha.13.md) | Adaptive delivery verification, crash-safe evidence, and safer host updates |
 | [0.1.0-alpha.12 release notes](releases/v0.1.0-alpha.12.md) | Durable Live Runs, grounded research, verified artifacts, and managed VPS domains |
 | [0.1.0-alpha.11 release notes](releases/v0.1.0-alpha.11.md) | Native email, durable integrations, audit closure, and local CI |
 | [0.1.0-alpha.10 release notes](releases/v0.1.0-alpha.10.md) | Production hardening, durable operations, and attested local releases |

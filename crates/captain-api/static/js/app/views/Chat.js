@@ -21,6 +21,7 @@ import {
   isScrollNearBottom,
   textDeltaFromMessage,
 } from '../chat_stream_batcher.mjs';
+import { deliveryVerificationFromPhase } from '../verification_phase_model.mjs';
 
 const html = htm.bind(h);
 
@@ -46,6 +47,7 @@ export function Chat() {
   const [activeModel, setActiveModel] = useState(activeModelIdentity(getState()));
   const [providerQuota, setProviderQuota] = useState(providerSubscriptionFromBudget(null));
   const [compaction, setCompaction] = useState(null);
+  const [deliveryVerification, setDeliveryVerification] = useState(null);
   const [reasoning, setReasoning] = useState(null);
   const [reasoningBusy, setReasoningBusy] = useState(false);
   const wsRef = useRef(null);
@@ -170,6 +172,7 @@ export function Chat() {
     if (!agentId) return;
     let dead = false;
     setCompaction(null);
+    setDeliveryVerification(null);
     pinToBottomRef.current = true;
 
     (async () => {
@@ -263,6 +266,7 @@ export function Chat() {
         break;
       case 'response':
         setBusy(false);
+        setDeliveryVerification(null);
         mutate((list) => {
           const a = lastAssistant(list);
           a.streaming = false;
@@ -271,6 +275,7 @@ export function Chat() {
         break;
       case 'error':
         setBusy(false);
+        setDeliveryVerification(null);
         mutate((list) => { list.push({ ...newItem('system'), text: `Erreur : ${m.content}` }); });
         break;
       case 'ask_user':
@@ -301,6 +306,10 @@ export function Chat() {
       case 'compaction_progress':
         applyCompactionProgress(m.progress);
         break;
+      case 'phase':
+        setDeliveryVerification((current) =>
+          deliveryVerificationFromPhase(m.phase, current));
+        break;
       case 'canvas':
         setCanvas({ title: m.title || 'Canvas', html: m.html || '' });
         break;
@@ -325,6 +334,7 @@ export function Chat() {
         const intermediate = payload('IntermediateMessage');
         const response = payload('Response');
         const askUser = payload('AskUser');
+        const phase = payload('Phase');
         if (userMessage) {
           mutate((list) => {
             list.forEach((item) => { item.suggestionsActive = false; });
@@ -339,6 +349,10 @@ export function Chat() {
         });
         if (intermediate?.content) mutate((list) => { lastAssistant(list).text += intermediate.content; });
         if (response) mutate((list) => { const a = lastAssistant(list); a.streaming = false; if (!a.text && response.content) a.text = response.content; });
+        if (phase) {
+          setDeliveryVerification((current) =>
+            deliveryVerificationFromPhase(phase.phase, current));
+        }
         if (askUser) {
           setBusy(false);
           mutate((list) => {
@@ -462,6 +476,7 @@ export function Chat() {
           </div>
         </div>
         <${CompactionProgressBar} progress=${compaction} />
+        <${DeliveryVerificationBar} status=${deliveryVerification} />
         <${Composer} disabled=${!connected} busy=${busy} onSend=${send} onUpload=${onUpload} />
         <${ProviderQuotaBar} status=${providerQuota} activeModel=${activeModel}
           reasoning=${reasoning} reasoningBusy=${reasoningBusy}
@@ -477,6 +492,19 @@ export function Chat() {
           <iframe sandbox="" srcdoc=${canvas.html}></iframe>
         </div>
       `}
+    </div>
+  `;
+}
+
+function DeliveryVerificationBar({ status }) {
+  if (!status) return null;
+  return html`
+    <div class="delivery-verification ${status.phase}" role="status" aria-live="polite">
+      <span class="delivery-verification-mark" aria-hidden="true"></span>
+      <strong>${status.label}</strong>
+      <span>${status.phase === 'correcting'
+        ? 'Captain corrige uniquement les écarts observés avant de livrer.'
+        : 'Captain contrôle les preuves utiles avant de confirmer le résultat.'}</span>
     </div>
   `;
 }

@@ -66,6 +66,7 @@ pub(crate) struct MaxTokensContinuationInput<'a> {
     pub(crate) tool_calls_recorded: &'a [ToolCallRecord],
     pub(crate) streaming: bool,
     pub(crate) messages: &'a mut Vec<Message>,
+    pub(crate) final_text_override: Option<String>,
 }
 
 pub(crate) async fn handle_max_tokens_continuation(
@@ -87,6 +88,7 @@ pub(crate) async fn handle_max_tokens_continuation(
             consecutive_count: *input.consecutive_max_tokens,
             tool_calls_recorded: input.tool_calls_recorded,
             streaming: input.streaming,
+            final_text_override: input.final_text_override,
         })
         .await
         .map(Some);
@@ -119,6 +121,7 @@ pub(crate) struct IncompleteContinuationInput<'a> {
     pub(crate) tool_calls_recorded: &'a [ToolCallRecord],
     pub(crate) streaming: bool,
     pub(crate) messages: &'a mut Vec<Message>,
+    pub(crate) final_text_override: Option<String>,
 }
 
 pub(crate) async fn handle_incomplete_continuation(
@@ -141,6 +144,7 @@ pub(crate) async fn handle_incomplete_continuation(
             consecutive_count: *input.consecutive_incomplete,
             tool_calls_recorded: input.tool_calls_recorded,
             streaming: input.streaming,
+            final_text_override: input.final_text_override,
         })
         .await
         .map(Some);
@@ -186,12 +190,15 @@ pub(crate) struct FinishContinuationLimitInput<'a> {
     pub(crate) consecutive_count: u32,
     pub(crate) tool_calls_recorded: &'a [ToolCallRecord],
     pub(crate) streaming: bool,
+    pub(crate) final_text_override: Option<String>,
 }
 
 pub(crate) async fn finish_continuation_limit(
     input: FinishContinuationLimitInput<'_>,
 ) -> CaptainResult<AgentLoopResult> {
-    let text = continuation_limit_text(input.kind, input.response);
+    let text = input
+        .final_text_override
+        .unwrap_or_else(|| continuation_limit_text(input.kind, input.response));
     input
         .session
         .messages
@@ -235,7 +242,10 @@ pub(crate) async fn finish_continuation_limit(
     })
 }
 
-fn continuation_limit_text(kind: ContinuationLimitKind, response: &CompletionResponse) -> String {
+pub(crate) fn continuation_limit_text(
+    kind: ContinuationLimitKind,
+    response: &CompletionResponse,
+) -> String {
     let text = response.text();
     if !text.trim().is_empty() {
         return text;

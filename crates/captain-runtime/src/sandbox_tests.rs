@@ -83,6 +83,32 @@ fn test_sandbox_engine_creation() {
 }
 
 #[test]
+fn completed_execution_cancels_its_epoch_watchdog() {
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fired_by_watchdog = Arc::clone(&fired);
+    {
+        let _watchdog = spawn_watchdog(std::time::Duration::from_secs(5), move || {
+            fired_by_watchdog.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
+    assert!(!fired.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn elapsed_epoch_watchdog_runs_once_and_joins_cleanly() {
+    let (fired, observed) = std::sync::mpsc::channel();
+    {
+        let _watchdog = spawn_watchdog(std::time::Duration::ZERO, move || {
+            let _ = fired.send(());
+        });
+        observed
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+    }
+}
+
+#[test]
 fn test_guest_result_pack_round_trips_pointer_and_length() {
     let packed = pack_guest_result(1234, 5678);
     let unpacked = unpack_guest_result(packed);

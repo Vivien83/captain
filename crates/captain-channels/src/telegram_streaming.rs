@@ -23,6 +23,7 @@ static NEXT_TELEGRAM_DRAFT_ID: AtomicI64 = AtomicI64::new(1);
 struct TelegramProgressState {
     last_visible_activity: Instant,
     waiting_for_user: bool,
+    status_override: bool,
 }
 
 /// Shareable control for the private-chat thinking draft shown only when the
@@ -55,6 +56,20 @@ impl TelegramProgressDraft {
     pub fn set_waiting_for_user(&self, waiting: bool) {
         if let Ok(mut state) = self.state.lock() {
             state.waiting_for_user = waiting;
+            state.last_visible_activity = Instant::now();
+        }
+    }
+
+    pub fn has_status_override(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.status_override)
+            .unwrap_or(true)
+    }
+
+    pub fn set_status_override(&self, active: bool) {
+        if let Ok(mut state) = self.state.lock() {
+            state.status_override = active;
             state.last_visible_activity = Instant::now();
         }
     }
@@ -164,6 +179,7 @@ impl TelegramStreamTarget {
             progress_state: Arc::new(Mutex::new(TelegramProgressState {
                 last_visible_activity: Instant::now(),
                 waiting_for_user: false,
+                status_override: false,
             })),
         }
     }
@@ -680,10 +696,15 @@ mod tests {
         let target = test_target();
         let progress = target.progress_draft().expect("private progress draft");
         assert!(!progress.is_waiting_for_user());
+        assert!(!progress.has_status_override());
         progress.set_waiting_for_user(true);
         assert!(progress.is_waiting_for_user());
+        progress.set_status_override(true);
+        assert!(progress.has_status_override());
         progress.set_waiting_for_user(false);
         assert!(!progress.is_waiting_for_user());
+        progress.set_status_override(false);
+        assert!(!progress.has_status_override());
     }
 
     #[test]

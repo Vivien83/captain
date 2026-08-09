@@ -150,8 +150,10 @@ mod tests {
 
     #[test]
     fn successful_before_tool_hook_allows_execution() {
-        let mut manifest = AgentManifest::default();
-        manifest.name = "captain".to_string();
+        let manifest = AgentManifest {
+            name: "captain".to_string(),
+            ..AgentManifest::default()
+        };
         let registry = HookRegistry::new();
         registry.register(HookEvent::BeforeToolCall, Arc::new(OkHandler));
         let tool_call = test_tool_call();
@@ -171,8 +173,10 @@ mod tests {
 
     #[test]
     fn blocking_before_tool_hook_adds_error_result() {
-        let mut manifest = AgentManifest::default();
-        manifest.name = "captain".to_string();
+        let manifest = AgentManifest {
+            name: "captain".to_string(),
+            ..AgentManifest::default()
+        };
         let registry = HookRegistry::new();
         registry.register(HookEvent::BeforeToolCall, Arc::new(BlockHandler));
         let tool_call = test_tool_call();
@@ -212,8 +216,10 @@ mod tests {
 
     #[test]
     fn after_tool_hook_receives_tool_result_payload() {
-        let mut manifest = AgentManifest::default();
-        manifest.name = "captain".to_string();
+        let manifest = AgentManifest {
+            name: "captain".to_string(),
+            ..AgentManifest::default()
+        };
         let registry = HookRegistry::new();
         let capture = Arc::new(CaptureHandler::new());
         registry.register(HookEvent::AfterToolCall, capture.clone());

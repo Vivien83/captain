@@ -144,9 +144,18 @@ fn ensure_data_dir(config: &KernelConfig) -> KernelResult<()> {
 
 fn open_boot_memory(config: &KernelConfig) -> KernelResult<Arc<MemorySubstrate>> {
     let db_path = boot_memory_db_path(config);
-    MemorySubstrate::open(&db_path, config.memory.decay_rate)
-        .map(Arc::new)
-        .map_err(|e| KernelError::BootFailed(format!("Memory init failed: {e}")))
+    let memory = MemorySubstrate::open(&db_path, config.memory.decay_rate)
+        .map_err(|e| KernelError::BootFailed(format!("Memory init failed: {e}")))?;
+    let interrupted = memory
+        .reconcile_work_verification_after_restart(chrono::Utc::now().timestamp_millis())
+        .map_err(|e| KernelError::BootFailed(format!("Work verification recovery failed: {e}")))?;
+    if !interrupted.is_empty() {
+        warn!(
+            count = interrupted.len(),
+            "Reconciled interrupted work verification operations without replay"
+        );
+    }
+    Ok(Arc::new(memory))
 }
 
 fn boot_memory_db_path(config: &KernelConfig) -> PathBuf {

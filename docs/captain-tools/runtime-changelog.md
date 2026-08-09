@@ -26,6 +26,50 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.13 — Adaptive delivery verification and crash-safe evidence
+
+Agent-facing changes:
+
+- Pure conversation and read-only inspection keep the direct completion path.
+  Once tools have produced effects, Captain evaluates ordered, redacted
+  receipts at useful milestones and before delivery rather than checking after
+  every tool call.
+- A mutation needs a newer relevant post-condition. A detached run or delegated
+  job that is still active remains an inspection, while a terminal successful
+  result can become a check. Failed effects and uncertain external receipts are
+  never converted into success by wording alone.
+- Missing evidence produces one short correction nudge containing fixed gap
+  requirements. Captain performs at most two correction rounds, then reports
+  the unresolved post-condition explicitly instead of looping or claiming
+  completion.
+- Verification progress is durable and crash-safe. Restart classifies an
+  unfinished lease as interrupted and re-evaluates current state without
+  replaying an uncertain side effect. Stored records contain only states,
+  requirement codes, receipt order, identifier digests, and timestamps; no raw
+  input, output, path, draft, or hidden reasoning is retained.
+- Project completion, delegated jobs, immutable artifacts, and Live Runs now
+  use the same receipt policy and evidence strength instead of parallel notions
+  of done.
+- Ratatui, terminal chat, Web Control, Web terminal, and Telegram receive the
+  same transient verification phases. A fast successful check stays silent;
+  a correction or incomplete result appears immediately, and Telegram shows a
+  Rich card only when the state is useful to the operator.
+- When verification is still unresolved, streamed model drafts are retained in
+  one bounded fail-closed delivery buffer. Failed retry attempts and corrected
+  drafts are discarded, event order is preserved, and the final verified or
+  honestly incomplete response is emitted once. Every held continuation
+  segment must match its provider text and unique terminal event before
+  release. Ordinary turns remain live; their transport retry is refused after
+  the first visible delta so an already-delivered prefix cannot be duplicated.
+- The macOS updater now requires a private adjacent candidate, mandatory
+  ad-hoc signing, exact executable `--version` parity, and file sync before the
+  atomic swap. A failed preflight preserves the installed binary.
+- Wasmtime execution watchdogs now cancel and join at scope exit, preventing
+  completed calls from retaining engines and delayed Mach exception handlers.
+- Provider quota surfaces continue to use live provider-reported windows. The
+  compact Chat gauge prioritizes provider-wide limits and the active model;
+  unrelated model-specific families remain clearly secondary.
+
 ### 0.1.0-alpha.12 — Durable Live Runs, grounded research, and managed VPS bootstrap
 
 Agent-facing changes:

@@ -69,8 +69,10 @@ mod tests {
     async fn circuit_break_saves_session_before_error() {
         let memory = MemorySubstrate::open_in_memory(0.01).unwrap();
         let mut session = test_session(vec![Message::user("preserve me")]);
-        let mut manifest = AgentManifest::default();
-        manifest.name = "captain".to_string();
+        let manifest = AgentManifest {
+            name: "captain".to_string(),
+            ..AgentManifest::default()
+        };
 
         let err = fail_loop_guard_circuit_break(
             &manifest,

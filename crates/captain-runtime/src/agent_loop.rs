@@ -2,19 +2,24 @@
 
 pub use crate::agent_loop_budget::{current_turn_token_budget, with_turn_token_budget};
 pub use crate::agent_loop_control::AGENT_LOOP_MAX_ITERATIONS_KEY;
-use crate::agent_loop_end_turn::{handle_end_turn_response, EndTurnInput};
+use crate::agent_loop_end_turn::{
+    begin_delivery_verification, delivery_verification_report, handle_end_turn_response,
+    incomplete_delivery_text, record_delivery_verification, EndTurnInput,
+};
 use crate::agent_loop_iteration::{
     complete_iteration, stream_iteration, CompletionIterationInput, IterationCallOutcome,
     StreamingIterationInput,
 };
 use crate::agent_loop_limits::{
-    fail_max_iterations, handle_incomplete_continuation, handle_max_tokens_continuation,
-    IncompleteContinuationInput, MaxTokensContinuationInput,
+    continuation_limit_text, fail_max_iterations, handle_incomplete_continuation,
+    handle_max_tokens_continuation, ContinuationLimitKind, IncompleteContinuationInput,
+    MaxTokensContinuationInput, MAX_CONTINUATIONS,
 };
 pub use crate::agent_loop_phase::{LoopPhase, PhaseCallback};
 use crate::agent_loop_quota::{check_mid_loop_quota, streaming_quota_should_break};
 pub use crate::agent_loop_request::strip_provider_prefix;
 pub use crate::agent_loop_result::AgentLoopResult;
+use crate::agent_loop_stream_delivery::StreamDeliveryBuffer;
 use crate::agent_loop_tool_execution::{
     execute_tool_calls, execute_tool_calls_streaming, StreamingToolExecutionInput,
     ToolExecutionInput,
@@ -29,8 +34,13 @@ use crate::llm_driver::{CompletionResponse, LlmDriver, StreamEvent};
 use crate::loop_guard::LoopGuard;
 use crate::mcp::McpConnection;
 use crate::web_search::WebToolsContext;
+use crate::work_verification::{
+    evaluate_tool_receipts, VerificationDisposition, WorkVerificationReport,
+    MAX_VERIFICATION_CORRECTION_ROUNDS,
+};
 use crate::workflow_learning_runtime::{begin_episode_best_effort, run_in_workflow_episode};
 use captain_memory::session::Session;
+use captain_memory::work_verification_progress::WorkVerificationState;
 use captain_memory::MemorySubstrate;
 use captain_skills::registry::SkillRegistry;
 use captain_types::agent::AgentManifest;
@@ -63,6 +73,9 @@ struct AgentLoopState {
     context_budget: ContextBudget,
     any_tools_executed: bool,
     capability_denial_watchdog_used: bool,
+    verification_correction_rounds: u8,
+    verification_operation:
+        Option<captain_memory::work_verification_progress::WorkVerificationLease>,
     visible_tools: Vec<ToolDefinition>,
 }
 
@@ -132,6 +145,8 @@ impl From<PreparedAgentTurn> for ActiveAgentTurn {
                 context_budget: prepared.context_budget,
                 any_tools_executed: false,
                 capability_denial_watchdog_used: false,
+                verification_correction_rounds: 0,
+                verification_operation: None,
                 visible_tools: prepared.visible_tools,
             },
         }
@@ -368,12 +383,17 @@ async fn run_non_streaming_agent_loop_iterations(
             &turn.state.total_usage,
             &turn.state.tool_calls_recorded,
         ) {
+            record_forced_incomplete_stop(turn, ctx.session, ctx.memory, ctx.on_phase)?;
             return Ok(result);
         }
 
         let response = match complete_agent_loop_iteration(&mut ctx, turn, iteration).await? {
             IterationCallOutcome::Response(response) => response,
-            IterationCallOutcome::Finished(result) => return Ok(result),
+            IterationCallOutcome::Finished(mut result) => {
+                record_forced_incomplete_stop(turn, ctx.session, ctx.memory, ctx.on_phase)?;
+                result.tool_calls = turn.state.tool_calls_recorded.clone();
+                return Ok(result);
+            }
             IterationCallOutcome::Continue => continue,
         };
 
@@ -384,6 +404,7 @@ async fn run_non_streaming_agent_loop_iterations(
         }
     }
 
+    record_forced_incomplete_stop(turn, ctx.session, ctx.memory, ctx.on_phase)?;
     fail_active_turn_max_iterations(ctx.manifest, ctx.session, ctx.memory, ctx.hooks, turn).await
 }
 
@@ -414,6 +435,7 @@ async fn run_streaming_agent_loop_iterations(
     turn: &mut ActiveAgentTurn,
 ) -> CaptainResult<AgentLoopResult> {
     let mut codex_missing_tool_watchdog_used = false;
+    let mut held_delivery = StreamDeliveryBuffer::default();
 
     for iteration in 0..turn.state.max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -429,26 +451,73 @@ async fn run_streaming_agent_loop_iterations(
             break;
         }
 
+        let hold_stream_delivery =
+            !held_delivery.is_empty() || stream_delivery_requires_hold(turn, iteration);
+        let delivery_checkpoint = held_delivery.checkpoint();
         let response = match stream_agent_loop_iteration(
             &mut ctx,
             turn,
             iteration,
             &mut codex_missing_tool_watchdog_used,
+            hold_stream_delivery,
+            &mut held_delivery,
         )
         .await?
         {
             IterationCallOutcome::Response(response) => response,
-            IterationCallOutcome::Finished(result) => return Ok(result),
-            IterationCallOutcome::Continue => continue,
+            IterationCallOutcome::Finished(mut result) => {
+                record_forced_incomplete_stop(turn, ctx.session, ctx.memory, ctx.on_phase)?;
+                result.tool_calls = turn.state.tool_calls_recorded.clone();
+                if hold_stream_delivery {
+                    held_delivery
+                        .replace_with_final(
+                            &ctx.stream_tx,
+                            &result.response,
+                            StopReason::EndTurn,
+                            result.total_usage,
+                        )
+                        .await;
+                }
+                return Ok(result);
+            }
+            IterationCallOutcome::Continue => {
+                if hold_stream_delivery {
+                    held_delivery.rollback(delivery_checkpoint);
+                }
+                continue;
+            }
         };
 
-        if let Some(result) =
-            handle_streaming_response(&response, &mut ctx, turn, iteration).await?
-        {
+        if hold_stream_delivery {
+            held_delivery.validate_segment(
+                delivery_checkpoint,
+                &response.text(),
+                response.stop_reason,
+            )?;
+        }
+
+        if response.stop_reason == StopReason::ToolUse && hold_stream_delivery {
+            held_delivery.release(&ctx.stream_tx).await?;
+        }
+
+        let result = handle_streaming_response(&response, &mut ctx, turn, iteration).await?;
+        if let Some(result) = result {
+            if hold_stream_delivery && response.stop_reason != StopReason::ToolUse {
+                deliver_held_final_response(&mut held_delivery, &ctx.stream_tx, &response, &result)
+                    .await?;
+            }
             return Ok(result);
+        }
+
+        match response.stop_reason {
+            StopReason::EndTurn | StopReason::StopSequence => held_delivery.discard(),
+            StopReason::ToolUse => debug_assert!(held_delivery.is_empty()),
+            StopReason::MaxTokens | StopReason::Incomplete => {}
         }
     }
 
+    record_forced_incomplete_stop(turn, ctx.session, ctx.memory, ctx.on_phase)?;
+    held_delivery.discard();
     fail_active_turn_max_iterations(ctx.manifest, ctx.session, ctx.memory, ctx.hooks, turn).await
 }
 
@@ -457,6 +526,8 @@ async fn stream_agent_loop_iteration(
     turn: &mut ActiveAgentTurn,
     iteration: u32,
     codex_missing_tool_watchdog_used: &mut bool,
+    hold_stream_delivery: bool,
+    delivery_buffer: &mut StreamDeliveryBuffer,
 ) -> CaptainResult<IterationCallOutcome> {
     Box::pin(stream_iteration(StreamingIterationInput {
         manifest: ctx.manifest,
@@ -474,8 +545,83 @@ async fn stream_agent_loop_iteration(
         stream_tx: &ctx.stream_tx,
         user_input_rx: &ctx.user_input_rx,
         codex_missing_tool_watchdog_used,
+        hold_stream_delivery,
+        delivery_buffer,
     }))
     .await
+}
+
+fn stream_delivery_requires_hold(turn: &ActiveAgentTurn, iteration: u32) -> bool {
+    if current_turn_token_budget().is_some_and(|budget| budget > 0) {
+        return true;
+    }
+
+    matches!(
+        delivery_verification_report(
+            &turn.state.tool_calls_recorded,
+            turn.state.any_tools_executed,
+            turn.state.verification_correction_rounds,
+            iteration,
+            turn.state.max_iterations,
+        )
+        .disposition,
+        VerificationDisposition::NeedsCorrection | VerificationDisposition::Incomplete
+    )
+}
+
+async fn deliver_held_final_response(
+    delivery: &mut StreamDeliveryBuffer,
+    stream_tx: &mpsc::Sender<StreamEvent>,
+    provider_response: &CompletionResponse,
+    result: &AgentLoopResult,
+) -> CaptainResult<()> {
+    let raw_text = provider_response.text();
+    if !result.silent && result.response == raw_text && delivery.all_events_validated() {
+        delivery.release(stream_tx).await?;
+    } else {
+        delivery
+            .replace_with_final(
+                stream_tx,
+                if result.silent { "" } else { &result.response },
+                StopReason::EndTurn,
+                result.total_usage,
+            )
+            .await;
+    }
+    Ok(())
+}
+
+fn record_forced_incomplete_stop(
+    turn: &mut ActiveAgentTurn,
+    session: &Session,
+    memory: &MemorySubstrate,
+    on_phase: Option<&PhaseCallback>,
+) -> CaptainResult<()> {
+    let report = evaluate_tool_receipts(
+        &turn.state.tool_calls_recorded,
+        turn.state.any_tools_executed,
+        MAX_VERIFICATION_CORRECTION_ROUNDS,
+    );
+    if report.disposition != VerificationDisposition::Incomplete {
+        return Ok(());
+    }
+    begin_delivery_verification(
+        memory,
+        session,
+        &mut turn.state.verification_operation,
+        MAX_VERIFICATION_CORRECTION_ROUNDS,
+        &report,
+        on_phase,
+    )?;
+    record_delivery_verification(
+        memory,
+        session,
+        &mut turn.state.verification_operation,
+        WorkVerificationState::Incomplete,
+        MAX_VERIFICATION_CORRECTION_ROUNDS,
+        &report,
+        on_phase,
+    )
 }
 
 fn reset_after_tool_use(turn: &mut ActiveAgentTurn) {
@@ -508,6 +654,9 @@ async fn handle_loop_end_turn(
         iteration,
         any_tools_executed: turn.state.any_tools_executed,
         capability_denial_watchdog_used: &mut turn.state.capability_denial_watchdog_used,
+        verification_correction_rounds: &mut turn.state.verification_correction_rounds,
+        verification_operation: &mut turn.state.verification_operation,
+        max_iterations: turn.state.max_iterations,
         visible_tools: &turn.state.visible_tools,
         streaming,
         phantom_action_watchdog,
@@ -529,11 +678,26 @@ async fn handle_max_tokens_response(
     session: &mut Session,
     memory: &MemorySubstrate,
     hooks: Option<&crate::hooks::HookRegistry>,
+    on_phase: Option<&PhaseCallback>,
     turn: &mut ActiveAgentTurn,
     iteration: u32,
     streaming: bool,
 ) -> CaptainResult<Option<AgentLoopResult>> {
-    handle_max_tokens_continuation(MaxTokensContinuationInput {
+    let next_continuation_count = turn.state.consecutive_max_tokens.saturating_add(1);
+    let forced_report = begin_forced_continuation_verification(
+        turn,
+        session,
+        memory,
+        on_phase,
+        next_continuation_count,
+    )?;
+    let final_text_override = forced_report.as_ref().map(|report| {
+        incomplete_delivery_text(
+            report,
+            &continuation_limit_text(ContinuationLimitKind::MaxTokens, response),
+        )
+    });
+    let result = handle_max_tokens_continuation(MaxTokensContinuationInput {
         response,
         session,
         memory,
@@ -547,8 +711,18 @@ async fn handle_max_tokens_response(
         tool_calls_recorded: &turn.state.tool_calls_recorded,
         streaming,
         messages: &mut turn.messages,
+        final_text_override,
     })
-    .await
+    .await?;
+    finish_forced_continuation_verification(
+        turn,
+        session,
+        memory,
+        on_phase,
+        forced_report.as_ref(),
+        result.is_some(),
+    )?;
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -558,11 +732,26 @@ async fn handle_incomplete_response(
     session: &mut Session,
     memory: &MemorySubstrate,
     hooks: Option<&crate::hooks::HookRegistry>,
+    on_phase: Option<&PhaseCallback>,
     turn: &mut ActiveAgentTurn,
     iteration: u32,
     streaming: bool,
 ) -> CaptainResult<Option<AgentLoopResult>> {
-    handle_incomplete_continuation(IncompleteContinuationInput {
+    let next_continuation_count = turn.state.consecutive_incomplete.saturating_add(1);
+    let forced_report = begin_forced_continuation_verification(
+        turn,
+        session,
+        memory,
+        on_phase,
+        next_continuation_count,
+    )?;
+    let final_text_override = forced_report.as_ref().map(|report| {
+        incomplete_delivery_text(
+            report,
+            &continuation_limit_text(ContinuationLimitKind::Incomplete, response),
+        )
+    });
+    let result = handle_incomplete_continuation(IncompleteContinuationInput {
         response,
         provider_name: manifest.model.provider.as_str(),
         session,
@@ -577,8 +766,69 @@ async fn handle_incomplete_response(
         tool_calls_recorded: &turn.state.tool_calls_recorded,
         streaming,
         messages: &mut turn.messages,
+        final_text_override,
     })
-    .await
+    .await?;
+    finish_forced_continuation_verification(
+        turn,
+        session,
+        memory,
+        on_phase,
+        forced_report.as_ref(),
+        result.is_some(),
+    )?;
+    Ok(result)
+}
+
+fn begin_forced_continuation_verification(
+    turn: &mut ActiveAgentTurn,
+    session: &Session,
+    memory: &MemorySubstrate,
+    on_phase: Option<&PhaseCallback>,
+    next_continuation_count: u32,
+) -> CaptainResult<Option<WorkVerificationReport>> {
+    if next_continuation_count < MAX_CONTINUATIONS {
+        return Ok(None);
+    }
+    let report = evaluate_tool_receipts(
+        &turn.state.tool_calls_recorded,
+        turn.state.any_tools_executed,
+        MAX_VERIFICATION_CORRECTION_ROUNDS,
+    );
+    if report.disposition != VerificationDisposition::Incomplete {
+        return Ok(None);
+    }
+    begin_delivery_verification(
+        memory,
+        session,
+        &mut turn.state.verification_operation,
+        MAX_VERIFICATION_CORRECTION_ROUNDS,
+        &report,
+        on_phase,
+    )?;
+    Ok(Some(report))
+}
+
+fn finish_forced_continuation_verification(
+    turn: &mut ActiveAgentTurn,
+    session: &Session,
+    memory: &MemorySubstrate,
+    on_phase: Option<&PhaseCallback>,
+    report: Option<&WorkVerificationReport>,
+    limit_reached: bool,
+) -> CaptainResult<()> {
+    let Some(report) = report.filter(|_| limit_reached) else {
+        return Ok(());
+    };
+    record_delivery_verification(
+        memory,
+        session,
+        &mut turn.state.verification_operation,
+        WorkVerificationState::Incomplete,
+        MAX_VERIFICATION_CORRECTION_ROUNDS,
+        report,
+        on_phase,
+    )
 }
 
 async fn handle_completion_response(
@@ -613,6 +863,7 @@ async fn handle_completion_response(
                 &mut *ctx.session,
                 ctx.memory,
                 ctx.hooks,
+                ctx.on_phase,
                 turn,
                 iteration,
                 false,
@@ -626,6 +877,7 @@ async fn handle_completion_response(
                 &mut *ctx.session,
                 ctx.memory,
                 ctx.hooks,
+                ctx.on_phase,
                 turn,
                 iteration,
                 false,
@@ -667,6 +919,7 @@ async fn handle_streaming_response(
                 &mut *ctx.session,
                 ctx.memory,
                 ctx.hooks,
+                ctx.on_phase,
                 turn,
                 iteration,
                 true,
@@ -680,6 +933,7 @@ async fn handle_streaming_response(
                 &mut *ctx.session,
                 ctx.memory,
                 ctx.hooks,
+                ctx.on_phase,
                 turn,
                 iteration,
                 true,
@@ -768,6 +1022,7 @@ async fn handle_streaming_tool_use(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_types::tool::{ToolCall, ToolResult};
 
     fn test_tool(name: &str) -> ToolDefinition {
         ToolDefinition {
@@ -775,6 +1030,53 @@ mod tests {
             description: "test tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         }
+    }
+
+    fn tool_record(
+        name: &str,
+        input: serde_json::Value,
+        output: &str,
+        sequence: u32,
+    ) -> ToolCallRecord {
+        let call = ToolCall {
+            id: format!("call-{sequence}"),
+            name: name.to_string(),
+            input,
+        };
+        let result = ToolResult {
+            tool_use_id: call.id.clone(),
+            content: output.to_string(),
+            is_error: false,
+            transient_content: Vec::new(),
+        };
+        ToolCallRecord {
+            tool_name: name.to_string(),
+            reason: "test receipt".to_string(),
+            is_error: false,
+            duration_ms: 1,
+            input_summary: String::new(),
+            output_summary: String::new(),
+            verification: Some(
+                crate::work_verification::ToolVerificationReceipt::from_tool_call(
+                    &call, &result, sequence,
+                ),
+            ),
+        }
+    }
+
+    fn active_test_turn() -> ActiveAgentTurn {
+        PreparedAgentTurn {
+            hand_allowed_env: Vec::new(),
+            agent_id_str: "agent-1".to_string(),
+            system_prompt: "system".to_string(),
+            messages: vec![captain_types::message::Message::user("hello")],
+            max_iterations: 7,
+            loop_guard: LoopGuard::new(crate::loop_guard::LoopGuardConfig::default()),
+            ctx_window: 4096,
+            context_budget: ContextBudget::new(4096),
+            visible_tools: vec![test_tool("file_write"), test_tool("file_read")],
+        }
+        .into()
     }
 
     #[test]
@@ -808,5 +1110,156 @@ mod tests {
         assert!(turn.state.tool_calls_recorded.is_empty());
         assert!(!turn.state.any_tools_executed);
         assert!(!turn.state.capability_denial_watchdog_used);
+        assert_eq!(turn.state.verification_correction_rounds, 0);
+        assert!(turn.state.verification_operation.is_none());
+    }
+
+    #[test]
+    fn stream_delivery_is_held_only_until_mutation_has_postcondition_evidence() {
+        let mut turn = active_test_turn();
+        turn.state.any_tools_executed = true;
+        turn.state.tool_calls_recorded.push(tool_record(
+            "file_write",
+            serde_json::json!({"path": "notes.txt", "content": "done"}),
+            "ok",
+            0,
+        ));
+
+        assert!(stream_delivery_requires_hold(&turn, 1));
+
+        turn.state.tool_calls_recorded.push(tool_record(
+            "file_read",
+            serde_json::json!({"path": "notes.txt"}),
+            "done",
+            1,
+        ));
+
+        assert!(!stream_delivery_requires_hold(&turn, 2));
+    }
+
+    #[tokio::test]
+    async fn delegation_budget_forces_transactional_stream_delivery() {
+        let turn = active_test_turn();
+
+        with_turn_token_budget(Some(100), async {
+            assert!(stream_delivery_requires_hold(&turn, 0));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn matching_verified_final_is_released_once_without_replacement() {
+        let usage = TokenUsage {
+            output_tokens: 3,
+            ..Default::default()
+        };
+        let response = CompletionResponse {
+            content: vec![ContentBlock::Text {
+                text: "verified".to_string(),
+                provider_metadata: None,
+            }],
+            stop_reason: StopReason::EndTurn,
+            tool_calls: Vec::new(),
+            usage,
+        };
+        let result = AgentLoopResult {
+            response: "verified".to_string(),
+            total_usage: usage,
+            iterations: 2,
+            cost_usd: None,
+            silent: false,
+            directives: Default::default(),
+            tool_calls: Vec::new(),
+        };
+        let mut delivery = StreamDeliveryBuffer::default();
+        let checkpoint = delivery.checkpoint();
+        delivery
+            .push(StreamEvent::TextDelta {
+                text: "verified".to_string(),
+            })
+            .unwrap();
+        delivery
+            .push(StreamEvent::ContentComplete {
+                stop_reason: StopReason::EndTurn,
+                usage,
+            })
+            .unwrap();
+        delivery
+            .validate_segment(checkpoint, "verified", StopReason::EndTurn)
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+
+        deliver_held_final_response(&mut delivery, &tx, &response, &result)
+            .await
+            .unwrap();
+        drop(tx);
+
+        assert!(matches!(
+            rx.recv().await,
+            Some(StreamEvent::TextDelta { text }) if text == "verified"
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(StreamEvent::ContentComplete {
+                stop_reason: StopReason::EndTurn,
+                ..
+            })
+        ));
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn continuation_limit_records_an_honest_incomplete_delivery() {
+        let mut turn = active_test_turn();
+        turn.state.any_tools_executed = true;
+        turn.state.consecutive_incomplete = MAX_CONTINUATIONS - 1;
+        turn.state.tool_calls_recorded.push(tool_record(
+            "file_write",
+            serde_json::json!({"path": "notes.txt", "content": "done"}),
+            "ok",
+            0,
+        ));
+        let manifest = AgentManifest::default();
+        let memory = MemorySubstrate::open_in_memory(0.01).unwrap();
+        let mut session = Session {
+            id: captain_types::agent::SessionId::new(),
+            agent_id: captain_types::agent::AgentId::new(),
+            messages: Vec::new(),
+            context_window_tokens: 0,
+            label: None,
+        };
+        let response = CompletionResponse {
+            content: vec![ContentBlock::Text {
+                text: "everything is complete".to_string(),
+                provider_metadata: None,
+            }],
+            stop_reason: StopReason::Incomplete,
+            tool_calls: Vec::new(),
+            usage: TokenUsage::default(),
+        };
+
+        let result = handle_incomplete_response(
+            &response,
+            &manifest,
+            &mut session,
+            &memory,
+            None,
+            None,
+            &mut turn,
+            4,
+            true,
+        )
+        .await
+        .unwrap()
+        .expect("continuation limit should finish honestly");
+
+        assert!(result.response.starts_with("Verification incomplete:"));
+        assert!(result.response.contains("Unverified draft from the agent:"));
+        assert!(turn.state.verification_operation.is_none());
+        let saved = memory.get_session(session.id).unwrap().unwrap();
+        assert_eq!(
+            saved.messages.last().unwrap().content.text_content(),
+            result.response
+        );
     }
 }

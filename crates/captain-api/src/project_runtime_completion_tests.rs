@@ -1,5 +1,6 @@
 use super::*;
 use captain_kernel::goals::Suggestion;
+use captain_runtime::work_verification::{EvidenceStrength, ToolVerificationReceipt, WorkEffect};
 use chrono::Utc;
 use std::collections::VecDeque;
 
@@ -11,6 +12,37 @@ fn tool(name: &str, is_error: bool) -> ToolCallRecord {
         duration_ms: 12,
         input_summary: "cargo test".to_string(),
         output_summary: if is_error { "failed" } else { "ok" }.to_string(),
+        verification: Some(ToolVerificationReceipt {
+            tool_call_id: format!("{name}-receipt"),
+            sequence: 0,
+            input_sha256: "a".repeat(64),
+            effect: WorkEffect::Verification,
+            evidence: if is_error {
+                EvidenceStrength::None
+            } else {
+                EvidenceStrength::Check
+            },
+            scope_digests: vec!["workspace".to_string()],
+        }),
+    }
+}
+
+fn structured_evidence(name: &str, strength: EvidenceStrength) -> ToolCallRecord {
+    ToolCallRecord {
+        tool_name: name.to_string(),
+        reason: "Inspect a linked durable subject.".to_string(),
+        is_error: false,
+        duration_ms: 4,
+        input_summary: String::new(),
+        output_summary: String::new(),
+        verification: Some(ToolVerificationReceipt {
+            tool_call_id: format!("{name}-receipt"),
+            sequence: 0,
+            input_sha256: "b".repeat(64),
+            effect: WorkEffect::Verification,
+            evidence: strength,
+            scope_digests: vec!["external:subject".to_string()],
+        }),
     }
 }
 
@@ -48,6 +80,128 @@ fn verify_phase_accepts_a_structured_handoff_with_real_tool_receipt() {
     let encoded = serde_json::to_string(&contract).unwrap();
     assert!(!encoded.contains("cargo test"));
     assert!(!encoded.contains("output_summary"));
+}
+
+#[test]
+fn running_live_run_is_visible_but_cannot_complete_project_verification() {
+    let contract = phase_completion_contract(
+        "verify",
+        "STATUS: complete\nSUMMARY: Run inspected.\nVERIFY: run status checked",
+        &[structured_evidence(
+            "tool_run_status",
+            EvidenceStrength::Inspection,
+        )],
+        false,
+        &[],
+    );
+
+    assert_eq!(contract.decision, "insufficient_evidence");
+    assert_eq!(contract.evidence[0].status, "pending");
+    assert!(contract.requirements.iter().any(|requirement| {
+        requirement.id == "verification_receipts_clean" && requirement.status == "failed"
+    }));
+}
+
+#[test]
+fn successful_terminal_subagent_result_is_project_verification_evidence() {
+    let contract = phase_completion_contract(
+        "verify",
+        "STATUS: complete\nSUMMARY: Delegated result inspected.\nVERIFY: terminal result passed",
+        &[structured_evidence(
+            "agent_job_result",
+            EvidenceStrength::Check,
+        )],
+        false,
+        &[],
+    );
+
+    assert!(contract.is_satisfied());
+    assert_eq!(contract.evidence[0].strength, "check");
+}
+
+#[test]
+fn project_build_reuses_adaptive_ordered_verification() {
+    let mutation = ToolCallRecord {
+        tool_name: "file_write".to_string(),
+        reason: "Build output".to_string(),
+        is_error: false,
+        duration_ms: 2,
+        input_summary: String::new(),
+        output_summary: String::new(),
+        verification: Some(ToolVerificationReceipt {
+            tool_call_id: "write".to_string(),
+            sequence: 0,
+            input_sha256: "c".repeat(64),
+            effect: WorkEffect::LocalMutation,
+            evidence: EvidenceStrength::None,
+            scope_digests: vec!["target:file".to_string()],
+        }),
+    };
+    let contract = phase_completion_contract(
+        "build",
+        "STATUS: complete\nSUMMARY: File built.\nVERIFY: not yet inspected",
+        &[mutation],
+        false,
+        &[],
+    );
+
+    assert_eq!(contract.decision, "insufficient_evidence");
+    assert!(contract.requirements.iter().any(|requirement| {
+        requirement.id == "adaptive_work_verification" && requirement.status == "failed"
+    }));
+    assert_eq!(contract.evidence[0].status, "passed");
+}
+
+#[test]
+fn checked_project_build_satisfies_the_shared_adaptive_contract() {
+    let mutation = ToolCallRecord {
+        tool_name: "file_write".to_string(),
+        reason: "Build output".to_string(),
+        is_error: false,
+        duration_ms: 2,
+        input_summary: String::new(),
+        output_summary: String::new(),
+        verification: Some(ToolVerificationReceipt {
+            tool_call_id: "write".to_string(),
+            sequence: 0,
+            input_sha256: "c".repeat(64),
+            effect: WorkEffect::LocalMutation,
+            evidence: EvidenceStrength::None,
+            scope_digests: vec!["target:file".to_string()],
+        }),
+    };
+    let check = ToolCallRecord {
+        tool_name: "file_read".to_string(),
+        reason: "Inspect output".to_string(),
+        is_error: false,
+        duration_ms: 1,
+        input_summary: String::new(),
+        output_summary: String::new(),
+        verification: Some(ToolVerificationReceipt {
+            tool_call_id: "read".to_string(),
+            sequence: 1,
+            input_sha256: "d".repeat(64),
+            effect: WorkEffect::Observation,
+            evidence: EvidenceStrength::Inspection,
+            scope_digests: vec!["target:file".to_string()],
+        }),
+    };
+    let contract = phase_completion_contract(
+        "build",
+        "STATUS: complete\nSUMMARY: File built.\nVERIFY: exact file inspected",
+        &[mutation, check],
+        false,
+        &[],
+    );
+
+    assert!(contract.is_satisfied());
+    assert!(contract
+        .evidence
+        .iter()
+        .all(|receipt| receipt.status == "passed"));
+    assert!(contract.requirements.iter().any(|requirement| {
+        requirement.id == "adaptive_work_verification" && requirement.status == "passed"
+    }));
 }
 
 #[test]

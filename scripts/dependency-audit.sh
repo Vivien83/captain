@@ -24,14 +24,20 @@ done
 report="$(mktemp "${TMPDIR:-/tmp}/captain-audit-report.XXXXXX")"
 full_report="$(mktemp "${TMPDIR:-/tmp}/captain-audit-full-report.XXXXXX")"
 metadata="$(mktemp "${TMPDIR:-/tmp}/captain-audit-metadata.XXXXXX")"
+advisory_db_root="$(mktemp -d "${TMPDIR:-/tmp}/captain-advisory-db.XXXXXX")"
+advisory_db="$advisory_db_root/advisory-db"
 cleanup() {
   rm -f "$report" "$full_report" "$metadata"
+  rm -rf "$advisory_db_root"
 }
 trap cleanup EXIT
 
-cargo audit
+# cargo-audit's shared checkout can retain files that RustSec later renames,
+# producing duplicate advisory IDs. A fresh per-run checkout makes every
+# report use one exact database revision without weakening the audit.
+cargo audit --db "$advisory_db"
 
-cargo audit --json --no-fetch >"$report"
+cargo audit --json --no-fetch --db "$advisory_db" >"$report"
 jq -e '
   .vulnerabilities.found == false
   and .vulnerabilities.count == 0
@@ -71,7 +77,7 @@ jq -e '
 set +e
 (
   cd "${TMPDIR:-/tmp}"
-  cargo audit --json --no-fetch --file "$ROOT_DIR/Cargo.lock"
+  cargo audit --json --no-fetch --file "$ROOT_DIR/Cargo.lock" --db "$advisory_db"
 ) >"$full_report"
 full_audit_status=$?
 set -e

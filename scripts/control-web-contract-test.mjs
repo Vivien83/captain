@@ -285,6 +285,10 @@ const chatBatcherSource = await readFile(
   new URL('../crates/captain-api/static/js/app/chat_stream_batcher.mjs', import.meta.url),
   'utf8',
 );
+const verificationPhaseSource = await readFile(
+  new URL('../crates/captain-api/static/js/app/verification_phase_model.mjs', import.meta.url),
+  'utf8',
+);
 const projectRuntimeSource = await readFile(
   new URL('../crates/captain-api/static/js/app/views/ProjectRuntime.js', import.meta.url),
   'utf8',
@@ -333,9 +337,14 @@ assert.match(chatSource, /type === 'suggested_replies'/);
 assert.match(chatSource, /pendingSuggestions/);
 assert.match(chatSource, /payload\('SuggestedReplies'\)/);
 assert.match(chatSource, /payload\('Response'\)/);
+assert.match(chatSource, /deliveryVerificationFromPhase/);
+assert.match(chatSource, /DeliveryVerificationBar/);
+assert.match(chatSource, /payload\('Phase'\)/);
 assert.match(suggestedRepliesSource, /suggestionsActive/);
 assert.match(suggestedRepliesSource, /onChoose\(item, option\)/);
 assert.match(chatBatcherSource, /CONTROL_STREAM_FRAME_MS = 34/);
+assert.match(verificationPhaseSource, /verification_verified/);
+assert.match(verificationPhaseSource, /verification_incomplete/);
 assert.match(projectRuntimeSource, /runtime\.completion_contract/);
 assert.match(projectRuntimeSource, /w\.completion_contract/);
 assert.match(projectRuntimeSource, /preuves insuffisantes/);

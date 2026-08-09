@@ -37,6 +37,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.13.md
   docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
@@ -158,21 +159,25 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.12"
+  "### 0.1.0-alpha.13"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.12'
+  '0.1.0-alpha.13'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.12'
+  '0.1.0-alpha.13'
 require_contains \
   "public changelog exposes the release candidate" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.12] - 2026-08-09'
+  '## [0.1.0-alpha.13] - 2026-08-09'
 require_contains \
-  "published release notes exist" \
+  "reviewed release candidate notes exist" \
+  docs/releases/v0.1.0-alpha.13.md \
+  '# Captain 0.1.0-alpha.13'
+require_contains \
+  "historical alpha.12 notes remain available" \
   docs/releases/v0.1.0-alpha.12.md \
   '# Captain 0.1.0-alpha.12'
 require_contains \
@@ -483,6 +488,30 @@ require_contains \
   "alpha.12 notes pin the authorized destination boundary" \
   docs/releases/v0.1.0-alpha.12.md \
   'selective metadata and redacted tail are not sent'
+require_contains \
+  "alpha.13 notes expose adaptive delivery verification" \
+  docs/releases/v0.1.0-alpha.13.md \
+  '## Adaptive delivery verification'
+require_contains \
+  "alpha.13 notes expose verified streaming delivery" \
+  docs/releases/v0.1.0-alpha.13.md \
+  '## Verified streaming delivery'
+require_contains \
+  "alpha.13 notes expose crash-safe evidence" \
+  docs/releases/v0.1.0-alpha.13.md \
+  '## Crash-safe evidence'
+require_contains \
+  "alpha.13 notes pin bounded correction" \
+  docs/releases/v0.1.0-alpha.13.md \
+  'Two correction rounds are the hard limit'
+require_not_contains \
+  "alpha.13 notes do not copy alpha.12 source provenance" \
+  docs/releases/v0.1.0-alpha.13.md \
+  'cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2'
+require_not_contains \
+  "alpha.13 notes do not copy alpha.12 OCI provenance" \
+  docs/releases/v0.1.0-alpha.13.md \
+  'sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa'
 require_not_contains \
   "current deployment docs do not call the domain rail post-Alpha 11" \
   docs/deployment/github-vps-install.md \
@@ -535,20 +564,24 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.12/install.sh'
+    'releases/download/v0.1.0-alpha.13/install.sh'
   require_contains \
     "$readme pins the immutable prerelease image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
     'releases/latest/download/install.sh'
 done
 require_contains \
-  "security policy supports alpha.12" \
+  "security policy supports alpha.13" \
   SECURITY.md \
-  '| 0.1.0-alpha.12 | :white_check_mark: |'
+  '| 0.1.0-alpha.13 | :white_check_mark: |'
+require_contains \
+  "security policy retires alpha.12" \
+  SECURITY.md \
+  '| 0.1.0-alpha.12 | :x: |'
 require_contains \
   "security policy retires alpha.11" \
   SECURITY.md \

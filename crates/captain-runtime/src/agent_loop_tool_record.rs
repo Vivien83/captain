@@ -13,6 +13,8 @@ pub struct ToolCallRecord {
     pub duration_ms: u64,
     pub input_summary: String,
     pub output_summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<crate::work_verification::ToolVerificationReceipt>,
 }
 
 pub(crate) fn record_tool_call(
@@ -21,6 +23,7 @@ pub(crate) fn record_tool_call(
     result: &ToolResult,
     duration_ms: u64,
 ) {
+    let sequence = recorded.len() as u32;
     recorded.push(ToolCallRecord {
         tool_name: tool_call.name.clone(),
         reason: tool_decision_reason(tool_call),
@@ -28,6 +31,11 @@ pub(crate) fn record_tool_call(
         duration_ms,
         input_summary: summarize_json_input(&tool_call.input),
         output_summary: summarize_text(&result.content),
+        verification: Some(
+            crate::work_verification::ToolVerificationReceipt::from_tool_call(
+                tool_call, result, sequence,
+            ),
+        ),
     });
 }
 
@@ -173,6 +181,15 @@ mod tests {
         assert_eq!(recorded[0].duration_ms, 42);
         assert_eq!(recorded[0].input_summary, r#"{"cmd":"pwd"}"#);
         assert_eq!(recorded[0].output_summary, "ok");
+        let receipt = recorded[0].verification.as_ref().expect("receipt");
+        assert_eq!(receipt.tool_call_id, "call-1");
+        assert_eq!(receipt.sequence, 0);
+        assert_eq!(
+            receipt.effect,
+            crate::work_verification::WorkEffect::Observation
+        );
+        assert_eq!(receipt.input_sha256.len(), 64);
+        assert!(!receipt.input_sha256.contains("pwd"));
     }
 
     #[test]
@@ -222,8 +239,10 @@ mod tests {
 
     #[test]
     fn record_completed_tool_call_records_and_fires_after_hook() {
-        let mut manifest = AgentManifest::default();
-        manifest.name = "captain".to_string();
+        let manifest = AgentManifest {
+            name: "captain".to_string(),
+            ..AgentManifest::default()
+        };
         let registry = HookRegistry::new();
         let capture = Arc::new(CaptureHandler::new());
         registry.register(HookEvent::AfterToolCall, capture.clone());

@@ -64,6 +64,11 @@ to prevent a lock refresh from changing the token transport silently.
 
 ## Fail-Closed Gate
 
+Each gate run uses one fresh temporary RustSec checkout for all filtered and
+unfiltered reports, then removes it. This prevents files renamed upstream from
+surviving as untracked duplicates in cargo-audit's shared cache while keeping
+every report pinned to the same database revision.
+
 The gate fails when:
 
 - the normal audit reports a vulnerability;

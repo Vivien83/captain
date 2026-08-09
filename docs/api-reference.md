@@ -1204,7 +1204,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.12"
+  "version": "0.1.0-alpha.13"
 }
 ```
 
@@ -1221,7 +1221,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.12",
+  "version": "0.1.0-alpha.13",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -1329,7 +1329,7 @@ historical failures alone do not keep operational awareness in warning state.
     "next_check_at": "2026-07-20T20:00:00Z",
     "last_error": null,
     "consecutive_failures": 0,
-    "pending_version": "0.1.0-alpha.12",
+    "pending_version": "0.1.0-alpha.13",
     "update_in_progress": false,
     "undelivered_notifications": 1,
     "dead_notifications": 0
@@ -2936,6 +2936,23 @@ expose reasoning as a direct selector backed by the REST endpoint above.
   "type": "thinking"
 }
 ```
+
+**Delivery verification phase** (ephemeral; never added to chat history):
+
+```json
+{
+  "type": "phase",
+  "phase": "verifying",
+  "detail": null
+}
+```
+
+The phase is one of `verifying`, `correcting`, `verification_verified`, or
+`verification_incomplete`. A client should replace its current transient
+status rather than append a message. `verification_verified` clears a fast
+verification silently; `correcting` and `verification_incomplete` may be made
+visible. These events contain no tool input, result, path, model draft, or
+hidden reasoning.
 
 **Text delta** (streaming token, sent as the LLM generates output):
 

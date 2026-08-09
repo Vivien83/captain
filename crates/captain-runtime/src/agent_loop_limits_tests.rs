@@ -39,6 +39,7 @@ fn tool_record() -> ToolCallRecord {
         duration_ms: 12,
         input_summary: "{\"cmd\":\"true\"}".to_string(),
         output_summary: "ok".to_string(),
+        verification: None,
     }
 }
 
@@ -213,6 +214,7 @@ async fn handle_max_tokens_continuation_updates_counters_and_continues() {
         tool_calls_recorded: &[],
         streaming: false,
         messages: &mut request_messages,
+        final_text_override: None,
     })
     .await
     .unwrap();
@@ -254,6 +256,7 @@ async fn handle_incomplete_continuation_returns_limit_when_counter_reaches_guard
         tool_calls_recorded: &[],
         streaming: true,
         messages: &mut request_messages,
+        final_text_override: None,
     })
     .await
     .unwrap()
@@ -305,6 +308,7 @@ async fn finish_continuation_limit_max_tokens_saves_fallback_and_fires_hook() {
         consecutive_count: 5,
         tool_calls_recorded: &tool_calls,
         streaming: true,
+        final_text_override: None,
     })
     .await
     .unwrap();
@@ -350,6 +354,7 @@ async fn finish_continuation_limit_incomplete_saves_fallback_without_hook() {
         consecutive_count: 5,
         tool_calls_recorded: &[],
         streaming: false,
+        final_text_override: None,
     })
     .await
     .unwrap();
@@ -387,6 +392,7 @@ async fn finish_continuation_limit_keeps_non_empty_partial_text() {
         consecutive_count: 5,
         tool_calls_recorded: &[],
         streaming: false,
+        final_text_override: None,
     })
     .await
     .unwrap();
@@ -398,6 +404,45 @@ async fn finish_continuation_limit_keeps_non_empty_partial_text() {
             .text_content(),
         "partial answer"
     );
+}
+
+#[tokio::test]
+async fn finish_continuation_limit_persists_verification_override_before_raw_draft() {
+    let response = completion_response(vec![ContentBlock::Text {
+        text: "everything is complete".to_string(),
+        provider_metadata: None,
+    }]);
+    let memory = MemorySubstrate::open_in_memory(0.01).unwrap();
+    let mut session = test_session(Vec::new());
+    let manifest = test_manifest();
+    let honest = "Verification incomplete: post-condition missing.".to_string();
+
+    let result = finish_continuation_limit(FinishContinuationLimitInput {
+        kind: ContinuationLimitKind::Incomplete,
+        response: &response,
+        session: &mut session,
+        memory: &memory,
+        manifest: &manifest,
+        hooks: None,
+        agent_id_str: "agent-1",
+        total_usage: TokenUsage::default(),
+        iteration: 4,
+        consecutive_count: MAX_CONTINUATIONS,
+        tool_calls_recorded: &[],
+        streaming: true,
+        final_text_override: Some(honest.clone()),
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(result.response, honest);
+    let saved = memory.get_session(session.id).unwrap().unwrap();
+    assert_eq!(saved.messages.len(), 1);
+    assert_eq!(saved.messages[0].content.text_content(), honest);
+    assert!(!saved.messages[0]
+        .content
+        .text_content()
+        .contains("everything is complete"));
 }
 
 #[tokio::test]

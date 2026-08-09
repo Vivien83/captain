@@ -8,6 +8,7 @@
 //! which already knows launchd/systemd/tmux/background.
 
 use sha2::Digest;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use super::service_runtime::installed_captain_binary;
@@ -165,46 +166,100 @@ fn perform_update(version: &str, platform: &str) -> Result<(), String> {
     let new_binary = find_binary(staging.path())
         .ok_or_else(|| "archive did not contain a `captain` binary".to_string())?;
 
-    swap_binary(&new_binary, &target)?;
+    swap_binary(&new_binary, &target, version)?;
     write_version_marker(version);
     ui::success(&format!("Installed {} -> {}", version, target.display()));
     Ok(())
 }
 
-fn swap_binary(new_binary: &Path, target: &Path) -> Result<(), String> {
+fn swap_binary(new_binary: &Path, target: &Path, version: &str) -> Result<(), String> {
     let dir = target
         .parent()
         .ok_or_else(|| format!("no parent directory for {}", target.display()))?;
-    let tmp = dir.join(format!(".captain.update.{}", std::process::id()));
-    std::fs::copy(new_binary, &tmp).map_err(|e| format!("stage binary: {e}"))?;
+    let mut pending = tempfile::Builder::new()
+        .prefix(".captain.update.")
+        .tempfile_in(dir)
+        .map_err(|error| format!("create staged binary: {error}"))?;
+    let mut source = std::fs::File::open(new_binary)
+        .map_err(|error| format!("open downloaded binary: {error}"))?;
+    io::copy(&mut source, pending.as_file_mut())
+        .map_err(|error| format!("stage binary: {error}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+        pending
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("chmod: {e}"))?;
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("xattr")
+        let xattr = std::process::Command::new("xattr")
             .args(["-cr"])
-            .arg(&tmp)
-            .status();
+            .arg(pending.path())
+            .status()
+            .map_err(|error| format!("launch xattr for staged binary: {error}"))?;
+        if !xattr.success() {
+            return Err(format!(
+                "xattr rejected the staged macOS binary with status {xattr}"
+            ));
+        }
         let signed = std::process::Command::new("codesign")
             .args(["--force", "--sign", "-"])
-            .arg(&tmp)
+            .arg(pending.path())
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !signed {
-            ui::check_warn(
-                "Ad-hoc codesign failed — on Apple Silicon the new binary may be killed by Gatekeeper.",
-            );
+            .map_err(|error| format!("launch codesign for staged binary: {error}"))?;
+        if !signed.success() {
+            return Err(format!(
+                "codesign rejected the staged macOS binary with status {signed}"
+            ));
         }
     }
-    std::fs::rename(&tmp, target).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("atomic swap into {}: {e}", target.display())
-    })
+    verify_binary_version(pending.path(), version)?;
+    pending
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("sync staged binary: {error}"))?;
+    pending
+        .persist(target)
+        .map_err(|error| format!("atomic swap into {}: {}", target.display(), error.error))?;
+    if let Err(error) = std::fs::File::open(dir).and_then(|directory| directory.sync_all()) {
+        ui::check_warn(&format!(
+            "The new binary is installed, but its directory could not be synchronized: {error}"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_binary_version(binary: &Path, version: &str) -> Result<(), String> {
+    let output = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("execute staged binary: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "staged binary preflight failed with status {}",
+            output.status
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("staged binary version is not UTF-8: {error}"))?;
+    validate_binary_version_output(&stdout, version)
+}
+
+fn validate_binary_version_output(stdout: &str, version: &str) -> Result<(), String> {
+    let expected = format!(
+        "captain {}",
+        captain_types::version::canonical_version(version)
+    );
+    let actual = stdout.trim();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "staged binary reports `{actual}` instead of `{expected}`"
+        ))
+    }
 }
 
 fn find_binary(dir: &Path) -> Option<PathBuf> {
@@ -503,6 +558,43 @@ mod tests {
         );
         assert!(parse_sha256("abc captain.tar.gz", "sum").is_err());
         assert!(parse_sha256(&"z".repeat(64), "sum").is_err());
+    }
+
+    #[test]
+    fn staged_binary_version_must_match_the_requested_release() {
+        assert!(
+            validate_binary_version_output("captain 0.1.0-alpha.13\n", "v0.1.0-alpha.13").is_ok()
+        );
+        assert!(
+            validate_binary_version_output("captain 0.1.0-alpha.12\n", "v0.1.0-alpha.13")
+                .unwrap_err()
+                .contains("instead of")
+        );
+        assert!(validate_binary_version_output(
+            "captain 0.1.0-alpha.13\nunexpected output\n",
+            "v0.1.0-alpha.13"
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_binary_preflight_executes_the_candidate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("captain");
+        std::fs::write(
+            &candidate,
+            b"#!/bin/sh\nprintf 'captain 0.1.0-alpha.13\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        verify_binary_version(&candidate, "v0.1.0-alpha.13").unwrap();
+        assert!(verify_binary_version(&candidate, "v0.1.0-alpha.12")
+            .unwrap_err()
+            .contains("instead of"));
     }
 
     #[test]

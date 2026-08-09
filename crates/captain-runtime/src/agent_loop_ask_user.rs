@@ -58,6 +58,13 @@ pub(crate) async fn try_handle_ask_user_tool_call(
 
     send_ask_user_tool_result_event(agent_name, tool_call, stream_tx, &answer);
 
+    let result = captain_types::tool::ToolResult {
+        tool_use_id: tool_call.id.clone(),
+        content: answer.clone(),
+        is_error: false,
+        transient_content: Vec::new(),
+    };
+    let sequence = tool_calls_recorded.len() as u32;
     tool_calls_recorded.push(ToolCallRecord {
         tool_name: "ask_user".to_string(),
         reason: "Ask the user for missing context before continuing.".to_string(),
@@ -65,6 +72,11 @@ pub(crate) async fn try_handle_ask_user_tool_call(
         duration_ms: 0,
         input_summary: question,
         output_summary: answer.clone(),
+        verification: Some(
+            crate::work_verification::ToolVerificationReceipt::from_tool_call(
+                tool_call, &result, sequence,
+            ),
+        ),
     });
     let response_unavailable =
         answer.starts_with("[No response") || answer.starts_with("[ask_user not");
@@ -251,6 +263,12 @@ mod tests {
         assert_eq!(recorded[0].tool_name, "ask_user");
         assert_eq!(recorded[0].input_summary, "Couleur ?");
         assert_eq!(recorded[0].output_summary, "bleu");
+        let receipt = recorded[0].verification.as_ref().expect("receipt");
+        assert_eq!(receipt.tool_call_id, "ask-1");
+        assert_eq!(
+            receipt.effect,
+            crate::work_verification::WorkEffect::HumanInput
+        );
         assert!(matches!(
             &blocks[0],
             ContentBlock::ToolResult {

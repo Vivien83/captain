@@ -84,6 +84,7 @@ required_files=(
   SECURITY.md
   docs/release-provenance.md
   docs/repository-governance.md
+  docs/releases/v0.1.0-alpha.13.md
   docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
   docs/releases/v0.1.0-alpha.10.md
@@ -118,11 +119,11 @@ done
 pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
-  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.12' \
+  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.13' \
     "$ROOT_DIR/$readme" || fail "$readme does not link the immutable release"
-  grep -Fq 'releases/download/v0.1.0-alpha.12/install.sh' \
+  grep -Fq 'releases/download/v0.1.0-alpha.13/install.sh' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the release installer"
-  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12' \
+  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable release image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
@@ -131,9 +132,26 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
     fail "$readme still exposes the private development build"
   fi
 done
-grep -Fq '### 0.1.0-alpha.12' \
+grep -Fq '### 0.1.0-alpha.13' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
   || fail "agent-facing changelog does not identify the release candidate"
+grep -Fq '## Adaptive delivery verification' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.13.md" \
+  || fail "candidate release notes do not expose adaptive delivery verification"
+grep -Fq '## Verified streaming delivery' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.13.md" \
+  || fail "candidate release notes do not expose verified streaming delivery"
+grep -Fq '## Crash-safe evidence' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.13.md" \
+  || fail "candidate release notes do not expose crash-safe evidence"
+if grep -Fq 'cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.13.md"; then
+  fail "Alpha 13 release notes copied the Alpha 12 public source commit"
+fi
+if grep -Fq 'sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.13.md"; then
+  fail "Alpha 13 release notes copied the Alpha 12 OCI digest"
+fi
 grep -Fq '## Durable Live Runs' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.12.md" \
   || fail "published release notes do not expose durable Live Runs"

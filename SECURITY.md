@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.1.0-alpha.12 | :white_check_mark: |
+| 0.1.0-alpha.13 | :white_check_mark: |
+| 0.1.0-alpha.12 | :x: |
 | 0.1.0-alpha.11 | :x: |
 | 0.1.0-alpha.10 | :x: |
 | 0.1.0-alpha.9 | :x: |
@@ -53,7 +54,7 @@ The following are in scope for security reports:
 
 ## Early-Access Deployment Boundary
 
-Captain `0.1.0-alpha.12` is an early-access release. Keep the API bound to
+Captain `0.1.0-alpha.13` is an early-access release. Keep the API bound to
 loopback unless authentication, TLS, and a trusted reverse proxy are configured.
 Agents can execute tools with the permissions granted to them, so review
 capabilities and destructive-action confirmations before connecting untrusted

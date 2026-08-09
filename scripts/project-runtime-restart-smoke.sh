@@ -13,6 +13,7 @@ PORT="${CAPTAIN_PROJECT_SMOKE_PORT:-50371}"
 BASE="http://127.0.0.1:$PORT"
 TIMEOUT="${CAPTAIN_PROJECT_SMOKE_TIMEOUT:-45}"
 READY_TIMEOUT="${CAPTAIN_PROJECT_SMOKE_READY_TIMEOUT:-25}"
+BOOTSTRAP_READY_TIMEOUT="${CAPTAIN_PROJECT_SMOKE_BOOTSTRAP_TIMEOUT:-300}"
 SETTLE_SECS="${CAPTAIN_PROJECT_SMOKE_SETTLE_SECS:-6}"
 PROJECT_SLUG="${CAPTAIN_PROJECT_SMOKE_SLUG:-restart-smoke-$$}"
 CAPTAIN_BIN="${CAPTAIN_BIN:-}"
@@ -20,7 +21,9 @@ HOME_DIR="$WORKDIR/home"
 CONFIG="$HOME_DIR/config.toml"
 LOG="$WORKDIR/daemon.log"
 PID=""
+GENERATION=0
 PASS=0
+API_KEY=""
 
 note() { printf '   %s\n' "$*"; }
 pass() {
@@ -71,6 +74,11 @@ resolve_captain_bin() {
 
 write_config() {
   mkdir -p "$HOME_DIR" "$HOME_DIR/data" "$WORKDIR"
+  API_KEY="$(openssl rand -hex 32)" || fail "isolated API key generation failed"
+  [ "${#API_KEY}" -eq 64 ] || fail "isolated API key has an invalid length"
+  (umask 077; printf 'CAPTAIN_DAEMON_API_KEY=%s\n' "$API_KEY" >"$HOME_DIR/secrets.env") ||
+    fail "isolated API key write failed"
+  chmod 600 "$HOME_DIR/secrets.env" || fail "isolated API key permissions failed"
   cat >"$CONFIG" <<EOF
 home_dir = "$HOME_DIR"
 data_dir = "$HOME_DIR/data"
@@ -91,9 +99,10 @@ EOF
 }
 
 wait_for_health() {
+  local limit="$1"
   local elapsed=0
   local body
-  while [ "$elapsed" -le "$READY_TIMEOUT" ]; do
+  while [ "$elapsed" -le "$limit" ]; do
     body=$(curl -sS --connect-timeout 1 --max-time 2 "$BASE/api/health" 2>/dev/null || true)
     if printf '%s' "$body" | jq -e '.status == "ok"' >/dev/null 2>&1; then
       printf '%s' "$body" >"$WORKDIR/health.json"
@@ -110,38 +119,43 @@ start_daemon() {
     fail "port $PORT already serves an HTTP endpoint"
   fi
   : >"$LOG"
+  GENERATION=$((GENERATION + 1))
   CAPTAIN_HOME="$HOME_DIR" "$CAPTAIN_BIN" start --config "$CONFIG" --yolo >>"$LOG" 2>&1 &
   PID="$!"
-  wait_for_health || fail "daemon did not become healthy on $BASE"
+  local ready_limit="$READY_TIMEOUT"
+  if [ "$GENERATION" -eq 1 ]; then
+    ready_limit="$BOOTSTRAP_READY_TIMEOUT"
+  fi
+  wait_for_health "$ready_limit" ||
+    fail "daemon generation $GENERATION did not become healthy on $BASE within ${ready_limit}s"
   pass "daemon healthy on $BASE"
 }
 
 crash_daemon() {
   [ -n "$PID" ] || fail "daemon pid missing"
-  kill "$PID" >/dev/null 2>&1 || true
-  for _ in $(seq 1 20); do
-    if ! kill -0 "$PID" >/dev/null 2>&1; then
-      PID=""
-      pass "test daemon interrupted"
-      return
-    fi
-    sleep 0.2
-  done
-  kill -KILL "$PID" >/dev/null 2>&1 || true
+  kill -KILL "$PID" >/dev/null 2>&1 || fail "SIGKILL failed"
+  wait "$PID" >/dev/null 2>&1 || true
+  if kill -0 "$PID" >/dev/null 2>&1; then
+    fail "daemon remained alive after SIGKILL"
+  fi
   PID=""
-  pass "test daemon force-interrupted"
+  pass "test daemon stopped by SIGKILL without graceful shutdown"
 }
 
 http_get() {
   local path="$1"
-  curl -sS --max-time "$TIMEOUT" "$BASE$path"
+  curl -sS --max-time "$TIMEOUT" \
+    -H "Authorization: Bearer $API_KEY" \
+    "$BASE$path"
 }
 
 http_post_json() {
   local path="$1"
   local body="$2"
   printf '%s' "$body" |
-    curl -sS --max-time "$TIMEOUT" -H "Content-Type: application/json" --data-binary @- "$BASE$path"
+    curl -sS --max-time "$TIMEOUT" \
+      -H "Authorization: Bearer $API_KEY" \
+      -H "Content-Type: application/json" --data-binary @- "$BASE$path"
 }
 
 assert_jq() {
@@ -175,6 +189,22 @@ assert_no_blocked_runtime() {
   ' "$label"
 }
 
+wait_for_running_worker() {
+  local file="$1"
+  local deadline=$(($(date +%s) + TIMEOUT))
+  while [ "$(date +%s)" -le "$deadline" ]; do
+    if curl -sS --max-time 2 \
+      -H "Authorization: Bearer $API_KEY" \
+      "$BASE/api/projects/$PROJECT_SLUG/runtime?events=80" >"$file" &&
+      jq -e '.runtime.workers | any(.status == "running")' "$file" >/dev/null 2>&1; then
+      pass "worker is running before crash"
+      return 0
+    fi
+    sleep 0.1
+  done
+  fail "no project worker became running before crash"
+}
+
 capture_timeline_follow() {
   CAPTAIN_HOME="$HOME_DIR" "$CAPTAIN_BIN" project timeline "$PROJECT_SLUG" --limit 50 --follow \
     >"$WORKDIR/cli-timeline-follow.txt" 2>&1 &
@@ -191,6 +221,7 @@ run_smoke() {
   require_cmd curl
   require_cmd grep
   require_cmd jq
+  require_cmd openssl
   require_cmd tail
   resolve_captain_bin
   write_config
@@ -214,6 +245,7 @@ run_smoke() {
   http_get "/api/projects/$PROJECT_SLUG/runtime?events=80" >"$WORKDIR/runtime-before-restart.json" ||
     fail "runtime fetch before restart failed"
   assert_jq "$WORKDIR/runtime-before-restart.json" "$(event_filter project.started)" "runtime before restart has timeline"
+  wait_for_running_worker "$WORKDIR/runtime-before-restart.json"
 
   crash_daemon
   start_daemon

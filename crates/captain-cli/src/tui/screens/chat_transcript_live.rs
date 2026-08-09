@@ -1,6 +1,6 @@
 //! Live transcript tail lines for streaming/status state.
 
-use super::chat::ChatState;
+use super::chat::{ChatState, DeliveryVerificationStatus};
 use crate::tui::theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -15,6 +15,7 @@ pub(super) fn push_live_transcript_lines(
 ) {
     push_streaming_text_lines(lines, state, width);
     push_thinking_line(lines, state);
+    push_delivery_verification_line(lines, state);
     push_active_tool_line(lines, state);
     push_streaming_token_estimate(lines, state);
     push_last_token_usage(lines, state);
@@ -33,7 +34,7 @@ fn push_streaming_text_lines(lines: &mut Vec<Line<'static>>, state: &ChatState, 
 }
 
 fn push_thinking_line(lines: &mut Vec<Line<'static>>, state: &ChatState) {
-    if state.thinking {
+    if state.thinking && state.delivery_verification.is_none() {
         lines.push(spinner_line(
             state.spinner_frame,
             theme::CYAN,
@@ -41,6 +42,22 @@ fn push_thinking_line(lines: &mut Vec<Line<'static>>, state: &ChatState) {
             Style::default().fg(theme::DIM),
         ));
     }
+}
+
+fn push_delivery_verification_line(lines: &mut Vec<Line<'static>>, state: &ChatState) {
+    let Some(status) = state.delivery_verification else {
+        return;
+    };
+    let label = match status {
+        DeliveryVerificationStatus::Verifying => "vérification de la livraison…",
+        DeliveryVerificationStatus::Correcting => "correction ciblée…",
+    };
+    lines.push(spinner_line(
+        state.spinner_frame,
+        theme::ACCENT,
+        label.to_string(),
+        Style::default().fg(theme::YELLOW),
+    ));
 }
 
 fn push_active_tool_line(lines: &mut Vec<Line<'static>>, state: &ChatState) {

@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.12
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.12/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.12 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.13 bash
 ```
 
 ## Global Options
@@ -269,14 +269,17 @@ captain update [--check] [--yes] [--version <release-tag>]
 |---|---|
 | `--check` | Resolve the compatible release channel without installing. |
 | `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
-| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.12`. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.13`. |
 
 Stable installations do not opt into prereleases. An existing prerelease may
 advance to a newer prerelease or the corresponding stable version. The archive
 and its `.sha256` asset are both mandatory. Captain stages the binary beside
-the installed target, performs an atomic swap, and then restarts through the
-platform service manager. Inside a container the command refuses to mutate the
-image and returns an orchestrator-owned procedure.
+the installed target, applies the required macOS ad-hoc signature, executes
+the staged candidate with `--version`, and requires an exact match with the
+requested release before the atomic swap. A preparation or preflight failure
+leaves the installed binary untouched. Captain then restarts through the
+platform service manager. Inside a container the command refuses to mutate
+the image and returns an orchestrator-owned procedure.
 
 On macOS, the first vault access after a binary replacement can display a
 Keychain authorization dialog for the `captain-vault` item. Verify that the

@@ -4,6 +4,7 @@ use captain_runtime::agent_loop::AgentLoopResult;
 pub(crate) fn prepare_stream_start(chat: &mut ChatState) {
     chat.is_streaming = true;
     chat.thinking = true;
+    chat.delivery_verification = None;
     chat.streaming_chars = 0;
     chat.begin_context_stream();
     chat.last_tokens = None;

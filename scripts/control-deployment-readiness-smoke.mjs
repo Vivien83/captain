@@ -19,7 +19,7 @@ const appCsp = cspMatch[1];
 
 const statusPayload = {
   status: 'running',
-  version: '0.1.0-alpha.12',
+  version: '0.1.0-alpha.13',
   uptime_seconds: 3600,
   default_provider: 'codex',
   default_model: 'gpt-5.6-sol',

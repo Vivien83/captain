@@ -160,6 +160,47 @@ fn phase_change_routes_tool_thinking_and_model_fallback() {
 }
 
 #[test]
+fn delivery_verification_phase_is_ephemeral_and_clears_terminally() {
+    let mut chat = ChatState::new();
+
+    apply_stream_event(
+        &mut chat,
+        StreamEvent::PhaseChange {
+            phase: "verifying".to_string(),
+            detail: None,
+        },
+    );
+    assert_eq!(
+        chat.delivery_verification,
+        Some(DeliveryVerificationStatus::Verifying)
+    );
+    assert!(!chat.thinking);
+
+    apply_stream_event(
+        &mut chat,
+        StreamEvent::PhaseChange {
+            phase: "correcting".to_string(),
+            detail: None,
+        },
+    );
+    assert_eq!(
+        chat.delivery_verification,
+        Some(DeliveryVerificationStatus::Correcting)
+    );
+    assert!(chat.messages.is_empty());
+
+    apply_stream_event(
+        &mut chat,
+        StreamEvent::PhaseChange {
+            phase: "verification_verified".to_string(),
+            detail: None,
+        },
+    );
+    assert!(chat.delivery_verification.is_none());
+    assert!(chat.messages.is_empty());
+}
+
+#[test]
 fn thinking_delta_stays_out_of_visible_answer_stream() {
     let mut chat = ChatState::new();
 

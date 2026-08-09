@@ -50,8 +50,10 @@ async fn finish_silent_turn_persists_marker_and_directives() {
 async fn finish_successful_turn_saves_message_and_marks_done() {
     let memory = MemorySubstrate::open_in_memory(0.01).unwrap();
     let mut session = test_session();
-    let mut manifest = AgentManifest::default();
-    manifest.name = "captain".to_string();
+    let manifest = AgentManifest {
+        name: "captain".to_string(),
+        ..AgentManifest::default()
+    };
     let done_seen = Arc::new(AtomicBool::new(false));
     let done_for_cb = Arc::clone(&done_seen);
     let phase_cb: PhaseCallback = Arc::new(move |phase| {
@@ -97,8 +99,10 @@ async fn finish_successful_turn_saves_message_and_marks_done() {
 async fn finish_successful_turn_honors_memory_opt_out_before_episodic_capture() {
     let memory = MemorySubstrate::open_in_memory(0.01).unwrap();
     let mut session = test_session();
-    let mut manifest = AgentManifest::default();
-    manifest.name = "captain".to_string();
+    let manifest = AgentManifest {
+        name: "captain".to_string(),
+        ..AgentManifest::default()
+    };
     let marker = "PRIVATE-OPT-OUT-7264";
     let user_message = format!("Do not remember this preference. The private marker is {marker}.");
 

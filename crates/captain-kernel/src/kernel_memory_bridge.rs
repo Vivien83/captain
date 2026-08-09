@@ -288,6 +288,7 @@ mod tests {
                 duration_ms: 12,
                 input_summary: r#"{"query":"ssh server"}"#.into(),
                 output_summary: r#"{"results":[{"name":"ssh_exec","source":"builtin"}]}"#.into(),
+                verification: None,
             },
             captain_runtime::agent_loop::ToolCallRecord {
                 tool_name: "ssh_exec".into(),
@@ -296,6 +297,7 @@ mod tests {
                 duration_ms: 50,
                 input_summary: "{}".into(),
                 output_summary: "alias not found; use captain_docs for recovery".into(),
+                verification: None,
             },
         ];
 
@@ -320,6 +322,7 @@ mod tests {
                 duration_ms: idx,
                 input_summary: "hidden".into(),
                 output_summary: "summary".into(),
+                verification: None,
             })
             .collect::<Vec<_>>();
 

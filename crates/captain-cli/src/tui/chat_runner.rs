@@ -269,17 +269,7 @@ impl StandaloneChat {
                 self.chat.last_cache_creation_tokens = usage.cache_creation_tokens;
             }
             StreamEvent::PhaseChange { phase, detail } => {
-                if phase == "tool_use" {
-                    if let Some(tool_name) = detail {
-                        self.chat.tool_start("", &tool_name);
-                    }
-                } else if phase == "thinking" {
-                    self.chat.thinking = true;
-                } else if phase == "model_fallback" {
-                    if let Some(text) = detail.filter(|value| !value.trim().is_empty()) {
-                        self.chat.push_message(Role::Agent, text);
-                    }
-                }
+                super::stream_route::apply_phase_change(&mut self.chat, &phase, detail);
             }
             StreamEvent::ThinkingDelta { text } => {
                 self.chat.thinking = true;
@@ -569,6 +559,7 @@ impl StandaloneChat {
         };
         self.chat.is_streaming = true;
         self.chat.thinking = true;
+        self.chat.delivery_verification = None;
         self.chat.streaming_chars = 0;
         self.chat.begin_context_stream();
         self.chat.last_tokens = None;

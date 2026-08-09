@@ -105,6 +105,7 @@ mod tests {
             duration_ms: 10,
             input_summary: "ls".to_string(),
             output_summary: "ok".to_string(),
+            verification: None,
         }];
         let summary = runtime_worker_summary(
             "builder",

@@ -390,6 +390,31 @@ Use `captain config schema` for the typed `[approval]` and `[exec_policy]`
 fields supported by the installed version. Do not copy permissive examples
 from an older release or enable broad host access as a convenience.
 
+### Adaptive delivery verification
+
+Delivery verification is a runtime invariant, not a switch that broadens
+authority. Pure conversation and read-only inspection finish without a second
+model pass. Once a turn has effectful receipts, Captain evaluates their order,
+scope, status, and evidence strength at the next useful milestone and before
+delivery. A successful mutation alone is not proof of its post-condition; the
+relevant check must be newer than the mutation. Pending detached work remains
+pending until its terminal result is inspected.
+
+Captain may request at most two targeted correction rounds. If evidence is
+still missing, a budget or iteration limit prevents another check, or an
+external effect is uncertain, the final result says what remains unverified.
+Captain never replays that effect merely to manufacture proof. Durable records
+contain only requirement codes, receipt order, digests, states, and timestamps;
+they never contain hidden reasoning, raw tool input, or raw output. An abrupt
+restart converts an unfinished verification lease to `interrupted` and
+re-evaluates current state without replay.
+
+The states `verifying`, `correcting`, `verification_verified`, and
+`verification_incomplete` are ephemeral presentation signals. They do not add
+messages to session history. Telegram shows a Rich verification card only for
+a correction, incomplete delivery, or a verification that lasts more than
+three seconds.
+
 Alpha 12 also contains the disabled-by-default core for exact approval
 suggestions:
 

@@ -36,6 +36,9 @@ pub(crate) mod agent_loop_quota;
 pub(crate) mod agent_loop_request;
 pub(crate) mod agent_loop_result;
 pub(crate) mod agent_loop_retry;
+pub(crate) mod agent_loop_stream_delivery;
+#[cfg(test)]
+mod agent_loop_stream_delivery_e2e_tests;
 pub(crate) mod agent_loop_stream_events;
 #[cfg(test)]
 mod agent_loop_text_tool_call_recovery_tests;
@@ -226,6 +229,8 @@ pub mod web_content;
 mod web_evidence;
 pub mod web_fetch;
 pub mod web_search;
+pub mod work_verification;
+mod work_verification_structured;
 pub mod workflow_learning_analysis;
 #[cfg(test)]
 mod workflow_learning_analysis_tests;

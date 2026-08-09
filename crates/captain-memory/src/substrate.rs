@@ -13,6 +13,7 @@ use crate::semantic::SemanticStore;
 use crate::session::{Session, SessionStore};
 use crate::structured::StructuredStore;
 use crate::usage::UsageStore;
+use crate::work_verification_progress::{WorkVerificationLease, WorkVerificationProgress};
 
 use async_trait::async_trait;
 use captain_types::agent::{AgentEntry, AgentId, SessionId};
@@ -31,6 +32,7 @@ use std::sync::{Arc, Mutex};
 /// to specialized stores backed by a shared SQLite connection.
 pub struct MemorySubstrate {
     conn: Arc<Mutex<Connection>>,
+    runtime_instance_id: String,
     structured: StructuredStore,
     pub semantic: SemanticStore,
     knowledge: KnowledgeStore,
@@ -45,6 +47,7 @@ pub struct MemorySubstrate {
 impl MemorySubstrate {
     /// Open or create a memory substrate at the given database path.
     pub fn open(db_path: &Path, decay_rate: f32) -> CaptainResult<Self> {
+        let runtime_instance_id = uuid::Uuid::new_v4().to_string();
         let conn = Connection::open(db_path).map_err(|e| CaptainError::Memory(e.to_string()))?;
         configure_durable_connection(&conn)?;
         run_migrations(&conn).map_err(|e| CaptainError::Memory(e.to_string()))?;
@@ -52,6 +55,7 @@ impl MemorySubstrate {
 
         Ok(Self {
             conn: Arc::clone(&shared),
+            runtime_instance_id,
             structured: StructuredStore::new(Arc::clone(&shared)),
             semantic: SemanticStore::new(Arc::clone(&shared)),
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
@@ -66,12 +70,14 @@ impl MemorySubstrate {
 
     /// Create an in-memory substrate (for testing).
     pub fn open_in_memory(decay_rate: f32) -> CaptainResult<Self> {
+        let runtime_instance_id = uuid::Uuid::new_v4().to_string();
         let conn = Connection::open_in_memory().map_err(|e| CaptainError::Memory(e.to_string()))?;
         run_migrations(&conn).map_err(|e| CaptainError::Memory(e.to_string()))?;
         let shared = Arc::new(Mutex::new(conn));
 
         Ok(Self {
             conn: Arc::clone(&shared),
+            runtime_instance_id,
             structured: StructuredStore::new(Arc::clone(&shared)),
             semantic: SemanticStore::new(Arc::clone(&shared)),
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
@@ -107,6 +113,13 @@ impl MemorySubstrate {
     /// Get the shared database connection (for constructing stores from outside).
     pub fn usage_conn(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
+    }
+
+    /// Unique owner identity for this opened substrate. A fresh value on every
+    /// process boot lets active-operation stores distinguish restart recovery
+    /// from updates by the current owner.
+    pub fn runtime_instance_id(&self) -> &str {
+        &self.runtime_instance_id
     }
 
     /// Append one row to `sessions_events` for timeline replay (v3.9f).
@@ -154,6 +167,98 @@ impl MemorySubstrate {
         crate::compaction_progress::reconcile_after_restart(
             &mut guard,
             current_runtime_instance_id,
+            now_unix_ms,
+        )
+        .map_err(|e| CaptainError::Memory(e.to_string()))
+    }
+
+    /// Atomically persist one adaptive-verification state and its append-only
+    /// session event.
+    pub fn record_work_verification_progress(
+        &self,
+        progress: &WorkVerificationProgress,
+    ) -> CaptainResult<i64> {
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Memory(format!("work verification lock: {e}")))?;
+        crate::work_verification_progress::record(&mut guard, progress)
+            .map_err(|e| CaptainError::Memory(e.to_string()))
+    }
+
+    /// Reconcile operations owned by a previous runtime instance. Call this
+    /// only from the authoritative kernel boot path: auxiliary CLI consumers
+    /// may open the same database while the daemon is still alive.
+    pub fn reconcile_work_verification_after_restart(
+        &self,
+        now_unix_ms: i64,
+    ) -> CaptainResult<Vec<WorkVerificationProgress>> {
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Memory(format!("work verification restart lock: {e}")))?;
+        crate::work_verification_progress::reconcile_after_restart(
+            &mut guard,
+            &self.runtime_instance_id,
+            now_unix_ms,
+        )
+        .map_err(|e| CaptainError::Memory(e.to_string()))
+    }
+
+    /// Reconcile stale work for the serialized session, persist the initial
+    /// verifying event, and return an armed cancellation lease.
+    pub fn start_work_verification_progress(
+        &self,
+        progress: WorkVerificationProgress,
+    ) -> CaptainResult<WorkVerificationLease> {
+        if progress.runtime_instance_id != self.runtime_instance_id
+            || !matches!(
+                progress.state,
+                crate::work_verification_progress::WorkVerificationState::Verifying
+            )
+        {
+            return Err(CaptainError::Memory(
+                "work verification must start as verifying under the current runtime".to_string(),
+            ));
+        }
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Memory(format!("work verification start lock: {e}")))?;
+        let interrupted = crate::work_verification_progress::reconcile_session_before_start(
+            &mut guard,
+            &progress.session_id.to_string(),
+            progress.updated_at_ms,
+        )
+        .map_err(|e| CaptainError::Memory(e.to_string()))?;
+        if !interrupted.is_empty() {
+            tracing::warn!(
+                session_id = %progress.session_id,
+                count = interrupted.len(),
+                "Closed stale verification work before a new delivery check"
+            );
+        }
+        crate::work_verification_progress::record(&mut guard, &progress)
+            .map_err(|e| CaptainError::Memory(e.to_string()))?;
+        drop(guard);
+        Ok(WorkVerificationLease::new(Arc::clone(&self.conn), progress))
+    }
+
+    /// Close stale active verification work before starting a new operation on
+    /// the same serialized session. This records interruption only; it never
+    /// invokes tools or replays effects.
+    pub fn reconcile_work_verification_session_before_start(
+        &self,
+        session_id: &str,
+        now_unix_ms: i64,
+    ) -> CaptainResult<Vec<WorkVerificationProgress>> {
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Memory(format!("work verification recovery lock: {e}")))?;
+        crate::work_verification_progress::reconcile_session_before_start(
+            &mut guard,
+            session_id,
             now_unix_ms,
         )
         .map_err(|e| CaptainError::Memory(e.to_string()))

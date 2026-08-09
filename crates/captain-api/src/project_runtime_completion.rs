@@ -4,6 +4,9 @@ use captain_kernel::goals::{CheckResult, Goal, GoalStatus, GoalStore};
 use captain_memory::project;
 use captain_runtime::agent_loop::ToolCallRecord;
 use captain_runtime::goal_loop::{execute_goal_check, goal_progress_signature};
+use captain_runtime::work_verification::{
+    evaluate_tool_receipts, EvidenceStrength, VerificationDisposition,
+};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -38,6 +41,7 @@ pub(crate) struct CompletionEvidence {
     kind: &'static str,
     source: String,
     status: &'static str,
+    strength: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
 }
@@ -200,7 +204,14 @@ pub(crate) fn phase_completion_contract(
             .any(|receipt| receipt.status == "passed");
     let verification_receipts_clean = verification_tool_evidence
         .iter()
-        .all(|receipt| receipt.status == "passed");
+        .all(|receipt| receipt.status == "passed" && receipt.strength == "check");
+    let adaptive_verification = evaluate_tool_receipts(tool_calls, !tool_calls.is_empty(), 0);
+    let adaptive_verification_required = matches!(
+        adaptive_verification.disposition,
+        VerificationDisposition::Verified
+            | VerificationDisposition::NeedsCorrection
+            | VerificationDisposition::Incomplete
+    );
 
     let requirements = vec![
         CompletionRequirement {
@@ -264,6 +275,17 @@ pub(crate) fn phase_completion_contract(
                 "failed"
             },
             required: phase == "verify",
+        },
+        CompletionRequirement {
+            id: "adaptive_work_verification",
+            status: match adaptive_verification.disposition {
+                VerificationDisposition::Verified => "passed",
+                VerificationDisposition::NotRequired => "not_required",
+                VerificationDisposition::NeedsCorrection | VerificationDisposition::Incomplete => {
+                    "failed"
+                }
+            },
+            required: adaptive_verification_required,
         },
     ];
 
@@ -436,17 +458,34 @@ fn completion_evidence(
         .filter(|(_, call)| tool_is_phase_evidence(phase, call.tool_name.as_str()))
         .take(24)
         .map(|(index, call)| CompletionEvidence {
-            id: digest_receipt(&[
-                phase,
-                &index.to_string(),
-                &call.tool_name,
-                if call.is_error { "failed" } else { "passed" },
-                &call.input_summary,
-                &call.output_summary,
-            ]),
+            id: call.verification.as_ref().map_or_else(
+                || {
+                    digest_receipt(&[
+                        phase,
+                        &index.to_string(),
+                        &call.tool_name,
+                        if call.is_error { "failed" } else { "passed" },
+                        &call.input_summary,
+                        &call.output_summary,
+                    ])
+                },
+                |receipt| {
+                    digest_receipt(&[
+                        phase,
+                        &receipt.tool_call_id,
+                        &receipt.sequence.to_string(),
+                        &receipt.input_sha256,
+                    ])
+                },
+            ),
             kind: "tool_receipt",
             source: call.tool_name.clone(),
-            status: if call.is_error { "failed" } else { "passed" },
+            status: completion_tool_status(call),
+            strength: call
+                .verification
+                .as_ref()
+                .map(|receipt| evidence_strength_name(receipt.evidence))
+                .unwrap_or("legacy"),
             duration_ms: Some(call.duration_ms),
         })
         .collect::<Vec<_>>();
@@ -455,9 +494,51 @@ fn completion_evidence(
         kind: "project_goal_check",
         source: receipt.goal_id.clone(),
         status: if receipt.passed() { "passed" } else { "failed" },
+        strength: "check",
         duration_ms: Some(receipt.latency_ms),
     }));
     evidence
+}
+
+fn completion_tool_status(call: &ToolCallRecord) -> &'static str {
+    if call.is_error {
+        return "failed";
+    }
+    match call.verification.as_ref().map(|receipt| receipt.evidence) {
+        Some(EvidenceStrength::None) if strict_structured_evidence_tool(&call.tool_name) => {
+            "failed"
+        }
+        Some(EvidenceStrength::Inspection)
+            if matches!(
+                call.tool_name.as_str(),
+                "tool_run_status" | "tool_run_result" | "agent_job_status" | "agent_job_result"
+            ) =>
+        {
+            "pending"
+        }
+        _ => "passed",
+    }
+}
+
+fn strict_structured_evidence_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "tool_run_result"
+            | "agent_job_result"
+            | "agent_delegate"
+            | "artifact_publish"
+            | "artifact_inspect"
+            | "artifact_deliver"
+    )
+}
+
+fn evidence_strength_name(strength: EvidenceStrength) -> &'static str {
+    match strength {
+        EvidenceStrength::None => "none",
+        EvidenceStrength::Receipt => "receipt",
+        EvidenceStrength::Inspection => "inspection",
+        EvidenceStrength::Check => "check",
+    }
 }
 
 fn requires_execution_receipt(phase: &str) -> bool {
@@ -501,7 +582,14 @@ fn tool_is_phase_evidence(phase: &str, tool: &str) -> bool {
 
 fn tool_is_verification_evidence(tool: &str) -> bool {
     let tool = tool.to_ascii_lowercase();
-    matches_tool_prefix(
+    matches!(
+        tool.as_str(),
+        "tool_run_status"
+            | "tool_run_result"
+            | "agent_job_status"
+            | "agent_job_result"
+            | "artifact_inspect"
+    ) || matches_tool_prefix(
         &tool,
         &[
             "shell_",

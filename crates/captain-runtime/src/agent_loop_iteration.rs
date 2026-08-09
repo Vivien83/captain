@@ -8,6 +8,7 @@ use crate::agent_loop_request::{
     build_completion_request, prepare_request_context, strip_provider_prefix,
 };
 use crate::agent_loop_retry::{call_with_retry, stream_with_retry};
+use crate::agent_loop_stream_delivery::StreamDeliveryBuffer;
 use crate::agent_loop_stream_events::send_context_recovery_phase_event;
 use crate::agent_loop_tool_flow::codex_missing_tool_call_should_retry;
 use crate::context_budget::ContextBudget;
@@ -60,6 +61,8 @@ pub(crate) struct StreamingIterationInput<'a> {
     pub(crate) stream_tx: &'a mpsc::Sender<StreamEvent>,
     pub(crate) user_input_rx: &'a Option<Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>>,
     pub(crate) codex_missing_tool_watchdog_used: &'a mut bool,
+    pub(crate) hold_stream_delivery: bool,
+    pub(crate) delivery_buffer: &'a mut StreamDeliveryBuffer,
 }
 
 pub(crate) async fn complete_iteration(
@@ -158,6 +161,9 @@ pub(crate) async fn stream_iteration(
         input.stream_tx.clone(),
         Some(provider_name),
         None,
+        input
+            .hold_stream_delivery
+            .then_some(&mut *input.delivery_buffer),
     )
     .await?;
     record_and_promote_response(

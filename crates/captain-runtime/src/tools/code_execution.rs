@@ -545,8 +545,8 @@ mod tests {
             .expect("bounded streaming completes");
 
         assert!(status.success());
-        assert!(stdout.starts_with(&vec![b'x'; 128]));
-        assert!(stderr.starts_with(&vec![b'y'; 128]));
+        assert!(stdout.starts_with(&[b'x'; 128]));
+        assert!(stderr.starts_with(&[b'y'; 128]));
         assert!(String::from_utf8_lossy(&stdout).contains("10000 total bytes"));
         assert!(String::from_utf8_lossy(&stderr).contains("10000 total bytes"));
     }

@@ -6,6 +6,57 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.13] - 2026-08-09
+
+Early-access release focused on adaptive delivery verification, crash-safe
+evidence, discreet multi-surface progress, and safer host updates.
+
+### Added
+
+- Effectful tool calls now produce ordered, redacted verification receipts.
+  Captain accepts a delivery only when the current receipts prove the relevant
+  post-condition; read-only conversation keeps its direct path.
+- Missing evidence triggers at most two targeted correction rounds. Pending
+  jobs, failed effects, stale checks, and uncertain external outcomes end as an
+  explicit incomplete result rather than a success claim or blind replay.
+- Verification lifecycle records survive abrupt restarts using durable leases,
+  fixed gap codes, digests, and timestamps without persisting raw input,
+  output, paths, model drafts, or hidden reasoning.
+- Projects, delegated jobs, immutable artifacts, and Live Runs now project the
+  same evidence strength and subject status into completion decisions.
+- Ratatui, standalone terminal, Web Control, Web terminal, and Telegram share
+  transient verification phases. Fast successful checks remain silent;
+  corrections, slow verification, and incomplete delivery are visible.
+
+### Reliability
+
+- The macOS updater now prepares an adjacent private candidate, requires
+  ad-hoc signing, executes an exact `--version` preflight, syncs the candidate,
+  and only then performs the atomic replacement. Failure leaves the installed
+  binary untouched.
+- Wasmtime timeout watchdogs are cancelled and joined when execution ends,
+  preventing completed sandbox calls from retaining engines and delayed Mach
+  exception handlers.
+- Power-loss certification now proves verification interruption, session and
+  project recovery, Live Run reconciliation, MemPalace continuity, audit-chain
+  continuity, and SQLite integrity after a real `SIGKILL`.
+
+### Security
+
+- Verification evidence is a sanitized metadata contract. It never grants
+  new authority, bypasses approvals or budgets, changes the configured model,
+  or replays an uncertain effect.
+- Streaming drafts for a delivery that still needs verification are withheld
+  behind a bounded fail-closed buffer. Failed provider attempts and superseded
+  drafts are discarded; the final verified or honestly incomplete answer is
+  emitted once.
+- Every held continuation segment must match the provider text and its single
+  terminal event before release. Direct streaming may retry before output
+  starts, but never after a visible delta, preventing duplicated prefixes.
+- Budget, continuation, and iteration stops with unresolved evidence persist
+  an incomplete verification outcome and replace any held draft with one
+  honest terminal response.
+
 ## [0.1.0-alpha.12] - 2026-08-09
 
 Early-access release focused on durable tool execution, evidence-grounded Web
@@ -638,7 +689,8 @@ formats, and behavior may change before `0.1.0`.
 - The presentation site is maintained separately and is not included in the
   public source repository or this release.
 
-[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.12...HEAD
+[Unreleased]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.13...HEAD
+[0.1.0-alpha.13]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.12...v0.1.0-alpha.13
 [0.1.0-alpha.12]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.11...v0.1.0-alpha.12
 [0.1.0-alpha.11]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.10...v0.1.0-alpha.11
 [0.1.0-alpha.10]: https://github.com/Vivien83/captain/compare/v0.1.0-alpha.9...v0.1.0-alpha.10

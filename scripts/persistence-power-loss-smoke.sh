@@ -10,6 +10,10 @@ set -u
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAMP="$(date +%Y%m%d-%H%M%S)-$$"
 WORKDIR="${CAPTAIN_DURABILITY_SMOKE_WORKDIR:-$ROOT_DIR/target/persistence-power-loss-smoke/$STAMP}"
+case "$WORKDIR" in
+  /*) ;;
+  *) WORKDIR="$ROOT_DIR/$WORKDIR" ;;
+esac
 HOME_DIR="$WORKDIR/home"
 CONFIG="$HOME_DIR/config.toml"
 PORT="${CAPTAIN_DURABILITY_SMOKE_PORT:-50461}"
