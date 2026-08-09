@@ -621,28 +621,28 @@ fn private_file(path: &Path, create_new: bool) -> std::io::Result<File> {
     Ok(file)
 }
 
-fn set_private_dir_permissions(path: &Path) -> std::io::Result<()> {
+fn set_private_dir_permissions(_path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
 }
 
-fn set_private_file_permissions(path: &Path) -> std::io::Result<()> {
+fn set_private_file_permissions(_path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
 
-fn sync_directory(path: &Path) -> std::io::Result<()> {
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(path)?.sync_all()?;
+        File::open(_path)?.sync_all()?;
     }
     Ok(())
 }
