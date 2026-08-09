@@ -495,6 +495,7 @@ require_contains "Spanish README documents the native 12-hour release monitor" R
 require_contains "Chinese README documents the native 12-hour release monitor" README.zh.md "之后每 12 小时检查一次"
 require_contains "deployment pins model-independent versioned update decisions" docs/DEPLOY.md "Callback decisions bypass the model"
 require_contains "CLI documents the durable release monitor projection" docs/cli-reference.md "jq '.runtime_update'"
+require_contains "CLI documents macOS post-update vault authorization" docs/cli-reference.md 'Keychain authorization dialog for the `captain-vault` item'
 require_contains "API status documents runtime update state" docs/api-reference.md '`runtime_update` | Last successful release check'
 require_contains "Telegram docs pin explicit update operator identity" docs/channel-adapters.md 'explicitly listed numeric Telegram user; `allowed_users = ["*"]`'
 require_contains "meta docs distinguish the native release monitor" docs/captain-tools/meta.md "distinct from the native release monitor"

@@ -572,6 +572,14 @@ for comparison and display. Power loss between decision, child launch, result,
 restart, and notification is bounded by durable state, timeout recovery,
 quarantine, and delivery leases.
 
+On macOS, replacing an ad-hoc-signed host binary can make Keychain request a
+fresh authorization before the existing `captain-vault` item is opened. This
+is an operating-system trust boundary, not a credential migration: after the
+operator verifies the installed Captain executable and chooses **Always
+Allow**, daemon boot and authenticated CLI requests resume with the same vault.
+The CLI reference and current release notes must keep this post-update recovery
+step visible until the distribution has a stable Apple signing identity.
+
 ## Alpha 10 First-Use Interaction Contract
 
 The seven-question first-use interview remains deterministic, durable, and

@@ -278,6 +278,14 @@ the installed target, performs an atomic swap, and then restarts through the
 platform service manager. Inside a container the command refuses to mutate the
 image and returns an orchestrator-owned procedure.
 
+On macOS, the first vault access after a binary replacement can display a
+Keychain authorization dialog for the `captain-vault` item. Verify that the
+requesting executable is the installed Captain binary, then choose **Always
+Allow** if this account should restart Captain unattended. Until the decision
+is accepted, the new daemon can remain alive but unavailable while Keychain
+holds its vault unlock request. `captain status` and `captain update --check`
+must complete normally afterwards; no credential needs to be re-entered.
+
 The daemon independently checks after startup and every 12 hours. An exact
 Telegram operator can update, defer for 24 hours, or refuse only the offered
 version from a Rich card. These callbacks never enter a model turn. Inspect the
