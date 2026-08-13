@@ -111,7 +111,7 @@ export function Chat() {
 
   useEffect(() => {
     let dead = false;
-    if (!agentId) {
+    if (!agentId || getState().clientMode === true) {
       setReasoning(null);
       return () => { dead = true; };
     }
@@ -426,7 +426,7 @@ export function Chat() {
     setBusy(true);
   };
 
-  const send = (text) => {
+  const send = (text, attachments = []) => {
     const ws = wsRef.current;
     if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN) return false;
     const pending = pendingAskUser();
@@ -439,24 +439,34 @@ export function Chat() {
       ...prev.map((item) => item.suggestionsActive ? { ...item, suggestionsActive: false } : item),
       { ...newItem('user'), text },
     ]);
-    ws.send(JSON.stringify({ type: 'message', content: text }));
+    ws.send(JSON.stringify({ type: 'message', content: text, attachments }));
     setBusy(true);
     return true;
   };
 
   const onUpload = async (file) => {
-    const fd = new FormData();
-    fd.append('file', file);
+    const contentType = file.type || 'application/octet-stream';
+    const filename = asciiFilename(file.name || 'attachment');
     try {
       const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/upload`, {
-        method: 'POST', body: fd, credentials: 'same-origin',
+        method: 'POST',
+        body: file,
+        credentials: 'same-origin',
+        headers: { 'content-type': contentType, 'x-filename': filename },
       });
-      if (!res.ok) throw new Error();
       const body = await res.json();
-      toast(`Fichier envoyé : ${body.path || file.name}`);
-      send(`J'ai uploadé un fichier : ${body.path || file.name}`);
-    } catch {
-      toast(`Échec de l'upload de ${file.name}`, 'err');
+      if (!res.ok) throw new Error(body.error || 'upload failed');
+      toast(`Fichier envoyé : ${body.filename || file.name}`);
+      const message = body.transcription
+        ? `Message vocal transcrit depuis ${body.filename || file.name} :\n${body.transcription}`
+        : `Analyse la pièce jointe ${body.filename || file.name}.`;
+      send(message, [{
+        file_id: body.file_id,
+        filename: body.filename || file.name,
+        content_type: body.content_type || contentType,
+      }]);
+    } catch (error) {
+      toast(`Échec de l'upload de ${file.name} : ${error.message}`, 'err');
     }
   };
 
@@ -479,8 +489,9 @@ export function Chat() {
         <${DeliveryVerificationBar} status=${deliveryVerification} />
         <${Composer} disabled=${!connected} busy=${busy} onSend=${send} onUpload=${onUpload} />
         <${ProviderQuotaBar} status=${providerQuota} activeModel=${activeModel}
-          reasoning=${reasoning} reasoningBusy=${reasoningBusy}
-          onReasoningChange=${setReasoningEffort} />
+          reasoning=${getState().clientMode ? null : reasoning}
+          reasoningBusy=${reasoningBusy}
+          onReasoningChange=${getState().clientMode ? null : setReasoningEffort} />
       </div>
       ${canvas && html`
         <div class="canvas-pane">
@@ -494,6 +505,16 @@ export function Chat() {
       `}
     </div>
   `;
+}
+
+function asciiFilename(filename) {
+  return Array.from(filename || 'attachment')
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code >= 0x20 && code <= 0x7e ? character : '_';
+    })
+    .join('')
+    .slice(0, 240) || 'attachment';
 }
 
 function DeliveryVerificationBar({ status }) {

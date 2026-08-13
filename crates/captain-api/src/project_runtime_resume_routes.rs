@@ -6,19 +6,26 @@ use crate::project_runtime_orchestrator::{
     resume_runtime_orchestrator, runtime_resume_event_metadata,
 };
 use crate::project_runtime_resume::runtime_declares_active;
+use crate::project_runtime_start::set_project_runtime_authority_origin;
 use crate::project_runtime_tool_status::prepare_denied_tool_request_retry;
 use crate::routes::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use std::sync::Arc;
 
 pub async fn resume_project_runtime(
     State(state): State<Arc<AppState>>,
     Path(id_or_slug): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
 ) -> impl IntoResponse {
-    let (response, spawn_key) = prepare_resume_project_runtime(&state, &id_or_slug).await;
+    let authority_origin = client
+        .as_ref()
+        .map(|_| captain_runtime::client_authority::paired_client_origin("project"));
+    let (response, spawn_key) =
+        prepare_resume_project_runtime(&state, &id_or_slug, authority_origin.as_deref()).await;
     if let Some(project_key) = spawn_key {
         crate::project_runtime_runner::spawn_project_runtime_if_needed(state, project_key);
     }
@@ -28,12 +35,19 @@ pub async fn resume_project_runtime(
 async fn prepare_resume_project_runtime(
     state: &Arc<AppState>,
     id_or_slug: &str,
+    authority_origin: Option<&str>,
 ) -> ((StatusCode, Json<serde_json::Value>), Option<String>) {
     let project_key = id_or_slug.to_string();
     let response = crate::project_runtime_route_support::mutate_project_runtime(
         state,
         id_or_slug,
         |runtime, _project| {
+            let process_running = crate::project_runtime_runner::project_runtime_is_running(
+                _project.id.as_str(),
+            );
+            if !process_running {
+                set_project_runtime_authority_origin(runtime, authority_origin);
+            }
             let stale_resume = runtime_declares_active(runtime);
             let resume_pending_phase = runtime_resume_pending_phase(runtime)
                 .filter(|phase| is_valid_lifecycle_phase(phase));

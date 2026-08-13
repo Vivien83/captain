@@ -127,6 +127,7 @@ fn build_auth_state(state: &Arc<AppState>) -> middleware::AuthState {
         fallback_auth: state.kernel.config.auth.clone(),
         deployment: state.kernel.config.deployment.clone(),
         security: Arc::new(crate::web_auth_security::WebAuthSecurity::default()),
+        hub_pairing: Arc::clone(&state.kernel.hub_pairing),
     }
 }
 
@@ -530,3 +531,11 @@ mod bind_auth_policy_tests {
         .expect("deadline completes after the shutdown signal");
     }
 }
+
+#[cfg(test)]
+#[path = "server_hub_pairing_tests.rs"]
+mod hub_pairing_server_tests;
+
+#[cfg(test)]
+#[path = "server_hub_node_tests.rs"]
+mod hub_node_server_tests;

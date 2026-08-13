@@ -208,7 +208,9 @@ pub(crate) use discovery_ops::{
     tool_capability_search, tool_search, tool_skill_check, tool_skill_search, tool_skill_view,
 };
 pub(crate) use dispatch_fallback::dispatch_fallback_tool;
-pub(crate) use dispatch_finalize::{finalize_dispatch_result, DispatchFinalizeContext};
+pub(crate) use dispatch_finalize::{
+    finalize_dispatch_result, finalize_remote_dispatch_result, DispatchFinalizeContext,
+};
 pub(crate) use dispatch_guard::{
     cached_tool_result, run_pre_dispatch_checks, shell_exec_approval_preview,
 };

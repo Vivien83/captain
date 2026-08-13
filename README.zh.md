@@ -40,6 +40,7 @@
 <tr><td><b>真实执行，受控管理</b></td><td>Shell、文件、SSH、浏览器、网络调研、代码、文档和媒体。敏感调用需要审批，关键 shell 模式会被拦截，预算限制 token、成本和调用频率。Captain 会将自身持久化的滚动限制与供应商管理的订阅窗口分开显示；对于 Codex，使用百分比和重置时间来自官方实时账户与响应信号，而不是复制的静态配额表。紧凑聊天状态栏只为供应商通用窗口和与当前模型匹配的限制显示独立进度条；其他模型专属配额会标注为不属于当前模型，而 Status 和 Budget 保留完整明细。Ratatui、Web Control 和保留的桌面兼容封装器共享这一契约。相互独立的只读工具可以并行执行，而有依赖或副作用的工作保持有序。</td></tr>
 <tr><td><b>人类可读的原生能力</b></td><td>将审核过的 <code>*.captain</code> 文件放入全局或项目 <code>.captain/</code> 目录，Captain 会热加载为类型化的 <code>cap_*</code> 工具。Captain Forge 由内核统一控制依赖、权限、审批、持久化 DAG 执行、崩溃恢复、修订历史、回滚和精确的操作员决策。</td></tr>
 <tr><td><b>跟随对话的记忆</b></td><td>会话召回、持久化用户事实、项目状态、知识图谱以及可选的本地 ONNX embedding 提供有边界的上下文，而不会在每一轮重新注入全部历史。已接受的事实会先写入本地持久化连续性日志，在 MemPalace 不可用期间仍可召回，并通过有界退避自动重新同步。</td></tr>
+<tr><td><b>一个 Captain，覆盖所有设备</b></td><td>运行一个完整 Hub，并将轻量终端、TUI 或 Desktop Client 配对到同一组会话、项目、记忆、模型和审批。可选执行 Node 只通过出站 HTTPS 443 操作本地工作区，支持代理与企业 CA、显式授权、本地守卫、持久确认，并且断线后不会盲目重放。</td></tr>
 <tr><td><b>任意模型，无供应商锁定</b></td><td>Codex（使用你的 ChatGPT 订阅）、Anthropic、OpenAI、Mistral、Groq、Gemini、OpenRouter，以及通过 Ollama 使用的本地模型。Captain 根据实际配置发现模型目录和凭证，不依赖固定数量；上下文预算会跟随所选模型的实时窗口。每个代理都可以单独控制推理级别：Auto 保留模型默认值；当 Codex 公布 Ultra 时，Captain 会使用最大模型推理强度，并且只在根代理上启用有界的主动委派。对于 Codex，Captain 每小时刷新一次目录，并在 Control 以及已配置的 Telegram 中提示新模型；只有在你明确确认并选择会话策略后才会切换。</td></tr>
 <tr><td><b>面向真实工作的邮件</b></td><td>通过 OAuth 连接多个 Gmail 账户，或通过 IMAP/SMTP 连接多个与供应商无关的邮箱。可搜索、读取、起草、发送、标记、保存附件，并把确定性匹配路由到指定智能体。凭据不会进入公开配置；已接受任务、自动化游标和崩溃后的不确定结果都可持久化并检查。</td></tr>
 <tr><td><b>六个操作中心</b></td><td>Chat, Projects, Automation, Learning, Capabilities 和 Status 是 TUI 与 Control 共用的主界面。Automation 集中管理 Workflows、Triggers、Crons、审批和 Webhooks。</td></tr>
@@ -52,15 +53,15 @@
 ## 快速安装
 
 当前公开早期访问版本：
-[v0.1.0-alpha.13](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.13)。
-不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13`；
+[v0.1.0-alpha.14](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14)。
+不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14`；
 滚动 Alpha 通道：`ghcr.io/vivien83/captain-agent-os:alpha`。
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
 ```
 
 官方仓库、Release 资产、校验和与容器镜像均为公开内容，无需 GitHub token 或容器仓库登录。
@@ -87,15 +88,15 @@ Release 资产为 macOS 和 Linux 提供 `aarch64` 与 `x86_64`，并提供
 ```bash
 export ANTHROPIC_API_KEY=...       # 或任意受支持的提供商 API key
 export TELEGRAM_BOT_TOKEN=...      # 可选——见下文
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 bash
 ```
 
 `vps` 配置模式会安装 systemd 服务、启动服务并验证健康状态。如果检测到 Telegram token，Captain
 会向 Telegram API 验证该 token，从机器人的待处理消息中识别出你的聊天，并**向你发送一条确认消息——你与智能体的第一次接触，会在安装完成几秒后出现在你的手机上。**
 
-Alpha 12 可以端到端管理一个公网 HTTPS 域名。请先创建 DNS 记录，然后像
+Captain 可以端到端管理一个公网 HTTPS 域名。请先创建 DNS 记录，然后像
 上例一样设置 `CAPTAIN_DOMAIN`，或在交互式安装器中填写。Captain 会把 API
 保持在 loopback，事务式配置 Caddy，并且仅在 TLS、Control、公开健康检查和
 版本一致性全部通过后才报告完成。
@@ -107,8 +108,8 @@ Codex 是 Captain 内置的默认提供商——不需要 `ANTHROPIC_API_KEY`
 会安装好一切（二进制文件、systemd 服务），但先不启动守护进程，这样下面的就绪检查就不会在你登录之前抢先运行：
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # 会显示一个 URL + 代码——在手机上打开即可，无需本地浏览器
@@ -125,7 +126,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
 ```
 
 首次启动会生成守护进程 API key，并将其与全部状态一起持久化到命名卷中，该卷可在镜像更新后继续保留。本地
@@ -138,8 +139,8 @@ socket、PID namespace 或特权模式。运行不可变镜像：
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.13 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.13 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose up -d
 ```
 
 首次启动后再配置所选模型提供商。任何宿主机访问都必须是经过本地审查的显式部署变更；旧的广泛访问
@@ -229,9 +230,11 @@ Telegram 操作员聊天和显式用户白名单后，Rich 卡片会提供**立�
 | [Built-in Tools](docs/captain-tools/) | 按类别划分的工具文档 |
 | [Architecture](docs/architecture.md) | Crate 结构、智能体循环、内核设计 |
 | [API Reference](docs/api-reference.md) | REST 端点、身份验证、流式传输 |
+| [Hub、Client 与 Node](docs/hub-clients-nodes.md) | 一个中央 Captain、轻量界面与出站本地执行 |
 | [VPS Deployment](docs/deployment/github-vps-install.md) | 无界面安装、反向代理、HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | 外部工具服务器与传输协议 |
 | [Troubleshooting](docs/troubleshooting.md) | 常见问题及其解决方法 |
+| [0.1.0-alpha.14 Release Notes](docs/releases/v0.1.0-alpha.14.md) | 一个 Hub、轻量 Client、出站 Node 与崩溃安全的分布式工作 |
 | [0.1.0-alpha.13 Release Notes](docs/releases/v0.1.0-alpha.13.md) | 自适应交付核验、崩溃安全证据与强化的主机更新 |
 | [0.1.0-alpha.12 Release Notes](docs/releases/v0.1.0-alpha.12.md) | 持久 Live Runs、基于证据的研究、已验证构件与托管 VPS 域名 |
 | [0.1.0-alpha.11 Release Notes](docs/releases/v0.1.0-alpha.11.md) | 原生邮件、持久集成、审计收尾与本地 CI |

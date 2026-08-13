@@ -47,6 +47,7 @@ async fn tool_request_rejects_invalid_project_identifier_without_echoing_input()
     let response = respond_project_tool_request(
         axum::extract::State(state),
         axum::extract::Path("bad-/Users/example/private-ghp_secret".to_string()),
+        None,
         axum::Json(ProjectToolRequestDecisionReq {
             phase: Some("build".to_string()),
             decision: "deny".to_string(),
@@ -110,5 +111,25 @@ fn prepare_tool_request_update_selects_pending_phase_and_normalizes_tools() {
     assert_eq!(
         update.metadata["runtime"]["resume_pending"]["reason"],
         "tool_request_approved"
+    );
+}
+
+#[test]
+fn paired_client_can_only_approve_tools_within_its_transitive_authority() {
+    let mut update = ProjectToolRequestUpdate {
+        metadata: serde_json::json!({}),
+        phase: "build".to_string(),
+        decision: ToolRequestDecision::Approve,
+        tools: vec!["memory_save".to_string()],
+    };
+    assert!(paired_client_may_apply_tool_request_update(&update));
+
+    update.tools.push("shell_exec".to_string());
+    assert!(!paired_client_may_apply_tool_request_update(&update));
+
+    update.decision = ToolRequestDecision::Deny;
+    assert!(
+        paired_client_may_apply_tool_request_update(&update),
+        "a Client must retain the ability to deny a dangerous request"
     );
 }

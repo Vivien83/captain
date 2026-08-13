@@ -16,6 +16,15 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         (_, "/api/health") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/status") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/version") => NonZeroU32::new(1).unwrap(),
+        ("POST", captain_wire::PAIRING_CLAIM_PATH) => NonZeroU32::new(20).unwrap(),
+        ("POST", captain_wire::PAIRING_POLL_PATH) => NonZeroU32::new(1).unwrap(),
+        ("POST", captain_wire::DEVICE_TOKEN_PATH) => NonZeroU32::new(10).unwrap(),
+        ("POST", captain_wire::HUB_NODE_CONNECT_PATH) => NonZeroU32::new(10).unwrap(),
+        ("POST", captain_wire::HUB_NODE_ENVELOPE_PATH) => NonZeroU32::new(1).unwrap(),
+        ("POST", captain_wire::HUB_NODE_PULL_PATH) => NonZeroU32::new(1).unwrap(),
+        ("GET", captain_wire::HUB_NODE_STREAM_PATH) => NonZeroU32::new(10).unwrap(),
+        ("GET", captain_wire::HUB_NODE_WEBSOCKET_PATH) => NonZeroU32::new(10).unwrap(),
+        ("POST", captain_wire::HUB_NODE_CLOSE_PATH) => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/tools") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/agents") => NonZeroU32::new(2).unwrap(),
         ("GET", "/api/skills") => NonZeroU32::new(2).unwrap(),
@@ -66,7 +75,12 @@ pub async fn gcra_rate_limit(
 
     let method = request.method().as_str().to_string();
     let path = request.uri().path().to_string();
-    if crate::agent_api_routes::is_agent_api_ingress_route(request.method(), request.uri().path()) {
+    if crate::agent_api_routes::is_agent_api_ingress_route(request.method(), request.uri().path())
+        || crate::hub_pairing_routes::is_hub_pairing_bootstrap_route(
+            request.method(),
+            request.uri().path(),
+        )
+    {
         return next.run(request).await;
     }
     let cost = operation_cost(&method, &path);
@@ -93,6 +107,42 @@ mod tests {
     fn test_costs() {
         assert_eq!(operation_cost("GET", "/api/health").get(), 1);
         assert_eq!(operation_cost("GET", "/api/tools").get(), 1);
+        assert_eq!(
+            operation_cost("POST", captain_wire::PAIRING_CLAIM_PATH).get(),
+            20
+        );
+        assert_eq!(
+            operation_cost("POST", captain_wire::PAIRING_POLL_PATH).get(),
+            1
+        );
+        assert_eq!(
+            operation_cost("POST", captain_wire::DEVICE_TOKEN_PATH).get(),
+            10
+        );
+        assert_eq!(
+            operation_cost("POST", captain_wire::HUB_NODE_CONNECT_PATH).get(),
+            10
+        );
+        assert_eq!(
+            operation_cost("POST", captain_wire::HUB_NODE_ENVELOPE_PATH).get(),
+            1
+        );
+        assert_eq!(
+            operation_cost("POST", captain_wire::HUB_NODE_PULL_PATH).get(),
+            1
+        );
+        assert_eq!(
+            operation_cost("GET", captain_wire::HUB_NODE_STREAM_PATH).get(),
+            10
+        );
+        assert_eq!(
+            operation_cost("GET", captain_wire::HUB_NODE_WEBSOCKET_PATH).get(),
+            10
+        );
+        assert_eq!(
+            operation_cost("POST", captain_wire::HUB_NODE_CLOSE_PATH).get(),
+            1
+        );
         assert_eq!(operation_cost("POST", "/api/agents/1/message").get(), 30);
         assert_eq!(operation_cost("POST", "/api/agents").get(), 50);
         assert_eq!(operation_cost("POST", "/api/workflows/1/run").get(), 100);
@@ -119,5 +169,27 @@ mod tests {
             &axum::http::Method::POST,
             "/hooks/agents/01234567-89ab-cdef-0123-456789abcdef/ingress"
         ));
+    }
+
+    #[test]
+    fn hub_pairing_bootstrap_uses_only_its_trusted_client_ip_limiter() {
+        for path in [
+            captain_wire::PAIRING_CLAIM_PATH,
+            captain_wire::PAIRING_POLL_PATH,
+            captain_wire::DEVICE_TOKEN_PATH,
+        ] {
+            assert!(crate::hub_pairing_routes::is_hub_pairing_bootstrap_route(
+                &axum::http::Method::POST,
+                path
+            ));
+            assert!(!crate::hub_pairing_routes::is_hub_pairing_bootstrap_route(
+                &axum::http::Method::GET,
+                path
+            ));
+            assert!(!crate::hub_pairing_routes::is_hub_pairing_bootstrap_route(
+                &axum::http::Method::POST,
+                &format!("{path}/extra")
+            ));
+        }
     }
 }

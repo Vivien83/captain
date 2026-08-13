@@ -548,7 +548,13 @@ impl std::fmt::Debug for KernelConfig {
                 ),
             )
             .field("docker", &format!("enabled={}", self.docker.enabled))
-            .field("pairing", &format!("enabled={}", self.pairing.enabled))
+            .field(
+                "pairing",
+                &format!(
+                    "legacy_enabled={}, hub_enabled={}",
+                    self.pairing.enabled, self.pairing.hub_enabled
+                ),
+            )
             .field(
                 "auth_profiles",
                 &format!("{} provider(s)", self.auth_profiles.len()),

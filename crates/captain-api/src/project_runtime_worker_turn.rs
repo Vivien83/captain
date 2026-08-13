@@ -11,15 +11,29 @@ use captain_types::agent::AgentId;
 use chrono::Utc;
 use std::sync::Arc;
 
+pub(crate) struct ProjectWorkerTurn {
+    pub(crate) project: project::Project,
+    pub(crate) spec: &'static RuntimeWorkerSpec,
+    pub(crate) run_id: String,
+    pub(crate) phase: &'static str,
+    pub(crate) agent_id: AgentId,
+    pub(crate) prompt: String,
+    pub(crate) authority_origin: Option<String>,
+}
+
 pub(crate) async fn run_project_worker_turn(
     state: Arc<AppState>,
-    project: project::Project,
-    spec: &'static RuntimeWorkerSpec,
-    run_id: &str,
-    phase: &'static str,
-    agent_id: AgentId,
-    prompt: String,
+    turn: ProjectWorkerTurn,
 ) -> Result<captain_runtime::agent_loop::AgentLoopResult, String> {
+    let ProjectWorkerTurn {
+        project,
+        spec,
+        run_id,
+        phase,
+        agent_id,
+        prompt,
+        authority_origin,
+    } = turn;
     let handle: Arc<dyn KernelHandle> = state.kernel.clone();
     let (mut rx, join, user_input_tx) = state
         .kernel
@@ -30,7 +44,7 @@ pub(crate) async fn run_project_worker_turn(
             Some(format!("project:{}", project.slug)),
             Some(format!("Project {}", project.name)),
             None,
-            Some("project".to_string()),
+            authority_origin.or_else(|| Some("project".to_string())),
         )
         .map_err(|e| format!("{e}"))?;
 
@@ -39,7 +53,7 @@ pub(crate) async fn run_project_worker_turn(
             &state,
             &project,
             spec,
-            run_id,
+            &run_id,
             phase,
             agent_id,
             event,

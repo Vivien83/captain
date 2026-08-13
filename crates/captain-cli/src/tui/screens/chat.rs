@@ -344,6 +344,9 @@ pub struct ChatState {
     /// Phase L.3: clé filesystem-safe pour sauvegarder cette session.
     /// Set par enter_chat_*; vide → pas de persistance.
     pub session_key: String,
+    /// False for a lightweight Client: the Hub is the only session authority
+    /// and no transcript snapshot may be read from or written to this machine.
+    pub local_session_persistence_enabled: bool,
     /// Authoritative session shared by every Captain surface.
     pub authoritative_session_id: Option<String>,
     /// Owner of the authoritative session.
@@ -470,6 +473,7 @@ impl ChatState {
             model_picker_filter: String::new(),
             model_picker_idx: 0,
             session_key: String::new(),
+            local_session_persistence_enabled: true,
             authoritative_session_id: None,
             authoritative_agent_id: None,
             session_path: None,
@@ -1077,10 +1081,17 @@ impl ChatState {
         self.authoritative_session_id = Some(session_id.to_string());
     }
 
+    /// Make the Hub the sole session authority for this chat surface.
+    pub fn use_authoritative_sessions_only(&mut self) {
+        self.local_session_persistence_enabled = false;
+        self.session_path = None;
+        self.session_picker_items.clear();
+    }
+
     /// Phase L.3: sauvegarde immédiate de la session sur disque (best-effort).
     /// Silencieux en cas d'échec — la persistance ne doit jamais bloquer le chat.
     pub fn persist_session(&mut self) {
-        if self.session_key.is_empty() {
+        if !self.local_session_persistence_enabled || self.session_key.is_empty() {
             return;
         }
         use crate::tui::session_store as store;
@@ -1136,8 +1147,11 @@ impl ChatState {
 
     /// Phase L.4: ouvre l'overlay session picker en peuplant la liste.
     pub fn open_session_picker(&mut self) {
-        use crate::tui::session_store as store;
-        self.session_picker_items = store::list_sessions();
+        self.session_picker_items = if self.local_session_persistence_enabled {
+            crate::tui::session_store::list_sessions()
+        } else {
+            Vec::new()
+        };
         self.session_picker_idx = 0;
         self.show_session_picker = true;
     }
@@ -3459,5 +3473,34 @@ mod tests_boot_resume_182 {
             "missing-path replay must not wipe state"
         );
         assert_eq!(chat.messages[0].text, "kept");
+    }
+}
+
+#[cfg(test)]
+mod tests_authoritative_session_mode {
+    use super::*;
+
+    #[test]
+    fn authoritative_mode_survives_reset_and_never_primes_a_local_picker() {
+        let mut chat = ChatState::new();
+        chat.use_authoritative_sessions_only();
+        chat.start_session("remote-display-key");
+        chat.reset();
+        chat.open_session_picker();
+
+        assert!(!chat.local_session_persistence_enabled);
+        assert!(chat.session_picker_items.is_empty());
+        assert!(chat.show_session_picker);
+    }
+
+    #[test]
+    fn authoritative_mode_never_writes_a_local_transcript() {
+        let mut chat = ChatState::new();
+        chat.use_authoritative_sessions_only();
+        chat.start_session("remote-display-key");
+        chat.push_message(Role::User, "only on the Hub".to_string());
+        chat.persist_session();
+
+        assert!(chat.session_path.is_none());
     }
 }

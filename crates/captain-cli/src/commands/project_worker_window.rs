@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn selection_keeps_actionable_and_recent_tail() {
-        let workers = vec![
+        let workers = [
             json!({"id": "old-running", "status": "running"}),
             json!({"id": "old-done", "status": "done"}),
             json!({"id": "mid-done", "status": "done"}),
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn selection_with_zero_limit_returns_empty() {
-        let workers = vec![json!({"id": "running", "status": "running"})];
+        let workers = [json!({"id": "running", "status": "running"})];
         let refs = workers.iter().collect::<Vec<_>>();
 
         assert!(select_priority_recent_workers(&refs, 0).is_empty());

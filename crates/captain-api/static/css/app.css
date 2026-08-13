@@ -1617,6 +1617,52 @@ input:focus, textarea:focus {
 .native-status-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .status-raw-toggle { margin-top: 30px; border-top: 1px solid var(--border); padding-top: 12px; }
 .status-raw-toggle .code-block { margin-top: 10px; max-height: 560px; }
+.device-enrollment-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 0;
+  color: var(--ok);
+  font-size: 12.5px;
+  border-top: 1px solid var(--border);
+}
+.device-code-review { padding: 13px 0; border-top: 1px solid var(--border); }
+.device-code-input { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
+.device-code-input > label { color: var(--text-2); font-size: 11.5px; }
+.device-code-input > div { display: flex; align-items: center; gap: 8px; }
+.device-code-input input { width: 170px; font-family: var(--font-mono); text-transform: uppercase; }
+.device-review-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px 20px;
+  margin-top: 12px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border);
+}
+.device-review-detail > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.device-review-detail span { color: var(--text-2); font-size: 11.5px; overflow-wrap: anywhere; }
+.device-mutation-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.device-pending-list, .device-list { border-top: 1px solid var(--border); }
+.device-pending-row, .device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 68px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+.device-pending-row { justify-content: space-between; }
+.device-pending-row > div, .device-row-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.device-pending-row span, .device-row-main > span { color: var(--text-2); font-size: 11.5px; overflow-wrap: anywhere; }
+.device-row-main > div { display: flex; align-items: center; gap: 8px; }
+.device-row-main .device-actionable { color: var(--warn); }
+.device-state-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--text-2); }
+.device-state-dot.state-online { background: var(--ok); box-shadow: 0 0 8px rgba(111, 206, 143, 0.45); }
+.device-state-dot.state-incompatible { background: var(--warn); }
+.device-state-dot.state-revoked { background: var(--err); }
 
 /* ------------------------------------------------------ project runtime */
 
@@ -1695,6 +1741,7 @@ input:focus, textarea:focus {
   .status-banner-meta { justify-content: flex-start; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .status-columns { grid-template-columns: 1fr; gap: 20px; }
+  .device-review-detail { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .capability-toolbar { flex-direction: column; }
   .capability-toolbar input { width: 100%; }
   .native-toolbar-actions { width: 100%; }
@@ -1753,6 +1800,11 @@ input:focus, textarea:focus {
   .learning-runtime-cell { border-left: none; border-top: 1px solid var(--border); }
   .status-grid { grid-template-columns: 1fr; }
   .status-cell { min-height: 100px; }
+  .device-code-input { align-items: stretch; flex-direction: column; gap: 7px; }
+  .device-code-input > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .device-code-input input { width: 100%; min-width: 0; }
+  .device-row, .device-pending-row { align-items: flex-start; flex-wrap: wrap; }
+  .device-row > button, .device-pending-row > button { margin-left: 20px; }
   .workflow-run-form { grid-template-columns: 1fr; }
   .workflow-run-form button { width: 100%; }
   .native-detail-grid { grid-template-columns: 1fr; }

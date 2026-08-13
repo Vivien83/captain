@@ -88,6 +88,8 @@ fn command_family(command: &Commands) -> DispatchFamily {
         | Commands::Security(_)
         | Commands::Memory(_)
         | Commands::Devices(_)
+        | Commands::Client(_)
+        | Commands::Node(_)
         | Commands::Qr => DispatchFamily::Capability,
         Commands::Snapshot(_) | Commands::Reset { .. } | Commands::Uninstall { .. } => {
             DispatchFamily::Lifecycle
@@ -364,6 +366,8 @@ fn dispatch_capability_command(config: Option<PathBuf>, command: Commands) {
         Commands::Security(sub) => dispatch_security_command(sub),
         Commands::Memory(sub) => dispatch_memory_command(sub),
         Commands::Devices(sub) => dispatch_devices_command(sub),
+        Commands::Client(sub) => super::client::cmd_client(sub),
+        Commands::Node(sub) => super::node::cmd_node(config, sub),
         Commands::Qr => super::devices::cmd_devices_pair(),
         _ => unreachable!("capability command routed to wrong dispatch family"),
     }
@@ -546,6 +550,12 @@ fn dispatch_devices_command(sub: DevicesCommands) {
     match sub {
         DevicesCommands::List { json } => super::devices::cmd_devices_list(json),
         DevicesCommands::Pair => super::devices::cmd_devices_pair(),
+        DevicesCommands::Pending { json } => super::devices::cmd_devices_pending(json),
+        DevicesCommands::Approve {
+            code,
+            allow_mutation,
+        } => super::devices::cmd_devices_approve(&code, allow_mutation),
+        DevicesCommands::Deny { request_id } => super::devices::cmd_devices_deny(&request_id),
         DevicesCommands::Remove { id } => super::devices::cmd_devices_remove(&id),
     }
 }

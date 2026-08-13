@@ -4,12 +4,12 @@ use clap::{Parser, Subcommand};
 
 use crate::{
     AgentCommands, ApprovalsCommands, AuthCommands, AutonomyCommands, ChannelCommands,
-    ConfigCommands, CronCommands, DevicesCommands, EmailCommands, EmbeddingsCommands,
-    GatewayCommands, HandCommands, IntegrationCommands, LogTarget, LoginCommands, MemoryCommands,
-    ModelsCommands, ProcessCommands, ProjectCommands, ScaffoldKind, SecurityCommands,
-    ServiceCommands, SessionsCommands, SkillCommands, SnapshotCommands, SshCommands,
-    SystemCommands, TriggerCommands, VaultCommands, VoiceCommands, WebhooksCommands,
-    WorkflowCommands,
+    ClientCommands, ConfigCommands, CronCommands, DevicesCommands, EmailCommands,
+    EmbeddingsCommands, GatewayCommands, HandCommands, IntegrationCommands, LogTarget,
+    LoginCommands, MemoryCommands, ModelsCommands, NodeCommands, ProcessCommands, ProjectCommands,
+    ScaffoldKind, SecurityCommands, ServiceCommands, SessionsCommands, SkillCommands,
+    SnapshotCommands, SshCommands, SystemCommands, TriggerCommands, VaultCommands, VoiceCommands,
+    WebhooksCommands, WorkflowCommands,
 };
 
 const AFTER_HELP: &str = "\
@@ -289,6 +289,12 @@ pub(crate) enum Commands {
     /// Device pairing and token management [*].
     #[command(subcommand)]
     Devices(DevicesCommands),
+    /// Pair and run this machine as an outbound execution Node [*].
+    #[command(subcommand)]
+    Node(NodeCommands),
+    /// Pair this installation as a lightweight interface to a Hub [*].
+    #[command(subcommand)]
+    Client(ClientCommands),
     /// Generate device pairing QR code.
     Qr,
     /// Webhook helpers and trigger management [*].
@@ -537,5 +543,75 @@ mod tests {
         assert!(Cli::try_parse_from(["captain", "channel", "test", "email:work"]).is_ok());
         assert!(Cli::try_parse_from(["captain", "channel", "enable", "telegram"]).is_err());
         assert!(Cli::try_parse_from(["captain", "channel", "disable", "telegram"]).is_err());
+    }
+
+    #[test]
+    fn node_cli_exposes_one_outbound_pairing_path_and_safe_defaults() {
+        let cli = Cli::try_parse_from([
+            "captain",
+            "node",
+            "pair",
+            "--hub",
+            "https://hub.example.com",
+            "--workspace",
+            ".",
+            "--no-browser",
+        ])
+        .unwrap();
+        let Some(Commands::Node(NodeCommands::Pair(args))) = cli.command else {
+            panic!("expected Node pair command");
+        };
+        assert_eq!(args.workspace_id, "workspace-main");
+        assert!(!args.allow_mutation);
+        assert!(args.no_browser);
+        assert!(args.proxy.is_none());
+
+        assert!(Cli::try_parse_from([
+            "captain",
+            "node",
+            "pair",
+            "--hub",
+            "https://hub.example.com",
+            "--workspace",
+            ".",
+            "--proxy",
+            "https://proxy.example.com",
+            "--no-proxy",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["captain", "node", "status", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["captain", "node", "run"]).is_ok());
+    }
+
+    #[test]
+    fn client_cli_exposes_one_lightweight_pairing_path_and_safe_defaults() {
+        let cli = Cli::try_parse_from([
+            "captain",
+            "client",
+            "pair",
+            "--hub",
+            "https://hub.example.com",
+            "--no-browser",
+        ])
+        .unwrap();
+        let Some(Commands::Client(ClientCommands::Pair(args))) = cli.command else {
+            panic!("expected Client pair command");
+        };
+        assert!(args.no_browser);
+        assert!(args.proxy.is_none());
+        assert!(args.ca_bundle.is_none());
+        assert!(Cli::try_parse_from([
+            "captain",
+            "client",
+            "pair",
+            "--hub",
+            "https://hub.example.com",
+            "--proxy",
+            "https://proxy.example.com",
+            "--no-proxy",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["captain", "client", "status", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["captain", "client", "reset", "--yes"]).is_ok());
     }
 }

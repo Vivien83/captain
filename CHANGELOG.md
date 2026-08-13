@@ -6,6 +6,56 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.14] - 2026-08-13
+
+Early-access release focused on one authoritative Captain Hub, lightweight
+Clients, outbound execution Nodes, and crash-safe distributed work.
+
+### Added
+
+- A versioned Hub/Client/Node protocol now carries capabilities, logical
+  workspaces, explicit grants, leases, monotonic sequences, acknowledgements,
+  heartbeats, idempotency keys, progress, cancellation, and terminal evidence.
+- Lightweight terminal, TUI, and Desktop Clients pair through a browser code,
+  reuse the Hub's sessions and work surfaces, and carry no competing provider
+  loop or memory database.
+- Optional macOS, Linux, and Windows Nodes connect outward over HTTPS 443,
+  preferring authenticated WebSocket with bounded HTTPS stream and long-poll
+  fallback. Environment and explicit proxies plus enterprise CA bundles are
+  supported.
+- The authenticated Devices registry exposes roles, presence, versions,
+  capabilities, approved grants, transport, offline reasons, and revocation.
+  Enrollment is closed by default and opens only for a bounded operator window.
+- Sessions and projects can select Auto, Hub, or one capable Node without
+  exposing the Node's physical workspace path.
+
+### Reliability
+
+- Hub and Node rails persist envelopes, ACKs, leases, approvals, cancellation,
+  outboxes, and terminal evidence before delivery. A possible interrupted side
+  effect becomes `uncertain` and is never replayed blindly.
+- The local Node worker repeats workspace, path, family, mutation, approval,
+  and runtime guards before execution. Idempotent replay returns reconciled
+  evidence without running the same effect twice.
+- `captain service start/restart` now waits up to a bounded 90 seconds for cold
+  boot health and reports whether the service manager remains active on
+  timeout.
+
+### Security
+
+- One per-device credential produces short-lived, role-scoped access tokens;
+  revocation is checked by the Hub and raw credentials stay out of durable Hub
+  state, status, errors, and logs.
+- Client work authority excludes secrets, configuration, installation,
+  updates, shutdown, device administration, and persistent approval grants.
+- Nodes keep physical paths local, accept only explicitly bound logical
+  workspaces and tool families, and require a fresh local approval proof for
+  sensitive effects.
+- The TUI stack now uses Ratatui 0.30 with fixed `lru 0.18.2`; the stale
+  Windows-only `quick-xml 0.37.5` path is also gone. The unfiltered RustSec
+  release baseline contains no vulnerability record, and source builds now
+  require Rust 1.88 or newer.
+
 ## [0.1.0-alpha.13] - 2026-08-09
 
 Early-access release focused on adaptive delivery verification, crash-safe

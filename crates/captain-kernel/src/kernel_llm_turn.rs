@@ -1,6 +1,7 @@
 use crate::error::{KernelError, KernelResult};
 use captain_memory::session::Session;
 use captain_runtime::agent_loop::AgentLoopResult;
+use captain_runtime::execution_routing::{with_turn_execution_context, TurnExecutionContext};
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::{LlmDriver, StreamEvent};
 use captain_types::agent::{AgentEntry, AgentId, AgentManifest, AgentMode, SessionId};
@@ -34,6 +35,7 @@ pub(super) struct StreamingLlmTurnRequest<'a> {
     pub(super) sender_name: Option<String>,
     pub(super) content_blocks: Option<Vec<ContentBlock>>,
     pub(super) channel_type: Option<String>,
+    pub(super) execution_context: TurnExecutionContext,
 }
 
 struct NonStreamingLlmTurnRequest<'a> {
@@ -45,6 +47,7 @@ struct NonStreamingLlmTurnRequest<'a> {
     sender_id: Option<String>,
     sender_name: Option<String>,
     channel_type: Option<String>,
+    execution_context: TurnExecutionContext,
 }
 
 pub(super) struct LlmTurnBasics {
@@ -78,10 +81,17 @@ impl CaptainKernel {
             sender_name,
             content_blocks,
             channel_type,
+            execution_context,
         } = request;
 
-        let prepared =
-            self.prepare_llm_turn_basics(agent_id, entry, message, content_blocks.is_some())?;
+        let prepared = self.prepare_llm_turn_basics(
+            agent_id,
+            entry,
+            message,
+            content_blocks.is_some(),
+            channel_type.as_deref(),
+            &execution_context,
+        )?;
         let session = prepared.session;
         let effective_ctx_window = prepared.context_window;
         let lean_direct = prepared.lean_direct;
@@ -99,7 +109,12 @@ impl CaptainKernel {
         let ctx_window = Some(effective_ctx_window);
 
         let mut manifest = entry.manifest.clone();
-        self.prepare_llm_manifest_for_prompt(agent_id, &mut manifest, true);
+        self.prepare_llm_manifest_for_prompt(
+            agent_id,
+            &mut manifest,
+            true,
+            channel_type.as_deref(),
+        );
 
         self.prepare_llm_prompt(LlmPromptRequest {
             agent_id,
@@ -128,6 +143,7 @@ impl CaptainKernel {
             pre_loop_compaction,
             content_blocks,
             channel_type,
+            execution_context,
         })
     }
 
@@ -143,6 +159,8 @@ impl CaptainKernel {
         sender_name: Option<String>,
         channel_type: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
+        let execution_context =
+            self.resolve_turn_execution_context(agent_id, &entry.manifest, entry.session_id)?;
         let request = NonStreamingLlmTurnRequest {
             entry,
             agent_id,
@@ -152,10 +170,23 @@ impl CaptainKernel {
             sender_id,
             sender_name,
             channel_type,
+            execution_context: execution_context.clone(),
         };
 
+        with_turn_execution_context(
+            execution_context,
+            self.execute_llm_agent_in_context(request),
+        )
+        .await
+    }
+
+    async fn execute_llm_agent_in_context(
+        &self,
+        request: NonStreamingLlmTurnRequest<'_>,
+    ) -> KernelResult<AgentLoopResult> {
         self.check_non_streaming_llm_quota(&request)?;
         let mut prepared = self.prepare_non_streaming_llm_turn(&request).await?;
+        let agent_id = request.agent_id;
         let result = self
             .run_prepared_non_streaming_llm_turn(request, &mut prepared)
             .await?;
@@ -187,6 +218,8 @@ impl CaptainKernel {
             request.entry,
             request.message,
             request.content_blocks.is_some(),
+            request.channel_type.as_deref(),
+            &request.execution_context,
         )?;
         let mut session = prepared.session;
         let initial_ctx_window = prepared.context_window;
@@ -240,7 +273,12 @@ impl CaptainKernel {
         lean_direct: bool,
     ) -> AgentManifest {
         let mut manifest = request.entry.manifest.clone();
-        self.prepare_llm_manifest_for_prompt(request.agent_id, &mut manifest, false);
+        self.prepare_llm_manifest_for_prompt(
+            request.agent_id,
+            &mut manifest,
+            false,
+            request.channel_type.as_deref(),
+        );
 
         self.prepare_llm_prompt(LlmPromptRequest {
             agent_id: request.agent_id,
@@ -294,6 +332,8 @@ impl CaptainKernel {
         entry: &AgentEntry,
         message: &str,
         has_content_blocks: bool,
+        origin: Option<&str>,
+        execution_context: &TurnExecutionContext,
     ) -> KernelResult<LlmTurnBasics> {
         let mut session = self
             .memory
@@ -309,8 +349,28 @@ impl CaptainKernel {
         session.context_window_tokens = context_window as u64;
 
         let lean_direct = !has_content_blocks && is_lean_direct_turn(message);
-        let tools =
+        let selected =
             select_llm_tools_for_turn(entry.mode, self.available_tools(agent_id), lean_direct);
+        let tools = if captain_runtime::client_authority::is_paired_client_origin(origin) {
+            let selected_names = selected
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let builtins = captain_runtime::tool_runner::builtin_tool_definitions()
+                .into_iter()
+                .filter(|tool| selected_names.contains(tool.name.as_str()))
+                .collect();
+            captain_runtime::client_authority::filter_tool_definitions_for_origin_and_route(
+                builtins,
+                origin,
+                matches!(
+                    execution_context.target,
+                    captain_runtime::execution_routing::ResolvedExecutionTarget::Node { .. }
+                ),
+            )
+        } else {
+            selected
+        };
 
         Ok(LlmTurnBasics {
             session,
@@ -345,8 +405,13 @@ impl CaptainKernel {
         agent_id: AgentId,
         manifest: &mut AgentManifest,
         streaming: bool,
+        origin: Option<&str>,
     ) {
-        if manifest.workspace.is_none() {
+        if captain_runtime::client_authority::is_paired_client_origin(origin) {
+            // The cloned turn manifest must not expose or mutate Hub-local
+            // workspace state for a lightweight Client turn.
+            manifest.workspace = None;
+        } else if manifest.workspace.is_none() {
             let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
             if let Err(e) = ensure_workspace(&workspace_dir) {
                 if streaming {

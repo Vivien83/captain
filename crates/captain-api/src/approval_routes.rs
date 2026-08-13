@@ -3,11 +3,12 @@
 use crate::state::AppState;
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_types::approval::{ApprovalDecision, ApprovalRequest, RiskLevel};
 use std::sync::Arc;
 
@@ -30,10 +31,17 @@ pub struct RejectApprovalRequest {
 }
 
 /// GET /api/approvals - List pending approval requests.
-pub async fn list_approvals(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn list_approvals(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<DeviceAccessIdentity>>,
+) -> impl IntoResponse {
     let pending = state.kernel.approval_manager.list_pending();
     let total = pending.len();
-    let rules = state.kernel.approval_manager.list_rules();
+    let rules = if client.is_none() {
+        state.kernel.approval_manager.list_rules()
+    } else {
+        Vec::new()
+    };
     let registry_agents = state.kernel.registry.list();
 
     let approvals: Vec<serde_json::Value> = pending
@@ -120,8 +128,15 @@ pub async fn create_approval(
 pub async fn approve_request(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
 ) -> Response {
-    resolve_approval(state, id, ApprovalDecision::Approved, "approved")
+    resolve_approval(
+        state,
+        id,
+        ApprovalDecision::Approved,
+        "approved",
+        client.is_some(),
+    )
 }
 
 /// POST /api/approvals/{id}/reject - Reject a pending request.
@@ -167,12 +182,14 @@ pub async fn reject_always_request(
 pub async fn approve_session_request(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
 ) -> Response {
     resolve_approval(
         state,
         id,
         ApprovalDecision::ApprovedSession,
         "approved_session",
+        client.is_some(),
     )
 }
 
@@ -180,12 +197,14 @@ pub async fn approve_session_request(
 pub async fn approve_always_request(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
 ) -> Response {
     resolve_approval(
         state,
         id,
         ApprovalDecision::ApprovedAlways,
         "approved_always",
+        client.is_some(),
     )
 }
 
@@ -256,7 +275,14 @@ fn reject_with_scope(
             serde_json::json!({"error": "A durable deny rule requires a reason"}),
         );
     }
-    resolve_approval_with_reason(state, id, decision, request.reason.as_deref(), status)
+    resolve_approval_with_reason(
+        state,
+        id,
+        decision,
+        request.reason.as_deref(),
+        status,
+        false,
+    )
 }
 
 fn parse_reject_body(body: &[u8]) -> Result<RejectApprovalRequest, String> {
@@ -271,8 +297,9 @@ fn resolve_approval(
     id: String,
     decision: ApprovalDecision,
     status: &'static str,
+    paired_client: bool,
 ) -> Response {
-    resolve_approval_with_reason(state, id, decision, None, status)
+    resolve_approval_with_reason(state, id, decision, None, status, paired_client)
 }
 
 fn resolve_approval_with_reason(
@@ -281,11 +308,39 @@ fn resolve_approval_with_reason(
     decision: ApprovalDecision,
     reason: Option<&str>,
     status: &'static str,
+    paired_client: bool,
 ) -> Response {
     let uuid = match parse_approval_id(&id) {
         Ok(uuid) => uuid,
         Err(response) => return response,
     };
+
+    if paired_client && decision.is_approved() {
+        let Some(request) = state
+            .kernel
+            .approval_manager
+            .list_pending()
+            .into_iter()
+            .find(|request| request.id == uuid)
+        else {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error": format!("No pending approval request with id {uuid}")}),
+            );
+        };
+        if !captain_runtime::client_authority::paired_client_tool_name_is_allowed(
+            &request.tool_name,
+        ) {
+            return json_response(
+                StatusCode::FORBIDDEN,
+                serde_json::json!({
+                    "error": "Paired Client authority cannot approve this tool",
+                    "code": "paired_client_authority_denied",
+                    "tool_name": request.tool_name,
+                }),
+            );
+        }
+    }
 
     match state.kernel.approval_manager.resolve_with_reason(
         uuid,
@@ -400,6 +455,47 @@ mod tests {
             tokio::spawn(async move { kernel.approval_manager.request_approval(request).await });
         for _ in 0..50 {
             if state.kernel.approval_manager.pending_count() > 0 {
+                return (id, task);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        panic!("approval request was not queued");
+    }
+
+    async fn queue_request_for_tool(
+        state: &Arc<AppState>,
+        tool_name: &str,
+        action: &str,
+    ) -> (
+        uuid::Uuid,
+        tokio::task::JoinHandle<captain_types::approval::ApprovalOutcome>,
+    ) {
+        let request = ApprovalRequest {
+            id: uuid::Uuid::new_v4(),
+            agent_id: "captain".to_string(),
+            tool_name: tool_name.to_string(),
+            description: "paired Client approval test".to_string(),
+            action_summary: action.to_string(),
+            action_digest: captain_types::approval::approval_action_digest(
+                tool_name,
+                action.as_bytes(),
+            ),
+            risk_level: RiskLevel::High,
+            requested_at: chrono::Utc::now(),
+            timeout_secs: 60,
+        };
+        let id = request.id;
+        let kernel = Arc::clone(&state.kernel);
+        let task =
+            tokio::spawn(async move { kernel.approval_manager.request_approval(request).await });
+        for _ in 0..50 {
+            if state
+                .kernel
+                .approval_manager
+                .list_pending()
+                .iter()
+                .any(|request| request.id == id)
+            {
                 return (id, task);
             }
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
@@ -533,13 +629,13 @@ mod tests {
         let (_tmp, state) = test_state();
         let (id, task) = queue_request(&state, "publish verified bundle").await;
         let response =
-            approve_always_request(State(Arc::clone(&state)), Path(id.to_string())).await;
+            approve_always_request(State(Arc::clone(&state)), Path(id.to_string()), None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let outcome = task.await.unwrap();
         assert_eq!(outcome.decision, ApprovalDecision::ApprovedAlways);
         let rule_id = outcome.rule_id.expect("durable rule id");
 
-        let listed = list_approvals(State(Arc::clone(&state)))
+        let listed = list_approvals(State(Arc::clone(&state)), None)
             .await
             .into_response();
         let body = json_body(listed).await;
@@ -548,10 +644,77 @@ mod tests {
         assert_eq!(body["rules"][0]["id"], rule_id.to_string());
         assert!(body["rules"][0].get("action_summary").is_none());
 
+        let client_listed = list_approvals(
+            State(Arc::clone(&state)),
+            Some(Extension(DeviceAccessIdentity {
+                device_id: "client-1".to_string(),
+                role: captain_wire::DeviceRole::Client,
+                grants_json: "{}".to_string(),
+                protocol_version: captain_wire::HUB_NODE_PROTOCOL_VERSION,
+            })),
+        )
+        .await
+        .into_response();
+        let client_body = json_body(client_listed).await;
+        assert_eq!(client_body["rules_total"], 0);
+        assert_eq!(client_body["rules"], serde_json::json!([]));
+
         let revoked =
             revoke_approval_rule(State(Arc::clone(&state)), Path(rule_id.to_string())).await;
         assert_eq!(revoked.status(), StatusCode::OK);
         assert!(state.kernel.approval_manager.list_rules().is_empty());
+        state.kernel.shutdown();
+    }
+
+    #[tokio::test]
+    async fn paired_client_cannot_approve_shell_but_can_approve_memory() {
+        let (_tmp, state) = test_state();
+        let identity = captain_kernel::hub_pairing_service::DeviceAccessIdentity {
+            device_id: "client-1".to_string(),
+            role: captain_wire::DeviceRole::Client,
+            grants_json: "{}".to_string(),
+            protocol_version: captain_wire::HUB_NODE_PROTOCOL_VERSION,
+        };
+
+        let (shell_id, shell_task) = queue_request_for_tool(&state, "shell_exec", "uname -a").await;
+        let denied = approve_request(
+            State(Arc::clone(&state)),
+            Path(shell_id.to_string()),
+            Some(Extension(identity.clone())),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert!(state
+            .kernel
+            .approval_manager
+            .list_pending()
+            .iter()
+            .any(|request| request.id == shell_id));
+
+        state
+            .kernel
+            .approval_manager
+            .resolve(
+                shell_id,
+                ApprovalDecision::Denied,
+                Some("test cleanup".to_string()),
+            )
+            .unwrap();
+        assert_eq!(shell_task.await.unwrap().decision, ApprovalDecision::Denied);
+
+        let (memory_id, memory_task) =
+            queue_request_for_tool(&state, "memory_save", "remember preference").await;
+        let allowed = approve_request(
+            State(Arc::clone(&state)),
+            Path(memory_id.to_string()),
+            Some(Extension(identity)),
+        )
+        .await;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert_eq!(
+            memory_task.await.unwrap().decision,
+            ApprovalDecision::Approved
+        );
         state.kernel.shutdown();
     }
 }

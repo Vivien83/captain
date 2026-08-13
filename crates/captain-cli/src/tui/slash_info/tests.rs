@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn remote_client_status_never_exposes_its_hub_origin() {
+    let message = status_message(
+        StatusSnapshot::RemoteClient {
+            agent_name: Some("captain"),
+        },
+        Lang::En,
+    );
+    assert!(message.contains("lightweight Client"));
+    assert!(message.contains("captain"));
+    assert!(!message.contains("https://"));
+}
+
+#[test]
 fn status_message_reports_daemon_mode_and_agent() {
     let msg = status_message(
         StatusSnapshot::Daemon {

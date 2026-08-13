@@ -275,7 +275,7 @@ mod tests {
         let normal = tmp.path().join("project_extra");
         std::fs::create_dir_all(&normal).unwrap();
 
-        let resolved = validate_extra_paths(&[normal.clone()], &captain_home).unwrap();
+        let resolved = validate_extra_paths(std::slice::from_ref(&normal), &captain_home).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0], normal.canonicalize().unwrap());
     }

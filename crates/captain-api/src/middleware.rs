@@ -54,6 +54,7 @@ pub struct AuthState {
     pub fallback_auth: captain_types::config::AuthConfig,
     pub deployment: captain_types::config::DeploymentConfig,
     pub security: Arc<crate::web_auth_security::WebAuthSecurity>,
+    pub hub_pairing: Arc<captain_kernel::hub_pairing_service::HubPairingService>,
 }
 
 /// Bearer token authentication middleware.
@@ -70,9 +71,25 @@ pub async fn auth(
     next: Next,
 ) -> Response<Body> {
     let method = request.method().clone();
-    let path = request.uri().path();
+    let path = request.uri().path().to_string();
 
-    if is_loopback_shutdown_request(&request, path) || is_public_endpoint(&method, path) {
+    if is_loopback_shutdown_request(&request, &path) {
+        return next.run(request).await;
+    }
+
+    if method == Method::GET && path == "/api/auth/check" {
+        if let Some(token) = request_credentials(&request).bearer_token {
+            if let Ok(identity) = auth_state
+                .hub_pairing
+                .authenticate_client_access_token(token)
+            {
+                request.extensions_mut().insert(identity);
+            }
+        }
+        return next.run(request).await;
+    }
+
+    if is_public_endpoint(&method, &path) {
         return next.run(request).await;
     }
 
@@ -92,16 +109,22 @@ pub async fn auth(
             request.headers(),
             &auth_state.deployment,
         );
-        if auth_state.security.consume_realtime_ticket(
+        if let Some(authorization) = auth_state.security.consume_realtime_ticket(
             ticket,
-            path,
+            &path,
             ip,
             auth_snapshot.auth.session_epoch,
             Instant::now(),
         ) {
-            request
-                .extensions_mut()
-                .insert(crate::web_auth_security::RealtimeTicketAuthorization);
+            if authorization.client.is_some()
+                && !crate::client_access_policy::allows(&method, &path)
+            {
+                return client_forbidden_response();
+            }
+            if let Some(identity) = authorization.client.as_ref() {
+                request.extensions_mut().insert(identity.clone());
+            }
+            request.extensions_mut().insert(authorization);
             return next.run(request).await;
         }
         return unauthorized_response("Invalid or expired realtime ticket");
@@ -118,7 +141,22 @@ pub async fn auth(
     );
     match authorize_request(&request, &auth_snapshot, client_is_loopback) {
         AuthDecision::Allow => next.run(request).await,
-        AuthDecision::Deny(error_msg) => unauthorized_response(error_msg),
+        AuthDecision::Deny(error_msg) => {
+            let Some(token) = request_credentials(&request).bearer_token else {
+                return unauthorized_response(error_msg);
+            };
+            match auth_state
+                .hub_pairing
+                .authenticate_client_access_token(token)
+            {
+                Ok(identity) if crate::client_access_policy::allows(&method, &path) => {
+                    request.extensions_mut().insert(identity);
+                    next.run(request).await
+                }
+                Ok(_) => client_forbidden_response(),
+                Err(_) => unauthorized_response(error_msg),
+            }
+        }
     }
 }
 
@@ -178,6 +216,8 @@ enum PublicPath {
     Exact(&'static str),
     Prefix(&'static str),
     AgentApiIngress,
+    HubNodeHttpTransport,
+    HubNodeWebSocket,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +237,12 @@ impl PublicEndpoint {
             PublicPath::AgentApiIngress => {
                 crate::agent_api_routes::is_agent_api_ingress_route(method, path)
             }
+            PublicPath::HubNodeHttpTransport => {
+                crate::hub_node_routes::is_hub_node_http_transport_route(method, path)
+            }
+            PublicPath::HubNodeWebSocket => {
+                crate::hub_node_websocket::is_hub_node_websocket_route(method, path)
+            }
         }
     }
 }
@@ -205,6 +251,10 @@ impl PublicEndpoint {
 ///
 /// The per-agent ingress rule is present only because that exact route applies
 /// its own rate limit and per-agent Bearer token before executing a turn.
+/// Hub pairing bootstrap routes are exact POST paths with their own per-IP
+/// limits, bounded typed bodies, one-time polling secret or device credential.
+/// Hub Node transport routes are exact HTTP paths with bounded bodies, a
+/// short-lived per-device Bearer token and one receive loop per transport.
 const PUBLIC_ALLOWLIST: &[PublicEndpoint] = &[
     PublicEndpoint {
         method: PublicMethod::Get,
@@ -253,6 +303,30 @@ const PUBLIC_ALLOWLIST: &[PublicEndpoint] = &[
     PublicEndpoint {
         method: PublicMethod::Post,
         path: PublicPath::AgentApiIngress,
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact(captain_wire::PAIRING_CLAIM_PATH),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact(captain_wire::PAIRING_POLL_PATH),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact(captain_wire::DEVICE_TOKEN_PATH),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::HubNodeHttpTransport,
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::HubNodeHttpTransport,
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::HubNodeWebSocket,
     },
 ];
 
@@ -359,6 +433,21 @@ fn unauthorized_response(error_msg: &'static str) -> Response<Body> {
         .header("www-authenticate", "Bearer")
         .body(Body::from(
             serde_json::json!({"error": error_msg}).to_string(),
+        ))
+        .unwrap_or_default()
+}
+
+fn client_forbidden_response() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "error": "Client credential is not authorized for this endpoint",
+                "code": "client_route_forbidden",
+                "policy_version": crate::client_access_policy::CLIENT_ACCESS_POLICY_VERSION,
+            })
+            .to_string(),
         ))
         .unwrap_or_default()
 }

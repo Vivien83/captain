@@ -4,6 +4,52 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Alpha 14 Release Candidate Contract
+
+Alpha 14 introduces one authoritative Hub, lightweight Clients, and optional
+execution Nodes. The Hub remains a complete Captain and the only authority for
+memory, sessions, projects, goals, providers, channels, agents, skills,
+automation, audit, and durable work. Standalone remains the default local
+composition; there is no multi-primary database synchronization.
+
+Terminal, TUI, and Desktop Clients pair with a browser code and reuse the same
+Hub sessions. Their scoped work authority covers chat, sessions, projects,
+workflows, memory, approvals, and cancellable Live Runs. It excludes secrets,
+configuration, install/update, shutdown, device administration, and persistent
+approval grants. A configured Client fails closed when the Hub is unavailable
+instead of falling back to a local daemon or in-process kernel.
+
+A Node keeps physical workspaces and execution on a macOS, Linux, or Windows
+machine while opening only an outbound HTTPS 443 connection. WebSocket is
+preferred; HTTPS streaming and bounded long polling are deterministic
+fallbacks. Environment and explicit proxy policies, named proxy-password
+secrets, `NO_PROXY`, and enterprise CA bundles are supported. Telegram is not
+a machine tunnel.
+
+Pairing enrollment is closed by default, bounded when opened by an operator,
+and closed again after restart. Per-device credentials, short-lived access
+tokens, capabilities, grants, presence, versions, transports, and revocation
+remain distinct. Nodes repeat local workspace, path, family, mutation,
+approval, and runtime guards; the Hub cannot bypass machine policy.
+
+The rail persists sequence numbers, ACKs, leases, heartbeats, approvals,
+cancellation, outboxes, idempotency, and terminal evidence. A possible effect
+after interruption becomes `uncertain` and is not replayed blindly. Session and
+project targets support Auto, Hub, and eligible Nodes without sending physical
+paths to the Hub.
+
+The deterministic distributed smoke composes the real API router, pairing,
+two Client surfaces, WebSocket transport, both durable rails, the local worker,
+and guarded file tools. It proves mutation, read, crash after effect, explicit
+uncertainty, reconnect, exact delivery, idempotent non-duplication, and path
+confinement. It does not claim that an arbitrary external VPS, DNS, firewall,
+reverse proxy, or certificate has passed deployment-specific validation.
+
+Alpha 14 also replaces the premature 12/15-second service readiness warning
+with a bounded 90-second cold-boot health window. Complete mobile apps,
+application connectors, native Node service installation, and multi-primary
+memory remain deferred and are not implied by this candidate.
+
 ## Alpha 13 Published Contract
 
 Alpha 13 adds adaptive delivery verification to the existing agent loop. Pure

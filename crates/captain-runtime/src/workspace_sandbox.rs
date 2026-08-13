@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 /// - Rejects `..` components outright.
 /// - Relative paths are joined with `workspace_root`.
 /// - Absolute paths are checked against the workspace root after canonicalization.
-/// - For new files: canonicalizes the parent directory and appends the filename.
+/// - For new files: canonicalizes the nearest existing ancestor and appends
+///   every missing component.
 /// - The final canonical path must start with the canonical workspace root.
 pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<PathBuf, String> {
     let path = Path::new(user_path);
@@ -34,24 +35,11 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
         .canonicalize()
         .map_err(|e| format!("Failed to resolve workspace root: {e}"))?;
 
-    // Canonicalize the candidate (or its parent for new files)
-    let canon_candidate = if candidate.exists() {
-        candidate
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve path: {e}"))?
-    } else {
-        // For new files: canonicalize the parent and append the filename
-        let parent = candidate
-            .parent()
-            .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
-        let filename = candidate
-            .file_name()
-            .ok_or_else(|| "Invalid path: no filename".to_string())?;
-        let canon_parent = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
-        canon_parent.join(filename)
-    };
+    // Canonicalize the nearest existing ancestor, then append every missing
+    // component. This preserves symlink-escape checks while allowing
+    // file_write to honor its contract of creating nested parent directories.
+    let canon_candidate = canonicalize_existing_or_ancestor(&candidate)
+        .ok_or_else(|| "Failed to resolve path from an existing ancestor".to_string())?;
 
     // Verify the canonical path is inside the workspace
     if !canon_candidate.starts_with(&canon_root) {
@@ -108,7 +96,7 @@ pub fn resolve_sandbox_path_multi(
         match resolve_sandbox_path(user_path, root) {
             Ok(canon) => {
                 for blocked in blocked_paths {
-                    if let Some(canon_blocked) = canonicalize_existing_or_parent(blocked) {
+                    if let Some(canon_blocked) = canonicalize_existing_or_ancestor(blocked) {
                         if canon.starts_with(&canon_blocked) {
                             return Err(format!(
                                 "Access denied: path '{}' is in a protected zone ({})",
@@ -133,13 +121,21 @@ pub fn resolve_sandbox_path_multi(
     Err(last_err)
 }
 
-fn canonicalize_existing_or_parent(path: &Path) -> Option<PathBuf> {
+fn canonicalize_existing_or_ancestor(path: &Path) -> Option<PathBuf> {
     if let Ok(canon) = path.canonicalize() {
         return Some(canon);
     }
-    let parent = path.parent()?;
-    let filename = path.file_name()?;
-    parent.canonicalize().ok().map(|p| p.join(filename))
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    while !ancestor.exists() {
+        missing.push(ancestor.file_name()?.to_os_string());
+        ancestor = ancestor.parent()?;
+    }
+    let mut resolved = ancestor.canonicalize().ok()?;
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    Some(resolved)
 }
 
 #[cfg(test)]
@@ -207,6 +203,25 @@ mod tests {
         let resolved = result.unwrap();
         assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));
         assert!(resolved.ends_with("new_file.txt"));
+    }
+
+    #[test]
+    fn test_nonexistent_nested_parents_stay_inside_workspace() {
+        let dir = TempDir::new().unwrap();
+        let result = resolve_sandbox_path("new/deep/tree/file.txt", dir.path()).unwrap();
+        assert!(result.starts_with(dir.path().canonicalize().unwrap()));
+        assert!(result.ends_with("new/deep/tree/file.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonexistent_leaf_below_symlink_escape_is_blocked() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).unwrap();
+        let result = resolve_sandbox_path("escape/new/deep/file.txt", dir.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Access denied"));
     }
 
     #[test]

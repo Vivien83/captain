@@ -283,7 +283,8 @@ max_age_secs = 604800
 blocked_mounts = []
 
 [pairing]
-enabled = false
+enabled = false                            # legacy mobile pairing routes
+hub_enabled = true                         # enrollment remains closed by default
 max_devices = 10
 token_expiry_secs = 300
 push_provider = "none"                     # none | ntfy | gotify

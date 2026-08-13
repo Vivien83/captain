@@ -24,6 +24,8 @@ DOC_FILES=(
   docs/cli-reference.md
   docs/channel-adapters.md
   docs/configuration.md
+  docs/hub-clients-nodes.md
+  docs/HUB_CLIENT_NODE_PROTOCOL.md
   docs/release-provenance.md
   docs/repository-governance.md
   docs/captain-tools/channel.md
@@ -37,6 +39,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.14.md
   docs/releases/v0.1.0-alpha.13.md
   docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
@@ -159,21 +162,25 @@ scan_banned \
 require_contains \
   "current release candidate has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.13"
+  "### 0.1.0-alpha.14"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.13'
+  '0.1.0-alpha.14'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.13'
+  '0.1.0-alpha.14'
 require_contains \
   "public changelog exposes the release candidate" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.13] - 2026-08-09'
+  '## [0.1.0-alpha.14] - 2026-08-13'
 require_contains \
   "reviewed release candidate notes exist" \
+  docs/releases/v0.1.0-alpha.14.md \
+  '# Captain 0.1.0-alpha.14'
+require_contains \
+  "historical alpha.13 notes remain available" \
   docs/releases/v0.1.0-alpha.13.md \
   '# Captain 0.1.0-alpha.13'
 require_contains \
@@ -489,6 +496,42 @@ require_contains \
   docs/releases/v0.1.0-alpha.12.md \
   'selective metadata and redacted tail are not sent'
 require_contains \
+  "alpha.14 notes expose one authoritative Hub" \
+  docs/releases/v0.1.0-alpha.14.md \
+  '## One Hub, shared work'
+require_contains \
+  "alpha.14 notes expose outbound execution Nodes" \
+  docs/releases/v0.1.0-alpha.14.md \
+  '## Outbound execution Nodes'
+require_contains \
+  "alpha.14 notes expose durable pairing and execution" \
+  docs/releases/v0.1.0-alpha.14.md \
+  '## Durable pairing and execution'
+require_contains \
+  "alpha.14 notes state the deployment certification boundary" \
+  docs/releases/v0.1.0-alpha.14.md \
+  'Each external deployment must still pass its own HTTPS and Node smoke'
+require_not_contains \
+  "alpha.14 notes do not copy alpha.13 source provenance" \
+  docs/releases/v0.1.0-alpha.14.md \
+  '6c05ae0c667e865a198764c1cd88c9050bd87db1'
+require_not_contains \
+  "alpha.14 notes do not copy alpha.13 OCI provenance" \
+  docs/releases/v0.1.0-alpha.14.md \
+  'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
+require_contains \
+  "DOC2 exposes the alpha.14 candidate contract" \
+  docs/DOCS_STATUS.md \
+  '## Alpha 14 Release Candidate Contract'
+require_contains \
+  "Hub user guide pins Client fail-closed behavior" \
+  docs/hub-clients-nodes.md \
+  'cannot silently fall back'
+require_contains \
+  "Hub protocol exposes the reproducible distributed smoke" \
+  docs/HUB_CLIENT_NODE_PROTOCOL.md \
+  '## Reproducible Distributed Smoke'
+require_contains \
   "alpha.13 notes expose adaptive delivery verification" \
   docs/releases/v0.1.0-alpha.13.md \
   '## Adaptive delivery verification'
@@ -584,24 +627,24 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.13/install.sh'
+    'releases/download/v0.1.0-alpha.14/install.sh'
   require_contains \
     "$readme pins the immutable prerelease image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
     'releases/latest/download/install.sh'
 done
 require_contains \
-  "security policy supports alpha.13" \
+  "security policy supports alpha.14" \
   SECURITY.md \
-  '| 0.1.0-alpha.13 | :white_check_mark: |'
+  '| 0.1.0-alpha.14 | :white_check_mark: |'
 require_contains \
-  "security policy retires alpha.12" \
+  "security policy retires alpha.13" \
   SECURITY.md \
-  '| 0.1.0-alpha.12 | :x: |'
+  '| 0.1.0-alpha.13 | :x: |'
 require_contains \
   "security policy retires alpha.11" \
   SECURITY.md \

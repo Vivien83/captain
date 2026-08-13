@@ -341,6 +341,22 @@ block remains readable as one account named `default`; all new writes use
 
 ## Execution and Approvals
 
+### Hub devices
+
+The Hub/Client/Node rail is available by default, while every enrollment
+window starts closed and expires automatically. Disable the rail entirely only
+when this installation must never accept Clients or Nodes:
+
+```toml
+[pairing]
+hub_enabled = true
+enabled = false # legacy mobile pairing routes
+```
+
+Open a bounded enrollment window with `captain devices pair`; this requires
+the existing authenticated operator API. Approved devices remain revocable
+and can reconnect after the enrollment window closes.
+
 Execution policy controls command availability, timeouts, output limits, and
 critical-command handling. The typed default is
 `profile = "personal_workstation"` with `mode = "allowlist"`. Guided local

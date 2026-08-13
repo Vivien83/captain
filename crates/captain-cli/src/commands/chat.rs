@@ -1,13 +1,23 @@
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
-use crate::{daemon_client, find_daemon, tui, ui};
+use crate::{daemon_client, find_tui_backend, tui, ui};
 
 pub(crate) fn cmd_quick_chat(config: Option<PathBuf>, agent: Option<String>, plain: bool) {
     if should_use_plain_chat(plain) {
-        if let Some(base) = find_daemon() {
-            cmd_plain_chat(&base, agent.as_deref());
-            return;
+        match find_tui_backend() {
+            Ok(Some(base)) => {
+                cmd_plain_chat(&base, agent.as_deref());
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                ui::error_with_fix(
+                    &format!("Client Hub unavailable: {error}"),
+                    "Check `captain client status`, then pair again if this device was revoked.",
+                );
+                std::process::exit(1);
+            }
         }
     }
     tui::chat_runner::run_chat_tui(config, agent);

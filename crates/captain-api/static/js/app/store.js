@@ -3,7 +3,8 @@
 
 const state = {
   authed: null,          // null = unknown, false = login needed, true = ok
-  authMode: 'session',   // "session" | "apikey" | "none" | "unknown"
+  authMode: 'session',   // "session" | "client" | "apikey" | "none" | "unknown"
+  clientMode: false,
   agents: [],
   currentAgentId: null,
   sessions: [],

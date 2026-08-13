@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
 ```
 
 ## Global Options
@@ -269,7 +269,7 @@ captain update [--check] [--yes] [--version <release-tag>]
 |---|---|
 | `--check` | Resolve the compatible release channel without installing. |
 | `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
-| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.13`. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.14`. |
 
 Stable installations do not opt into prereleases. An existing prerelease may
 advance to a newer prerelease or the corresponding stable version. The archive
@@ -341,6 +341,75 @@ captain doctor --repair
 
 captain doctor --json
 ```
+
+---
+
+### captain node
+
+Pair and run this machine as an optional outbound execution Node for one
+Captain Hub. The Hub remains a complete Captain installation and the sole
+authority for sessions, memory, projects, providers, audit, and orchestration.
+
+```bash
+captain node pair --hub <HTTPS_URL> --workspace <DIR> [OPTIONS]
+captain node run
+captain node status [--json]
+captain node reset --yes
+```
+
+`pair` accepts these options:
+
+| Option | Description |
+|---|---|
+| `--hub <HTTPS_URL>` | Exact Hub HTTPS origin. Production pairing requires standard HTTPS port 443. |
+| `--workspace <DIR>` | Existing local directory exposed under a logical workspace identifier. Its physical path stays local. |
+| `--workspace-id <ID>` | Logical Hub-visible identifier. Defaults to `workspace-main`. |
+| `--name <NAME>` | Human-readable device name. |
+| `--label <LABEL>` | Human-readable workspace label. |
+| `--allow-mutation` | Request read/write authority. Pairing is read-only by default and the Hub may approve a smaller grant. |
+| `--ca-bundle <PEM_FILE>` | Add an enterprise CA bundle for the Hub/proxy connection. |
+| `--proxy <PROXY_URL>` | Use one explicit HTTP(S) proxy. Credentials must not be embedded in the URL. |
+| `--proxy-username <USER>` | Username for the explicit proxy. |
+| `--proxy-password-secret <NAME>` | Resolve the proxy password from Captain's secret store. |
+| `--no-proxy` | Ignore proxy environment variables. Conflicts with `--proxy`. |
+| `--no-browser` | Print the approval URL and code without opening a browser. |
+
+The Node opens only outbound connections and prefers secure WebSocket, then
+HTTPS streaming, then HTTPS long-poll. `HTTPS_PROXY` and `NO_PROXY` are honored
+unless overridden. Pairing state, the one-device credential, and the run rail
+are private, atomic, and restartable; short-lived access tokens are not stored.
+
+`captain node run` is deliberately a foreground operator command in this
+Alpha 14 tranche. It reconnects with bounded backoff, refreshes short-lived
+credentials, reapplies the effective Hub grant and local execution policy, and
+keeps terminal evidence in the durable rail. Ctrl+C stops the runtime through
+the same cleanup path used for an internal failure.
+
+`captain node status --json` distinguishes requested authority from the
+effective Hub-approved authority. While the runtime lock is active it also
+reports the categorical transport, capability rotation state, bounded fallback
+count, last safe error code, and rail counters. It never emits the Hub URL,
+workspace roots, proxy credentials, tool input, or raw results.
+
+`captain node reset --yes` removes the local device credential and durable rail
+state only. It refuses while the Node owns the state lock and leaves the local
+workspace configuration available for an explicit new pairing.
+
+**Example:**
+
+```bash
+captain node pair \
+  --hub https://hub.example.com \
+  --workspace "$PWD" \
+  --workspace-id project-main \
+  --no-browser
+
+captain node status --json
+captain node run
+```
+
+See [Captain Hub, Clients, and Nodes](HUB_CLIENT_NODE_PROTOCOL.md) for the wire,
+pairing, grant, crash-recovery, and uncertainty contracts.
 
 ---
 

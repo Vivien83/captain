@@ -18,7 +18,9 @@ mod dotenv;
 mod i18n;
 mod launcher;
 mod mcp;
+mod node_runtime;
 pub mod progress;
+mod remote_client;
 mod snapshot;
 pub mod table;
 mod templates;
@@ -38,11 +40,11 @@ pub(crate) use cli_args_config::{
     HandCommands, IntegrationCommands, KnownHostsCommands, SkillCommands, SshCommands,
 };
 pub(crate) use cli_args_ops::{
-    AgentCommands, ApprovalsCommands, AuthCommands, CronCommands, DevicesCommands, EmailCommands,
-    EmailProviderArg, GatewayCommands, GmailAccessArg, GmailDeliveryCommands, GmailRuleCommands,
-    LoginCommands, MemoryCommands, ModelsCommands, ProcessCommands, SecurityCommands,
-    ServiceCommands, ServiceManagerArg, SystemCommands, TriggerCommands, WebhooksCommands,
-    WorkflowCommands,
+    AgentCommands, ApprovalsCommands, AuthCommands, ClientCommands, CronCommands, DevicesCommands,
+    EmailCommands, EmailProviderArg, GatewayCommands, GmailAccessArg, GmailDeliveryCommands,
+    GmailRuleCommands, LoginCommands, MemoryCommands, ModelsCommands, NodeCommands,
+    ProcessCommands, SecurityCommands, ServiceCommands, ServiceManagerArg, SystemCommands,
+    TriggerCommands, WebhooksCommands, WorkflowCommands,
 };
 pub(crate) use cli_args_project::{
     ProjectCommands, ProjectTaskCommands, ProjectTaskStatusArg, ProjectToolDecisionArg,
@@ -64,7 +66,8 @@ pub(crate) use commands::init::{
     write_default_model_config,
 };
 pub(crate) use daemon_api::{
-    daemon_auth_headers, daemon_client, daemon_json, find_daemon, require_daemon,
+    daemon_client, daemon_client_with_timeout, daemon_json, daemon_request_error, find_daemon,
+    find_tui_backend, require_daemon,
 };
 
 fn main() {

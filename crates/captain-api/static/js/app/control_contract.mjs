@@ -10,6 +10,10 @@ export const PRIMARY_HUBS = Object.freeze([
   { route: 'status', icon: '◉', label: 'Status' },
 ]);
 
+export const CLIENT_PRIMARY_HUBS = Object.freeze(
+  PRIMARY_HUBS.filter(({ route }) => ['chat', 'projects', 'automation', 'status'].includes(route)),
+);
+
 export const AUTOMATION_TABS = Object.freeze([
   { route: 'workflows', label: 'Workflows' },
   { route: 'triggers', label: 'Triggers' },
@@ -17,6 +21,10 @@ export const AUTOMATION_TABS = Object.freeze([
   { route: 'approvals', label: 'Approbations' },
   { route: 'webhooks', label: 'Webhooks' },
 ]);
+
+export const CLIENT_AUTOMATION_TABS = Object.freeze(
+  AUTOMATION_TABS.filter(({ route }) => ['workflows', 'approvals'].includes(route)),
+);
 
 export const CAPABILITY_TABS = Object.freeze([
   { route: 'native-capabilities', label: 'Natives' },
@@ -43,8 +51,29 @@ export function hubForRoute(route) {
   return ROUTE_HUB[route] || route || 'chat';
 }
 
-export function automationTabForRoute(route) {
-  return AUTOMATION_TABS.find((tab) => tab.route === route) || AUTOMATION_TABS[0];
+export function primaryHubsForMode(clientMode) {
+  return clientMode ? CLIENT_PRIMARY_HUBS : PRIMARY_HUBS;
+}
+
+export function routeForMode(route, clientMode) {
+  if (!clientMode) return route || 'chat';
+  const candidate = route || 'chat';
+  return ['chat', 'projects', 'automation', 'workflows', 'approvals', 'status'].includes(candidate)
+    ? candidate
+    : 'chat';
+}
+
+export function hubForMode(route, clientMode) {
+  return hubForRoute(routeForMode(route, clientMode));
+}
+
+export function automationTabsForMode(clientMode) {
+  return clientMode ? CLIENT_AUTOMATION_TABS : AUTOMATION_TABS;
+}
+
+export function automationTabForRoute(route, clientMode = false) {
+  const tabs = automationTabsForMode(clientMode);
+  return tabs.find((tab) => tab.route === route) || tabs[0];
 }
 
 export function capabilityTabForRoute(route) {

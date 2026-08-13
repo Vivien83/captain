@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum EmailProviderArg {
@@ -712,11 +712,136 @@ pub(crate) enum DevicesCommands {
     },
     /// Start a new device pairing flow.
     Pair,
+    /// List pending pairing requests awaiting an operator decision.
+    Pending {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Review and approve the one-time code displayed by a device.
+    Approve {
+        /// One-time display code shown on the device.
+        code: String,
+        /// Grant mutation authority when the device requested it.
+        #[arg(long)]
+        allow_mutation: bool,
+    },
+    /// Deny a pending request by its request ID.
+    Deny {
+        /// Pairing request ID shown by `captain devices pending`.
+        request_id: String,
+    },
     /// Remove a paired device.
     Remove {
         /// Device ID.
         id: String,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum NodeCommands {
+    /// Pair this machine with a Hub over outbound HTTPS.
+    Pair(Box<NodePairArgs>),
+    /// Run the outbound Node worker in the foreground.
+    Run,
+    /// Show local pairing and durable rail state without exposing local paths.
+    Status {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove local Node credentials and durable rail state.
+    Reset {
+        /// Confirm the local reset.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ClientCommands {
+    /// Pair this terminal or desktop interface with a Captain Hub.
+    Pair(Box<ClientPairArgs>),
+    /// Show the local lightweight Client state without exposing the Hub URL.
+    Status {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the local Client identity and Hub configuration.
+    Reset {
+        /// Confirm the local reset.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Args)]
+pub(crate) struct ClientPairArgs {
+    /// HTTPS origin of the Captain Hub.
+    #[arg(long, value_name = "HTTPS_URL")]
+    pub(crate) hub: String,
+    /// Human-readable Client name shown in Appareils.
+    #[arg(long)]
+    pub(crate) name: Option<String>,
+    /// PEM bundle for an enterprise certificate authority.
+    #[arg(long, value_name = "PEM_FILE")]
+    pub(crate) ca_bundle: Option<std::path::PathBuf>,
+    /// Explicit HTTP(S) proxy URL; credentials must not be embedded.
+    #[arg(long, value_name = "PROXY_URL", conflicts_with = "no_proxy")]
+    pub(crate) proxy: Option<String>,
+    /// Username for an explicit authenticated proxy.
+    #[arg(long, requires = "proxy")]
+    pub(crate) proxy_username: Option<String>,
+    /// Captain secret name containing the explicit proxy password.
+    #[arg(long, requires_all = ["proxy", "proxy_username"])]
+    pub(crate) proxy_password_secret: Option<String>,
+    /// Ignore proxy environment variables.
+    #[arg(long, conflicts_with = "proxy")]
+    pub(crate) no_proxy: bool,
+    /// Print the approval URL without opening a browser.
+    #[arg(long)]
+    pub(crate) no_browser: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct NodePairArgs {
+    /// HTTPS origin of the Captain Hub.
+    #[arg(long, value_name = "HTTPS_URL")]
+    pub(crate) hub: String,
+    /// Local workspace directory exposed under a logical identifier.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) workspace: std::path::PathBuf,
+    /// Logical workspace identifier visible to the Hub.
+    #[arg(long, default_value = "workspace-main")]
+    pub(crate) workspace_id: String,
+    /// Human-readable Node name.
+    #[arg(long)]
+    pub(crate) name: Option<String>,
+    /// Human-readable workspace label.
+    #[arg(long)]
+    pub(crate) label: Option<String>,
+    /// Request mutation authority for this workspace (read-only by default).
+    #[arg(long)]
+    pub(crate) allow_mutation: bool,
+    /// PEM bundle for an enterprise certificate authority.
+    #[arg(long, value_name = "PEM_FILE")]
+    pub(crate) ca_bundle: Option<std::path::PathBuf>,
+    /// Explicit HTTP(S) proxy URL; credentials must not be embedded.
+    #[arg(long, value_name = "PROXY_URL", conflicts_with = "no_proxy")]
+    pub(crate) proxy: Option<String>,
+    /// Username for an explicit authenticated proxy.
+    #[arg(long, requires = "proxy")]
+    pub(crate) proxy_username: Option<String>,
+    /// Captain secret name containing the explicit proxy password.
+    #[arg(long, requires_all = ["proxy", "proxy_username"])]
+    pub(crate) proxy_password_secret: Option<String>,
+    /// Ignore proxy environment variables.
+    #[arg(long, conflicts_with = "proxy")]
+    pub(crate) no_proxy: bool,
+    /// Print the approval URL without opening a browser.
+    #[arg(long)]
+    pub(crate) no_browser: bool,
 }
 
 #[derive(Subcommand)]

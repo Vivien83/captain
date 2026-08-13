@@ -71,6 +71,10 @@ pub use crate::cron_routes::{
     create_cron_job, cron_job_status, delete_cron_job, list_cron_jobs, run_cron_job,
     toggle_cron_job, update_cron_job,
 };
+pub use crate::execution_target_routes::{
+    get_project_execution_target, get_session_execution_target, list_execution_targets,
+    set_project_execution_target, set_session_execution_target,
+};
 pub use crate::feedback_routes::{get_feedback, submit_feedback};
 pub use crate::hand_install_routes::{install_hand, install_hand_deps, upsert_hand};
 pub use crate::hand_instance_routes::{
@@ -79,6 +83,15 @@ pub use crate::hand_instance_routes::{
 };
 pub use crate::hand_routes::{check_hand_deps, get_hand, list_active_hands, list_hands};
 pub use crate::health_routes::{health, health_detail, prometheus_metrics};
+pub use crate::hub_node_routes::{
+    hub_node_close, hub_node_connect, hub_node_envelope, hub_node_pull, hub_node_stream,
+};
+pub use crate::hub_node_websocket::hub_node_websocket;
+pub use crate::hub_pairing_routes::{
+    hub_device_revoke, hub_device_token, hub_devices, hub_pairing_approve, hub_pairing_claim,
+    hub_pairing_deny, hub_pairing_enrollment_close, hub_pairing_enrollment_open,
+    hub_pairing_enrollment_status, hub_pairing_poll, hub_pairing_requests, hub_pairing_review,
+};
 pub use crate::integration_routes::{
     add_integration, integrations_health, list_available_integrations, list_integrations,
     reconnect_integration, reload_integrations, remove_integration,

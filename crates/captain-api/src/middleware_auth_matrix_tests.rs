@@ -49,6 +49,30 @@ const REVIEWED_PUBLIC_ALLOWLIST: &[PublicEndpoint] = &[
         method: PublicMethod::Post,
         path: PublicPath::AgentApiIngress,
     },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact(captain_wire::PAIRING_CLAIM_PATH),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact(captain_wire::PAIRING_POLL_PATH),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::Exact(captain_wire::DEVICE_TOKEN_PATH),
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::HubNodeHttpTransport,
+    },
+    PublicEndpoint {
+        method: PublicMethod::Post,
+        path: PublicPath::HubNodeHttpTransport,
+    },
+    PublicEndpoint {
+        method: PublicMethod::Get,
+        path: PublicPath::HubNodeWebSocket,
+    },
 ];
 
 #[test]
@@ -109,6 +133,72 @@ fn agent_ingress_bypass_requires_the_exact_typed_route() {
 }
 
 #[test]
+fn hub_pairing_bootstrap_bypass_is_exact_and_post_only() {
+    for path in [
+        captain_wire::PAIRING_CLAIM_PATH,
+        captain_wire::PAIRING_POLL_PATH,
+        captain_wire::DEVICE_TOKEN_PATH,
+    ] {
+        assert!(is_public_endpoint(&Method::POST, path));
+        assert!(!is_public_endpoint(&Method::GET, path));
+        assert!(!is_public_endpoint(&Method::PUT, path));
+        assert!(!is_public_endpoint(&Method::POST, &format!("{path}/extra")));
+    }
+
+    for private_path in [
+        "/api/hub/pairing/requests",
+        "/api/hub/pairing/approve",
+        "/api/hub/pairing/review",
+        "/api/hub/pairing/enrollment",
+        "/api/hub/pairing/requests/example/deny",
+        "/api/hub/devices",
+        "/api/hub/devices/node-example",
+        "/api/pairing/request",
+        "/api/pairing/complete",
+    ] {
+        assert!(!is_public_endpoint(&Method::GET, private_path));
+        assert!(!is_public_endpoint(&Method::POST, private_path));
+        assert!(!is_public_endpoint(&Method::DELETE, private_path));
+    }
+}
+
+#[test]
+fn hub_node_http_bypass_is_exact_and_transport_specific() {
+    for path in [
+        captain_wire::HUB_NODE_CONNECT_PATH,
+        captain_wire::HUB_NODE_ENVELOPE_PATH,
+        captain_wire::HUB_NODE_PULL_PATH,
+        captain_wire::HUB_NODE_CLOSE_PATH,
+    ] {
+        assert!(is_public_endpoint(&Method::POST, path));
+        assert!(!is_public_endpoint(&Method::GET, path));
+        assert!(!is_public_endpoint(&Method::PUT, path));
+        assert!(!is_public_endpoint(&Method::POST, &format!("{path}/extra")));
+    }
+
+    assert!(is_public_endpoint(
+        &Method::GET,
+        captain_wire::HUB_NODE_STREAM_PATH
+    ));
+    assert!(!is_public_endpoint(
+        &Method::POST,
+        captain_wire::HUB_NODE_STREAM_PATH
+    ));
+    assert!(is_public_endpoint(
+        &Method::GET,
+        captain_wire::HUB_NODE_WEBSOCKET_PATH
+    ));
+    assert!(!is_public_endpoint(
+        &Method::POST,
+        captain_wire::HUB_NODE_WEBSOCKET_PATH
+    ));
+    assert!(!is_public_endpoint(
+        &Method::GET,
+        &format!("{}/extra", captain_wire::HUB_NODE_WEBSOCKET_PATH)
+    ));
+}
+
+#[test]
 fn every_operational_read_from_the_previous_policy_is_private() {
     for path in [
         "/terminal",
@@ -142,6 +232,8 @@ fn every_operational_read_from_the_previous_policy_is_private() {
         "/api/integrations",
         "/api/integrations/available",
         "/api/integrations/health",
+        "/api/hub/pairing/requests",
+        "/api/hub/devices",
         "/api/cron/jobs",
         "/api/network/status",
         "/api/a2a/agents",

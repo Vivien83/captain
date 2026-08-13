@@ -56,7 +56,7 @@ async fn prepare_start_project_runtime_starts_runtime_and_requests_spawn() {
     let state = std::sync::Arc::new(state);
 
     let ((status, Json(body)), spawn_key) =
-        prepare_start_project_runtime(&state, &format!(" {} ", project.slug)).await;
+        prepare_start_project_runtime(&state, &format!(" {} ", project.slug), None).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(spawn_key.as_deref(), Some(" start-runtime "));
@@ -161,7 +161,7 @@ async fn prepare_start_project_runtime_resumes_stale_run_and_replays_events() {
     let state = std::sync::Arc::new(state);
 
     let ((status, Json(body)), spawn_key) =
-        prepare_start_project_runtime(&state, &project.slug).await;
+        prepare_start_project_runtime(&state, &project.slug, None).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(spawn_key.as_deref(), Some("restart-replay"));
@@ -207,6 +207,7 @@ async fn start_project_runtime_rejects_invalid_identifier_without_spawn() {
     let response = start_project_runtime(
         axum::extract::State(state),
         axum::extract::Path("bad-/Users/example/private-ghp_secret".to_string()),
+        None,
     )
     .await
     .into_response();

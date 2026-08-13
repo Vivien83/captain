@@ -146,13 +146,35 @@ fn open_boot_memory(config: &KernelConfig) -> KernelResult<Arc<MemorySubstrate>>
     let db_path = boot_memory_db_path(config);
     let memory = MemorySubstrate::open(&db_path, config.memory.decay_rate)
         .map_err(|e| KernelError::BootFailed(format!("Memory init failed: {e}")))?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let interrupted = memory
-        .reconcile_work_verification_after_restart(chrono::Utc::now().timestamp_millis())
+        .reconcile_work_verification_after_restart(now_ms)
         .map_err(|e| KernelError::BootFailed(format!("Work verification recovery failed: {e}")))?;
     if !interrupted.is_empty() {
         warn!(
             count = interrupted.len(),
             "Reconciled interrupted work verification operations without replay"
+        );
+    }
+    let rail_recovery = memory
+        .hub_node_rail()
+        .reconcile_after_restart(now_ms)
+        .map_err(|error| {
+            KernelError::BootFailed(format!("Hub Node rail recovery failed: {error}"))
+        })?;
+    let offline_connections = memory
+        .hub_node_rail()
+        .reconcile_connections_after_restart(now_ms)
+        .map_err(|error| {
+            KernelError::BootFailed(format!("Hub Node presence recovery failed: {error}"))
+        })?;
+    if rail_recovery != Default::default() || offline_connections > 0 {
+        warn!(
+            requeued_read_only = rail_recovery.requeued_read_only,
+            cancelled_before_effect = rail_recovery.cancelled_before_effect,
+            uncertain_side_effects = rail_recovery.uncertain_side_effects,
+            offline_connections,
+            "Reconciled Hub Node work and presence without replaying side effects"
         );
     }
     Ok(Arc::new(memory))
@@ -394,5 +416,97 @@ mod tests {
         );
         assert_eq!(prepared.auth.session_secret, persisted.auth.session_secret);
         assert_eq!(prepared.auth.session_epoch, persisted.auth.session_epoch);
+    }
+
+    #[test]
+    fn authoritative_boot_reconciles_hub_node_runs_and_presence() {
+        use captain_memory::hub_node_rail::{
+            HubNodeConnectionStatus, HubNodeRunStatus, NewHubNodeRun,
+        };
+        use captain_wire::hub_protocol::RunEffect;
+        use serde_json::json;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let database = temporary.path().join("captain.sqlite");
+        {
+            let memory = MemorySubstrate::open(&database, 0.01).unwrap();
+            let connection = memory.usage_conn();
+            connection
+                .lock()
+                .unwrap()
+                .execute_batch(&format!(
+                    "INSERT INTO captain_devices (
+                         device_id, display_name, role, platform, captain_version,
+                         protocol_major, protocol_minor, credential_sha256,
+                         capabilities_json, grants_json, status, paired_at_ms,
+                         last_seen_ms, updated_at_ms
+                     ) VALUES ('node-1', 'Node', 'node', 'macos', 'alpha.14',
+                               1, 0, '{}', '{{}}', '{{}}', 'active', 1, 1, 1);
+                     INSERT INTO hub_node_connections (
+                         device_id, connection_id, transport, protocol_major,
+                         protocol_minor, status, connected_at_ms, last_seen_ms,
+                         updated_at_ms
+                     ) VALUES ('node-1', 'connection-1', 'long_poll', 1, 0,
+                               'active', 10, 10, 10);",
+                    "a".repeat(64)
+                ))
+                .unwrap();
+            for (run_id, effect, created_at_ms) in [
+                ("read-run", RunEffect::ReadOnly, 20),
+                ("mutation-run", RunEffect::LocalMutation, 21),
+            ] {
+                memory
+                    .hub_node_rail()
+                    .enqueue_run(&NewHubNodeRun {
+                        run_id: run_id.to_string(),
+                        device_id: "node-1".to_string(),
+                        idempotency_key: format!("idem-{run_id}"),
+                        workspace_id: "workspace-main".to_string(),
+                        tool_name: "shell_exec".to_string(),
+                        input: json!({"command": "true"}),
+                        effect,
+                        created_at_ms,
+                    })
+                    .unwrap();
+                memory
+                    .hub_node_rail()
+                    .lease_next("node-1", "connection-1", created_at_ms + 10, 60_000)
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+
+        let mut config = KernelConfig::default();
+        config.data_dir = temporary.path().join("data");
+        config.memory.sqlite_path = Some(database);
+        let reopened = open_boot_memory(&config).unwrap();
+
+        assert_eq!(
+            reopened
+                .hub_node_rail()
+                .get_run("read-run")
+                .unwrap()
+                .unwrap()
+                .status,
+            HubNodeRunStatus::Queued
+        );
+        assert_eq!(
+            reopened
+                .hub_node_rail()
+                .get_run("mutation-run")
+                .unwrap()
+                .unwrap()
+                .status,
+            HubNodeRunStatus::Uncertain
+        );
+        assert_eq!(
+            reopened
+                .hub_node_rail()
+                .connection("node-1")
+                .unwrap()
+                .unwrap()
+                .status,
+            HubNodeConnectionStatus::Offline
+        );
     }
 }

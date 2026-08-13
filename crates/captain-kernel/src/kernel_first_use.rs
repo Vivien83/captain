@@ -673,6 +673,18 @@ impl CaptainKernel {
         }
     }
 
+    pub(super) fn ensure_first_use_onboarding_resolved(&self) -> KernelResult<()> {
+        if read_global_user_profile(&self.config.home_dir).is_some()
+            || self.config.assistant.onboarding_completed
+        {
+            return Ok(());
+        }
+        Err(KernelError::Captain(CaptainError::AuthDenied(
+            "The Hub operator must complete first-use onboarding before a paired Client can start a chat"
+                .to_string(),
+        )))
+    }
+
     fn first_use_onboarding_already_resolved(&self) -> bool {
         if read_global_user_profile(&self.config.home_dir).is_some() {
             self.clear_first_use_onboarding_state();

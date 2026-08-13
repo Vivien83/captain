@@ -17,7 +17,9 @@ export function Login({ mode }) {
           <img src="/assets/logo.png?rev=wordmark-2" alt="Captain" />
           <h1>Captain</h1>
           <div class="login-error" style="color:var(--text-1)">
-            ${mode === 'apikey'
+            ${mode === 'client'
+              ? "L'accès du Client appairé est indisponible. Lance `captain client status`, puis réappaire cet appareil si son accès a été révoqué."
+              : mode === 'apikey'
               ? "L'authentification web n'est pas configurée pour une connexion par session. Configure un accès web (captain setup) ou utilise une clé API."
               : "L'authentification web n'est pas configurée. Lance `captain setup` ou demande à Captain de créer des identifiants web."}
           </div>

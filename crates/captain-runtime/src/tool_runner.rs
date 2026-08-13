@@ -3,6 +3,9 @@
 //! Provides filesystem, web, shell, and inter-agent tools. Agent tools
 //! (agent_send, agent_spawn, etc.) require a KernelHandle to be passed in.
 
+use crate::execution_routing::{
+    current_turn_execution_context, RemoteToolExecutionRequest, ResolvedExecutionTarget,
+};
 use crate::kernel_handle::KernelHandle;
 use crate::mcp;
 pub(crate) use crate::tools::emit_tool_chunk;
@@ -14,7 +17,8 @@ use crate::tools::screenshot_command;
 #[cfg(test)]
 use crate::tools::validate_child_agent_tool_scope;
 use crate::tools::{
-    cached_tool_result, finalize_dispatch_result, run_pre_dispatch_checks, DispatchFinalizeContext,
+    cached_tool_result, finalize_dispatch_result, finalize_remote_dispatch_result,
+    run_pre_dispatch_checks, DispatchFinalizeContext,
 };
 #[cfg(test)]
 use crate::tools::{
@@ -57,6 +61,13 @@ mod tool_runner_dispatch;
 
 use self::tool_runner_dispatch::{dispatch_tool, ToolDispatchOutcome, ToolDispatchRequest};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ToolCacheMode {
+    #[default]
+    Global,
+    Disabled,
+}
+
 /// Execute a tool by name with the given input, returning a ToolResult.
 ///
 /// The optional `kernel` handle enables inter-agent tools. If `None`,
@@ -84,6 +95,50 @@ pub async fn execute_tool(
     tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&captain_types::config::DockerSandboxConfig>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
+) -> ToolResult {
+    execute_tool_with_cache_mode(
+        tool_use_id,
+        tool_name,
+        input,
+        kernel,
+        allowed_tools,
+        caller_agent_id,
+        skill_registry,
+        mcp_connections,
+        web_ctx,
+        browser_ctx,
+        allowed_env_vars,
+        workspace_root,
+        media_engine,
+        exec_policy,
+        tts_engine,
+        docker_config,
+        process_manager,
+        ToolCacheMode::Global,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_tool_with_cache_mode(
+    tool_use_id: &str,
+    tool_name: &str,
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    allowed_tools: Option<&[String]>,
+    caller_agent_id: Option<&str>,
+    skill_registry: Option<&SkillRegistry>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+    web_ctx: Option<&WebToolsContext>,
+    browser_ctx: Option<&crate::browser::BrowserManager>,
+    allowed_env_vars: Option<&[String]>,
+    workspace_root: Option<&Path>,
+    media_engine: Option<&crate::media_understanding::MediaEngine>,
+    exec_policy: Option<&captain_types::config::ExecPolicy>,
+    tts_engine: Option<&crate::tts::TtsEngine>,
+    docker_config: Option<&captain_types::config::DockerSandboxConfig>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    cache_mode: ToolCacheMode,
 ) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical Captain name.
@@ -121,8 +176,49 @@ pub async fn execute_tool(
         return blocked;
     }
 
+    if let Some(context) = current_turn_execution_context() {
+        if let ResolvedExecutionTarget::Node {
+            device_id,
+            workspace_id,
+        } = context.target
+        {
+            if crate::node_tool_runtime::local_node_tool_family(tool_name).is_some() {
+                let result = execute_remote_node_tool(
+                    RemoteToolExecutionRequest {
+                        scope_id: context.scope_id,
+                        tool_use_id: tool_use_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        input: input.clone(),
+                        caller_agent_id: caller_agent_id.unwrap_or("unknown").to_string(),
+                        device_id,
+                        workspace_id,
+                    },
+                    kernel,
+                )
+                .await;
+                let no_cache = None;
+                return finalize_remote_dispatch_result(
+                    DispatchFinalizeContext {
+                        tool_use_id,
+                        tool_name,
+                        input,
+                        kernel,
+                        mcp_connections,
+                        caller_agent_id,
+                        tool_cache: &no_cache,
+                        dispatch_start,
+                    },
+                    result,
+                );
+            }
+        }
+    }
+
     // v3.10f — cache lookup before dispatch.
-    let tool_cache = crate::tool_cache::global_cache();
+    let tool_cache = match cache_mode {
+        ToolCacheMode::Global => crate::tool_cache::global_cache(),
+        ToolCacheMode::Disabled => None,
+    };
     if let Some(cached) = cached_tool_result(tool_use_id, tool_name, input, &tool_cache).await {
         record_tool_finished(tool_use_id, tool_name, cached.is_error, 0, "cache_hit");
         return cached;
@@ -187,6 +283,35 @@ pub async fn execute_tool(
     tool_result
 }
 
+async fn execute_remote_node_tool(
+    request: RemoteToolExecutionRequest,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> ToolResult {
+    let tool_use_id = request.tool_use_id.clone();
+    let Some(kernel) = kernel else {
+        return remote_node_error(
+            &tool_use_id,
+            "the Kernel execution rail is unavailable; no local fallback was attempted",
+        );
+    };
+    match kernel.execute_remote_tool(request).await {
+        Ok(result) => result,
+        Err(error) => remote_node_error(
+            &tool_use_id,
+            &format!("{error}; no local fallback was attempted"),
+        ),
+    }
+}
+
+fn remote_node_error(tool_use_id: &str, message: &str) -> ToolResult {
+    ToolResult {
+        tool_use_id: tool_use_id.to_string(),
+        content: format!("Remote Node execution failed: {message}"),
+        is_error: true,
+        transient_content: Vec::new(),
+    }
+}
+
 fn intersect_execution_policy(
     agent_policy: Option<&captain_types::config::ExecPolicy>,
     global_policy: Option<&captain_types::config::ExecPolicy>,
@@ -231,6 +356,7 @@ mod tests {
     mod memory_save_runtime;
     mod project_runtime;
     mod registry_config;
+    mod remote_routing;
     mod schedule_parse;
     mod schema_guidance;
     mod security_execute;

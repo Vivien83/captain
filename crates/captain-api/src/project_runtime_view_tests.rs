@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn runtime_view_never_exposes_internal_authority_origin() {
+    let view = project_runtime_view(&serde_json::json!({
+        "status": "running",
+        "current_phase": "build",
+        "authority_origin": "paired-client:project"
+    }));
+
+    assert!(view.get("authority_origin").is_none());
+    assert!(!view.to_string().contains("paired-client"));
+}
+
 fn project() -> project::Project {
     project::Project {
         id: "project-1".to_string(),

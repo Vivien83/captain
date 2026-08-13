@@ -61,6 +61,21 @@ impl CaptainKernel {
         let _guard = lock.lock().await;
 
         let entry = self.resolve_agent_session_entry(agent_id, session_id)?;
+        let paired_client =
+            captain_runtime::client_authority::is_paired_client_origin(channel_type.as_deref());
+
+        if paired_client
+            && !captain_runtime::client_authority::paired_client_agent_module_is_allowed(
+                &entry.manifest.module,
+            )
+        {
+            return Err(KernelError::Captain(
+                captain_types::error::CaptainError::AuthDenied(
+                    "Paired Clients cannot execute local or custom agent modules on the Hub"
+                        .to_string(),
+                ),
+            ));
+        }
 
         {
             let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
@@ -77,7 +92,9 @@ impl CaptainKernel {
         // must not read as inactivity to the 60s heartbeat timeout.
         let _ = self.registry.touch(agent_id);
 
-        if let Some(result) =
+        if paired_client {
+            self.ensure_first_use_onboarding_resolved()?;
+        } else if let Some(result) =
             self.maybe_handle_first_use_onboarding(&entry, message, channel_type.as_deref())?
         {
             return Ok(result);
@@ -86,21 +103,33 @@ impl CaptainKernel {
         // Enforce the coherent global budget and the agent quota before work.
         self.check_turn_budget(agent_id)?;
 
-        let regex_hint = self.emit_user_message_learning_hint(agent_id, message);
+        let regex_hint = (!paired_client)
+            .then(|| self.emit_user_message_learning_hint(agent_id, message))
+            .flatten();
 
         // Channel-neutral continuation for safe model switches. The TUI keeps
         // this state in its UI layer; Telegram arrives as a fresh user message,
         // so the kernel consumes clear replies like "Nouvelle" before invoking
         // the LLM.
-        let result = if let Some(response) =
-            self.consume_codex_model_update_keep_request(agent_id, message)?
+        let result = if let Some(response) = (!paired_client)
+            .then(|| self.consume_codex_model_update_keep_request(agent_id, message))
+            .transpose()?
+            .flatten()
         {
             Ok(Self::empty_agent_loop_result(response))
-        } else if let Some(result) = self.consume_pending_model_switch_choice(agent_id, message)? {
+        } else if let Some(result) = (!paired_client)
+            .then(|| self.consume_pending_model_switch_choice(agent_id, message))
+            .transpose()?
+            .flatten()
+        {
             Ok(result)
         } else if let Some(result) = self.maybe_answer_recent_project_status(message) {
             Ok(result)
-        } else if let Some(result) = self.handle_direct_model_switch_request(agent_id, message)? {
+        } else if let Some(result) = (!paired_client)
+            .then(|| self.handle_direct_model_switch_request(agent_id, message))
+            .transpose()?
+            .flatten()
+        {
             Ok(result)
         } else if entry.manifest.module.starts_with("wasm:") {
             self.execute_wasm_agent(&entry, message, kernel_handle)
@@ -128,14 +157,17 @@ impl CaptainKernel {
                     agent_id,
                     &entry,
                     message,
-                    channel_type.clone(),
-                    regex_hint,
                     &result,
+                    super::kernel_agent_turn_observability::AgentTurnLearningContext {
+                        channel_type: channel_type.clone(),
+                        regex_hint,
+                        enabled: !paired_client,
+                    },
                 );
                 Ok(result)
             }
             Err(error) => {
-                self.record_agent_turn_failure(agent_id, &entry, &error);
+                self.record_agent_turn_failure(agent_id, &entry, &error, !paired_client);
                 Err(error)
             }
         }

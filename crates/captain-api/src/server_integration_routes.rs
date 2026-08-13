@@ -1,5 +1,10 @@
 use crate::routes::{self, AppState};
-use axum::Router;
+use axum::{extract::DefaultBodyLimit, Router};
+use captain_wire::{
+    DEVICE_TOKEN_PATH, HUB_NODE_CLOSE_PATH, HUB_NODE_CONNECT_PATH, HUB_NODE_ENVELOPE_PATH,
+    HUB_NODE_PULL_PATH, HUB_NODE_STREAM_PATH, HUB_NODE_WEBSOCKET_PATH, PAIRING_CLAIM_PATH,
+    PAIRING_POLL_PATH,
+};
 use std::sync::Arc;
 
 pub(crate) fn mount_integration_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
@@ -53,5 +58,96 @@ pub(crate) fn mount_integration_routes(router: Router<Arc<AppState>>) -> Router<
         .route(
             "/api/pairing/notify",
             axum::routing::post(routes::pairing_notify),
+        )
+        // Alpha.14 Hub device protocol. Global auth still protects every
+        // route here; the middleware owns the exact proof-bound exceptions.
+        .route(
+            PAIRING_CLAIM_PATH,
+            axum::routing::post(routes::hub_pairing_claim).layer(DefaultBodyLimit::max(
+                crate::hub_pairing_routes::MAX_HUB_PAIRING_BODY_SIZE,
+            )),
+        )
+        .route(
+            PAIRING_POLL_PATH,
+            axum::routing::post(routes::hub_pairing_poll).layer(DefaultBodyLimit::max(
+                crate::hub_pairing_routes::MAX_HUB_PAIRING_BODY_SIZE,
+            )),
+        )
+        .route(
+            DEVICE_TOKEN_PATH,
+            axum::routing::post(routes::hub_device_token).layer(DefaultBodyLimit::max(
+                crate::hub_pairing_routes::MAX_HUB_PAIRING_BODY_SIZE,
+            )),
+        )
+        .route(
+            crate::hub_pairing_routes::HUB_PAIRING_REQUESTS_PATH,
+            axum::routing::get(routes::hub_pairing_requests),
+        )
+        .route(
+            crate::hub_pairing_routes::HUB_PAIRING_ENROLLMENT_PATH,
+            axum::routing::get(routes::hub_pairing_enrollment_status)
+                .post(routes::hub_pairing_enrollment_open)
+                .delete(routes::hub_pairing_enrollment_close)
+                .layer(DefaultBodyLimit::max(
+                    crate::hub_pairing_routes::MAX_HUB_PAIRING_BODY_SIZE,
+                )),
+        )
+        .route(
+            crate::hub_pairing_routes::HUB_PAIRING_APPROVE_PATH,
+            axum::routing::post(routes::hub_pairing_approve).layer(DefaultBodyLimit::max(
+                crate::hub_pairing_routes::MAX_HUB_PAIRING_BODY_SIZE,
+            )),
+        )
+        .route(
+            crate::hub_pairing_routes::HUB_PAIRING_REVIEW_PATH,
+            axum::routing::post(routes::hub_pairing_review).layer(DefaultBodyLimit::max(
+                crate::hub_pairing_routes::MAX_HUB_PAIRING_BODY_SIZE,
+            )),
+        )
+        .route(
+            "/api/hub/pairing/requests/{request_id}/deny",
+            axum::routing::post(routes::hub_pairing_deny),
+        )
+        .route(
+            crate::hub_pairing_routes::HUB_DEVICES_PATH,
+            axum::routing::get(routes::hub_devices),
+        )
+        .route(
+            "/api/hub/devices/{device_id}",
+            axum::routing::delete(routes::hub_device_revoke),
+        )
+        // Device-bearer Hub/Node HTTPS transports. The exact global-auth
+        // bypass is owned by middleware; every handler reauthenticates.
+        .route(
+            HUB_NODE_CONNECT_PATH,
+            axum::routing::post(routes::hub_node_connect).layer(DefaultBodyLimit::max(
+                crate::hub_node_routes::MAX_HUB_NODE_BODY_SIZE,
+            )),
+        )
+        .route(
+            HUB_NODE_ENVELOPE_PATH,
+            axum::routing::post(routes::hub_node_envelope).layer(DefaultBodyLimit::max(
+                crate::hub_node_routes::MAX_HUB_NODE_BODY_SIZE,
+            )),
+        )
+        .route(
+            HUB_NODE_PULL_PATH,
+            axum::routing::post(routes::hub_node_pull).layer(DefaultBodyLimit::max(
+                crate::hub_node_routes::MAX_HUB_NODE_BODY_SIZE,
+            )),
+        )
+        .route(
+            HUB_NODE_STREAM_PATH,
+            axum::routing::get(routes::hub_node_stream),
+        )
+        .route(
+            HUB_NODE_WEBSOCKET_PATH,
+            axum::routing::get(routes::hub_node_websocket),
+        )
+        .route(
+            HUB_NODE_CLOSE_PATH,
+            axum::routing::post(routes::hub_node_close).layer(DefaultBodyLimit::max(
+                crate::hub_node_routes::MAX_HUB_NODE_BODY_SIZE,
+            )),
         )
 }

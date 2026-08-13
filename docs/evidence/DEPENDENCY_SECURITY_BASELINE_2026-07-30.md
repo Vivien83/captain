@@ -15,27 +15,19 @@ release gate is `scripts/dependency-audit.sh`; `Cargo.lock` is the authority.
 | `rsa 0.9.10` and `rsa 0.10.0-rc.18` / RUSTSEC-2023-0071 | RSA features removed from `ssh-key` and `russh`; vulnerable crates absent |
 | `imap-proto 0.10.2` future Rust rejection | `imap 3.0.0-alpha.15` pinned to the maintained `imap-proto 0.16.7` line |
 | `lexical-core 0.7.6` / RUSTSEC-2023-0086 | Removed with the obsolete IMAP parser chain |
+| `lru 0.12.5` / RUSTSEC-2026-0002 and RUSTSEC-2026-0253 | Ratatui stack upgraded to `ratatui 0.30.2`, `ratatui-core 0.1.2`, `ratatui-image 11.0.6`, and `ratatui-explorer 0.3.0`; the sole resolved LRU is fixed `lru 0.18.2` |
 
 Captain now accepts Ed25519 and ECDSA P-256 SSH private keys. RSA-only client
 keys and server host keys fail closed with an actionable message.
 
 ## Reviewed Exceptions
 
-The unfiltered audit contains exactly two vulnerability records:
-
-| Advisory | Package | Reachability decision |
-|---|---|---|
-| RUSTSEC-2026-0194 | `quick-xml 0.37.5` | Not reachable: parent `tauri-winrt-notification 0.7.2` uses XML escaping, not attribute parsing |
-| RUSTSEC-2026-0195 | `quick-xml 0.37.5` | Not reachable: parent does not instantiate `NsReader` or namespace resolution |
-
-The path is Windows-only:
-
-`tauri-plugin-notification 2.3.3 -> notify-rust 4.18.0 -> tauri-winrt-notification 0.7.2 -> quick-xml 0.37.5`
-
-Upstream `tauri-winrt-notification 0.8.1` removes `quick-xml`, but the current
-`notify-rust 4.18.0` manifest still requires the `0.7` line. Captain does not
-vendor or impersonate an upstream version to silence the scanner. The
-exceptions remain exact and must disappear when that constraint is upgraded.
+The unfiltered audit contains no vulnerability record. The lockfile already
+contained no Windows-only
+`tauri-winrt-notification 0.7.2 -> quick-xml 0.37.5` path, while the previous
+gate baseline still expected it. Those stale assertions and exceptions are now
+removed. The sole resolved `quick-xml` is patched `0.41.0`, inherited through
+`plist 1.10.0`.
 
 ## Informational Warnings
 
@@ -62,6 +54,11 @@ The native Gmail authorization path pins `oauth2 5.0.0` with only its
 by Captain's own HTTP client; the exact dependency and feature set are checked
 to prevent a lock refresh from changing the token transport silently.
 
+The maintained Ratatui 0.30 line raises the workspace MSRV to Rust 1.88. The
+gate pins the complete TUI compatibility set and requires `lru 0.18.2` with
+`ratatui-core 0.1.2` as its only direct parent. This prevents a lock refresh
+from silently restoring either vulnerable 0.12.x LRU path.
+
 ## Fail-Closed Gate
 
 Each gate run uses one fresh temporary RustSec checkout for all filtered and
@@ -72,7 +69,7 @@ every report pinned to the same database revision.
 The gate fails when:
 
 - the normal audit reports a vulnerability;
-- the unfiltered vulnerability or warning set changes;
+- the unfiltered vulnerability set becomes non-empty or its warning set changes;
 - an exception is added without updating the reviewed baseline;
 - RSA or its supporting crates reappear;
 - `imap 3.0.0-alpha.15`, `imap-proto 0.16.7`, their parent chain, or vendored
@@ -80,8 +77,9 @@ The gate fails when:
 - the removed `lexical-core` parser reappears;
 - an RSA feature is enabled on either resolved `ssh-key` version;
 - `oauth2 5.0.0` or its minimal `reqwest`/`rustls-tls` feature set drifts;
-- the FastEmbed/ORT ABI pins, notification chain, mDNS chain, or direct parent
+- the FastEmbed/ORT ABI pins, mDNS chain, or direct parent
   chains drift.
+- Ratatui, its image/explorer adapters, or the fixed LRU parent chain drift.
 
 This baseline means **no unreviewed vulnerability**, not “the dependency graph
 contains no advisory records.”

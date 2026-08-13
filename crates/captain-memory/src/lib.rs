@@ -12,9 +12,12 @@ pub mod artifacts;
 pub mod compaction_progress;
 pub mod consolidation;
 pub mod detached_tool_runs;
+pub mod devices;
 pub mod event_log;
+pub mod execution_targets;
 pub mod gmail_accounts;
 pub mod gmail_automation;
+pub mod hub_node_rail;
 pub mod knowledge;
 pub mod learning_review;
 pub mod memory_capsule;
@@ -56,7 +59,17 @@ mod workflow_learning_types;
 mod workflow_learning_validation;
 
 #[cfg(test)]
+mod devices_tests;
+#[cfg(test)]
+mod execution_target_tests;
+#[cfg(test)]
 mod gmail_automation_tests;
+#[cfg(test)]
+mod hub_node_connection_tests;
+#[cfg(test)]
+mod hub_node_inbound_tests;
+#[cfg(test)]
+mod hub_node_rail_tests;
 #[cfg(test)]
 mod workflow_learning_control_tests;
 #[cfg(test)]

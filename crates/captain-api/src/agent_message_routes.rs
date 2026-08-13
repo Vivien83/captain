@@ -4,12 +4,14 @@ use crate::state::AppState;
 use crate::types::{MessageRequest, MessageResponse, ToolCallSummary};
 use crate::upload_routes::resolve_attachments;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::{header::RETRY_AFTER, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
-use captain_kernel::{error::KernelError, CaptainKernel};
+use captain_kernel::{
+    error::KernelError, hub_pairing_service::DeviceAccessIdentity, CaptainKernel,
+};
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_types::agent::{AgentId, SessionId};
 use captain_types::quota::QuotaExceededInfo;
@@ -75,6 +77,7 @@ pub fn inject_attachments_into_session(
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
     Json(req): Json<MessageRequest>,
 ) -> impl IntoResponse {
     let agent_id = match parse_agent_id(&id) {
@@ -98,7 +101,9 @@ pub async fn send_message(
         Err(response) => return response,
     };
 
-    if let Some(response) = handle_daemon_slash(&state, &req).await {
+    let provenance = turn_provenance(client.as_ref(), &req, "api");
+
+    if let Some(response) = handle_daemon_slash(&state, &req, &provenance).await {
         return response;
     }
 
@@ -109,7 +114,7 @@ pub async fn send_message(
     let content_blocks = if req.attachments.is_empty() {
         None
     } else {
-        match resolve_attachments(&req.attachments) {
+        match resolve_attachments(&req.message, &req.attachments) {
             blocks if blocks.is_empty() => None,
             blocks => Some(blocks),
         }
@@ -123,9 +128,9 @@ pub async fn send_message(
             &req.message,
             Some(kernel_handle),
             content_blocks,
-            req.sender_id,
-            req.sender_name,
-            req.channel_type.or_else(|| Some("web".to_string())),
+            provenance.sender_id,
+            provenance.sender_name,
+            provenance.channel_type,
             requested_session_id,
         )
         .await
@@ -176,6 +181,7 @@ pub async fn send_message(
 pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
     Json(req): Json<MessageRequest>,
 ) -> axum::response::Response {
     use axum::response::sse::{Event, Sse};
@@ -202,7 +208,14 @@ pub async fn send_message_stream(
         Err(response) => return response,
     };
 
+    let provenance = turn_provenance(client.as_ref(), &req, "sse");
+
     if let Some((command, args)) = crate::daemon_commands::parse_daemon_slash(&req.message) {
+        if provenance.paired_client
+            && !captain_runtime::client_authority::paired_client_daemon_command_is_allowed(&command)
+        {
+            return paired_client_command_denied(&command);
+        }
         let reply = crate::daemon_commands::handle_daemon_command(
             state.kernel.clone(),
             Some(state.started_at),
@@ -210,8 +223,8 @@ pub async fn send_message_stream(
             &command,
             &args,
             crate::daemon_commands::DaemonCommandOrigin::api(
-                req.channel_type.as_deref(),
-                req.sender_id.as_deref(),
+                provenance.channel_type.as_deref(),
+                provenance.sender_id.as_deref(),
             ),
         )
         .await;
@@ -233,7 +246,7 @@ pub async fn send_message_stream(
             .into_response();
     }
 
-    let channel_type = req
+    let channel_type = provenance
         .channel_type
         .clone()
         .unwrap_or_else(|| "web".to_string());
@@ -242,8 +255,8 @@ pub async fn send_message_stream(
         agent_id,
         &req.message,
         Some(kernel_handle),
-        req.sender_id,
-        req.sender_name,
+        provenance.sender_id,
+        provenance.sender_name,
         None,
         Some(channel_type.clone()),
         requested_session_id,
@@ -354,8 +367,14 @@ pub async fn answer_message(
 async fn handle_daemon_slash(
     state: &Arc<AppState>,
     req: &MessageRequest,
+    provenance: &crate::client_access_policy::ClientTurnProvenance,
 ) -> Option<axum::response::Response> {
     let (command, args) = crate::daemon_commands::parse_daemon_slash(&req.message)?;
+    if provenance.paired_client
+        && !captain_runtime::client_authority::paired_client_daemon_command_is_allowed(&command)
+    {
+        return Some(paired_client_command_denied(&command));
+    }
     let reply = crate::daemon_commands::handle_daemon_command(
         state.kernel.clone(),
         Some(state.started_at),
@@ -363,8 +382,8 @@ async fn handle_daemon_slash(
         &command,
         &args,
         crate::daemon_commands::DaemonCommandOrigin::api(
-            req.channel_type.as_deref(),
-            req.sender_id.as_deref(),
+            provenance.channel_type.as_deref(),
+            provenance.sender_id.as_deref(),
         ),
     )
     .await;
@@ -382,6 +401,33 @@ async fn handle_daemon_slash(
         )
             .into_response(),
     )
+}
+
+fn turn_provenance(
+    client: Option<&Extension<DeviceAccessIdentity>>,
+    req: &MessageRequest,
+    surface: &str,
+) -> crate::client_access_policy::ClientTurnProvenance {
+    crate::client_access_policy::ClientTurnProvenance::resolve(
+        client.map(|Extension(identity)| identity.device_id.as_str()),
+        surface,
+        req.sender_id.as_deref(),
+        req.sender_name.as_deref(),
+        req.channel_type.as_deref(),
+        "web",
+    )
+}
+
+fn paired_client_command_denied(command: &str) -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "Paired Client authority forbids this daemon command",
+            "code": "paired_client_authority_denied",
+            "command": command,
+        })),
+    )
+        .into_response()
 }
 
 fn handle_project_slash(
@@ -443,6 +489,19 @@ fn agent_message_error_response(error_value: &KernelError) -> axum::response::Re
     if let KernelError::Captain(captain_error) = error_value {
         if let Some(quota) = captain_error.quota_info() {
             return quota_error_response(quota);
+        }
+        if matches!(
+            captain_error,
+            captain_types::error::CaptainError::AuthDenied(_)
+        ) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Paired Client authority denied this operation",
+                    "code": "paired_client_authority_denied",
+                })),
+            )
+                .into_response();
         }
     }
 

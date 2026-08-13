@@ -228,14 +228,19 @@ pub async fn run_agent_loop(
     user_content_blocks: Option<Vec<ContentBlock>>,
     origin_channel: Option<String>,
 ) -> CaptainResult<AgentLoopResult> {
-    let workflow_episode = begin_episode_best_effort(
-        memory,
-        &session.agent_id.to_string(),
-        &session.id.to_string(),
-        user_message,
-        origin_channel.as_deref(),
-        workspace_root,
-    );
+    let workflow_episode =
+        (!crate::client_authority::is_paired_client_origin(origin_channel.as_deref()))
+            .then(|| {
+                begin_episode_best_effort(
+                    memory,
+                    &session.agent_id.to_string(),
+                    &session.id.to_string(),
+                    user_message,
+                    origin_channel.as_deref(),
+                    workspace_root,
+                )
+            })
+            .flatten();
     run_in_workflow_episode(
         workflow_episode,
         Box::pin(async {
@@ -311,14 +316,19 @@ pub async fn run_agent_loop_streaming(
     user_input_rx: Option<Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>>,
     origin_channel: Option<String>,
 ) -> CaptainResult<AgentLoopResult> {
-    let workflow_episode = begin_episode_best_effort(
-        memory,
-        &session.agent_id.to_string(),
-        &session.id.to_string(),
-        user_message,
-        origin_channel.as_deref(),
-        workspace_root,
-    );
+    let workflow_episode =
+        (!crate::client_authority::is_paired_client_origin(origin_channel.as_deref()))
+            .then(|| {
+                begin_episode_best_effort(
+                    memory,
+                    &session.agent_id.to_string(),
+                    &session.id.to_string(),
+                    user_message,
+                    origin_channel.as_deref(),
+                    workspace_root,
+                )
+            })
+            .flatten();
     run_in_workflow_episode(
         workflow_episode,
         Box::pin(async {

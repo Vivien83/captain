@@ -84,6 +84,16 @@ pub trait KernelHandle: Send + Sync {
     /// Send a message to another agent and get the response.
     async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String>;
 
+    /// Execute one workspace-local tool through the durable Hub/Node rail.
+    /// Implementations must not fall back to the Hub filesystem when the
+    /// selected Node is unavailable or the run state becomes uncertain.
+    async fn execute_remote_tool(
+        &self,
+        _request: crate::execution_routing::RemoteToolExecutionRequest,
+    ) -> Result<captain_types::tool::ToolResult, String> {
+        Err("remote Node execution is not available on this kernel".to_string())
+    }
+
     /// List all running agents.
     fn list_agents(&self) -> Vec<AgentInfo>;
 

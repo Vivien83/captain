@@ -314,6 +314,27 @@ impl ApprovalManager {
         info!(removed = n, "Session approval cache cleared");
     }
 
+    /// Remove an approval whose owning tool future was cancelled. This keeps
+    /// interrupted remote runs from leaving an actionable request in every UI.
+    pub(crate) fn cancel_pending_request(&self, id: Uuid, reason: &str) -> bool {
+        let _resolution = self
+            .resolution_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some((_, pending)) = self.pending.remove(&id) else {
+            return false;
+        };
+        let outcome = ApprovalOutcome {
+            decision: ApprovalDecision::Denied,
+            reason: normalize_approval_reason(Some(reason))
+                .unwrap_or_else(|_| Some("The owning tool run was interrupted.".to_string())),
+            rule_id: None,
+        };
+        self.audit_outcome(&pending.request, &outcome, "runtime", "cancelled");
+        let _ = pending.sender.send(outcome);
+        true
+    }
+
     /// Number of cached exact `(agent, tool, action digest)` session rules.
     pub fn session_cache_size(&self) -> usize {
         self.session_cache.len()

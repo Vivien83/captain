@@ -11,7 +11,7 @@ import { Learning } from './views/Learning.js';
 import { Automation } from './views/Automation.js';
 import { Capabilities } from './views/Capabilities.js';
 import { Status } from './views/Status.js';
-import { hubForRoute } from './control_contract.mjs';
+import { hubForMode, routeForMode } from './control_contract.mjs';
 
 const html = htm.bind(h);
 
@@ -42,11 +42,15 @@ function App() {
   useEffect(() => subscribe((s) => setAuthed(s.authed)), []);
 
   useEffect(() => {
-    const onUnauthorized = () => setState({
-      authed: false,
-      authMode: 'session',
-      backgroundActivity: [],
-    });
+    const onUnauthorized = () => {
+      const clientMode = getState().clientMode;
+      setState({
+        authed: false,
+        authMode: clientMode ? 'client' : 'session',
+        clientMode,
+        backgroundActivity: [],
+      });
+    };
     window.addEventListener('captain:unauthorized', onUnauthorized);
     return () => window.removeEventListener('captain:unauthorized', onUnauthorized);
   }, []);
@@ -59,10 +63,10 @@ function App() {
   useEffect(() => {
     api.authCheck()
       .then((info) => {
-        if (info && info.mode === 'session' && info.authenticated) {
-          setState({ authed: true });
+        if (info && ['session', 'client'].includes(info.mode) && info.authenticated) {
+          setState({ authed: true, authMode: info.mode, clientMode: info.mode === 'client' });
         } else {
-          setState({ authed: false, authMode: (info && info.mode) || 'unknown' });
+          setState({ authed: false, authMode: (info && info.mode) || 'unknown', clientMode: false });
         }
       })
       .catch(() => setState({ authed: false, authMode: 'unknown' }));
@@ -109,10 +113,12 @@ function App() {
   if (authed === null) return html`<div></div>`;
   if (authed === false) return html`<${Login} mode=${getState().authMode} />`;
 
-  const View = VIEWS[hubForRoute(route)] || Chat;
+  const clientMode = getState().clientMode;
+  const effectiveRoute = routeForMode(route, clientMode);
+  const View = VIEWS[hubForMode(effectiveRoute, clientMode)] || Chat;
   return html`
-    <${Shell} route=${route}>
-      <${View} route=${route} />
+    <${Shell} route=${effectiveRoute}>
+      <${View} route=${effectiveRoute} />
     <//>
   `;
 }

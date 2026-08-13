@@ -6,6 +6,10 @@ pub(crate) fn mount_session_management_routes(
     router: Router<Arc<AppState>>,
 ) -> Router<Arc<AppState>> {
     router
+        .route(
+            "/api/execution-targets",
+            axum::routing::get(routes::list_execution_targets),
+        )
         .route("/api/sessions", axum::routing::get(routes::list_sessions))
         .route(
             "/api/sessions/{id}",
@@ -14,6 +18,11 @@ pub(crate) fn mount_session_management_routes(
         .route(
             "/api/sessions/{id}/label",
             axum::routing::put(routes::set_session_label),
+        )
+        .route(
+            "/api/sessions/{id}/execution-target",
+            axum::routing::get(routes::get_session_execution_target)
+                .put(routes::set_session_execution_target),
         )
         .route(
             "/api/agents/{id}/sessions/by-label/{label}",

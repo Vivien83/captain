@@ -21,13 +21,24 @@ pub(crate) async fn tool_capability_search(
     kernel: Option<&Arc<dyn KernelHandle>>,
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
-    search_capabilities(
-        input,
-        skill_registry,
-        mcp_connections,
-        kernel,
-        workspace_root,
+    let client_origin = crate::client_authority::is_paired_client_origin(
+        super::current_origin_channel().as_deref(),
+    );
+    let mut bounded_input = input.clone();
+    if client_origin {
+        bounded_input["sources"] = serde_json::json!(["builtin"]);
+    }
+    let definitions = crate::client_authority::filter_tool_definitions_for_origin(
         builtin_tool_definitions(),
+        super::current_origin_channel().as_deref(),
+    );
+    search_capabilities(
+        &bounded_input,
+        (!client_origin).then_some(skill_registry).flatten(),
+        (!client_origin).then_some(mcp_connections).flatten(),
+        (!client_origin).then_some(kernel).flatten(),
+        (!client_origin).then_some(workspace_root).flatten(),
+        definitions,
         is_core_tool,
     )
     .await
@@ -55,5 +66,10 @@ pub(crate) fn tool_skill_check(
 }
 
 pub(crate) async fn tool_search(input: &serde_json::Value) -> Result<String, String> {
-    search_deferred_builtin_tools(input, builtin_tool_definitions(), is_core_tool)
+    let origin = super::current_origin_channel();
+    let definitions = crate::client_authority::filter_tool_definitions_for_origin(
+        builtin_tool_definitions(),
+        origin.as_deref(),
+    );
+    search_deferred_builtin_tools(input, definitions, is_core_tool)
 }

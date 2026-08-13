@@ -16,7 +16,12 @@ async function request(path, options = {}) {
   }
   if (!res.ok) {
     let detail = '';
-    try { detail = (await res.json()).error || ''; } catch { /* non-JSON body */ }
+    try {
+      const payload = await res.json();
+      detail = typeof payload.error === 'string'
+        ? payload.error
+        : (payload.error && payload.error.message) || payload.message || '';
+    } catch { /* non-JSON body */ }
     throw new Error(detail || `${res.status} ${res.statusText}`);
   }
   const text = await res.text();
@@ -50,6 +55,27 @@ export const api = {
     { method: 'PUT', body: JSON.stringify({ effort }) },
   ),
   status: () => request('/api/status'),
+  hubDevices: () => request('/api/hub/devices'),
+  hubPairingRequests: () => request('/api/hub/pairing/requests'),
+  hubPairingEnrollment: () => request('/api/hub/pairing/enrollment'),
+  openHubPairingEnrollment: (durationSecs = 600) => request('/api/hub/pairing/enrollment', {
+    method: 'POST', body: JSON.stringify({ duration_secs: durationSecs }),
+  }),
+  closeHubPairingEnrollment: () => request('/api/hub/pairing/enrollment', { method: 'DELETE' }),
+  reviewHubPairingCode: (displayCode) => request('/api/hub/pairing/review', {
+    method: 'POST', body: JSON.stringify({ display_code: displayCode }),
+  }),
+  approveHubPairingCode: (displayCode, grant) => request('/api/hub/pairing/approve', {
+    method: 'POST', body: JSON.stringify({ display_code: displayCode, grant }),
+  }),
+  denyHubPairingRequest: (requestId) => request(
+    `/api/hub/pairing/requests/${encodeURIComponent(requestId)}/deny`,
+    { method: 'POST' },
+  ),
+  revokeHubDevice: (deviceId) => request(
+    `/api/hub/devices/${encodeURIComponent(deviceId)}`,
+    { method: 'DELETE' },
+  ),
   toolRuns: (status, limit = 50) => request(withQuery('/api/tool-runs', { status, limit })),
   toolRun: (runId) => request(`/api/tool-runs/${encodeURIComponent(runId)}`),
   toolRunTail: (runId, maxLines = 80) => request(withQuery(
@@ -83,7 +109,7 @@ export const api = {
   createSession: (agentId) => request(`/api/agents/${encodeURIComponent(agentId)}/sessions`, { method: 'POST' }),
   switchSession: (agentId, sessionId) => request(`/api/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/switch`, { method: 'POST' }),
   sessionEvents: (sessionId, limit = 400) => request(`/api/sessions/${encodeURIComponent(sessionId)}/events?limit=${limit}`),
-  labelSession: (sessionId, label) => request(`/api/sessions/${encodeURIComponent(sessionId)}/label`, { method: 'POST', body: JSON.stringify({ label }) }),
+  labelSession: (sessionId, label) => request(`/api/sessions/${encodeURIComponent(sessionId)}/label`, { method: 'PUT', body: JSON.stringify({ label }) }),
   deleteSession: (sessionId) => request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
   resetSession: (sessionId) => request(`/api/sessions/${encodeURIComponent(sessionId)}/reset`, { method: 'POST' }),
 

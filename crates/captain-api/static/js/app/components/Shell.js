@@ -3,7 +3,7 @@ import { useCallback, useState, useEffect } from '/assets/app/vendor/hooks.modul
 import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
 import { getState, setState, subscribe, toast } from '../store.js';
-import { PRIMARY_HUBS, hubForRoute } from '../control_contract.mjs';
+import { hubForMode, primaryHubsForMode } from '../control_contract.mjs';
 import { ArtifactDrawer } from './ArtifactDrawer.js';
 import { LiveRunsDrawer } from './LiveRunsDrawer.js';
 
@@ -46,6 +46,10 @@ export function Shell({ route, children }) {
 
   // Durable Codex catalog additions stay visible until the user decides.
   useEffect(() => {
+    if (getState().clientMode) {
+      setModelUpdates(null);
+      return undefined;
+    }
     const load = async () => {
       try { setModelUpdates(await api.modelUpdates()); } catch { /* transient */ }
     };
@@ -73,7 +77,8 @@ export function Shell({ route, children }) {
     refreshSessions(st.currentAgentId);
   }, [st.currentAgentId]);
 
-  const nav = (hash) => { location.hash = hash; setDrawerOpen(false); };
+  const primaryHubs = primaryHubsForMode(st.clientMode);
+  const activeHub = hubForMode(route, st.clientMode);
 
   return html`
     <div class="shell">
@@ -84,8 +89,8 @@ export function Shell({ route, children }) {
           <span class="name">Captain</span>
         </div>
         <div class="sidebar-nav">
-          ${PRIMARY_HUBS.map((item) => html`
-            <a key=${item.route} class="nav-item ${hubForRoute(route) === item.route ? 'active' : ''}"
+          ${primaryHubs.map((item) => html`
+            <a key=${item.route} class="nav-item ${activeHub === item.route ? 'active' : ''}"
               href="#/${item.route}" onClick=${() => setDrawerOpen(false)}>
               <span>${item.icon}</span> ${item.label}
               ${item.route === 'automation' && st.approvalsCount > 0 && html`<span class="badge">${st.approvalsCount}</span>`}
@@ -108,14 +113,14 @@ export function Shell({ route, children }) {
         <div class="sidebar-footer">
           <span class="status-dot ${st.daemon.ok === false ? 'err' : ''}"></span>
           <span>${st.daemon.ok === false ? 'daemon hors ligne' : (st.daemon.version || 'connecté')}</span>
-          <a href="/terminal" title="Mode expert (terminal)">⌥ expert</a>
+          ${!st.clientMode && html`<a href="/terminal" title="Mode expert (terminal)">⌥ expert</a>`}
         </div>
       </div>
 
       <div class="main">
         <div class="topbar">
           <button class="ghost menu-btn" onClick=${() => setDrawerOpen(true)}>☰</button>
-          <span class="title">${(PRIMARY_HUBS.find((it) => it.route === hubForRoute(route)) || PRIMARY_HUBS[0]).label}</span>
+          <span class="title">${(primaryHubs.find((it) => it.route === activeHub) || primaryHubs[0]).label}</span>
           ${st.backgroundActivity.length > 0 && html`
             <span class="bg-activity"><span class="spinner"></span> ${st.backgroundActivity.length} en arrière-plan</span>
           `}
@@ -143,7 +148,7 @@ export function Shell({ route, children }) {
             </select>
           `}
         </div>
-        ${modelUpdates && modelUpdates.pending && modelUpdates.pending.length > 0 && html`
+        ${!st.clientMode && modelUpdates && modelUpdates.pending && modelUpdates.pending.length > 0 && html`
           <${ModelUpdateNotice} snapshot=${modelUpdates} onRefresh=${async () => setModelUpdates(await api.modelUpdates())} />
         `}
         ${children}

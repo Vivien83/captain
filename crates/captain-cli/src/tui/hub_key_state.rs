@@ -1,8 +1,8 @@
 use super::{
     hub_nav,
     navigation_state::{
-        AutomationView, CapabilitiesView, ConnectionsView, LearningView, AUTOMATION_VIEWS,
-        CAPABILITIES_VIEWS, CONNECTIONS_VIEWS, LEARNING_VIEWS,
+        AutomationView, CapabilitiesView, ConnectionsView, LearningView, CAPABILITIES_VIEWS,
+        CONNECTIONS_VIEWS, LEARNING_VIEWS,
     },
 };
 
@@ -23,11 +23,12 @@ pub(crate) fn automation_key_route_for_view(view: AutomationView) -> AutomationK
     }
 }
 
-pub(crate) fn automation_view_after_shortcut(
+pub(crate) fn automation_view_after_shortcut_in(
+    views: &[AutomationView],
     current: AutomationView,
     action: hub_nav::ShortcutAction,
 ) -> Option<AutomationView> {
-    view_after_shortcut(AUTOMATION_VIEWS, current, action)
+    view_after_shortcut(views, current, action)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -24,11 +24,14 @@ pub(crate) fn apply_project_runtime_start(
     runtime: &mut serde_json::Value,
     project: &project::Project,
     process_running: bool,
+    authority_origin: Option<&str>,
 ) -> ProjectRuntimeStartAction {
     if process_running {
         mark_runtime_already_running(runtime);
         return ProjectRuntimeStartAction::AlreadyRunning;
     }
+
+    set_project_runtime_authority_origin(runtime, authority_origin);
 
     if runtime_should_resume_stale_run(process_running, runtime) {
         resume_stale_project_runtime(runtime);
@@ -41,6 +44,27 @@ pub(crate) fn apply_project_runtime_start(
 
     start_fresh_project_runtime(runtime, project);
     ProjectRuntimeStartAction::FreshStart
+}
+
+pub(crate) fn set_project_runtime_authority_origin(
+    runtime: &mut serde_json::Value,
+    authority_origin: Option<&str>,
+) {
+    let authority_origin = authority_origin
+        .filter(|origin| captain_runtime::client_authority::is_paired_client_origin(Some(origin)));
+    if let Some(authority_origin) = authority_origin {
+        runtime["authority_origin"] = serde_json::json!(authority_origin);
+    } else if let Some(runtime) = runtime.as_object_mut() {
+        runtime.remove("authority_origin");
+    }
+}
+
+pub(crate) fn project_runtime_authority_origin(runtime: &serde_json::Value) -> Option<String> {
+    runtime
+        .get("authority_origin")
+        .and_then(serde_json::Value::as_str)
+        .filter(|origin| captain_runtime::client_authority::is_paired_client_origin(Some(origin)))
+        .map(str::to_string)
 }
 
 fn mark_runtime_already_running(runtime: &mut serde_json::Value) {
@@ -200,7 +224,7 @@ mod tests {
             "timeline": []
         });
 
-        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), true);
+        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), true, None);
 
         assert_eq!(action, ProjectRuntimeStartAction::AlreadyRunning);
         assert_eq!(runtime["status"], "running");
@@ -223,7 +247,7 @@ mod tests {
             "timeline": []
         });
 
-        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false);
+        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false, None);
 
         assert_eq!(action, ProjectRuntimeStartAction::ResumeAfterRestart);
         assert_eq!(runtime["status"], "running");
@@ -252,7 +276,7 @@ mod tests {
             "timeline": []
         });
 
-        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false);
+        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false, None);
 
         assert_eq!(action, ProjectRuntimeStartAction::ResumePending);
         assert_eq!(runtime["status"], "running");
@@ -280,7 +304,7 @@ mod tests {
             "timeline": []
         });
 
-        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false);
+        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false, None);
 
         assert_eq!(action, ProjectRuntimeStartAction::FreshStart);
         assert_eq!(runtime["status"], "running");
@@ -299,7 +323,7 @@ mod tests {
             "timeline": []
         });
 
-        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false);
+        let action = apply_project_runtime_start(&mut runtime, &project_fixture(), false, None);
 
         assert_eq!(action, ProjectRuntimeStartAction::FreshStart);
         assert_eq!(runtime["status"], "running");
@@ -321,5 +345,39 @@ mod tests {
         );
         assert_eq!(runtime["timeline"][1]["kind"], "task_graph.created");
         assert_eq!(runtime["timeline"][1]["data"]["worker_count"], 7);
+    }
+
+    #[test]
+    fn paired_client_origin_is_durable_and_operator_resume_can_clear_it() {
+        let mut runtime = serde_json::json!({
+            "status": "ready",
+            "current_phase": "observe",
+            "timeline": []
+        });
+        let origin = captain_runtime::client_authority::paired_client_origin("project");
+
+        apply_project_runtime_start(&mut runtime, &project_fixture(), false, Some(&origin));
+        assert_eq!(project_runtime_authority_origin(&runtime), Some(origin));
+
+        set_project_runtime_authority_origin(&mut runtime, None);
+        assert_eq!(project_runtime_authority_origin(&runtime), None);
+        assert!(runtime.get("authority_origin").is_none());
+    }
+
+    #[test]
+    fn already_running_project_keeps_its_original_authority() {
+        let mut runtime = serde_json::json!({
+            "status": "running",
+            "current_phase": "build",
+            "authority_origin": "paired-client:project",
+            "timeline": []
+        });
+
+        apply_project_runtime_start(&mut runtime, &project_fixture(), true, None);
+
+        assert_eq!(
+            project_runtime_authority_origin(&runtime).as_deref(),
+            Some("paired-client:project")
+        );
     }
 }

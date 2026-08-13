@@ -374,6 +374,21 @@ fn classify_tool_call(tool_call: &ToolCall) -> WorkEffect {
     classify_tool_name(&tool_call.name, Some(&tool_call.input))
 }
 
+/// Classify a tool offered to a remote-operated Node. Unlike ordinary turn
+/// verification, an unknown shell command is an external effect: a false
+/// positive only asks for approval, while a false local classification could
+/// replay an unobserved side effect after a partition.
+pub fn classify_distributed_tool_effect(tool_name: &str, input: &serde_json::Value) -> WorkEffect {
+    if !is_command_tool(tool_name) {
+        return classify_tool_name(tool_name, Some(input));
+    }
+    input
+        .as_object()
+        .and_then(|_| command_from_input(input))
+        .map(classify_distributed_command)
+        .unwrap_or(WorkEffect::ExternalEffect)
+}
+
 fn classify_tool_name(tool_name: &str, input: Option<&serde_json::Value>) -> WorkEffect {
     if tool_name == "ask_user" {
         return WorkEffect::HumanInput;
@@ -542,13 +557,27 @@ fn command_from_input(input: &serde_json::Value) -> Option<&str> {
 }
 
 fn classify_command(command: &str) -> WorkEffect {
-    let normalized = format!(
-        " {} ",
-        command
-            .to_ascii_lowercase()
-            .replace('\r', " ")
-            .replace('\n', " ; ")
-    );
+    classify_normalized_command(command, WorkEffect::LocalMutation)
+}
+
+fn classify_distributed_command(command: &str) -> WorkEffect {
+    let normalized = normalize_command(command);
+    if command_has_external_effect(&normalized) {
+        WorkEffect::ExternalEffect
+    } else if command_has_mutation(&normalized) || command_has_verification(&normalized) {
+        // Build, test, health, and status commands may execute project hooks,
+        // populate caches, or contact a daemon. They are useful evidence but
+        // are not replay-safe observations on a remote Node.
+        WorkEffect::LocalMutation
+    } else if command_is_observation(&normalized) {
+        WorkEffect::Observation
+    } else {
+        WorkEffect::ExternalEffect
+    }
+}
+
+fn classify_normalized_command(command: &str, unknown: WorkEffect) -> WorkEffect {
+    let normalized = normalize_command(command);
     if command_has_external_effect(&normalized) {
         WorkEffect::ExternalEffect
     } else if command_has_mutation(&normalized) {
@@ -558,8 +587,18 @@ fn classify_command(command: &str) -> WorkEffect {
     } else if command_is_observation(&normalized) {
         WorkEffect::Observation
     } else {
-        WorkEffect::LocalMutation
+        unknown
     }
+}
+
+fn normalize_command(command: &str) -> String {
+    format!(
+        " {} ",
+        command
+            .to_ascii_lowercase()
+            .replace('\r', " ")
+            .replace('\n', " ; ")
+    )
 }
 
 fn command_has_external_effect(command: &str) -> bool {
@@ -1203,6 +1242,27 @@ mod tests {
         assert_eq!(classify_tool_call(&remote_status), WorkEffect::Verification);
         assert_eq!(
             classify_tool_call(&remote_restart),
+            WorkEffect::ExternalEffect
+        );
+    }
+
+    #[test]
+    fn distributed_shell_classifier_fails_unknown_work_closed() {
+        let effect = |command: &str| {
+            classify_distributed_tool_effect("shell_exec", &serde_json::json!({"command": command}))
+        };
+        assert_eq!(effect("pwd"), WorkEffect::Observation);
+        assert_eq!(effect("cargo test --workspace"), WorkEffect::LocalMutation);
+        assert_eq!(effect("git status --short"), WorkEffect::LocalMutation);
+        assert_eq!(effect("git add README.md"), WorkEffect::LocalMutation);
+        assert_eq!(effect("git push origin main"), WorkEffect::ExternalEffect);
+        assert_eq!(
+            effect("custom-deploy production"),
+            WorkEffect::ExternalEffect
+        );
+        assert_eq!(effect(""), WorkEffect::ExternalEffect);
+        assert_eq!(
+            classify_distributed_tool_effect("shell_exec", &serde_json::json!({})),
             WorkEffect::ExternalEffect
         );
     }

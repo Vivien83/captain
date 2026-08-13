@@ -5,7 +5,7 @@ VPS does not need Rust, Cargo, or a source build.
 
 ## Managed Domain Install
 
-The `v0.1.0-alpha.13` installer includes Captain's managed single-domain HTTPS
+The `v0.1.0-alpha.14` installer includes Captain's managed single-domain HTTPS
 bootstrap. Interactive VPS setup asks for the domain; unattended installs use
 the exact `CAPTAIN_DOMAIN` value below.
 
@@ -15,7 +15,7 @@ provider firewall. Captain can update an active `ufw` or `firewalld` host
 firewall, but it cannot modify an external cloud firewall or DNS account.
 
 ```bash
-CAPTAIN_RELEASE=v0.1.0-alpha.13
+CAPTAIN_RELEASE=v0.1.0-alpha.14
 curl -fsSL "https://github.com/Vivien83/captain/releases/download/$CAPTAIN_RELEASE/install.sh" \
   | CAPTAIN_VERSION="$CAPTAIN_RELEASE" \
     CAPTAIN_PROFILE=vps \
@@ -56,7 +56,7 @@ For Codex through a ChatGPT subscription, install the service without starting
 it, complete device login, then start it:
 
 ```bash
-CAPTAIN_RELEASE=v0.1.0-alpha.13
+CAPTAIN_RELEASE=v0.1.0-alpha.14
 curl -fsSL "https://github.com/Vivien83/captain/releases/download/$CAPTAIN_RELEASE/install.sh" \
   | CAPTAIN_VERSION="$CAPTAIN_RELEASE" \
     CAPTAIN_PROFILE=vps \

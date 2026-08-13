@@ -1,10 +1,11 @@
 //! Workflow route handlers.
 
 use crate::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_kernel::workflow::{
     ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowRun, WorkflowStep,
 };
@@ -129,6 +130,7 @@ pub async fn list_workflows(State(state): State<Arc<AppState>>) -> impl IntoResp
 pub async fn run_workflow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let workflow_id = match parse_workflow_id(&id) {
@@ -137,7 +139,13 @@ pub async fn run_workflow(
     };
     let input = req["input"].as_str().unwrap_or("").to_string();
 
-    match state.kernel.run_workflow(workflow_id, input).await {
+    let origin =
+        client.map(|_| captain_runtime::client_authority::paired_client_origin("workflow"));
+    match state
+        .kernel
+        .run_workflow_with_origin(workflow_id, input, origin)
+        .await
+    {
         Ok((run_id, output)) => (
             StatusCode::OK,
             Json(serde_json::json!({

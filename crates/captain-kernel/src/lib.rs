@@ -36,6 +36,8 @@ pub mod goals;
 pub mod graph_memory;
 pub mod graph_seed;
 pub mod heartbeat;
+pub mod hub_node_service;
+pub mod hub_pairing_service;
 pub mod kernel;
 pub mod metering;
 pub mod milestone_alerts;

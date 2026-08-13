@@ -97,21 +97,29 @@ if [ "$needs_xwin" = "1" ]; then
 fi
 command -v jq >/dev/null 2>&1 || fail "jq is required for the aggregate release manifest"
 
-# Prints only the built binary path on stdout (captured by the caller);
-# progress goes to stderr, alongside cargo/cross's own output.
+BUILD_TARGET_BIN=""
+
+# Stores the exact output path in BUILD_TARGET_BIN. Keep the build in the
+# current shell: command substitutions can suppress `set -e` inside functions
+# and must never allow a stale binary to survive a failed compiler invocation.
 build_target() {
     target="$1"
+    BUILD_TARGET_BIN=""
     echo "" >&2
     echo "════ Building $target ════" >&2
     case "$target" in
         "$HOST_TARGET")
-            CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli
-            echo "$TARGET_ROOT/release/captain"
+            BUILD_TARGET_BIN="$TARGET_ROOT/release/captain"
+            rm -f "$BUILD_TARGET_BIN"
+            CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli \
+                || fail "release build failed for $target"
             ;;
         *-apple-darwin)
             rustup target add "$target" >/dev/null
-            CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli --target "$target"
-            echo "$TARGET_ROOT/$target/release/captain"
+            BUILD_TARGET_BIN="$TARGET_ROOT/$target/release/captain"
+            rm -f "$BUILD_TARGET_BIN"
+            CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli --target "$target" \
+                || fail "release build failed for $target"
             ;;
         *-unknown-linux-gnu)
             # Thin LTO for cross builds: the workspace release profile
@@ -123,18 +131,23 @@ build_target() {
             # the same directory the native macOS cache uses — sharing it
             # cross-contaminates both caches (host build scripts linked
             # against the container's glibc, and vice versa).
+            BUILD_TARGET_BIN="$TARGET_ROOT/cross-$target/$target/release/captain"
+            rm -f "$BUILD_TARGET_BIN"
             CAPTAIN_BUILD_VERSION="$VERSION" \
             CARGO_TARGET_DIR="$TARGET_ROOT/cross-$target" \
             CARGO_PROFILE_RELEASE_LTO=thin \
             CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8 \
-                cross build --release -p captain-cli --target "$target"
-            echo "$TARGET_ROOT/cross-$target/$target/release/captain"
+                cross build --release -p captain-cli --target "$target" \
+                || fail "release build failed for $target"
             ;;
         *-pc-windows-msvc)
+            BUILD_TARGET_BIN="$TARGET_ROOT/xwin-$target/$target/release/captain.exe"
+            rm -f "$BUILD_TARGET_BIN"
+            RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings" \
             CAPTAIN_BUILD_VERSION="$VERSION" \
             CARGO_TARGET_DIR="$TARGET_ROOT/xwin-$target" \
-                cargo xwin build --release --target "$target" -p captain-cli --bin captain
-            echo "$TARGET_ROOT/xwin-$target/$target/release/captain.exe"
+                cargo xwin build --release --target "$target" -p captain-cli --bin captain \
+                || fail "release build failed for $target"
             ;;
         *)
             fail "Unsupported target: $target"
@@ -298,7 +311,9 @@ echo "  Target root: $TARGET_ROOT"
 for target in $TARGETS; do
     release_host_checkpoint "before $target"
     build_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    bin_path="$(build_target "$target" | tail -1)"
+    build_target "$target"
+    bin_path="$BUILD_TARGET_BIN"
+    [ -n "$bin_path" ] || fail "Build produced no output path for $target"
     [ -f "$bin_path" ] || fail "Build produced no binary for $target at $bin_path"
     verify_embedded_binary_version "$target" "$bin_path"
     case "$target" in

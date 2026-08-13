@@ -1398,6 +1398,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         fallback_auth: state.kernel.config.auth.clone(),
         deployment: state.kernel.config.deployment.clone(),
         security: Arc::new(captain_api::web_auth_security::WebAuthSecurity::default()),
+        hub_pairing: Arc::clone(&state.kernel.hub_pairing),
     };
     let web_auth_security = auth_state.security.clone();
 
@@ -1535,6 +1536,7 @@ async fn start_test_server_with_legacy_web_auth(password: &str) -> TestServer {
         fallback_auth: state.kernel.config.auth.clone(),
         deployment: state.kernel.config.deployment.clone(),
         security: security.clone(),
+        hub_pairing: Arc::clone(&state.kernel.hub_pairing),
     };
 
     let app = Router::new()

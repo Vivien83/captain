@@ -102,11 +102,7 @@ fn fetch_inprocess_tail(run_id: &str) -> Result<OperatorToolRunTail, String> {
 }
 
 fn daemon_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .default_headers(crate::daemon_auth_headers())
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new())
+    crate::daemon_client_with_timeout(Some(Duration::from_secs(5)))
 }
 
 fn decode_response<T: serde::de::DeserializeOwned>(

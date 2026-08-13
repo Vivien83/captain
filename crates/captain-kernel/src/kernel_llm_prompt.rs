@@ -176,6 +176,9 @@ impl CaptainKernel {
         snapshot: &PromptRuntimeSnapshot,
     ) -> PromptContext {
         let manifest = request.manifest;
+        let paired_client = captain_runtime::client_authority::is_paired_client_origin(
+            request.channel_type.as_deref(),
+        );
         let active_project =
             resolve_active_project(&self.memory, &self.goal_store, request.agent_id);
         let active_project_slug = active_project.as_ref().map(|project| project.slug.as_str());
@@ -189,9 +192,17 @@ impl CaptainKernel {
                 snapshot.runtime_update_notice.clone(),
             ),
             granted_tools: request.tools.iter().map(|tool| tool.name.clone()).collect(),
-            skill_summary: self.build_skill_summary(&manifest.skills),
-            skill_prompt_context: self.collect_prompt_context(&manifest.skills),
-            mcp_summary: if snapshot.mcp_tool_count > 0 {
+            skill_summary: if paired_client {
+                String::new()
+            } else {
+                self.build_skill_summary(&manifest.skills)
+            },
+            skill_prompt_context: if paired_client {
+                String::new()
+            } else {
+                self.collect_prompt_context(&manifest.skills)
+            },
+            mcp_summary: if !paired_client && snapshot.mcp_tool_count > 0 {
                 self.build_mcp_summary(&manifest.mcp_servers)
             } else {
                 String::new()
@@ -275,6 +286,9 @@ impl CaptainKernel {
         manifest: &AgentManifest,
         retractions: &[MemoryRetraction],
     ) {
+        if captain_runtime::client_authority::is_paired_client_origin(ctx.channel_type.as_deref()) {
+            return;
+        }
         let style_file = manifest
             .workspace
             .as_ref()

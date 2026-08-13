@@ -15,7 +15,9 @@ captain-capspec = { path = "../captain-capspec" }
 captain-kernel = { path = "../captain-kernel", default-features = false }
 captain-api = { path = "../captain-api", default-features = false }
 captain-memory = { path = "../captain-memory" }
+captain-node = { path = "../captain-node" }
 captain-skills = { path = "../captain-skills" }
+captain-wire = { path = "../captain-wire" }
 captain-extensions = { path = "../captain-extensions" }
 zeroize = { workspace = true }
 tokio = { workspace = true }
@@ -23,6 +25,7 @@ clap = { workspace = true }
 clap_complete = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -36,6 +39,7 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 zip = { workspace = true }
 fs2 = { workspace = true }
+futures = { workspace = true }
 captain-runtime = { path = "../captain-runtime", default-features = false }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -47,13 +51,12 @@ arboard = { version = "3.4", default-features = false }
 rusqlite = { workspace = true }
 similar = { version = "2.5", default-features = false, features = ["text"] }
 # TUI polish — image previews via ratatui-image (Sixel/Kitty/iTerm2/halfblocks).
-# Compatible with ratatui 0.29; chafa-dyn dropped to avoid the libchafa system
-# dep — fallback halfblocks is enough for terminals without graphics support.
-ratatui-image = { version = "9", default-features = false, features = ["crossterm"] }
+# Keep chafa-dyn disabled to avoid the libchafa system dependency; fallback
+# halfblocks is enough for terminals without graphics support.
+ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # File picker overlay for /image and /file when called without an argument.
-# 0.2.x is the last branch compatible with ratatui 0.29; 0.3 bumps to 0.30.
-ratatui-explorer = "0.2"
+ratatui-explorer = "=0.3.0"
 # Masks terminal input for secret prompts (SSH passphrases, API keys, vault
 # secrets, bot tokens) — plain prompt_input() echoes cleartext otherwise.
 rpassword = "7"

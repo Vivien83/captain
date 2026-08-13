@@ -35,20 +35,20 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.13` explicitly.
+below pins `v0.1.0-alpha.14` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 CAPTAIN_PROFILE=vps bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps bash
 ```
 
 The VPS profile installs the binary, prepares local state, runs setup, and
@@ -60,8 +60,8 @@ for DNS, firewall, rollback, and readiness requirements.
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.13"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.14"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -88,8 +88,8 @@ For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \
@@ -133,6 +133,19 @@ Default local URLs:
 - Control web: `http://127.0.0.1:50051/`
 - Expert terminal: `http://127.0.0.1:50051/terminal`
 - Health API: `http://127.0.0.1:50051/api/health`
+
+To use this same Captain from another terminal or Desktop installation, or to
+execute tools on another machine without opening an inbound port, follow
+[Hub, Clients, and Nodes](hub-clients-nodes.md). The shortest Client path is:
+
+```bash
+# On the Hub: open enrollment for ten minutes.
+captain devices pair
+
+# On the other machine: pair the lightweight interface.
+captain client pair --hub https://hub.example.com
+captain chat
+```
 
 If Captain is installed as a service:
 

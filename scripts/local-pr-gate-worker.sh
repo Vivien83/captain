@@ -234,8 +234,6 @@ run_step "locked dependency fetch" "$STEP_TIMEOUT" \
 run_step "RustSec vulnerability audit" "$STEP_TIMEOUT" \
     cargo audit \
         --file "$HEAD_DIR/Cargo.lock" \
-        --ignore RUSTSEC-2026-0194 \
-        --ignore RUSTSEC-2026-0195 \
     || fail_gate "RustSec found an unreviewed vulnerability"
 
 run_step "seal exact trees and disable egress" 60 \

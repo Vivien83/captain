@@ -48,6 +48,43 @@ impl CaptainKernel {
         Ok(self.approval_manager.request_approval(req).await)
     }
 
+    pub(super) async fn handle_remote_node_approval(
+        &self,
+        agent_id: &str,
+        tool_name: &str,
+        approval: &captain_memory::hub_node_rail::HubNodeRunApprovalRecord,
+    ) -> Result<captain_types::approval::ApprovalOutcome, String> {
+        let id = approval
+            .approval_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| "remote Node approval identifier is invalid".to_string())?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let remaining_ms = approval.expires_at_ms.saturating_sub(now_ms);
+        if remaining_ms <= 0 {
+            return Ok(captain_types::approval::ApprovalDecision::TimedOut.into());
+        }
+        let policy_timeout = self.approval_manager.policy().timeout_secs.max(1);
+        let remaining_secs = u64::try_from(remaining_ms)
+            .unwrap_or(u64::MAX)
+            .saturating_add(999)
+            / 1_000;
+        let req = ApprovalRequest {
+            id,
+            agent_id: agent_id.to_string(),
+            tool_name: tool_name.to_string(),
+            description: approval_description(agent_id, tool_name),
+            action_summary: bounded_action_summary(&approval.action_summary),
+            action_digest: approval.action_digest.clone(),
+            risk_level: approval.risk_level,
+            requested_at: chrono::DateTime::from_timestamp_millis(approval.requested_at_ms)
+                .unwrap_or_else(chrono::Utc::now),
+            timeout_secs: remaining_secs.min(policy_timeout).max(1),
+        };
+        req.validate()?;
+        self.publish_approval_requested(agent_id, &req).await;
+        Ok(self.approval_manager.request_approval(req).await)
+    }
+
     pub(super) async fn handle_spawn_agent_checked(
         &self,
         manifest_toml: &str,

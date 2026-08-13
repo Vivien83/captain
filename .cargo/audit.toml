@@ -1,7 +1,7 @@
 # Reviewed transitive advisories.
 #
 # Tauri's Linux desktop stack still uses the GTK3 bindings listed below.
-# The remaining proc-macro, UNIC, LRU, paste, and fxhash entries are
+# The remaining proc-macro, UNIC, paste, and fxhash entries are
 # also target-specific or transitive. `scripts/dependency-audit.sh` runs a
 # second audit without this file and pins every accepted package, version,
 # advisory, plus the critical direct parent chains, so this list cannot hide
@@ -13,21 +13,10 @@
 # SmallRng::seed_from_u64 rather than thread_rng/rand::rng. Remove this ignore
 # when Tauri/kuchikiki/selectors no longer pull phf_generator 0.8.
 #
-# quick-xml RUSTSEC-2026-0194/0195 (DoS: quadratic runtime / unbounded
-# namespace allocation): plist now uses patched quick-xml 0.41.0. The sole
-# remaining 0.37.5 path is Windows-only:
-# tauri-winrt-notification 0.7.2 -> notify-rust 4.18.0 ->
-# tauri-plugin-notification 2.3.3. That crate only calls
-# `quick_xml::escape::escape`; it does not call the vulnerable parser,
-# `NsReader`, `Attributes`, or `try_get_attribute` paths. Remove these two
-# exceptions when notify-rust accepts tauri-winrt-notification >=0.8.
-#
 # RSA is deliberately absent. Its unresolved RUSTSEC-2023-0071
 # timing-side-channel advisory is not ignored.
 [advisories]
 ignore = [
-    "RUSTSEC-2026-0194",  # quick-xml parser DoS — unreachable Windows notification parser path
-    "RUSTSEC-2026-0195",  # quick-xml NsReader DoS — unreachable Windows notification parser path
     "RUSTSEC-2024-0370",  # proc-macro-error unmaintained
     "RUSTSEC-2024-0411",  # gtk-rs GTK3 unmaintained (gdkwayland-sys)
     "RUSTSEC-2024-0412",  # gtk-rs GTK3 unmaintained (gdk)
@@ -47,6 +36,5 @@ ignore = [
     "RUSTSEC-2025-0081",  # unic-char-property unmaintained
     "RUSTSEC-2025-0098",  # unic-ucd-version unmaintained
     "RUSTSEC-2025-0100",  # unic-ucd-ident unmaintained
-    "RUSTSEC-2026-0002",  # lru IterMut soundness
     "RUSTSEC-2026-0097",  # rand ThreadRng custom logger unsoundness — remaining exposure is Tauri build-time phf_generator 0.8 only
 ]

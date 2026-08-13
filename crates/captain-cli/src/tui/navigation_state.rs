@@ -389,6 +389,12 @@ pub(crate) const AUTOMATION_VIEWS: &[AutomationView] = &[
     AutomationView::Approvals,
 ];
 
+pub(crate) const CLIENT_AUTOMATION_VIEWS: &[AutomationView] = &[
+    AutomationView::Workflows,
+    AutomationView::Triggers,
+    AutomationView::Approvals,
+];
+
 impl AutomationView {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -397,10 +403,6 @@ impl AutomationView {
             AutomationView::Cron => "Cron",
             AutomationView::Approvals => "Approvals",
         }
-    }
-
-    pub(crate) fn index(self) -> usize {
-        hub_nav::index(AUTOMATION_VIEWS, self)
     }
 }
 

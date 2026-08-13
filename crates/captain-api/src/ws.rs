@@ -14,8 +14,9 @@
 
 use crate::routes::AppState;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Extension, Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_runtime::llm_errors;
@@ -142,6 +143,7 @@ pub async fn agent_ws(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     // SECURITY: Enforce per-IP WebSocket connection limit
@@ -172,13 +174,27 @@ pub async fn agent_ws(
     }
 
     let id_str = id.clone();
-    ws.on_upgrade(move |socket| handle_agent_ws(socket, state, agent_id, id_str, guard))
-        .into_response()
+    let client_device_id = client.map(|Extension(identity)| identity.device_id);
+    ws.on_upgrade(move |socket| {
+        handle_agent_ws(socket, state, agent_id, id_str, guard, client_device_id)
+    })
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
 // WS Connection Handler
 // ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct WsMessageContext {
+    sender: Arc<Mutex<SplitSink<WebSocket, Message>>>,
+    state: Arc<AppState>,
+    agent_id: AgentId,
+    verbose: Arc<AtomicU8>,
+    active_user_input_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
+    is_initiator: Arc<std::sync::atomic::AtomicBool>,
+    client_device_id: Option<String>,
+}
 
 /// Handle a WebSocket connection to an agent.
 ///
@@ -190,6 +206,7 @@ async fn handle_agent_ws(
     agent_id: AgentId,
     id_str: String,
     _guard: WsConnectionGuard,
+    client_device_id: Option<String>,
 ) {
     info!(agent_id = %id_str, "WebSocket connected");
 
@@ -324,6 +341,15 @@ async fn handle_agent_ws(
     // Channel for injecting user responses into the agent loop (ask_user tool)
     let active_user_input_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>> =
         Arc::new(tokio::sync::Mutex::new(None));
+    let message_context = WsMessageContext {
+        sender: Arc::clone(&sender),
+        state: Arc::clone(&state),
+        agent_id,
+        verbose: Arc::clone(&verbose),
+        active_user_input_tx: Arc::clone(&active_user_input_tx),
+        is_initiator: Arc::clone(&is_initiator),
+        client_device_id,
+    };
 
     // Per-connection rate limiting: max 10 messages per 60 seconds
     let mut msg_times: Vec<std::time::Instant> = Vec::new();
@@ -414,23 +440,10 @@ async fn handle_agent_ws(
 
                 // Spawn message handling as a task so the WS loop stays responsive
                 // for user_response messages during ask_user waits
-                let sender_c = Arc::clone(&sender);
-                let state_c = Arc::clone(&state);
-                let verbose_c = Arc::clone(&verbose);
-                let ui_tx_c = Arc::clone(&active_user_input_tx);
-                let is_init_c = Arc::clone(&is_initiator);
                 let text_owned = text.clone();
+                let message_context = message_context.clone();
                 tokio::spawn(async move {
-                    handle_text_message(
-                        &sender_c,
-                        &state_c,
-                        agent_id,
-                        &text_owned,
-                        &verbose_c,
-                        &ui_tx_c,
-                        &is_init_c,
-                    )
-                    .await;
+                    handle_text_message(message_context, &text_owned).await;
                 });
             }
             Message::Close(_) => {
@@ -457,15 +470,14 @@ async fn handle_agent_ws(
 // ---------------------------------------------------------------------------
 
 /// Handle a text message from the WebSocket client.
-async fn handle_text_message(
-    sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>,
-    state: &Arc<AppState>,
-    agent_id: AgentId,
-    text: &str,
-    verbose: &Arc<AtomicU8>,
-    active_user_input_tx: &Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
-    is_initiator: &Arc<std::sync::atomic::AtomicBool>,
-) {
+async fn handle_text_message(context: WsMessageContext, text: &str) {
+    let sender = &context.sender;
+    let state = &context.state;
+    let agent_id = context.agent_id;
+    let verbose = &context.verbose;
+    let active_user_input_tx = &context.active_user_input_tx;
+    let is_initiator = &context.is_initiator;
+    let client_device_id = context.client_device_id.as_deref();
     // Parse the message
     let parsed: serde_json::Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -508,6 +520,52 @@ async fn handle_text_message(
                 return;
             }
 
+            let provenance = crate::client_access_policy::ClientTurnProvenance::resolve(
+                client_device_id,
+                "ws",
+                None,
+                None,
+                Some("web"),
+                "web",
+            );
+
+            if let Some((command, args)) = crate::daemon_commands::parse_daemon_slash(&content) {
+                if provenance.paired_client
+                    && !captain_runtime::client_authority::paired_client_daemon_command_is_allowed(
+                        &command,
+                    )
+                {
+                    let _ = send_json(
+                        sender,
+                        &serde_json::json!({
+                            "type": "error",
+                            "code": "paired_client_authority_denied",
+                            "content": "Paired Client authority forbids this daemon command",
+                        }),
+                    )
+                    .await;
+                    return;
+                }
+                let reply = crate::daemon_commands::handle_daemon_command(
+                    state.kernel.clone(),
+                    Some(state.started_at),
+                    Some(state.shutdown_notify.clone()),
+                    &command,
+                    &args,
+                    crate::daemon_commands::DaemonCommandOrigin::api(
+                        provenance.channel_type.as_deref(),
+                        provenance.sender_id.as_deref(),
+                    ),
+                )
+                .await;
+                let _ = send_json(
+                    sender,
+                    &serde_json::json!({"type": "response", "content": reply}),
+                )
+                .await;
+                return;
+            }
+
             // v3.11d — intercept /project slash commands before calling the LLM.
             // Instant UX + no token burn.
             {
@@ -537,10 +595,12 @@ async fn handle_text_message(
                     .filter_map(|a| serde_json::from_value(a.clone()).ok())
                     .collect();
                 if !refs.is_empty() {
-                    let image_blocks = crate::routes::resolve_attachments(&refs);
-                    if !image_blocks.is_empty() {
-                        has_images = true;
-                        ws_content_blocks = Some(image_blocks);
+                    let content_blocks = crate::routes::resolve_attachments(&content, &refs);
+                    if content_blocks.len() > 1 {
+                        has_images = content_blocks.iter().any(|block| {
+                            matches!(block, captain_types::message::ContentBlock::Image { .. })
+                        });
+                        ws_content_blocks = Some(content_blocks);
                     }
                 }
             }
@@ -604,7 +664,10 @@ async fn handle_text_message(
                         message_id: user_msg_id.clone(),
                         content: content.clone(),
                         agent_id,
-                        channel: "web".to_string(),
+                        channel: provenance
+                            .channel_type
+                            .clone()
+                            .unwrap_or_else(|| "web".to_string()),
                     },
                 )
                 .await;
@@ -624,7 +687,10 @@ async fn handle_text_message(
                 agent_id,
                 content.clone(),
                 user_msg_id.clone(),
-                "web".to_string(),
+                provenance
+                    .channel_type
+                    .clone()
+                    .unwrap_or_else(|| "web".to_string()),
             );
 
             // Send message to agent with streaming
@@ -634,10 +700,10 @@ async fn handle_text_message(
                 agent_id,
                 &content,
                 Some(kernel_handle),
-                None,
-                None,
+                provenance.sender_id,
+                provenance.sender_name,
                 ws_content_blocks,
-                Some("web".to_string()),
+                provenance.channel_type,
             ) {
                 Ok((mut rx, handle, user_input_tx)) => {
                     let stream_metric = crate::stream_metrics::StreamMetricHandle::start(

@@ -11,11 +11,12 @@ use crate::project_tool_request_view::{
 };
 use crate::routes::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_memory::project;
 use serde::Deserialize;
 use serde_json::Value;
@@ -41,6 +42,7 @@ struct ProjectToolRequestUpdate {
 pub async fn respond_project_tool_request(
     State(state): State<Arc<AppState>>,
     Path(id_or_slug): Path<String>,
+    client: Option<Extension<DeviceAccessIdentity>>,
     Json(req): Json<ProjectToolRequestDecisionReq>,
 ) -> impl IntoResponse {
     let id_or_slug = match normalize_project_lookup_key(&id_or_slug) {
@@ -57,7 +59,22 @@ pub async fn respond_project_tool_request(
         Ok(update) => update,
         Err(response) => return response,
     };
+    if client.is_some() && !paired_client_may_apply_tool_request_update(&update) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "paired_client_authority_denied",
+            "Paired Client authority cannot approve one or more requested tools",
+        );
+    }
     persist_project_tool_request_update(&state, &project, update).await
+}
+
+fn paired_client_may_apply_tool_request_update(update: &ProjectToolRequestUpdate) -> bool {
+    update.decision != ToolRequestDecision::Approve
+        || update
+            .tools
+            .iter()
+            .all(|tool| captain_runtime::client_authority::paired_client_tool_name_is_allowed(tool))
 }
 
 fn resolve_project_for_tool_request(

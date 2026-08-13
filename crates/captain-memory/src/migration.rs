@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 44;
+const SCHEMA_VERSION: u32 = 51;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -185,6 +185,34 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 44 {
         migrate_v44(conn)?;
+    }
+
+    if current_version < 45 {
+        migrate_v45(conn)?;
+    }
+
+    if current_version < 46 {
+        migrate_v46(conn)?;
+    }
+
+    if current_version < 47 {
+        migrate_v47(conn)?;
+    }
+
+    if current_version < 48 {
+        migrate_v48(conn)?;
+    }
+
+    if current_version < 49 {
+        migrate_v49(conn)?;
+    }
+
+    if current_version < 50 {
+        migrate_v50(conn)?;
+    }
+
+    if current_version < 51 {
+        migrate_v51(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -2193,6 +2221,485 @@ fn migrate_v44(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 45: authoritative device registry and crash-safe pairing claims.
+/// Legacy mobile pairing rows remain intact and are imported as
+/// `reauth_required`; no historical plaintext push token is copied.
+fn migrate_v45(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS captain_devices (
+             device_id TEXT PRIMARY KEY,
+             display_name TEXT NOT NULL,
+             role TEXT NOT NULL,
+             platform TEXT NOT NULL,
+             captain_version TEXT NOT NULL,
+             protocol_major INTEGER NOT NULL,
+             protocol_minor INTEGER NOT NULL,
+             credential_sha256 TEXT UNIQUE,
+             capabilities_json TEXT NOT NULL,
+             grants_json TEXT NOT NULL,
+             status TEXT NOT NULL,
+             paired_at_ms INTEGER NOT NULL,
+             last_seen_ms INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL,
+             last_transport TEXT,
+             last_error_code TEXT,
+             revoked_at_ms INTEGER,
+             CHECK(length(device_id) BETWEEN 1 AND 128),
+             CHECK(device_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(display_name) BETWEEN 1 AND 160),
+             CHECK(instr(display_name, char(10)) = 0),
+             CHECK(instr(display_name, char(13)) = 0),
+             CHECK(role IN ('client', 'node')),
+             CHECK(length(platform) BETWEEN 1 AND 128),
+             CHECK(platform NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(captain_version) BETWEEN 1 AND 160),
+             CHECK(protocol_major BETWEEN 0 AND 65535),
+             CHECK(protocol_minor BETWEEN 0 AND 65535),
+             CHECK(
+                 credential_sha256 IS NULL OR (
+                     length(credential_sha256) = 64
+                     AND credential_sha256 NOT GLOB '*[^0-9a-f]*'
+                 )
+             ),
+             CHECK(length(capabilities_json) BETWEEN 2 AND 262144),
+             CHECK(json_valid(capabilities_json)),
+             CHECK(length(grants_json) BETWEEN 2 AND 65536),
+             CHECK(json_valid(grants_json)),
+             CHECK(status IN ('active', 'reauth_required', 'revoked')),
+             CHECK(paired_at_ms >= 0),
+             CHECK(last_seen_ms >= paired_at_ms),
+             CHECK(updated_at_ms >= paired_at_ms),
+             CHECK(last_transport IS NULL OR last_transport IN (
+                 'web_socket', 'http_stream', 'long_poll', 'local'
+             )),
+             CHECK(last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 96),
+             CHECK(revoked_at_ms IS NULL OR revoked_at_ms >= paired_at_ms),
+             CHECK((status = 'revoked') = (revoked_at_ms IS NOT NULL)),
+             CHECK(status <> 'active' OR credential_sha256 IS NOT NULL)
+         );
+         CREATE INDEX IF NOT EXISTS idx_captain_devices_status
+             ON captain_devices(status, role, display_name);
+         CREATE INDEX IF NOT EXISTS idx_captain_devices_seen
+             ON captain_devices(last_seen_ms DESC, device_id);
+
+         CREATE TABLE IF NOT EXISTS device_pairing_requests (
+             request_id TEXT PRIMARY KEY,
+             display_code_sha256 TEXT NOT NULL UNIQUE,
+             polling_secret_sha256 TEXT NOT NULL UNIQUE,
+             credential_sha256 TEXT NOT NULL UNIQUE,
+             display_name TEXT NOT NULL,
+             role TEXT NOT NULL,
+             platform TEXT NOT NULL,
+             captain_version TEXT NOT NULL,
+             protocol_major INTEGER NOT NULL,
+             protocol_minor INTEGER NOT NULL,
+             capabilities_json TEXT NOT NULL,
+             requested_grants_json TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'pending',
+             created_at_ms INTEGER NOT NULL,
+             expires_at_ms INTEGER NOT NULL,
+             decided_at_ms INTEGER,
+             approved_device_id TEXT REFERENCES captain_devices(device_id) ON DELETE RESTRICT,
+             CHECK(length(request_id) = 36),
+             CHECK(request_id NOT GLOB '*[^0-9a-f-]*'),
+             CHECK(length(display_code_sha256) = 64),
+             CHECK(display_code_sha256 NOT GLOB '*[^0-9a-f]*'),
+             CHECK(length(polling_secret_sha256) = 64),
+             CHECK(polling_secret_sha256 NOT GLOB '*[^0-9a-f]*'),
+             CHECK(length(credential_sha256) = 64),
+             CHECK(credential_sha256 NOT GLOB '*[^0-9a-f]*'),
+             CHECK(length(display_name) BETWEEN 1 AND 160),
+             CHECK(instr(display_name, char(10)) = 0),
+             CHECK(instr(display_name, char(13)) = 0),
+             CHECK(role IN ('client', 'node')),
+             CHECK(length(platform) BETWEEN 1 AND 128),
+             CHECK(platform NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(captain_version) BETWEEN 1 AND 160),
+             CHECK(protocol_major BETWEEN 1 AND 65535),
+             CHECK(protocol_minor BETWEEN 0 AND 65535),
+             CHECK(length(capabilities_json) BETWEEN 2 AND 262144),
+             CHECK(json_valid(capabilities_json)),
+             CHECK(length(requested_grants_json) BETWEEN 2 AND 65536),
+             CHECK(json_valid(requested_grants_json)),
+             CHECK(status IN ('pending', 'approved', 'denied', 'expired')),
+             CHECK(created_at_ms >= 0),
+             CHECK(expires_at_ms > created_at_ms),
+             CHECK(decided_at_ms IS NULL OR decided_at_ms >= created_at_ms),
+             CHECK((status = 'pending') = (decided_at_ms IS NULL)),
+             CHECK((status = 'approved') = (approved_device_id IS NOT NULL))
+         );
+         CREATE INDEX IF NOT EXISTS idx_device_pairing_pending
+             ON device_pairing_requests(status, expires_at_ms, created_at_ms);
+         ",
+    )?;
+
+    if table_exists(conn, "paired_devices")? {
+        conn.execute_batch(
+            "INSERT OR IGNORE INTO captain_devices (
+             device_id, display_name, role, platform, captain_version,
+             protocol_major, protocol_minor, credential_sha256,
+             capabilities_json, grants_json, status, paired_at_ms,
+             last_seen_ms, updated_at_ms, last_transport,
+             last_error_code, revoked_at_ms
+         )
+         SELECT
+             device_id, display_name, 'client', platform, 'legacy',
+             0, 0, NULL, '{}', '{}', 'reauth_required',
+             CAST(COALESCE(strftime('%s', paired_at), '0') AS INTEGER) * 1000,
+             MAX(
+                 CAST(COALESCE(strftime('%s', paired_at), '0') AS INTEGER) * 1000,
+                 CAST(COALESCE(strftime('%s', last_seen), '0') AS INTEGER) * 1000
+             ),
+             MAX(
+                 CAST(COALESCE(strftime('%s', paired_at), '0') AS INTEGER) * 1000,
+                 CAST(COALESCE(strftime('%s', last_seen), '0') AS INTEGER) * 1000
+             ),
+             NULL, 'legacy_pairing_requires_reauth', NULL
+         FROM paired_devices
+         WHERE length(device_id) BETWEEN 1 AND 128
+           AND device_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+           AND length(display_name) BETWEEN 1 AND 160
+           AND instr(display_name, char(10)) = 0
+           AND instr(display_name, char(13)) = 0
+           AND length(platform) BETWEEN 1 AND 128
+           AND platform NOT GLOB '*[^A-Za-z0-9._:-]*';",
+        )?;
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (45, datetime('now'), 'Add authoritative devices and durable pairing claims')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Version 46: durable Hub-to-Node execution rail. Messages are persisted as
+/// validated JSON payloads before delivery; cursors make both directions
+/// replayable without re-running an acknowledged side effect.
+fn migrate_v46(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS hub_node_runs (
+             run_id TEXT PRIMARY KEY,
+             device_id TEXT NOT NULL REFERENCES captain_devices(device_id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL,
+             workspace_id TEXT NOT NULL,
+             tool_name TEXT NOT NULL,
+             input_json TEXT NOT NULL,
+             effect TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'queued',
+             attempt INTEGER NOT NULL DEFAULT 0,
+             lease_owner TEXT,
+             lease_expires_at_ms INTEGER,
+             effect_state TEXT NOT NULL DEFAULT 'not_started',
+             progress_sequence INTEGER NOT NULL DEFAULT 0,
+             progress_message TEXT,
+             completion_json TEXT,
+             completion_sha256 TEXT,
+             error_code TEXT,
+             cancel_requested_at_ms INTEGER,
+             created_at_ms INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL,
+             terminal_at_ms INTEGER,
+             UNIQUE(device_id, idempotency_key),
+             CHECK(length(run_id) BETWEEN 1 AND 128),
+             CHECK(run_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(device_id) BETWEEN 1 AND 128),
+             CHECK(length(idempotency_key) BETWEEN 1 AND 128),
+             CHECK(idempotency_key NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(workspace_id) BETWEEN 1 AND 128),
+             CHECK(workspace_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(tool_name) BETWEEN 1 AND 128),
+             CHECK(tool_name NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(input_json) BETWEEN 2 AND 1048576),
+             CHECK(json_valid(input_json)),
+             CHECK(effect IN ('read_only', 'local_mutation', 'external_effect')),
+             CHECK(status IN (
+                 'queued', 'leased', 'accepted', 'cancel_requested',
+                 'succeeded', 'failed', 'cancelled', 'uncertain'
+             )),
+             CHECK(attempt BETWEEN 0 AND 4294967295),
+             CHECK(effect_state IN ('not_started', 'started', 'completed')),
+             CHECK(progress_sequence >= 0),
+             CHECK(progress_message IS NULL OR length(progress_message) <= 4096),
+             CHECK(completion_json IS NULL OR (
+                 length(completion_json) BETWEEN 2 AND 8388608
+                 AND json_valid(completion_json)
+             )),
+             CHECK(completion_sha256 IS NULL OR (
+                 length(completion_sha256) = 64
+                 AND completion_sha256 NOT GLOB '*[^0-9a-f]*'
+             )),
+             CHECK(error_code IS NULL OR length(error_code) BETWEEN 1 AND 96),
+             CHECK(created_at_ms >= 0),
+             CHECK(updated_at_ms >= created_at_ms),
+             CHECK(terminal_at_ms IS NULL OR terminal_at_ms >= created_at_ms),
+             CHECK(
+                 (status IN ('leased', 'accepted', 'cancel_requested')) =
+                 (lease_owner IS NOT NULL AND lease_expires_at_ms IS NOT NULL)
+             ),
+             CHECK(
+                 (status IN ('succeeded', 'failed', 'cancelled', 'uncertain')) =
+                 (terminal_at_ms IS NOT NULL)
+             )
+         );
+         CREATE INDEX IF NOT EXISTS idx_hub_node_runs_dispatch
+             ON hub_node_runs(device_id, status, created_at_ms, run_id);
+         CREATE INDEX IF NOT EXISTS idx_hub_node_runs_lease
+             ON hub_node_runs(status, lease_expires_at_ms);
+
+         CREATE TABLE IF NOT EXISTS hub_node_cursors (
+             device_id TEXT PRIMARY KEY REFERENCES captain_devices(device_id) ON DELETE RESTRICT,
+             next_hub_sequence INTEGER NOT NULL DEFAULT 1,
+             last_node_sequence INTEGER NOT NULL DEFAULT 0,
+             last_hub_ack_sequence INTEGER NOT NULL DEFAULT 0,
+             updated_at_ms INTEGER NOT NULL,
+             CHECK(next_hub_sequence >= 1),
+             CHECK(last_node_sequence >= 0),
+             CHECK(last_hub_ack_sequence >= 0),
+             CHECK(last_hub_ack_sequence < next_hub_sequence),
+             CHECK(updated_at_ms >= 0)
+         );
+
+         CREATE TABLE IF NOT EXISTS hub_node_outbox (
+             device_id TEXT NOT NULL REFERENCES captain_devices(device_id) ON DELETE RESTRICT,
+             sequence INTEGER NOT NULL,
+             message_kind TEXT NOT NULL,
+             message_json TEXT NOT NULL,
+             message_sha256 TEXT NOT NULL,
+             run_id TEXT,
+             created_at_ms INTEGER NOT NULL,
+             acked_at_ms INTEGER,
+             PRIMARY KEY(device_id, sequence),
+             CHECK(sequence >= 1),
+             CHECK(length(message_kind) BETWEEN 1 AND 64),
+             CHECK(message_kind NOT GLOB '*[^a-z0-9_]*'),
+             CHECK(length(message_json) BETWEEN 2 AND 8388608),
+             CHECK(json_valid(message_json)),
+             CHECK(length(message_sha256) = 64),
+             CHECK(message_sha256 NOT GLOB '*[^0-9a-f]*'),
+             CHECK(created_at_ms >= 0),
+             CHECK(acked_at_ms IS NULL OR acked_at_ms >= created_at_ms)
+         );
+         CREATE INDEX IF NOT EXISTS idx_hub_node_outbox_pending
+             ON hub_node_outbox(device_id, acked_at_ms, sequence);
+
+         CREATE TABLE IF NOT EXISTS hub_node_inbox (
+             device_id TEXT NOT NULL REFERENCES captain_devices(device_id) ON DELETE RESTRICT,
+             sequence INTEGER NOT NULL,
+             connection_id TEXT NOT NULL,
+             message_kind TEXT NOT NULL,
+             message_sha256 TEXT NOT NULL,
+             received_at_ms INTEGER NOT NULL,
+             PRIMARY KEY(device_id, sequence),
+             CHECK(sequence >= 1),
+             CHECK(length(connection_id) BETWEEN 1 AND 128),
+             CHECK(connection_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(length(message_kind) BETWEEN 1 AND 64),
+             CHECK(message_kind NOT GLOB '*[^a-z0-9_]*'),
+             CHECK(length(message_sha256) = 64),
+             CHECK(message_sha256 NOT GLOB '*[^0-9a-f]*'),
+             CHECK(received_at_ms >= 0)
+         );
+
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (46, datetime('now'), 'Add durable Hub Node execution rail');",
+    )?;
+    Ok(())
+}
+
+/// Version 47: one durable presence row per paired Node. A process restart
+/// marks active rows offline before any new transport is accepted.
+fn migrate_v47(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS hub_node_connections (
+             device_id TEXT PRIMARY KEY REFERENCES captain_devices(device_id) ON DELETE RESTRICT,
+             connection_id TEXT NOT NULL UNIQUE,
+             transport TEXT NOT NULL,
+             protocol_major INTEGER NOT NULL,
+             protocol_minor INTEGER NOT NULL,
+             status TEXT NOT NULL,
+             connected_at_ms INTEGER NOT NULL,
+             last_seen_ms INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL,
+             disconnected_at_ms INTEGER,
+             last_error_code TEXT,
+             CHECK(length(device_id) BETWEEN 1 AND 128),
+             CHECK(length(connection_id) BETWEEN 1 AND 128),
+             CHECK(connection_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(transport IN ('web_socket', 'http_stream', 'long_poll')),
+             CHECK(protocol_major BETWEEN 1 AND 65535),
+             CHECK(protocol_minor BETWEEN 0 AND 65535),
+             CHECK(status IN ('active', 'offline')),
+             CHECK(connected_at_ms >= 0),
+             CHECK(last_seen_ms >= connected_at_ms),
+             CHECK(updated_at_ms >= connected_at_ms),
+             CHECK(disconnected_at_ms IS NULL OR disconnected_at_ms >= connected_at_ms),
+             CHECK((status = 'active') = (disconnected_at_ms IS NULL)),
+             CHECK(last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 96)
+         );
+         CREATE INDEX IF NOT EXISTS idx_hub_node_connections_presence
+             ON hub_node_connections(status, last_seen_ms DESC, device_id);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (47, datetime('now'), 'Add durable Hub Node connection presence');",
+    )?;
+    Ok(())
+}
+
+/// Version 48: distinguish a real Node acknowledgement from an outbox row
+/// superseded and resequenced for a newer authenticated connection.
+fn migrate_v48(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "hub_node_outbox", "superseded_at_ms") {
+        conn.execute(
+            "ALTER TABLE hub_node_outbox ADD COLUMN superseded_at_ms INTEGER",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_hub_node_outbox_delivery
+             ON hub_node_outbox(device_id, acked_at_ms, superseded_at_ms, sequence);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (48, datetime('now'), 'Track resequenced Hub Node outbox rows');",
+    )?;
+    Ok(())
+}
+
+/// Version 49: correlate local Node policy rejection and exact-action
+/// approvals with one leased run without persisting raw tool input twice.
+fn migrate_v49(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "hub_node_runs", "rejection_json") {
+        conn.execute(
+            "ALTER TABLE hub_node_runs ADD COLUMN rejection_json TEXT",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "hub_node_runs", "rejection_sha256") {
+        conn.execute(
+            "ALTER TABLE hub_node_runs ADD COLUMN rejection_sha256 TEXT",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS hub_node_run_approvals (
+             approval_id TEXT PRIMARY KEY,
+             run_id TEXT NOT NULL REFERENCES hub_node_runs(run_id) ON DELETE RESTRICT,
+             attempt INTEGER NOT NULL,
+             action_digest TEXT NOT NULL,
+             action_summary TEXT NOT NULL,
+             risk_level TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'pending',
+             decision TEXT,
+             reason TEXT,
+             requested_at_ms INTEGER NOT NULL,
+             expires_at_ms INTEGER NOT NULL,
+             decided_at_ms INTEGER,
+             UNIQUE(run_id, attempt),
+             CHECK(length(approval_id) BETWEEN 1 AND 128),
+             CHECK(approval_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(attempt BETWEEN 1 AND 4294967295),
+             CHECK(length(action_digest) = 64),
+             CHECK(action_digest NOT GLOB '*[^0-9a-f]*'),
+             CHECK(length(action_summary) BETWEEN 1 AND 512),
+             CHECK(risk_level IN ('low', 'medium', 'high', 'critical')),
+             CHECK(status IN ('pending', 'approved', 'denied', 'timed_out')),
+             CHECK(decision IS NULL OR decision IN (
+                 'approved', 'approved_session', 'approved_always',
+                 'denied', 'denied_session', 'denied_always', 'timed_out'
+             )),
+             CHECK(reason IS NULL OR length(reason) BETWEEN 1 AND 280),
+             CHECK(requested_at_ms >= 0),
+             CHECK(expires_at_ms > requested_at_ms),
+             CHECK(decided_at_ms IS NULL OR decided_at_ms >= requested_at_ms),
+             CHECK(
+                 (status = 'pending' AND decision IS NULL AND decided_at_ms IS NULL)
+                 OR
+                 (status <> 'pending' AND decision IS NOT NULL AND decided_at_ms IS NOT NULL)
+             )
+         );
+         CREATE INDEX IF NOT EXISTS idx_hub_node_run_approvals_pending
+             ON hub_node_run_approvals(status, expires_at_ms, run_id);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (49, datetime('now'), 'Add exact Hub Node run approval and rejection evidence');",
+    )?;
+    Ok(())
+}
+
+/// Version 50: persist only short-lived access-token digests so paired
+/// Clients and Nodes remain authenticated across a Hub restart without ever
+/// writing a bearer token itself to disk.
+fn migrate_v50(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS device_access_tokens (
+             token_sha256 TEXT PRIMARY KEY,
+             device_id TEXT NOT NULL REFERENCES captain_devices(device_id) ON DELETE CASCADE,
+             issued_at_ms INTEGER NOT NULL,
+             expires_at_ms INTEGER NOT NULL,
+             CHECK(length(token_sha256) = 64),
+             CHECK(token_sha256 NOT GLOB '*[^0-9a-f]*'),
+             CHECK(issued_at_ms >= 0),
+             CHECK(expires_at_ms > issued_at_ms)
+         );
+         CREATE INDEX IF NOT EXISTS idx_device_access_tokens_device
+             ON device_access_tokens(device_id, issued_at_ms, token_sha256);
+         CREATE INDEX IF NOT EXISTS idx_device_access_tokens_expiry
+             ON device_access_tokens(expires_at_ms, token_sha256);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (50, datetime('now'), 'Persist short-lived device access token digests');",
+    )?;
+    Ok(())
+}
+
+/// Version 51: persist the logical execution target pinned to a session or
+/// project. Node filesystem paths are intentionally absent.
+fn migrate_v51(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS execution_target_bindings (
+             scope_kind TEXT NOT NULL,
+             scope_id TEXT NOT NULL,
+             target_kind TEXT NOT NULL,
+             device_id TEXT,
+             workspace_id TEXT,
+             updated_at_ms INTEGER NOT NULL,
+             PRIMARY KEY(scope_kind, scope_id),
+             CHECK(scope_kind IN ('session', 'project')),
+             CHECK(length(scope_id) BETWEEN 1 AND 128),
+             CHECK(scope_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+             CHECK(target_kind IN ('auto', 'hub', 'node')),
+             CHECK(updated_at_ms >= 0),
+             CHECK(
+                 (target_kind IN ('auto', 'hub')
+                     AND device_id IS NULL AND workspace_id IS NULL)
+                 OR
+                 (target_kind = 'node'
+                     AND device_id IS NOT NULL
+                     AND workspace_id IS NOT NULL
+                     AND length(device_id) = 41
+                     AND device_id LIKE 'node-%'
+                     AND length(workspace_id) BETWEEN 1 AND 128
+                     AND workspace_id NOT GLOB '*[^A-Za-z0-9._:-]*')
+             )
+         );
+         CREATE INDEX IF NOT EXISTS idx_execution_target_bindings_node
+             ON execution_target_bindings(device_id, workspace_id, scope_kind, scope_id)
+             WHERE target_kind = 'node';
+         CREATE TRIGGER IF NOT EXISTS cleanup_session_execution_target
+             AFTER DELETE ON sessions
+             BEGIN
+                 DELETE FROM execution_target_bindings
+                 WHERE scope_kind = 'session' AND scope_id = OLD.id;
+             END;
+         CREATE TRIGGER IF NOT EXISTS cleanup_project_execution_target
+             AFTER DELETE ON projects
+             BEGIN
+                 DELETE FROM execution_target_bindings
+                 WHERE scope_kind = 'project' AND scope_id = OLD.id;
+             END;
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (51, datetime('now'), 'Persist logical session and project execution targets');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2293,6 +2800,14 @@ mod tests {
         assert!(tables.contains(&"legacy_skill_proposals_archive".to_string()));
         assert!(tables.contains(&"todos".to_string()));
         assert!(tables.contains(&"detached_tool_runs".to_string()));
+        assert!(tables.contains(&"captain_devices".to_string()));
+        assert!(tables.contains(&"device_pairing_requests".to_string()));
+        assert!(tables.contains(&"device_access_tokens".to_string()));
+        assert!(tables.contains(&"hub_node_runs".to_string()));
+        assert!(tables.contains(&"hub_node_cursors".to_string()));
+        assert!(tables.contains(&"hub_node_outbox".to_string()));
+        assert!(tables.contains(&"hub_node_inbox".to_string()));
+        assert!(tables.contains(&"hub_node_connections".to_string()));
         assert!(tables.contains(&"provider_quota_snapshots".to_string()));
         assert!(tables.contains(&"provider_quota_events".to_string()));
         assert!(tables.contains(&"provider_quota_reset_outbox".to_string()));
@@ -3092,5 +3607,227 @@ mod tests {
                 [],
             )
             .is_err());
+    }
+
+    #[test]
+    fn v45_imports_legacy_devices_without_push_tokens_and_replays_safely() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO paired_devices (
+                 device_id, display_name, platform, paired_at, last_seen, push_token
+             ) VALUES (
+                 'legacy-phone', 'Legacy Phone', 'ios',
+                 '2026-08-01T10:00:00Z', '2026-08-02T12:00:00Z',
+                 'push-token-must-not-migrate'
+             )",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "DROP TABLE device_pairing_requests;
+             DROP TABLE captain_devices;
+             DELETE FROM migrations WHERE version = 45;
+             PRAGMA user_version = 44;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let imported: (String, String, Option<String>, String, i64, i64) = conn
+            .query_row(
+                "SELECT role, status, credential_sha256, last_error_code,
+                        paired_at_ms, last_seen_ms
+                 FROM captain_devices WHERE device_id = 'legacy-phone'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(imported.0, "client");
+        assert_eq!(imported.1, "reauth_required");
+        assert_eq!(imported.2, None);
+        assert_eq!(imported.3, "legacy_pairing_requires_reauth");
+        assert!(imported.4 > 0);
+        assert!(imported.5 >= imported.4);
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(captain_devices)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column == "push_token"));
+
+        conn.execute("DELETE FROM migrations WHERE version = 45", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 44).unwrap();
+        run_migrations(&conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM captain_devices WHERE device_id = 'legacy-phone'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v48_adds_resequence_audit_without_rewriting_outbox_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO captain_devices (
+                 device_id, display_name, role, platform, captain_version,
+                 protocol_major, protocol_minor, credential_sha256,
+                 capabilities_json, grants_json, status, paired_at_ms,
+                 last_seen_ms, updated_at_ms
+             ) VALUES ('node-v48', 'Node', 'node', 'linux', 'alpha.14',
+                       1, 0, ?1, '{}', '{}', 'active', 1, 1, 1)",
+            ["a".repeat(64)],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO hub_node_outbox (
+                 device_id, sequence, message_kind, message_json,
+                 message_sha256, created_at_ms
+             ) VALUES ('node-v48', 1, 'welcome', '{}', ?1, 2)",
+            ["b".repeat(64)],
+        )
+        .unwrap();
+
+        conn.execute("DROP INDEX idx_hub_node_outbox_delivery", [])
+            .unwrap();
+        conn.execute(
+            "ALTER TABLE hub_node_outbox DROP COLUMN superseded_at_ms",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM migrations WHERE version = 48", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 47).unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(column_exists(&conn, "hub_node_outbox", "superseded_at_ms"));
+        let retained: (String, Option<i64>) = conn
+            .query_row(
+                "SELECT message_kind, superseded_at_ms
+                 FROM hub_node_outbox WHERE device_id = 'node-v48'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(retained, ("welcome".to_string(), None));
+
+        conn.execute("DELETE FROM migrations WHERE version = 48", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 47).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v49_adds_exact_node_run_decisions_and_replays_safely() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE hub_node_run_approvals;
+             ALTER TABLE hub_node_runs DROP COLUMN rejection_sha256;
+             ALTER TABLE hub_node_runs DROP COLUMN rejection_json;
+             DELETE FROM migrations WHERE version = 49;
+             PRAGMA user_version = 48;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(column_exists(&conn, "hub_node_runs", "rejection_json"));
+        assert!(column_exists(&conn, "hub_node_runs", "rejection_sha256"));
+        assert!(table_exists(&conn, "hub_node_run_approvals").unwrap());
+
+        conn.execute("DELETE FROM migrations WHERE version = 49", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 48).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v50_adds_durable_device_access_token_digests_idempotently() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE device_access_tokens;
+             DELETE FROM migrations WHERE version = 50;
+             PRAGMA user_version = 49;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(table_exists(&conn, "device_access_tokens").unwrap());
+
+        conn.execute("DELETE FROM migrations WHERE version = 50", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 49).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v51_adds_logical_execution_targets_idempotently() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE execution_target_bindings;
+             DELETE FROM migrations WHERE version = 51;
+             PRAGMA user_version = 50;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(table_exists(&conn, "execution_target_bindings").unwrap());
+        assert!(table_exists(&conn, "sessions").unwrap());
+        let trigger_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'trigger'
+                   AND name IN ('cleanup_session_execution_target',
+                                'cleanup_project_execution_target')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trigger_count, 2);
+        conn.execute(
+            "INSERT INTO execution_target_bindings
+                (scope_kind, scope_id, target_kind, device_id, workspace_id, updated_at_ms)
+             VALUES ('session', 'session-1', 'hub', NULL, NULL, 1)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM migrations WHERE version = 51", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 50).unwrap();
+        run_migrations(&conn).unwrap();
+        let retained: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM execution_target_bindings
+                 WHERE scope_kind = 'session' AND scope_id = 'session-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained, 1);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 }

@@ -73,9 +73,15 @@ pub fn normalize_tool_name(name: &str) -> &str {
 pub fn is_known_captain_tool(name: &str) -> bool {
     matches!(
         name,
-        "file_read"
+        "file_inspect_batch"
+            | "file_read"
             | "file_write"
             | "file_list"
+            | "glob"
+            | "grep"
+            | "edit_file"
+            | "multi_edit"
+            | "apply_patch"
             | "shell_exec"
             | "web_search"
             | "web_fetch"
@@ -222,6 +228,9 @@ mod tests {
         assert_eq!(normalize_tool_name("shell_exec"), "shell_exec");
         assert_eq!(normalize_tool_name("web_search"), "web_search");
         assert_eq!(normalize_tool_name("memory_save"), "memory_save");
+        assert_eq!(normalize_tool_name("glob"), "glob");
+        assert_eq!(normalize_tool_name("grep"), "grep");
+        assert_eq!(normalize_tool_name("apply_patch"), "apply_patch");
 
         // Aliases get normalized to canonical names
         assert_eq!(normalize_tool_name("fs-read"), "file_read");

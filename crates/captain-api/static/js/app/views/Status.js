@@ -2,26 +2,88 @@ import { h } from '/assets/app/vendor/preact.module.js';
 import { useState, useEffect, useCallback } from '/assets/app/vendor/hooks.module.js';
 import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
-import { toast } from '../store.js';
+import { getState, toast } from '../store.js';
 import { formatDuration, formatLatency, stateTone, statusSnapshot } from '../status_model.mjs';
 
 const html = htm.bind(h);
 
 export function Status() {
   const [snapshot, setSnapshot] = useState(null);
+  const [deviceRegistry, setDeviceRegistry] = useState({
+    available: true,
+    devices: [],
+    requests: [],
+    enrollment: null,
+  });
   const [showRaw, setShowRaw] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [deviceBusy, setDeviceBusy] = useState(false);
+  const clientMode = getState().clientMode === true;
+
+  const loadDevices = useCallback(async () => {
+    if (clientMode) {
+      setDeviceRegistry({ available: false, devices: [], requests: [], enrollment: null });
+      return;
+    }
+    try {
+      const [devices, requests, enrollment] = await Promise.all([
+        api.hubDevices(),
+        api.hubPairingRequests(),
+        api.hubPairingEnrollment(),
+      ]);
+      setDeviceRegistry({
+        available: true,
+        devices: devices.devices || [],
+        requests: requests.requests || [],
+        enrollment,
+      });
+    } catch {
+      setDeviceRegistry((current) => ({ ...current, available: false }));
+    }
+  }, [clientMode]);
 
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
       setSnapshot(statusSnapshot(await api.status()));
+      await loadDevices();
     } catch (e) {
       toast(`Statut indisponible : ${e.message}`, 'err');
     } finally {
       if (manual) setRefreshing(false);
     }
-  }, []);
+  }, [loadDevices]);
+
+  const toggleEnrollment = async () => {
+    setDeviceBusy(true);
+    try {
+      if (deviceRegistry.enrollment && deviceRegistry.enrollment.open) {
+        await api.closeHubPairingEnrollment();
+        toast('Ajout d’appareil fermé');
+      } else {
+        await api.openHubPairingEnrollment(600);
+        toast('Ajout d’appareil ouvert pendant 10 minutes');
+      }
+      await loadDevices();
+    } catch (error) {
+      toast(`Action impossible : ${error.message}`, 'err');
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
+
+  const denyPairing = async (requestId) => {
+    setDeviceBusy(true);
+    try {
+      await api.denyHubPairingRequest(requestId);
+      toast('Demande d’appairage refusée');
+      await loadDevices();
+    } catch (error) {
+      toast(`Refus impossible : ${error.message}`, 'err');
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -150,6 +212,50 @@ export function Status() {
             `}
           <//>
 
+          ${!clientMode && html`<${StatusSection} title="Appareils" actions=${deviceRegistry.available && html`
+            <button class=${deviceRegistry.enrollment && deviceRegistry.enrollment.open ? 'ghost' : 'primary'}
+              disabled=${deviceBusy} onClick=${toggleEnrollment}>
+              ${deviceRegistry.enrollment && deviceRegistry.enrollment.open ? 'Fermer l’ajout' : 'Ajouter un appareil'}
+            </button>
+          `}>
+            ${!deviceRegistry.available && html`
+              <div class="status-empty">Le registre d’appareils est désactivé ou momentanément indisponible.</div>
+            `}
+            ${deviceRegistry.available && html`
+              ${deviceRegistry.enrollment && deviceRegistry.enrollment.open && html`
+                <div class="device-enrollment-notice">
+                  <span class="status-dot"></span>
+                  Ajout ouvert jusqu’à ${formatTimestamp(deviceRegistry.enrollment.expires_at_ms)}
+                </div>
+              `}
+              <${PairingCodeReview} enrollment=${deviceRegistry.enrollment}
+                busy=${deviceBusy} onBusy=${setDeviceBusy} onRefresh=${loadDevices} />
+              ${deviceRegistry.requests.length > 0 && html`
+                <div class="device-pending-list">
+                  ${deviceRegistry.requests.map((request) => html`
+                    <div class="device-pending-row" key=${request.request_id}>
+                      <div>
+                        <strong>${request.display_name}</strong>
+                        <span>${request.role} · ${request.platform} · ${request.captain_version}</span>
+                      </div>
+                      <button class="ghost danger" disabled=${deviceBusy}
+                        onClick=${() => denyPairing(request.request_id)}>Refuser</button>
+                    </div>
+                  `)}
+                </div>
+              `}
+              <div class="device-list">
+                ${deviceRegistry.devices.map((device) => html`
+                  <${DeviceRow} key=${device.device_id} device=${device}
+                    busy=${deviceBusy} onBusy=${setDeviceBusy} onRefresh=${loadDevices} />
+                `)}
+                ${deviceRegistry.devices.length === 0 && html`
+                  <div class="status-empty">Aucun Client ou Nœud appairé.</div>
+                `}
+              </div>
+            `}
+          <//>`}
+
           <${StatusSection} title="Quotas">
             <div class="status-grid">
               <${StatusMetric} label="Captain internal" value=${formatNumber(snapshot.budget.totalTokens)} meta=${snapshot.budget.limitedAgents + ' agent(s) · fenêtre glissante locale'}
@@ -216,13 +322,140 @@ export function Status() {
   `;
 }
 
-function StatusSection({ title, children }) {
+function StatusSection({ title, actions = null, children }) {
   return html`
     <section class="status-section">
-      <div class="status-section-head"><h2>${title}</h2></div>
+      <div class="status-section-head"><h2>${title}</h2>${actions}</div>
       ${children}
     </section>
   `;
+}
+
+function PairingCodeReview({ enrollment, busy, onBusy, onRefresh }) {
+  const [code, setCode] = useState('');
+  const [review, setReview] = useState(null);
+  const [allowMutation, setAllowMutation] = useState(false);
+
+  const inspect = async () => {
+    const normalized = code.trim().toUpperCase();
+    if (!normalized) return;
+    onBusy(true);
+    try {
+      const next = await api.reviewHubPairingCode(normalized);
+      setCode(normalized);
+      setReview(next);
+      setAllowMutation(false);
+    } catch (error) {
+      setReview(null);
+      toast(`Code invalide ou expiré : ${error.message}`, 'err');
+    } finally {
+      onBusy(false);
+    }
+  };
+
+  const approve = async () => {
+    if (!review) return;
+    onBusy(true);
+    try {
+      const grant = {
+        ...review.requested_grants,
+        allow_mutation: Boolean(review.requested_grants.allow_mutation && allowMutation),
+      };
+      await api.approveHubPairingCode(code, grant);
+      toast('Appareil approuvé');
+      setCode('');
+      setReview(null);
+      setAllowMutation(false);
+      await onRefresh();
+    } catch (error) {
+      toast(`Approbation impossible : ${error.message}`, 'err');
+    } finally {
+      onBusy(false);
+    }
+  };
+
+  if (!enrollment || !enrollment.open) return null;
+  return html`
+    <div class="device-code-review">
+      <div class="device-code-input">
+        <label for="pairing-display-code">Code affiché sur l’appareil</label>
+        <div>
+          <input id="pairing-display-code" value=${code} maxlength="16" autocomplete="off"
+            placeholder="ABCD-EFGH" onInput=${(event) => setCode(event.target.value)} />
+          <button disabled=${busy || !code.trim()} onClick=${inspect}>Examiner</button>
+        </div>
+      </div>
+      ${review && html`
+        <div class="device-review-detail">
+          <div>
+            <strong>${review.display_name}</strong>
+            <span>${review.role} · ${review.platform} · ${review.captain_version}</span>
+            <span>${grantSummary(review.requested_grants)}</span>
+          </div>
+          ${review.requested_grants.allow_mutation && html`
+            <label class="device-mutation-toggle">
+              <input type="checkbox" checked=${allowMutation}
+                onChange=${(event) => setAllowMutation(event.target.checked)} />
+              Autoriser les modifications locales
+            </label>
+          `}
+          <button class="primary" disabled=${busy} onClick=${approve}>
+            ${allowMutation ? 'Approuver avec écriture' : 'Approuver en lecture seule'}
+          </button>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function DeviceRow({ device, busy, onBusy, onRefresh }) {
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const revoke = async () => {
+    if (!confirmRevoke) {
+      setConfirmRevoke(true);
+      return;
+    }
+    onBusy(true);
+    try {
+      await api.revokeHubDevice(device.device_id);
+      toast(`${device.display_name} révoqué`);
+      await onRefresh();
+    } catch (error) {
+      toast(`Révocation impossible : ${error.message}`, 'err');
+    } finally {
+      onBusy(false);
+      setConfirmRevoke(false);
+    }
+  };
+  return html`
+    <div class="device-row">
+      <span class="device-state-dot state-${device.status}"></span>
+      <div class="device-row-main">
+        <div><strong>${device.display_name}</strong><span class="status-pill status-${device.status === 'online' ? 'done' : (device.status === 'revoked' ? 'blocked' : 'review')}">${device.status}</span></div>
+        <span>${device.role} · ${device.platform} · ${device.captain_version}</span>
+        <span>${capabilitySummary(device)}</span>
+        ${device.presence && device.presence.action && html`<span class="device-actionable">${device.presence.action}</span>`}
+      </div>
+      ${device.registry_status !== 'revoked' && html`
+        <button class="ghost danger" disabled=${busy} onClick=${revoke}>
+          ${confirmRevoke ? 'Confirmer' : 'Révoquer'}
+        </button>
+      `}
+    </div>
+  `;
+}
+
+function grantSummary(grant = {}) {
+  const workspaces = (grant.workspace_ids || []).length;
+  const tools = (grant.tool_families || []).length;
+  return `${workspaces} workspace(s) · ${tools} famille(s) d’outils · ${grant.allow_mutation ? 'écriture demandée' : 'lecture seule'}`;
+}
+
+function capabilitySummary(device) {
+  if (device.role === 'client') return `Dernière présence ${formatTimestamp(device.last_seen_ms)}`;
+  const workspaces = ((device.capabilities || {}).workspaces || []).map((workspace) => workspace.label).join(', ');
+  const transport = device.last_transport || 'aucun transport';
+  return `${workspaces || 'aucun workspace'} · ${transport} · dernière présence ${formatTimestamp(device.last_seen_ms)}`;
 }
 
 function StatusMetric({ label, value, meta, tone = 'neutral' }) {

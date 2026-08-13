@@ -1,3 +1,5 @@
+use crate::hub_node_service::HubNodeService;
+use crate::hub_pairing_service::HubPairingService;
 use crate::pairing::{PairedDevice, PairingManager, PersistOp};
 use captain_memory::MemorySubstrate;
 use captain_runtime::browser::BrowserManager;
@@ -12,6 +14,8 @@ pub(super) struct BootDevices {
     pub(super) media_engine: MediaEngine,
     pub(super) tts_engine: TtsEngine,
     pub(super) pairing: PairingManager,
+    pub(super) hub_pairing: Arc<HubPairingService>,
+    pub(super) hub_nodes: HubNodeService,
 }
 
 pub(super) fn build_boot_devices(
@@ -22,6 +26,11 @@ pub(super) fn build_boot_devices(
     let media_engine = MediaEngine::new(config.media.clone());
     let tts_engine = TtsEngine::new(config.tts.clone());
     let mut pairing = PairingManager::new(config.pairing.clone());
+    let hub_pairing = Arc::new(HubPairingService::new(
+        config.pairing.clone(),
+        memory.devices().clone(),
+    ));
+    let hub_nodes = HubNodeService::new(Arc::clone(&hub_pairing), memory.hub_node_rail().clone());
 
     if config.pairing.enabled {
         match memory.load_paired_devices() {
@@ -58,6 +67,8 @@ pub(super) fn build_boot_devices(
         media_engine,
         tts_engine,
         pairing,
+        hub_pairing,
+        hub_nodes,
     }
 }
 

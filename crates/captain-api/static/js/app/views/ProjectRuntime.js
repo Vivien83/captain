@@ -2,7 +2,7 @@ import { h } from '/assets/app/vendor/preact.module.js';
 import { useState } from '/assets/app/vendor/hooks.module.js';
 import htm from '/assets/app/vendor/htm.module.js';
 import { api } from '../api.js';
-import { toast } from '../store.js';
+import { getState, toast } from '../store.js';
 
 const html = htm.bind(h);
 
@@ -57,6 +57,7 @@ export function ProjectRuntime({ projectId, runtime, operatorStatus, onRefresh }
 
   const questions = (runtime.user_questions || []).filter((q) => q.status === 'pending');
   const toolRequest = operatorStatus && operatorStatus.pending_tool_request;
+  const clientMode = getState().clientMode;
 
   return html`
     <div class="runtime-panel">
@@ -78,7 +79,9 @@ export function ProjectRuntime({ projectId, runtime, operatorStatus, onRefresh }
       <div class="task-toolbar">
         ${runtime.status === 'running' ? html`
           <button class="ghost" disabled=${busy} onClick=${() => act(api.pauseProjectRuntime, 'Run mis en pause')}>Pause</button>
-          <button class="ghost" disabled=${busy} onClick=${() => act(api.takeoverProjectRuntime, 'Contrôle repris')}>Reprendre la main</button>
+          ${!clientMode && html`
+            <button class="ghost" disabled=${busy} onClick=${() => act(api.takeoverProjectRuntime, 'Contrôle repris')}>Reprendre la main</button>
+          `}
         ` : html`
           ${(runtime.status === 'paused') && html`
             <button class="ghost" disabled=${busy} onClick=${() => act(api.resumeProjectRuntime, 'Run repris')}>Reprendre</button>

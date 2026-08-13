@@ -6,6 +6,7 @@ members = [
     "crates/captain-memory",
     "crates/captain-runtime",
     "crates/captain-wire",
+    "crates/captain-node",
     "crates/captain-api",
     "crates/captain-kernel",
     "crates/captain-cli",
@@ -23,7 +24,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/Vivien83/captain"
-rust-version = "1.75"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # Async runtime
@@ -68,7 +69,8 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 
 # HTTP client (for LLM drivers)
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "gzip", "deflate", "brotli"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "rustls-tls-native-roots", "gzip", "deflate", "brotli"] }
+reqwest-websocket = "=0.4.4"
 semver = "1"
 flate2 = "1"
 tar = "0.4"
@@ -128,7 +130,7 @@ zeroize = { version = "1", features = ["derive"] }
 governor = "0.8"
 
 # Interactive CLI
-ratatui = "0.29"
+ratatui = "=0.30.2"
 unicode-width = "0.1.14"
 colored = "3"
 
@@ -201,8 +203,8 @@ openssl-sys = { version = "0.9", features = ["vendored"] }
 
 # V.1 — FFmpeg sidecar wrapper for video frame extraction (#184).
 # Default features include `download_ffmpeg` → auto-download the binary
-# cross-platform (macOS Intel/M1, Linux x86_64/ARM, Windows). MSRV 1.79
-# (compatible with our toolchain even though workspace.rust-version = 1.75).
+# cross-platform (macOS Intel/M1, Linux x86_64/ARM, Windows). MSRV 1.79,
+# below the workspace MSRV 1.88 required by the maintained Ratatui line.
 ffmpeg-sidecar = "2.5.1"
 
 # Testing

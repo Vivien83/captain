@@ -8,6 +8,7 @@ use crate::project_runtime_orchestrator::{
     deactivate_runtime_orchestrator, mark_runtime_completed, mark_runtime_dispatch_started,
     runtime_run_id,
 };
+use crate::project_runtime_start::project_runtime_authority_origin;
 use crate::project_runtime_worker_phase_finish::{
     finish_failed_project_worker_phase, finish_successful_project_worker_phase,
 };
@@ -81,10 +82,16 @@ pub(crate) fn spawn_project_runtime_if_needed(state: Arc<AppState>, id_or_slug: 
     }
     let project_id = project.id.clone();
     let runtime = project_runtime_json(&state, &project, None);
+    let authority_origin = project_runtime_authority_origin(&runtime);
     let run_id = runtime_run_id(&runtime).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     tokio::spawn(async move {
-        let result =
-            run_project_runtime_v2(state.clone(), project_id.clone(), run_id.clone()).await;
+        let result = run_project_runtime_v2(
+            state.clone(),
+            project_id.clone(),
+            run_id.clone(),
+            authority_origin,
+        )
+        .await;
         project_runtime_mark_finished(&project_id);
         if let Err(e) = result {
             let detail = trim_runtime_text(&e, 900);
@@ -118,24 +125,41 @@ async fn run_project_runtime_v2(
     state: Arc<AppState>,
     project_id: String,
     run_id: String,
+    authority_origin: Option<String>,
 ) -> Result<(), String> {
     update_project_runtime_state(&state, &project_id, |runtime, _project| {
         mark_runtime_dispatch_started(runtime, &run_id);
     })
     .await?;
 
-    let observe =
-        run_project_worker_phase(state.clone(), project_id.clone(), run_id.clone(), "observe");
-    let think =
-        run_project_worker_phase(state.clone(), project_id.clone(), run_id.clone(), "think");
+    let observe = run_project_worker_phase(
+        state.clone(),
+        project_id.clone(),
+        run_id.clone(),
+        "observe",
+        authority_origin.clone(),
+    );
+    let think = run_project_worker_phase(
+        state.clone(),
+        project_id.clone(),
+        run_id.clone(),
+        "think",
+        authority_origin.clone(),
+    );
     let (observe_result, think_result) = tokio::join!(observe, think);
     if !observe_result? || !think_result? {
         return Ok(());
     }
 
     for phase in ["plan", "build", "execute", "verify", "learn"] {
-        if !run_project_worker_phase(state.clone(), project_id.clone(), run_id.clone(), phase)
-            .await?
+        if !run_project_worker_phase(
+            state.clone(),
+            project_id.clone(),
+            run_id.clone(),
+            phase,
+            authority_origin.clone(),
+        )
+        .await?
         {
             return Ok(());
         }
@@ -166,6 +190,7 @@ async fn run_project_worker_phase(
     project_id: String,
     run_id: String,
     phase: &'static str,
+    authority_origin: Option<String>,
 ) -> Result<bool, String> {
     let phase_start =
         prepare_project_worker_phase_start(&state, &project_id, &run_id, phase).await?;
@@ -185,12 +210,15 @@ async fn run_project_worker_phase(
     .await?;
     let result = run_project_worker_turn(
         state.clone(),
-        phase_start.project.clone(),
-        phase_start.spec,
-        &run_id,
-        phase,
-        worker.agent_id,
-        worker.prompt,
+        crate::project_runtime_worker_turn::ProjectWorkerTurn {
+            project: phase_start.project.clone(),
+            spec: phase_start.spec,
+            run_id: run_id.clone(),
+            phase,
+            agent_id: worker.agent_id,
+            prompt: worker.prompt,
+            authority_origin,
+        },
     )
     .await;
 

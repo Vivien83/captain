@@ -40,6 +40,11 @@ fn mount_project_base_routes(router: ApiRouter) -> ApiRouter {
             "/api/projects/github/repos",
             axum::routing::get(crate::project_github_routes::github_repositories),
         )
+        .route(
+            "/api/projects/{id}/execution-target",
+            axum::routing::get(crate::execution_target_routes::get_project_execution_target)
+                .put(crate::execution_target_routes::set_project_execution_target),
+        )
 }
 
 fn mount_project_runtime_routes(router: ApiRouter) -> ApiRouter {

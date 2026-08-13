@@ -4,8 +4,11 @@
 //! session store, and consolidation engine behind a single async API.
 
 use crate::consolidation::ConsolidationEngine;
+use crate::devices::DeviceStore;
+use crate::execution_targets::ExecutionTargetStore;
 use crate::gmail_accounts::GmailAccountStore;
 use crate::gmail_automation::GmailAutomationStore;
+use crate::hub_node_rail::HubNodeRailStore;
 use crate::knowledge::KnowledgeStore;
 use crate::migration::run_migrations;
 use crate::provider_quota::ProviderQuotaStore;
@@ -38,10 +41,13 @@ pub struct MemorySubstrate {
     knowledge: KnowledgeStore,
     sessions: SessionStore,
     consolidation: ConsolidationEngine,
+    devices: DeviceStore,
+    execution_targets: ExecutionTargetStore,
     usage: UsageStore,
     provider_quotas: ProviderQuotaStore,
     gmail_accounts: GmailAccountStore,
     gmail_automation: GmailAutomationStore,
+    hub_node_rail: HubNodeRailStore,
 }
 
 impl MemorySubstrate {
@@ -60,10 +66,13 @@ impl MemorySubstrate {
             semantic: SemanticStore::new(Arc::clone(&shared)),
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
+            devices: DeviceStore::new(Arc::clone(&shared)),
+            execution_targets: ExecutionTargetStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
             provider_quotas: ProviderQuotaStore::new(Arc::clone(&shared)),
             gmail_accounts: GmailAccountStore::new(Arc::clone(&shared)),
             gmail_automation: GmailAutomationStore::new(Arc::clone(&shared)),
+            hub_node_rail: HubNodeRailStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(shared, decay_rate),
         })
     }
@@ -82,10 +91,13 @@ impl MemorySubstrate {
             semantic: SemanticStore::new(Arc::clone(&shared)),
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
+            devices: DeviceStore::new(Arc::clone(&shared)),
+            execution_targets: ExecutionTargetStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
             provider_quotas: ProviderQuotaStore::new(Arc::clone(&shared)),
             gmail_accounts: GmailAccountStore::new(Arc::clone(&shared)),
             gmail_automation: GmailAutomationStore::new(Arc::clone(&shared)),
+            hub_node_rail: HubNodeRailStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(shared, decay_rate),
         })
     }
@@ -93,6 +105,16 @@ impl MemorySubstrate {
     /// Get a reference to the usage store.
     pub fn usage(&self) -> &UsageStore {
         &self.usage
+    }
+
+    /// Get the authoritative Hub device and pairing store.
+    pub fn devices(&self) -> &DeviceStore {
+        &self.devices
+    }
+
+    /// Get durable session/project execution-target bindings.
+    pub fn execution_targets(&self) -> &ExecutionTargetStore {
+        &self.execution_targets
     }
 
     /// Get the durable provider subscription quota store.
@@ -108,6 +130,11 @@ impl MemorySubstrate {
     /// Get the durable Gmail automation rule and outbox store.
     pub fn gmail_automation(&self) -> &GmailAutomationStore {
         &self.gmail_automation
+    }
+
+    /// Get the authoritative durable Hub-to-Node execution rail.
+    pub fn hub_node_rail(&self) -> &HubNodeRailStore {
+        &self.hub_node_rail
     }
 
     /// Get the shared database connection (for constructing stores from outside).

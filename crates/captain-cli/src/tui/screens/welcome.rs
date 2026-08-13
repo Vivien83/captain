@@ -120,16 +120,18 @@ impl WelcomeState {
                 action: WelcomeAction::ConnectDaemon,
             });
         }
-        self.menu_items.push(MenuItem {
-            label: t("welcome.menu.inprocess"),
-            hint: t("welcome.menu.inprocess.hint"),
-            action: WelcomeAction::InProcess,
-        });
-        self.menu_items.push(MenuItem {
-            label: t("welcome.menu.wizard"),
-            hint: t("welcome.menu.wizard.hint"),
-            action: WelcomeAction::Wizard,
-        });
+        if !crate::remote_client::client_profile_configured() {
+            self.menu_items.push(MenuItem {
+                label: t("welcome.menu.inprocess"),
+                hint: t("welcome.menu.inprocess.hint"),
+                action: WelcomeAction::InProcess,
+            });
+            self.menu_items.push(MenuItem {
+                label: t("welcome.menu.wizard"),
+                hint: t("welcome.menu.wizard.hint"),
+                action: WelcomeAction::Wizard,
+            });
+        }
         self.menu_items.push(MenuItem {
             label: t("welcome.menu.exit"),
             hint: t("welcome.menu.exit.hint"),

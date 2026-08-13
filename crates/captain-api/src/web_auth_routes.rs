@@ -4,10 +4,11 @@ use crate::state::AppState;
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{HeaderMap, Request, StatusCode},
+    http::{HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_types::config::WebPasswordVerification;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -252,6 +253,7 @@ pub async fn auth_realtime_ticket(
     Extension(security): Extension<Arc<crate::web_auth_security::WebAuthSecurity>>,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
+    client: Option<Extension<DeviceAccessIdentity>>,
     Json(request): Json<RealtimeTicketRequest>,
 ) -> Response {
     let auth_snapshot = crate::session_auth::load_web_auth_snapshot(
@@ -264,10 +266,22 @@ pub async fn auth_realtime_ticket(
         &headers,
         &state.kernel.config.deployment,
     );
+    let client = client.map(|Extension(identity)| identity);
+    if client.is_some() && !crate::client_access_policy::allows(&Method::GET, &request.path) {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            serde_json::json!({
+                "error": "Client credential is not authorized for this realtime path",
+                "code": "client_route_forbidden",
+                "policy_version": crate::client_access_policy::CLIENT_ACCESS_POLICY_VERSION,
+            }),
+        );
+    }
     match security.issue_realtime_ticket(
         &request.path,
         client_ip,
         auth_snapshot.auth.session_epoch,
+        client,
         Instant::now(),
     ) {
         Ok(grant) => json_response(
@@ -297,6 +311,15 @@ pub async fn auth_check(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
 ) -> impl IntoResponse {
+    if let Some(identity) = request.extensions().get::<DeviceAccessIdentity>() {
+        return Json(serde_json::json!({
+            "authenticated": true,
+            "mode": "client",
+            "api_key_configured": false,
+            "device_id": identity.device_id,
+            "client_policy_version": crate::client_access_policy::CLIENT_ACCESS_POLICY_VERSION,
+        }));
+    }
     let auth_snapshot = crate::session_auth::load_web_auth_snapshot(
         &state.kernel.config.home_dir,
         &state.kernel.config.api_key,

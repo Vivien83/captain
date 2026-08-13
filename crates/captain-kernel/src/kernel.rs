@@ -119,6 +119,8 @@ mod kernel_delivery_tracker;
 mod kernel_driver_support;
 #[path = "kernel_email_credentials.rs"]
 mod kernel_email_credentials;
+#[path = "kernel_execution_routing.rs"]
+mod kernel_execution_routing;
 #[path = "kernel_first_use.rs"]
 mod kernel_first_use;
 #[path = "kernel_first_use_text.rs"]
@@ -161,6 +163,8 @@ mod kernel_handle_knowledge;
 mod kernel_handle_mcp;
 #[path = "kernel_handle_memory.rs"]
 mod kernel_handle_memory;
+#[path = "kernel_handle_node_runs.rs"]
+mod kernel_handle_node_runs;
 #[path = "kernel_handle_projects.rs"]
 mod kernel_handle_projects;
 #[path = "kernel_handle_tool_runs.rs"]
@@ -369,6 +373,10 @@ pub struct CaptainKernel {
     pub tts_engine: captain_runtime::tts::TtsEngine,
     /// Device pairing manager.
     pub pairing: crate::pairing::PairingManager,
+    /// Durable Hub Client and Node pairing authority.
+    pub hub_pairing: Arc<crate::hub_pairing_service::HubPairingService>,
+    /// Authenticated durable Hub-to-Node transport authority.
+    pub hub_nodes: crate::hub_node_service::HubNodeService,
     /// Embedding driver for vector similarity search (None = text fallback).
     pub embedding_driver:
         Option<Arc<dyn captain_runtime::embedding::EmbeddingDriver + Send + Sync>>,
@@ -756,6 +764,8 @@ impl CaptainKernel {
         let media_engine = boot_devices.media_engine;
         let tts_engine = boot_devices.tts_engine;
         let pairing = boot_devices.pairing;
+        let hub_pairing = boot_devices.hub_pairing;
+        let hub_nodes = boot_devices.hub_nodes;
         let live_budget_config = config.budget.clone();
 
         let kernel = Self {
@@ -799,6 +809,8 @@ impl CaptainKernel {
             media_engine,
             tts_engine,
             pairing,
+            hub_pairing,
+            hub_nodes,
             embedding_driver,
             hand_registry,
             credential_resolver: std::sync::Mutex::new(boot_core.credential_resolver),
@@ -1460,6 +1472,13 @@ impl KernelHandle for CaptainKernel {
 
     async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String> {
         self.handle_send_to_agent(agent_id, message).await
+    }
+
+    async fn execute_remote_tool(
+        &self,
+        request: captain_runtime::execution_routing::RemoteToolExecutionRequest,
+    ) -> Result<captain_types::tool::ToolResult, String> {
+        self.handle_execute_remote_tool(request).await
     }
 
     fn list_agents(&self) -> Vec<kernel_handle::AgentInfo> {

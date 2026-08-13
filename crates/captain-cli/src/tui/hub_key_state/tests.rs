@@ -1,7 +1,7 @@
 use super::*;
 use crate::tui::hub_nav;
 use crate::tui::navigation_state::{
-    AutomationView, CapabilitiesView, ConnectionsView, LearningView,
+    AutomationView, CapabilitiesView, ConnectionsView, LearningView, AUTOMATION_VIEWS,
 };
 
 #[test]
@@ -79,25 +79,57 @@ fn connections_view_key_routes_match_hub_views() {
 #[test]
 fn automation_shortcut_selects_wrapped_or_indexed_view() {
     assert!(matches!(
-        automation_view_after_shortcut(AutomationView::Workflows, hub_nav::ShortcutAction::Prev),
+        automation_view_after_shortcut_in(
+            AUTOMATION_VIEWS,
+            AutomationView::Workflows,
+            hub_nav::ShortcutAction::Prev,
+        ),
         Some(AutomationView::Approvals)
     ));
     assert!(matches!(
-        automation_view_after_shortcut(AutomationView::Cron, hub_nav::ShortcutAction::Next),
+        automation_view_after_shortcut_in(
+            AUTOMATION_VIEWS,
+            AutomationView::Cron,
+            hub_nav::ShortcutAction::Next,
+        ),
         Some(AutomationView::Approvals)
     ));
     assert!(matches!(
-        automation_view_after_shortcut(
+        automation_view_after_shortcut_in(
+            AUTOMATION_VIEWS,
             AutomationView::Workflows,
             hub_nav::ShortcutAction::Index(1)
         ),
         Some(AutomationView::Triggers)
     ));
-    assert!(automation_view_after_shortcut(
+    assert!(automation_view_after_shortcut_in(
+        AUTOMATION_VIEWS,
         AutomationView::Workflows,
         hub_nav::ShortcutAction::Index(9)
     )
     .is_none());
+}
+
+#[test]
+fn lightweight_client_automation_cycle_never_reaches_cron() {
+    use crate::tui::navigation_state::CLIENT_AUTOMATION_VIEWS;
+
+    assert_eq!(
+        automation_view_after_shortcut_in(
+            CLIENT_AUTOMATION_VIEWS,
+            AutomationView::Triggers,
+            hub_nav::ShortcutAction::Next,
+        ),
+        Some(AutomationView::Approvals)
+    );
+    assert_eq!(
+        automation_view_after_shortcut_in(
+            CLIENT_AUTOMATION_VIEWS,
+            AutomationView::Approvals,
+            hub_nav::ShortcutAction::Next,
+        ),
+        Some(AutomationView::Workflows)
+    );
 }
 
 #[test]

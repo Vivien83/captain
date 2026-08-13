@@ -21,6 +21,16 @@ impl CaptainKernel {
         workflow_id: WorkflowId,
         input: String,
     ) -> KernelResult<(WorkflowRunId, String)> {
+        self.run_workflow_with_origin(workflow_id, input, None)
+            .await
+    }
+
+    pub async fn run_workflow_with_origin(
+        &self,
+        workflow_id: WorkflowId,
+        input: String,
+        origin: Option<String>,
+    ) -> KernelResult<(WorkflowRunId, String)> {
         let run_id = self
             .workflows
             .create_run(workflow_id, input)
@@ -45,17 +55,25 @@ impl CaptainKernel {
         };
 
         // Message sender: sends to agent and returns (output, in_tokens, out_tokens)
-        let send_message = |agent_id: AgentId, message: String| async move {
-            self.send_message(agent_id, &message)
-                .await
-                .map(|r| {
-                    (
-                        r.response,
-                        r.total_usage.input_tokens,
-                        r.total_usage.output_tokens,
-                    )
-                })
-                .map_err(|e| format!("{e}"))
+        let send_message = |agent_id: AgentId, message: String| {
+            let origin = origin.clone();
+            async move {
+                let handle: Option<Arc<dyn KernelHandle>> = self
+                    .self_handle
+                    .get()
+                    .and_then(|weak| weak.upgrade())
+                    .map(|kernel| kernel as Arc<dyn KernelHandle>);
+                self.send_message_full(agent_id, &message, handle, None, None, None, origin)
+                    .await
+                    .map(|r| {
+                        (
+                            r.response,
+                            r.total_usage.input_tokens,
+                            r.total_usage.output_tokens,
+                        )
+                    })
+                    .map_err(|e| format!("{e}"))
+            }
         };
 
         // SECURITY: Global workflow timeout to prevent runaway execution.
@@ -189,5 +207,130 @@ impl CaptainKernel {
             }
         }
         count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::{ErrorMode, StepMode, WorkflowStep};
+    use async_trait::async_trait;
+    use captain_runtime::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
+    use captain_types::config::{AssistantConfig, DefaultModelConfig, KernelConfig};
+    use captain_types::message::{ContentBlock, StopReason, TokenUsage};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct CapturingToolsDriver {
+        requests: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl CapturingToolsDriver {
+        fn take_tools(&self) -> Vec<Vec<String>> {
+            std::mem::take(&mut *self.requests.lock().unwrap())
+        }
+    }
+
+    #[async_trait]
+    impl LlmDriver for CapturingToolsDriver {
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            self.requests
+                .lock()
+                .unwrap()
+                .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
+            Ok(CompletionResponse {
+                content: vec![ContentBlock::Text {
+                    text: "workflow ok".to_string(),
+                    provider_metadata: None,
+                }],
+                stop_reason: StopReason::EndTurn,
+                tool_calls: Vec::new(),
+                usage: TokenUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    ..Default::default()
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn paired_client_workflow_keeps_client_tool_authority_for_every_agent_step() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = KernelConfig {
+            home_dir: temp.path().join("home"),
+            data_dir: temp.path().join("data"),
+            default_model: DefaultModelConfig {
+                provider: "workflow-test".to_string(),
+                model: "workflow-test-model".to_string(),
+                api_key_env: String::new(),
+                base_url: None,
+            },
+            assistant: AssistantConfig {
+                onboarding_completed: true,
+                ..AssistantConfig::default()
+            },
+            ..KernelConfig::default()
+        };
+        let driver = Arc::new(CapturingToolsDriver::default());
+        let mut kernel = Arc::new(CaptainKernel::boot_with_config(config).unwrap());
+        Arc::get_mut(&mut kernel).unwrap().default_driver = driver.clone();
+        kernel.set_self_handle();
+        let captain = kernel.registry.find_by_name("captain").unwrap();
+        let workflow = Workflow {
+            id: WorkflowId::new(),
+            name: "client-authority".to_string(),
+            description: "Client authority propagation test".to_string(),
+            steps: vec![WorkflowStep {
+                name: "step".to_string(),
+                agent: StepAgent::ById {
+                    id: captain.id.to_string(),
+                },
+                prompt_template: "{{input}}".to_string(),
+                mode: StepMode::Sequential,
+                timeout_secs: 30,
+                error_mode: ErrorMode::Fail,
+                output_var: None,
+            }],
+            graph: None,
+            created_at: chrono::Utc::now(),
+        };
+        let workflow_id = kernel.register_workflow(workflow).await;
+
+        kernel
+            .run_workflow(workflow_id, "operator".to_string())
+            .await
+            .unwrap();
+        let operator_requests = driver.take_tools();
+        assert_eq!(operator_requests.len(), 1);
+        assert!(
+            operator_requests[0]
+                .iter()
+                .any(|tool| tool == "skill_search"),
+            "operator workflow should retain the normal CORE discovery catalog"
+        );
+
+        kernel
+            .run_workflow_with_origin(
+                workflow_id,
+                "client".to_string(),
+                Some(captain_runtime::client_authority::paired_client_origin(
+                    "workflow",
+                )),
+            )
+            .await
+            .unwrap();
+        let client_requests = driver.take_tools();
+        assert_eq!(client_requests.len(), 1);
+        assert!(!client_requests[0].is_empty());
+        assert!(client_requests[0].iter().all(|tool| {
+            captain_runtime::client_authority::paired_client_tool_name_is_allowed(tool)
+        }));
+        assert!(!client_requests[0].iter().any(|tool| tool == "skill_search"));
+
+        kernel.shutdown();
     }
 }

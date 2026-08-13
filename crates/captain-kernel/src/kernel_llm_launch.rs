@@ -3,6 +3,7 @@ use captain_memory::session::Session;
 use captain_runtime::agent_loop::{
     run_agent_loop, run_agent_loop_streaming, AgentLoopResult, PhaseCallback,
 };
+use captain_runtime::execution_routing::{with_turn_execution_context, TurnExecutionContext};
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::{LlmDriver, StreamEvent};
 use captain_skills::registry::SkillRegistry;
@@ -38,6 +39,7 @@ struct StreamingLlmTask {
     user_input_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<String>>>,
     message_with_links: String,
     run_id: uuid::Uuid,
+    execution_context: TurnExecutionContext,
 }
 
 struct StreamingTaskParts {
@@ -87,6 +89,7 @@ pub(super) struct StreamingLlmLoopRequest {
     pub pre_loop_compaction: LlmPreLoopCompactionDecision,
     pub content_blocks: Option<Vec<ContentBlock>>,
     pub channel_type: Option<String>,
+    pub execution_context: TurnExecutionContext,
 }
 
 impl CaptainKernel {
@@ -107,6 +110,9 @@ impl CaptainKernel {
             content_blocks,
             channel_type,
         } = request;
+
+        let paired_client =
+            captain_runtime::client_authority::is_paired_client_origin(channel_type.as_deref());
 
         let skill_snapshot =
             self.prepare_llm_skill_snapshot(agent_id, manifest, lean_direct, false);
@@ -140,7 +146,7 @@ impl CaptainKernel {
             Some(&self.media_engine),
             tts_engine,
             docker_config,
-            Some(&self.hooks),
+            (!paired_client).then_some(&self.hooks),
             ctx_window,
             Some(&self.process_manager),
             content_blocks,
@@ -168,6 +174,7 @@ impl CaptainKernel {
             pre_loop_compaction,
             content_blocks,
             channel_type,
+            execution_context,
         } = request;
 
         let channels = streaming_loop_channels();
@@ -188,11 +195,13 @@ impl CaptainKernel {
                 pre_loop_compaction,
                 content_blocks,
                 channel_type,
+                execution_context: execution_context.clone(),
             },
             tx: channels.tx,
             user_input_rx: channels.user_input_rx,
             message_with_links,
             run_id,
+            execution_context,
         });
 
         self.track_running_task(agent_id, run_id, handle.abort_handle());
@@ -208,8 +217,13 @@ impl CaptainKernel {
         task: StreamingLlmTask,
     ) -> tokio::task::JoinHandle<KernelResult<AgentLoopResult>> {
         let kernel_clone = Arc::clone(self);
+        let execution_context = task.execution_context.clone();
         self.spawn_supervised_agent_task(task.request.agent_id, async move {
-            run_streaming_llm_task(kernel_clone, task).await
+            with_turn_execution_context(
+                execution_context,
+                run_streaming_llm_task(kernel_clone, task),
+            )
+            .await
         })
     }
 
@@ -318,6 +332,7 @@ fn unpack_streaming_task(task: StreamingLlmTask) -> StreamingTaskParts {
         user_input_rx,
         message_with_links,
         run_id,
+        execution_context: _,
     } = task;
     let StreamingLlmLoopRequest {
         agent_id,
@@ -413,6 +428,8 @@ async fn execute_streaming_agent_loop(
     user_input_rx: Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<String>>>>,
     channel_type: Option<String>,
 ) -> Result<AgentLoopResult, captain_types::error::CaptainError> {
+    let paired_client =
+        captain_runtime::client_authority::is_paired_client_origin(channel_type.as_deref());
     // Tool RAG stays out of this path; visible tools are already filtered by
     // the caller, and broader discovery goes through tool_search.
     run_agent_loop_streaming(
@@ -442,7 +459,7 @@ async fn execute_streaming_agent_loop(
         } else {
             None
         },
-        Some(&kernel.hooks),
+        (!paired_client).then_some(&kernel.hooks),
         ctx_window,
         Some(&kernel.process_manager),
         content_blocks,

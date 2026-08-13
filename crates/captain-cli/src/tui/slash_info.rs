@@ -5,6 +5,9 @@ pub(crate) enum StatusSnapshot<'a> {
         base_url: &'a str,
         agent_name: Option<&'a str>,
     },
+    RemoteClient {
+        agent_name: Option<&'a str>,
+    },
     InProcess {
         agent_count: usize,
         agent_name: Option<&'a str>,
@@ -32,6 +35,12 @@ pub(crate) fn status_message(snapshot: StatusSnapshot<'_>, lang: Lang) -> String
             lines.push(
                 i18n::t("status.agent_count", lang).replace("{count}", &agent_count.to_string()),
             );
+            if let Some(name) = agent_name {
+                lines.push(i18n::t("status.current_agent", lang).replace("{name}", name));
+            }
+        }
+        StatusSnapshot::RemoteClient { agent_name } => {
+            lines.push("Mode: lightweight Client · remote Hub".to_string());
             if let Some(name) = agent_name {
                 lines.push(i18n::t("status.current_agent", lang).replace("{name}", name));
             }

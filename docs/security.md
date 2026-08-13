@@ -1654,6 +1654,10 @@ allow_unauthenticated_loopback = false
 session_ttl_hours = 72
 session_cookie_secure = "auto"  # auto, always, or never for explicit local HTTP
 
+[pairing]
+enabled = false       # legacy mobile pairing routes
+hub_enabled = true    # Hub device rail; enrollment remains closed by default
+
 # OFP Wire Protocol
 [network]
 shared_secret = "your-pre-shared-key"  # Required for OFP
@@ -1795,7 +1799,9 @@ trust the configured ignore list by itself:
 3. package names, versions, advisory IDs, enabled features, and direct parent
    chains must match the reviewed baseline exactly;
 4. `bincode`, `rsa`, `pkcs1`, and `num-bigint-dig` must remain absent;
-5. `russh` and both resolved `ssh-key` versions must have no RSA feature.
+5. `russh` and both resolved `ssh-key` versions must have no RSA feature;
+6. Ratatui, its image/explorer adapters, and fixed `lru 0.18.2` must remain on
+   their reviewed versions and parent chain.
 
 `fastembed 5.13.2` remains pinned to `ort 2.0.0-rc.11` because Captain ships
 ONNX Runtime 1.23.2 on every release target. FastEmbed 5.17 requires the ORT
@@ -1817,14 +1823,11 @@ transport contract and preventing an automatic switch to STARTTLS on custom
 ports. The dependency gate also requires its sole parser parent, `native-tls`
 feature, and vendored TLS path to remain exact.
 
-The two reviewed vulnerability exceptions are RUSTSEC-2026-0194 and
-RUSTSEC-2026-0195 on `quick-xml 0.37.5`. The only parent is
-`tauri-winrt-notification 0.7.2` in the Windows desktop notification chain.
-That crate calls `quick_xml::escape::escape` only; it does not call the
-affected `NsReader`, `Attributes`, or `try_get_attribute` parser paths. The
-other plist/Tauri path has been upgraded to `quick-xml 0.41.0`. The exceptions
-must be removed when `notify-rust` accepts
-`tauri-winrt-notification >=0.8`.
+The unfiltered release audit currently contains no vulnerability record. The
+former Windows-only `tauri-winrt-notification 0.7.2 -> quick-xml 0.37.5` path
+is absent, and patched `quick-xml 0.41.0` is the sole resolved version. The TUI
+stack is pinned to Ratatui 0.30 and `lru 0.18.2`, which fixes both published
+LRU soundness advisories. No exception masks either dependency family.
 
 RSA SSH private keys and RSA-only server host keys are intentionally
 unsupported while RUSTSEC-2023-0071 has no fixed upstream implementation.

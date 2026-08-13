@@ -50,9 +50,12 @@ CONTRACT_DOCS=(
   docs/evidence/RELEASE_SUPPLY_CHAIN_BASELINE_2026-07-30.md
   docs/agent-templates.md
   docs/workflows.md
+  docs/hub-clients-nodes.md
+  docs/HUB_CLIENT_NODE_PROTOCOL.md
   docs/captain-tools/browser.md
   docs/deployment/github-vps-install.md
   docs/deployment/vps-web-terminal.md
+  docs/releases/v0.1.0-alpha.14.md
   docs/releases/v0.1.0-alpha.13.md
   docs/releases/v0.1.0-alpha.12.md
   docs/releases/v0.1.0-alpha.11.md
@@ -459,9 +462,9 @@ require_not_contains "docs navigation does not advertise frozen migration" docs/
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains "$readme pins the six operational hubs" "$readme" "Chat, Projects, Automation, Learning, Capabilities"
   require_contains "$readme documents the public alpha channel" "$readme" "ghcr.io/vivien83/captain-agent-os:alpha"
-  require_contains "$readme links the immutable release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.13"
-  require_contains "$readme pins the immutable release image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13"
-  require_contains "$readme pins the release installer" "$readme" "releases/download/v0.1.0-alpha.13/install.sh"
+  require_contains "$readme links the immutable release" "$readme" "https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14"
+  require_contains "$readme pins the immutable release image" "$readme" "ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14"
+  require_contains "$readme pins the release installer" "$readme" "releases/download/v0.1.0-alpha.14/install.sh"
   require_contains "$readme opens the Control root" "$readme" 'http://127.0.0.1:50051/'
   require_not_contains "$readme does not use GitHub latest for a prerelease" "$readme" "releases/latest/download/install.sh"
   require_not_contains "$readme does not require a registry token" "$readme" "GHCR_TOKEN"
@@ -510,9 +513,10 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "release candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.13"
-require_contains "release candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.13] - 2026-08-09"
-require_contains "reviewed alpha.13 release candidate notes exist" docs/releases/v0.1.0-alpha.13.md "# Captain 0.1.0-alpha.13"
+require_contains "release candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.14"
+require_contains "release candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.14] - 2026-08-13"
+require_contains "reviewed alpha.14 release candidate notes exist" docs/releases/v0.1.0-alpha.14.md "# Captain 0.1.0-alpha.14"
+require_contains "historical alpha.13 release notes remain available" docs/releases/v0.1.0-alpha.13.md "# Captain 0.1.0-alpha.13"
 require_contains "historical alpha.12 release notes remain available" docs/releases/v0.1.0-alpha.12.md "# Captain 0.1.0-alpha.12"
 require_contains "historical alpha.11 release notes remain available" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
 require_contains "historical alpha.10 release notes remain available" docs/releases/v0.1.0-alpha.10.md "# Captain 0.1.0-alpha.10"
@@ -558,6 +562,16 @@ require_contains "alpha.12 notes record zero hosted workflows" docs/releases/v0.
 require_not_contains "alpha.12 notes do not copy alpha.11 source provenance" docs/releases/v0.1.0-alpha.12.md 'cd7f580a5e89ea77852468bc4fad9875f00dce61'
 require_not_contains "alpha.12 notes do not copy alpha.11 OCI provenance" docs/releases/v0.1.0-alpha.12.md 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
 require_contains "DOC2 identifies the Alpha 13 published contract" docs/DOCS_STATUS.md "## Alpha 13 Published Contract"
+require_contains "DOC2 identifies the Alpha 14 candidate contract" docs/DOCS_STATUS.md "## Alpha 14 Release Candidate Contract"
+require_contains "alpha.14 notes expose one authoritative Hub" docs/releases/v0.1.0-alpha.14.md "## One Hub, shared work"
+require_contains "alpha.14 notes expose outbound execution Nodes" docs/releases/v0.1.0-alpha.14.md "## Outbound execution Nodes"
+require_contains "alpha.14 notes expose durable pairing" docs/releases/v0.1.0-alpha.14.md "## Durable pairing and execution"
+require_contains "alpha.14 notes expose certification limits" docs/releases/v0.1.0-alpha.14.md "## Certification boundary"
+require_not_contains "alpha.14 notes do not copy alpha.13 source provenance" docs/releases/v0.1.0-alpha.14.md '6c05ae0c667e865a198764c1cd88c9050bd87db1'
+require_not_contains "alpha.14 notes do not copy alpha.13 OCI provenance" docs/releases/v0.1.0-alpha.14.md 'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
+require_contains "Hub user guide pins outbound HTTPS" docs/hub-clients-nodes.md "outbound HTTPS port 443"
+require_contains "Hub user guide pins Client fail-closed behavior" docs/hub-clients-nodes.md "cannot silently fall back"
+require_contains "Hub protocol pins distributed smoke" docs/HUB_CLIENT_NODE_PROTOCOL.md "## Reproducible Distributed Smoke"
 require_contains "alpha.13 notes expose adaptive delivery verification" docs/releases/v0.1.0-alpha.13.md "## Adaptive delivery verification"
 require_contains "alpha.13 notes expose verified streaming delivery" docs/releases/v0.1.0-alpha.13.md "## Verified streaming delivery"
 require_contains "alpha.13 notes expose crash-safe evidence" docs/releases/v0.1.0-alpha.13.md "## Crash-safe evidence"
@@ -645,9 +659,10 @@ require_contains "Control emits centralized unauthorized signal" crates/captain-
 require_contains "Control consumes centralized unauthorized signal" crates/captain-api/static/js/app/main.js "captain:unauthorized"
 require_contains "security reconciliation closes F4" docs/evidence/SECURITY_AUDIT_RECONCILIATION_2026-07-29.md "| F4 | Remediated (T3)"
 require_contains "DOC2 defines fail-closed browser origins" docs/DOCS_STATUS.md "Alpha 10 Browser Origin Contract"
-require_contains "security policy supports only alpha.13" SECURITY.md '| 0.1.0-alpha.13 | :white_check_mark: |'
+require_contains "security policy supports only alpha.14" SECURITY.md '| 0.1.0-alpha.14 | :white_check_mark: |'
+require_contains "security policy retires alpha.13" SECURITY.md '| 0.1.0-alpha.13 | :x: |'
 require_contains "security policy retires alpha.12" SECURITY.md '| 0.1.0-alpha.12 | :x: |'
-require_contains "security policy pins the alpha.13 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.13` is an early-access release.'
+require_contains "security policy pins the alpha.14 deployment boundary" SECURITY.md 'Captain `0.1.0-alpha.14` is an early-access release.'
 require_contains "configuration exposes exact API origins" docs/configuration.md 'allowed_origins = ["https://console.example.com"]'
 require_contains "reference config exposes the API origin section" captain.toml.example "[api]"
 require_not_contains "API CORS policy has no wildcard helper" crates/captain-api/src/request_origin_security.rs "tower_http::cors::Any"
@@ -766,7 +781,7 @@ require_contains "host installer restores failed Caddy activation" scripts/insta
 require_contains "host installer verifies public Captain Web" scripts/install.sh 'Captain Web verified end to end'
 require_contains "host installer distinguishes browser and API credentials" scripts/install.sh 'API bearer key: for CLI/API clients; it is not pasted into the browser login'
 require_contains "VPS guide pins automatic browser session creation" docs/deployment/github-vps-install.md 'A successful browser login creates the'
-require_contains "VPS guide pins the managed Alpha 13 installer" docs/deployment/github-vps-install.md 'The `v0.1.0-alpha.13` installer includes Captain'
+require_contains "VPS guide pins the managed Alpha 14 installer" docs/deployment/github-vps-install.md 'The `v0.1.0-alpha.14` installer includes Captain'
 require_contains "VPS docs pin managed-domain rollback" docs/deployment/github-vps-install.md 'restores the previous files if validation or activation fails'
 require_not_contains "getting-started does not describe the domain rail as post-Alpha 11" docs/getting-started.md 'post-Alpha 11'
 require_not_contains "deployment guide does not describe the domain rail as post-Alpha 11" docs/DEPLOY.md 'post-Alpha 11'

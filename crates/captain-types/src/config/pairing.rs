@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PairingConfig {
-    /// Enable device pairing. Default: false.
+    /// Enable the legacy mobile pairing routes. Default: false.
     pub enabled: bool,
+    /// Enable the Hub/Client/Node device rail. Enrollment stays closed until
+    /// an authenticated operator opens a short pairing window. Default: true.
+    pub hub_enabled: bool,
     /// Max paired devices. Default: 10.
     pub max_devices: usize,
     /// Pairing token expiry in seconds. Default: 300 (5 min).
@@ -22,6 +25,7 @@ impl Default for PairingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            hub_enabled: true,
             max_devices: 10,
             token_expiry_secs: 300,
             push_provider: "none".to_string(),
@@ -41,6 +45,7 @@ mod tests {
         let config = PairingConfig::default();
 
         assert!(!config.enabled);
+        assert!(config.hub_enabled);
         assert_eq!(config.max_devices, 10);
         assert_eq!(config.token_expiry_secs, 300);
         assert_eq!(config.push_provider, "none");
@@ -61,6 +66,7 @@ mod tests {
         .unwrap();
 
         assert!(config.pairing.enabled);
+        assert!(config.pairing.hub_enabled);
         assert_eq!(config.pairing.max_devices, 10);
         assert_eq!(config.pairing.token_expiry_secs, 300);
         assert_eq!(config.pairing.push_provider, "ntfy");

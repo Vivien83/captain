@@ -1,4 +1,5 @@
 use axum::http::{HeaderMap, Uri};
+use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_types::config::{DeploymentConfig, SessionCookieSecurePolicy};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -14,8 +15,10 @@ const LOGIN_SATURATION_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_LOGIN_STATE_KEYS: usize = 4096;
 const MAX_REALTIME_TICKETS: usize = 4096;
 
-#[derive(Debug, Clone, Copy)]
-pub struct RealtimeTicketAuthorization;
+#[derive(Debug, Clone)]
+pub struct RealtimeTicketAuthorization {
+    pub client: Option<DeviceAccessIdentity>,
+}
 
 #[derive(Debug)]
 pub struct RealtimeTicketGrant {
@@ -96,6 +99,7 @@ impl WebAuthSecurity {
         path: &str,
         ip: IpAddr,
         session_epoch: u64,
+        client: Option<DeviceAccessIdentity>,
         now: Instant,
     ) -> Result<RealtimeTicketGrant, String> {
         if !is_realtime_transport_path(path) {
@@ -122,6 +126,7 @@ impl WebAuthSecurity {
                 path: path.to_string(),
                 ip,
                 session_epoch,
+                client,
                 expires_at: now + REALTIME_TICKET_TTL,
             },
         );
@@ -138,21 +143,22 @@ impl WebAuthSecurity {
         ip: IpAddr,
         session_epoch: u64,
         now: Instant,
-    ) -> bool {
+    ) -> Option<RealtimeTicketAuthorization> {
         if ticket.is_empty() || ticket.len() > 128 || !is_realtime_transport_path(path) {
-            return false;
+            return None;
         }
         let mut state = self
             .tickets
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let Some(record) = state.tickets.remove(ticket) else {
-            return false;
-        };
-        record.expires_at > now
+        let record = state.tickets.remove(ticket)?;
+        (record.expires_at > now
             && record.path == path
             && record.ip == ip
-            && record.session_epoch == session_epoch
+            && record.session_epoch == session_epoch)
+            .then_some(RealtimeTicketAuthorization {
+                client: record.client,
+            })
     }
 }
 
@@ -265,6 +271,7 @@ struct RealtimeTicketRecord {
     path: String,
     ip: IpAddr,
     session_epoch: u64,
+    client: Option<DeviceAccessIdentity>,
     expires_at: Instant,
 }
 
@@ -419,32 +426,63 @@ mod tests {
         let ip: IpAddr = "203.0.113.9".parse().unwrap();
         let now = Instant::now();
         let path = "/api/sessions/captain/terminal";
-        let grant = security.issue_realtime_ticket(path, ip, 4, now).unwrap();
+        let grant = security
+            .issue_realtime_ticket(path, ip, 4, None, now)
+            .unwrap();
 
-        assert!(!security.consume_realtime_ticket(
-            &grant.ticket,
-            path,
-            "203.0.113.10".parse().unwrap(),
-            4,
-            now,
-        ));
-        assert!(!security.consume_realtime_ticket(&grant.ticket, path, ip, 4, now));
+        assert!(security
+            .consume_realtime_ticket(&grant.ticket, path, "203.0.113.10".parse().unwrap(), 4, now,)
+            .is_none());
+        assert!(security
+            .consume_realtime_ticket(&grant.ticket, path, ip, 4, now)
+            .is_none());
 
-        let grant = security.issue_realtime_ticket(path, ip, 4, now).unwrap();
-        assert!(security.consume_realtime_ticket(&grant.ticket, path, ip, 4, now));
-        assert!(!security.consume_realtime_ticket(&grant.ticket, path, ip, 4, now));
+        let grant = security
+            .issue_realtime_ticket(path, ip, 4, None, now)
+            .unwrap();
+        assert!(security
+            .consume_realtime_ticket(&grant.ticket, path, ip, 4, now)
+            .is_some());
+        assert!(security
+            .consume_realtime_ticket(&grant.ticket, path, ip, 4, now)
+            .is_none());
 
-        let grant = security.issue_realtime_ticket(path, ip, 4, now).unwrap();
-        assert!(!security.consume_realtime_ticket(&grant.ticket, path, ip, 5, now));
+        let grant = security
+            .issue_realtime_ticket(path, ip, 4, None, now)
+            .unwrap();
+        assert!(security
+            .consume_realtime_ticket(&grant.ticket, path, ip, 5, now)
+            .is_none());
 
-        let grant = security.issue_realtime_ticket(path, ip, 4, now).unwrap();
-        assert!(!security.consume_realtime_ticket(
-            &grant.ticket,
-            path,
-            ip,
-            4,
-            now + REALTIME_TICKET_TTL
-        ));
+        let grant = security
+            .issue_realtime_ticket(path, ip, 4, None, now)
+            .unwrap();
+        assert!(security
+            .consume_realtime_ticket(&grant.ticket, path, ip, 4, now + REALTIME_TICKET_TTL)
+            .is_none());
+    }
+
+    #[test]
+    fn realtime_ticket_preserves_paired_client_identity() {
+        let security = WebAuthSecurity::default();
+        let ip: IpAddr = "203.0.113.11".parse().unwrap();
+        let now = Instant::now();
+        let path = "/api/memory/events";
+        let identity = DeviceAccessIdentity {
+            device_id: "client-1".to_string(),
+            role: captain_wire::DeviceRole::Client,
+            grants_json: "{}".to_string(),
+            protocol_version: captain_wire::HUB_NODE_PROTOCOL_VERSION,
+        };
+
+        let grant = security
+            .issue_realtime_ticket(path, ip, 9, Some(identity.clone()), now)
+            .unwrap();
+        let authorization = security
+            .consume_realtime_ticket(&grant.ticket, path, ip, 9, now)
+            .expect("ticket should be accepted once");
+
+        assert_eq!(authorization.client, Some(identity));
     }
 
     #[test]

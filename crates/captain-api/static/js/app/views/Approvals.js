@@ -6,7 +6,7 @@ import { setState, toast } from '../store.js';
 
 const html = htm.bind(h);
 
-export function Approvals() {
+export function Approvals({ clientMode = false }) {
   const [items, setItems] = useState(null); // null = loading
   const [rules, setRules] = useState([]);
   const [reasons, setReasons] = useState({});
@@ -17,7 +17,7 @@ export function Approvals() {
       const res = await api.approvals();
       const list = res.approvals || [];
       setItems(list);
-      setRules(res.rules || []);
+      setRules(clientMode ? [] : (res.rules || []));
       setState({ approvalsCount: list.length });
     } catch { /* transient — keep last view */ }
   };
@@ -26,7 +26,7 @@ export function Approvals() {
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [clientMode]);
 
   const act = async (id, fn, label) => {
     setBusyId(id);
@@ -76,8 +76,10 @@ export function Approvals() {
                 onClick=${() => act(a.id, api.approve, 'Approuvé une fois')}>Une fois</button>
               <button disabled=${busyId === a.id}
                 onClick=${() => act(a.id, api.approveSession, 'Autorisé pour cette session')}>Session</button>
-              <button disabled=${busyId === a.id}
-                onClick=${() => act(a.id, api.approveAlways, 'Règle exacte créée')}>Toujours cette action</button>
+              ${!clientMode && html`
+                <button disabled=${busyId === a.id}
+                  onClick=${() => act(a.id, api.approveAlways, 'Règle exacte créée')}>Toujours cette action</button>
+              `}
             </div>
             <div class="approval-reject">
               <label for=${`approval-reason-${a.id}`}>Motif transmis à l’agent</label>
@@ -91,14 +93,16 @@ export function Approvals() {
                 onClick=${() => act(a.id, (id) => api.reject(id, reasonFor(id)), 'Refusé une fois')}>Refuser</button>
               <button class="danger" disabled=${busyId === a.id}
                 onClick=${() => act(a.id, (id) => api.rejectSession(id, reasonFor(id)), 'Refusé pour cette session')}>Refuser (session)</button>
-              <button class="danger" disabled=${busyId === a.id || !reasonFor(a.id)}
-                title=${reasonFor(a.id) ? '' : 'Un motif est obligatoire pour une règle durable'}
-                onClick=${() => act(a.id, (id) => api.rejectAlways(id, reasonFor(id)), 'Règle de blocage exacte créée')}>Bloquer cette action</button>
+              ${!clientMode && html`
+                <button class="danger" disabled=${busyId === a.id || !reasonFor(a.id)}
+                  title=${reasonFor(a.id) ? '' : 'Un motif est obligatoire pour une règle durable'}
+                  onClick=${() => act(a.id, (id) => api.rejectAlways(id, reasonFor(id)), 'Règle de blocage exacte créée')}>Bloquer cette action</button>
+              `}
             </div>
           </div>
         `)}
 
-        ${rules.length > 0 && html`
+        ${!clientMode && rules.length > 0 && html`
           <section class="approval-rules" aria-labelledby="approval-rules-title">
             <div class="approval-rules-heading">
               <div>

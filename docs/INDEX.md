@@ -10,6 +10,7 @@ Use this index to find the right document quickly.
 | Document | Purpose |
 |---|---|
 | [Getting Started](getting-started.md) | What Captain is, how to install it, and first commands |
+| [Hub, Clients, and Nodes](hub-clients-nodes.md) | Pair lightweight interfaces and outbound execution machines to one authoritative Hub |
 | [Docs Status (DOC2)](DOCS_STATUS.md) | Current, historical, frozen, and agent-facing documentation rules |
 | [CLI Reference](cli-reference.md) | Command reference for the `captain` binary |
 | [Troubleshooting](troubleshooting.md) | Common operational issues and diagnostics |
@@ -24,6 +25,7 @@ Use this index to find the right document quickly.
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS proxy contract |
 | [Release Provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
 | [Repository Governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.14 Release Notes](releases/v0.1.0-alpha.14.md) | One Hub, lightweight Clients, outbound Nodes, and crash-safe distributed work |
 | [0.1.0-alpha.13 Release Notes](releases/v0.1.0-alpha.13.md) | Adaptive delivery verification, crash-safe evidence, and safer host updates |
 | [0.1.0-alpha.12 Release Notes](releases/v0.1.0-alpha.12.md) | Durable Live Runs, grounded research, verified artifacts, and managed VPS domains |
 | [0.1.0-alpha.11 Release Notes](releases/v0.1.0-alpha.11.md) | Native email, durable integrations, audit closure, and local CI |
@@ -73,6 +75,7 @@ Use this index to find the right document quickly.
 | Document | Purpose |
 |---|---|
 | [Architecture](architecture.md) | Runtime structure, boot, sessions, tools, and operational boundaries |
+| [Hub/Client/Node Protocol](HUB_CLIENT_NODE_PROTOCOL.md) | Versioned wire, security, durability, and failure contract |
 | [Performance Budgets](performance-budgets.md) | Exact batching, long-transcript, frame, and viewport regression contracts |
 | [Channel Adapters](channel-adapters.md) | Setup and operation of Telegram, Discord, Signal, and Email |
 | [API Reference](api-reference.md) | HTTP/WebSocket API reference |

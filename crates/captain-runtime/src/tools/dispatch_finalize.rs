@@ -54,6 +54,29 @@ pub(crate) async fn finalize_dispatch_result(
     tool_result
 }
 
+/// Finalize a result already executed through the durable Node rail. Remote
+/// runs are never retried or cached here: the rail owns idempotence and an
+/// uncertain side effect must remain visible instead of being replayed.
+pub(crate) fn finalize_remote_dispatch_result(
+    ctx: DispatchFinalizeContext<'_>,
+    tool_result: ToolResult,
+) -> ToolResult {
+    let is_error = tool_result.is_error;
+    emit_learning_signal(&ctx, &tool_result, false, is_error);
+    record_tool_finished(
+        ctx.tool_use_id,
+        ctx.tool_name,
+        is_error,
+        0,
+        if is_error {
+            "remote_tool_error"
+        } else {
+            "remote_tool_success"
+        },
+    );
+    tool_result
+}
+
 fn learning_outcome(
     dispatch_failed: bool,
     visible_tool_error: bool,

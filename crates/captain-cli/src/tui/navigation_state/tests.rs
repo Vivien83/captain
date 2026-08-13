@@ -475,7 +475,12 @@ fn automation_views_keep_order_and_labels() {
     let labels: Vec<_> = AUTOMATION_VIEWS.iter().map(|view| view.label()).collect();
 
     assert_eq!(labels, vec!["Workflows", "Triggers", "Cron", "Approvals"]);
-    assert_eq!(AutomationView::Cron.index(), 2);
+    assert_eq!(
+        AUTOMATION_VIEWS
+            .iter()
+            .position(|view| *view == AutomationView::Cron),
+        Some(2)
+    );
 }
 
 #[test]

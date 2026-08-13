@@ -136,6 +136,19 @@ pub(crate) struct PdfExtractedText {
     pub(crate) streams_decoded: usize,
 }
 
+/// Extract caller-facing text from an uploaded PDF while keeping parser
+/// diagnostics private to the runtime.
+pub fn extract_pdf_attachment_text(bytes: &[u8]) -> Result<String, String> {
+    let extracted = extract_pdf_text_from_bytes(bytes)?;
+    if extracted.text.trim().is_empty() {
+        return Err(
+            "No extractable PDF text was found; the document may require OCR or vision."
+                .to_string(),
+        );
+    }
+    Ok(extracted.text)
+}
+
 pub(crate) fn extract_pdf_text_from_bytes(bytes: &[u8]) -> Result<PdfExtractedText, String> {
     if !bytes.starts_with(b"%PDF") {
         return Err("Invalid PDF: missing %PDF header".to_string());

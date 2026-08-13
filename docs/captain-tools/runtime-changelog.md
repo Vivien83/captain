@@ -26,6 +26,46 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.14 — One Hub, lightweight Clients, and execution Nodes
+
+Agent-facing changes:
+
+- A Hub remains a complete Captain and the only authority for memory,
+  sessions, projects, goals, providers, channels, agents, tools, skills,
+  automation, audit, and durable work. Standalone remains the default local
+  composition and no multi-primary database is introduced.
+- Lightweight Client mode lets terminal, TUI, and Desktop surfaces reopen the
+  same Hub sessions without starting a second agent loop or memory. A remote
+  Client fails closed when its Hub is unavailable instead of silently running
+  a different local Captain.
+- Client authority covers ordinary chat, sessions, projects, workflows,
+  memory, approvals, and cancellable Live Runs. It cannot access secrets,
+  configuration, installation/update, shutdown, device administration, or
+  persistent approval grants.
+- Optional Nodes execute workspace tools on another macOS, Linux, or Windows
+  machine. They open only outbound HTTPS 443, prefer WebSocket, and fall back
+  to HTTPS streaming or bounded long polling through supported proxy and
+  enterprise-CA policies.
+- Pairing is closed by default and uses a bounded enrollment window, one-time
+  display code, per-device credential, short-lived role token, explicit
+  capability grant, and immediate revocation. Devices remain visible with
+  presence, version, grants, transport, and actionable offline state.
+- Session and project execution targets support Auto, Hub, and eligible Nodes.
+  The Hub keeps logical workspace identifiers while physical paths remain on
+  the Node; an unavailable requested target is not silently replaced.
+- The distributed rail persists sequence, ACK, lease, approval, cancellation,
+  heartbeat, outbox, idempotency, and terminal evidence. Possible effects after
+  a disconnect become `uncertain`; exact reconciliation does not execute an
+  idempotent request twice.
+- `captain service start/restart` now uses a bounded 90-second health window so
+  a normal cold boot does not receive a premature warning. A real timeout
+  distinguishes an active service manager from one that stopped.
+- The maintained Ratatui 0.30 stack replaces vulnerable `lru 0.12.5` with
+  fixed `lru 0.18.2`; source builds now require Rust 1.88 or newer, while
+  prebuilt bundles continue to need no Rust toolchain.
+- Alpha 14 intentionally does not include application connectors, a Telegram
+  machine tunnel, a complete mobile app, or multi-primary memory sync.
+
 ### 0.1.0-alpha.13 — Adaptive delivery verification and crash-safe evidence
 
 Agent-facing changes:

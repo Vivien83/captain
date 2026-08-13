@@ -71,7 +71,7 @@ fn popup_area_rejects_tiny_view_and_centers_picker() {
 
 #[test]
 fn model_picker_rows_keep_selected_entry_visible() {
-    let entries = vec![
+    let entries = [
         model("one", "One", "fast"),
         model("two", "Two", "smart"),
         model("three", "Three", "balanced"),

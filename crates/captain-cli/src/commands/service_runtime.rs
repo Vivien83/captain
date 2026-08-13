@@ -5,6 +5,7 @@ use crate::{cli_captain_home, find_captain_cli_on_path, find_daemon, ServiceMana
 pub(super) const CAPTAIN_SERVICE_NAME: &str = "captain.service";
 pub(super) const CAPTAIN_LAUNCHD_LABEL: &str = "ai.captain.daemon";
 pub(super) const CAPTAIN_TMUX_SESSION: &str = "captain-daemon";
+pub(super) const SERVICE_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServiceRuntime {

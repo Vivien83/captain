@@ -9,7 +9,7 @@ use super::service_runtime::{
     resolve_control_runtime, resolve_install_runtime, run_checked, service_runtime_active,
     stream_command, systemd_system_service_path, systemd_user_service_path, tmux_start,
     wait_for_daemon, ServiceRuntime, CAPTAIN_LAUNCHD_LABEL, CAPTAIN_SERVICE_NAME,
-    CAPTAIN_TMUX_SESSION,
+    CAPTAIN_TMUX_SESSION, SERVICE_READY_TIMEOUT,
 };
 use crate::{
     cli_captain_home, commands, daemon_client, find_daemon, start_daemon_background, ui, LogTarget,
@@ -76,13 +76,8 @@ pub(crate) fn cmd_service_start(manager: ServiceManagerArg) {
 
     match result {
         Ok(()) => {
-            if wait_for_daemon(Some(std::time::Duration::from_secs(12))).is_some() {
+            if wait_for_service_health("Start", runtime) {
                 ui::success(&format!("Captain started via {}", runtime.label()));
-            } else {
-                ui::check_warn(&format!(
-                    "Start command sent via {}, but the daemon is not healthy yet",
-                    runtime.label()
-                ));
             }
         }
         Err(e) => {
@@ -168,13 +163,8 @@ pub(crate) fn cmd_service_restart(manager: ServiceManagerArg) {
 
     match result {
         Ok(()) => {
-            if wait_for_daemon(Some(std::time::Duration::from_secs(15))).is_some() {
+            if wait_for_service_health("Restart", runtime) {
                 ui::success(&format!("Captain restarted via {}", runtime.label()));
-            } else {
-                ui::check_warn(&format!(
-                    "Restart command sent via {}, but the daemon is not healthy yet",
-                    runtime.label()
-                ));
             }
         }
         Err(e) => {
@@ -400,6 +390,41 @@ fn service_control_deferred_summary(
     )
 }
 
+fn wait_for_service_health(action_label: &str, runtime: ServiceRuntime) -> bool {
+    ui::hint(&format!(
+        "Waiting up to {} seconds for Captain health on cold start",
+        SERVICE_READY_TIMEOUT.as_secs()
+    ));
+    if wait_for_daemon(Some(SERVICE_READY_TIMEOUT)).is_some() {
+        return true;
+    }
+
+    ui::check_warn(&service_readiness_timeout_summary(
+        action_label,
+        runtime,
+        service_runtime_active(runtime),
+    ));
+    ui::hint("Run `captain service status` and `captain service logs` for details");
+    false
+}
+
+fn service_readiness_timeout_summary(
+    action_label: &str,
+    runtime: ServiceRuntime,
+    manager_active: bool,
+) -> String {
+    let state = if manager_active {
+        "the service manager still reports it active"
+    } else {
+        "the service manager no longer reports it active"
+    };
+    format!(
+        "{action_label} command sent via {}, but Captain did not become healthy within {} seconds; {state}",
+        runtime.label(),
+        SERVICE_READY_TIMEOUT.as_secs()
+    )
+}
+
 fn launchd_start() -> Result<(), String> {
     let domain = launchd_domain()?;
     let plist = launchd_plist_path();
@@ -466,5 +491,21 @@ mod tests {
         assert!(text.contains("healthy active task"));
         assert!(!text.contains("agent_id"));
         assert!(!text.contains("prompt"));
+    }
+
+    #[test]
+    fn readiness_timeout_is_long_enough_for_a_cold_boot_and_reports_manager_state() {
+        assert!(SERVICE_READY_TIMEOUT >= std::time::Duration::from_secs(60));
+
+        let active = service_readiness_timeout_summary("Restart", ServiceRuntime::Launchd, true);
+        assert!(active.contains("within 90 seconds"));
+        assert!(active.contains("still reports it active"));
+
+        let stopped =
+            service_readiness_timeout_summary("Start", ServiceRuntime::SystemdSystem, false);
+        assert!(stopped.contains("systemd-system"));
+        assert!(stopped.contains("no longer reports it active"));
+        assert!(!stopped.contains("config"));
+        assert!(!stopped.contains("token"));
     }
 }

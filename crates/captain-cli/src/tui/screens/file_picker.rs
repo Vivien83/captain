@@ -14,9 +14,9 @@ use std::path::PathBuf;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, BorderType, Borders, Clear};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, FrameExt};
 use ratatui::Frame;
-use ratatui_explorer::{FileExplorer, Theme};
+use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Theme};
 
 use crate::tui::theme;
 
@@ -47,7 +47,7 @@ impl FilePickerState {
     /// current working directory if `$HOME` is not resolvable).
     pub fn open(kind: PickerKind) -> std::io::Result<Self> {
         let theme = picker_theme(kind);
-        let mut explorer = FileExplorer::with_theme(theme)?;
+        let mut explorer = FileExplorerBuilder::build_with_theme(theme)?;
         if let Some(home) = dirs::home_dir() {
             // Best-effort: if `$HOME` is missing or unreadable just stay
             // on the explorer's default (cwd).
@@ -71,19 +71,19 @@ impl FilePickerState {
             if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
                 let current = self.explorer.current();
                 if current.is_file() {
-                    if !self.is_acceptable(current.path()) {
+                    if !self.is_acceptable(&current.path) {
                         self.last_error = Some(format!(
                             "Format non supporté pour /{}: {}",
                             self.kind.command_name(),
                             current
-                                .path()
+                                .path
                                 .extension()
                                 .and_then(|e| e.to_str())
                                 .unwrap_or("?")
                         ));
                         return Ok(None);
                     }
-                    return Ok(Some(current.path().to_path_buf()));
+                    return Ok(Some(current.path.clone()));
                 }
             }
         }
@@ -156,7 +156,7 @@ fn picker_theme(kind: PickerKind) -> Theme {
 pub fn draw(f: &mut Frame, area: Rect, state: &FilePickerState) {
     let popup = centred_rect(area, 70, 60);
     f.render_widget(Clear, popup);
-    f.render_widget(&state.explorer.widget(), popup);
+    f.render_widget_ref(state.explorer.widget(), popup);
     if let Some(ref err) = state.last_error {
         // Show inline at the bottom of the popup so the user sees why
         // the last Enter didn't pick the file.
@@ -209,5 +209,25 @@ mod tests {
     fn command_name_round_trip() {
         assert_eq!(PickerKind::Image.command_name(), "image");
         assert_eq!(PickerKind::File.command_name(), "file");
+    }
+
+    #[test]
+    fn picker_renders_with_the_ratatui_widget_ref_contract() {
+        let state = FilePickerState::open(PickerKind::File).unwrap();
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &state))
+            .unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Choisir un fichier"));
     }
 }

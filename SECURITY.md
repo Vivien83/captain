@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.1.0-alpha.13 | :white_check_mark: |
+| 0.1.0-alpha.14 | :white_check_mark: |
+| 0.1.0-alpha.13 | :x: |
 | 0.1.0-alpha.12 | :x: |
 | 0.1.0-alpha.11 | :x: |
 | 0.1.0-alpha.10 | :x: |
@@ -54,7 +55,7 @@ The following are in scope for security reports:
 
 ## Early-Access Deployment Boundary
 
-Captain `0.1.0-alpha.13` is an early-access release. Keep the API bound to
+Captain `0.1.0-alpha.14` is an early-access release. Keep the API bound to
 loopback unless authentication, TLS, and a trusted reverse proxy are configured.
 Agents can execute tools with the permissions granted to them, so review
 capabilities and destructive-action confirmations before connecting untrusted
@@ -141,12 +142,12 @@ vulnerabilities, newly ignored findings, changes to critical parent chains,
 reintroduced RSA features, or drift in the two accepted informational warnings
 fail the gate.
 
-The only reviewed vulnerability exceptions are RUSTSEC-2026-0194 and
-RUSTSEC-2026-0195 on `quick-xml 0.37.5`, reachable solely through the
-Windows-only notification backend. That backend uses only XML escaping and
-does not call the affected XML parser APIs. The main Tauri/plist path uses
-`quick-xml 0.41.0`. This exception is removed as soon as the upstream
-notification chain accepts `tauri-winrt-notification >=0.8`.
+The unfiltered release audit currently contains no vulnerability record. The
+TUI stack is pinned to Ratatui 0.30 and fixed `lru 0.18.2`; the former
+Windows-only `quick-xml 0.37.5` notification path is absent, leaving patched
+`quick-xml 0.41.0` as the sole resolved version. These invariants and their
+direct parent chains are checked explicitly instead of being hidden by an
+exception.
 
 Host release assets include a deterministic in-toto/SLSA v1 provenance
 statement that binds all 20 pre-existing assets to the public Git commit,

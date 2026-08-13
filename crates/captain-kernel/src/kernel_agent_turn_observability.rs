@@ -16,6 +16,12 @@ use super::CaptainKernel;
 
 const SEND_MESSAGE_SOURCE: &str = "kernel.send_message_full";
 
+pub(super) struct AgentTurnLearningContext {
+    pub(super) channel_type: Option<String>,
+    pub(super) regex_hint: Option<&'static str>,
+    pub(super) enabled: bool,
+}
+
 impl CaptainKernel {
     pub(super) fn emit_user_message_learning_hint(
         &self,
@@ -34,26 +40,25 @@ impl CaptainKernel {
         agent_id: AgentId,
         entry: &AgentEntry,
         message: &str,
-        channel_type: Option<String>,
-        regex_hint: Option<&'static str>,
         result: &AgentLoopResult,
+        learning: AgentTurnLearningContext,
     ) {
         let semantic_memory_opt_out =
             captain_runtime::outcome_detector::memory_write_opt_out(message);
         self.record_successful_turn_state(agent_id, result);
-        if !semantic_memory_opt_out {
+        if !semantic_memory_opt_out && learning.enabled {
             self.emit_successful_conversation_signal(
                 agent_id,
                 message,
                 &result.response,
-                channel_type,
-                regex_hint,
+                learning.channel_type,
+                learning.regex_hint,
             );
         }
         self.spawn_agent_turn_memory_job(agent_id, entry, message, result, semantic_memory_opt_out);
         self.record_successful_turn_audit(agent_id, result);
 
-        if !semantic_memory_opt_out {
+        if !semantic_memory_opt_out && learning.enabled {
             let _ = emit(workflow_success_signal(agent_id, result));
         }
     }
@@ -123,6 +128,7 @@ impl CaptainKernel {
         agent_id: AgentId,
         entry: &AgentEntry,
         error: &KernelError,
+        emit_learning_signals: bool,
     ) {
         self.audit_log.record_or_alert(
             agent_id.to_string(),
@@ -150,7 +156,9 @@ impl CaptainKernel {
             let _ = graph.save();
         });
 
-        let _ = emit(workflow_failure_signal(agent_id, &err_msg));
+        if emit_learning_signals {
+            let _ = emit(workflow_failure_signal(agent_id, &err_msg));
+        }
 
         self.supervisor.record_failure();
         warn!(agent_id = %agent_id, error = %error, "Agent loop failed — recoverable failure recorded in supervisor");

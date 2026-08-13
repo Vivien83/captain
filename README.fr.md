@@ -46,6 +46,7 @@ authentifiée, Telegram ou Discord.
 <tr><td><b>Exécution réelle, encadrée</b></td><td>Shell, fichiers, SSH, navigateur, recherche web, code, documents et médias. Les appels sensibles utilisent les approbations ; les motifs shell critiques sont bloqués ; les budgets limitent tokens, coût et fréquence. Captain sépare son garde-fou roulant durable des fenêtres d'abonnement gérées par le fournisseur ; pour Codex, pourcentages et heures de réinitialisation viennent des signaux live officiels du compte et des réponses, jamais d'un tableau de quotas copié. Dans les barres compactes de Chat, les fenêtres générales du fournisseur et celles correspondant au modèle actif ont leur propre jauge ; les autres familles propres à un modèle sont résumées comme hors modèle actif, tandis que Statut et Budget restent exhaustifs. Ratatui, Control web et le wrapper desktop de compatibilité conservé partagent ce contrat. Les lectures indépendantes peuvent s'exécuter en parallèle, tandis que les dépendances et effets de bord restent ordonnés.</td></tr>
 <tr><td><b>Capacités natives lisibles</b></td><td>Déposez un fichier <code>*.captain</code> relu dans un dossier global ou projet <code>.captain/</code> : Captain le charge à chaud comme outil typé <code>cap_*</code>. Captain Forge garde dépendances, permissions, approbations, DAG durable, reprise après crash, historique de révisions, rollback et décisions opérateur exactes sous le contrôle du kernel.</td></tr>
 <tr><td><b>Une mémoire qui suit l'échange</b></td><td>Rappel de sessions, faits utilisateur durables, état des projets, graphe de connaissances et embeddings ONNX locaux optionnels fournissent un contexte borné sans réinjecter tout l'historique à chaque tour. Les faits acceptés entrent d'abord dans un journal local durable, restent disponibles pendant une panne MemPalace et se resynchronisent automatiquement avec un backoff borné.</td></tr>
+<tr><td><b>Un seul Captain, sur toutes vos machines</b></td><td>Exécutez un Hub complet et appairez des Clients légers terminal, TUI ou Desktop aux mêmes sessions, projets, mémoire, modèle et approbations. Des Nœuds d'exécution optionnels agissent sur les workspaces locaux uniquement par HTTPS 443 sortant, avec proxy/CA d'entreprise, grants explicites, gardes locales, acquittements durables et aucun rejeu aveugle après coupure.</td></tr>
 <tr><td><b>N'importe quel modèle, aucun verrouillage</b></td><td>Codex via votre abonnement ChatGPT, Anthropic, OpenAI, Mistral, Groq, Gemini, OpenRouter et modèles locaux via Ollama. Captain découvre le catalogue et les identifiants réellement configurés sans dépendre de compteurs figés ; le budget de contexte suit la fenêtre live du modèle sélectionné. Les contrôles de raisonnement par agent préservent le défaut du modèle en Auto ; lorsque Codex annonce Ultra, Captain applique l'effort modèle maximal et une délégation proactive bornée réservée à l'agent racine. Pour Codex, une actualisation horaire signale les nouveaux modèles dans Control et, s'il est configuré, Telegram ; Captain ne bascule jamais sans votre décision explicite et votre choix de stratégie de session.</td></tr>
 <tr><td><b>Email pour le travail réel</b></td><td>Connectez plusieurs comptes Gmail par OAuth ou plusieurs boîtes indépendantes du fournisseur par IMAP/SMTP. Recherchez, lisez, préparez, envoyez, classez, enregistrez des pièces jointes et routez des correspondances déterministes vers un agent précis. Les identifiants restent hors de la configuration publique ; travail accepté, curseurs d'automatisation et résultats ambigus après crash restent durables et inspectables.</td></tr>
 <tr><td><b>Six hubs opérationnels</b></td><td>Chat, Projects, Automation, Learning, Capabilities et Status forment la surface primaire commune au TUI et à Control. Automation regroupe Workflows, Triggers, Crons, Approbations et Webhooks.</td></tr>
@@ -58,15 +59,15 @@ authentifiée, Telegram ou Discord.
 ## Installation rapide
 
 Préversion publique early-access actuelle :
-[v0.1.0-alpha.13](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.13).
-Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13` ;
+[v0.1.0-alpha.14](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14).
+Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14` ;
 canal alpha mobile : `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
 ```
 
 Le dépôt officiel, les assets, les checksums et l'image sont publics. Aucun
@@ -102,8 +103,8 @@ agrégé et les installateurs Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # ou toute clé de provider supportée
 export TELEGRAM_BOT_TOKEN=...      # optionnel — voir ci-dessous
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 bash
 ```
 
@@ -113,7 +114,7 @@ Telegram, découvre votre chat depuis les messages en attente du bot, et
 **vous envoie un message de confirmation — votre premier contact avec votre
 agent se fait sur votre téléphone, quelques secondes après l'installation.**
 
-L'Alpha 12 peut gérer un domaine HTTPS public de bout en bout. Créez d'abord
+Captain peut gérer un domaine HTTPS public de bout en bout. Créez d'abord
 son enregistrement DNS, puis définissez `CAPTAIN_DOMAIN` comme ci-dessus ou
 répondez au prompt de l'installateur. Captain garde son API en loopback,
 configure Caddy transactionnellement et ne conclut qu'après validation de TLS,
@@ -128,8 +129,8 @@ sans démarrer le daemon tout de suite, pour que la vérification de
 disponibilité ci-dessous ne tourne pas avant que vous vous soyez connecté :
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.13/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.13 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # affiche une URL + un code — ouvrez-la sur votre téléphone, pas besoin de navigateur local
@@ -146,7 +147,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
 ```
 
 Le premier démarrage génère la clé API du daemon et la persiste — avec tout
@@ -162,8 +163,8 @@ l'espace PID, ni le mode privilégié. Pour lancer l'image immuable :
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.13 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.13 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose up -d
 ```
 
 Configurez le provider choisi après le premier démarrage. Tout accès à l'hôte
@@ -266,9 +267,11 @@ l'agent peut revisiter, annuler ou ordonner par dépendances.
 | [Built-in Tools](docs/captain-tools/) | Documentation des outils par famille |
 | [Architecture](docs/architecture.md) | Crates, boucle d'agent, design du kernel |
 | [API Reference](docs/api-reference.md) | Endpoints REST, auth, streaming |
+| [Hub, Clients et Nœuds](docs/hub-clients-nodes.md) | Un Captain central, des interfaces légères et l'exécution locale sortante |
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Installs headless, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | Serveurs d'outils externes et contrat de transport |
 | [Troubleshooting](docs/troubleshooting.md) | Problèmes courants et leurs correctifs |
+| [Notes de release 0.1.0-alpha.14](docs/releases/v0.1.0-alpha.14.md) | Un Hub, des Clients légers, des Nœuds sortants et un travail distribué résistant aux crashs |
 | [Notes de release 0.1.0-alpha.13](docs/releases/v0.1.0-alpha.13.md) | Vérification adaptative, preuves résistantes aux crashs et mises à jour hôte renforcées |
 | [Notes de release 0.1.0-alpha.12](docs/releases/v0.1.0-alpha.12.md) | Live Runs durables, recherche fondée, artefacts vérifiés et domaines VPS gérés |
 | [Notes de release 0.1.0-alpha.11](docs/releases/v0.1.0-alpha.11.md) | Email natif, intégrations durables, clôture d'audit et CI locale |

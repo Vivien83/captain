@@ -81,34 +81,15 @@ set +e
 ) >"$full_report"
 full_audit_status=$?
 set -e
-if [[ "$full_audit_status" -ne 1 ]]; then
+if [[ "$full_audit_status" -ne 0 ]]; then
   echo "unfiltered cargo-audit returned unexpected status $full_audit_status" >&2
   exit 1
 fi
 
 jq -e '
-  (
-    [
-      .vulnerabilities.list[]
-      | {
-          advisory: .advisory.id,
-          package: .package.name,
-          version: .package.version
-        }
-    ]
-    | sort_by(.advisory, .package, .version)
-  ) == [
-    {
-      "advisory": "RUSTSEC-2026-0194",
-      "package": "quick-xml",
-      "version": "0.37.5"
-    },
-    {
-      "advisory": "RUSTSEC-2026-0195",
-      "package": "quick-xml",
-      "version": "0.37.5"
-    }
-  ]
+  .vulnerabilities.found == false
+  and .vulnerabilities.count == 0
+  and .vulnerabilities.list == []
   and (
     [
       .warnings
@@ -144,7 +125,6 @@ jq -e '
     {"kind":"unmaintained","advisory":"RUSTSEC-2025-0100","package":"unic-ucd-ident","version":"0.9.0"},
     {"kind":"unmaintained","advisory":"RUSTSEC-2025-0119","package":"number_prefix","version":"0.4.0"},
     {"kind":"unsound","advisory":"RUSTSEC-2024-0429","package":"glib","version":"0.18.5"},
-    {"kind":"unsound","advisory":"RUSTSEC-2026-0002","package":"lru","version":"0.12.5"},
     {"kind":"unsound","advisory":"RUSTSEC-2026-0097","package":"rand","version":"0.7.3"}
   ]
 ' "$full_report" >/dev/null || {
@@ -175,13 +155,31 @@ jq -e '
     and (versions("russh") == ["0.62.4"])
     and (versions("ssh-key") == ["0.6.7", "0.7.0-rc.11"])
     and (versions("mdns-sd") == ["0.20.3"])
-    and (versions("notify-rust") == ["4.18.0"])
-    and (versions("mac-notification-sys") == ["0.6.15"])
     and (versions("plist") == ["1.10.0"])
-    and (versions("quick-xml") == ["0.37.5", "0.41.0"])
+    and (versions("quick-xml") == ["0.41.0"])
     and (versions("time") == ["0.3.54"])
     and (versions("number_prefix") == ["0.4.0"])
     and (versions("spin") == ["0.9.8"])
+    and (versions("ratatui") == ["0.30.2"])
+    and (versions("ratatui-core") == ["0.1.2"])
+    and (versions("ratatui-image") == ["11.0.6"])
+    and (versions("ratatui-explorer") == ["0.3.0"])
+    and (versions("lru") == ["0.18.2"])
+    and (
+      ($root.packages[]
+        | select(.name == "lru" and .version == "0.18.2")
+        | .id) as $target
+      | [
+          $root.resolve.nodes[]
+          | select(any(.deps[]?; .pkg == $target))
+          | .id as $parent
+          | $root.packages[]
+          | select(.id == $parent)
+          | "\(.name)@\(.version)"
+        ]
+        | unique
+        | sort
+    ) == ["ratatui-core@0.1.2"]
     and (
       ($root.packages[]
         | select(.name == "oauth2" and .version == "5.0.0")
@@ -256,21 +254,6 @@ jq -e '
     )
     and (
       ($root.packages[]
-        | select(.name == "quick-xml" and .version == "0.37.5")
-        | .id) as $target
-      | [
-          $root.resolve.nodes[]
-          | select(any(.deps[]?; .pkg == $target))
-          | .id as $parent
-          | $root.packages[]
-          | select(.id == $parent)
-          | "\(.name)@\(.version)"
-        ]
-        | unique
-        | sort
-    ) == ["tauri-winrt-notification@0.7.2"]
-    and (
-      ($root.packages[]
         | select(.name == "number_prefix" and .version == "0.4.0")
         | .id) as $target
       | [
@@ -304,4 +287,4 @@ jq -e '
   exit 1
 }
 
-printf 'dependency baseline passed: no unreviewed vulnerabilities; OAuth, vault, IMAP, SSH and reviewed transitive chains are pinned\n'
+printf 'dependency baseline passed: no unreviewed vulnerabilities; TUI, OAuth, vault, IMAP, SSH and reviewed transitive chains are pinned\n'

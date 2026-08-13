@@ -8,6 +8,7 @@ WORKFLOW="$ROOT_DIR/.github/workflows/release.yml"
 CI_WORKFLOW="$ROOT_DIR/.github/workflows/ci.yml"
 COMPOSE="$ROOT_DIR/docker-compose.yml"
 RELEASE_ALL="$ROOT_DIR/scripts/release-all.sh"
+RELEASE_ALL_TEST="$ROOT_DIR/scripts/release-all-test.sh"
 PACKAGE_RELEASE="$ROOT_DIR/scripts/package-release.sh"
 LOCAL_PUBLISHER="$ROOT_DIR/scripts/publish-release-local.sh"
 RELEASE_PROVENANCE="$ROOT_DIR/scripts/release-provenance.sh"
@@ -227,12 +228,15 @@ require_file_literal "local packager executes embedded versions" "$RELEASE_ALL" 
 require_file_literal "local packager emulates Linux ARM64" "$RELEASE_ALL" 'qemu-aarch64-static'
 require_file_literal "local packager forwards custom output roots" "$RELEASE_ALL" 'CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"'
 require_file_literal "local packager honors the shared Cargo target root" "$RELEASE_ALL" 'TARGET_ROOT="${CARGO_TARGET_DIR:-target}"'
-require_file_literal "local packager resolves the host binary from the shared target root" "$RELEASE_ALL" 'echo "$TARGET_ROOT/release/captain"'
+require_file_literal "local packager resolves the host binary from the shared target root" "$RELEASE_ALL" 'BUILD_TARGET_BIN="$TARGET_ROOT/release/captain"'
+require_file_literal "local packager removes stale target binaries" "$RELEASE_ALL" 'rm -f "$BUILD_TARGET_BIN"'
+require_file_absent_literal "local packager avoids lossy build command substitutions" "$RELEASE_ALL" 'bin_path="$(build_target "$target" | tail -1)"'
 require_file_literal "local packager opens current Docker Desktop app" "$RELEASE_ALL" 'open -a "Docker Desktop"'
 require_file_literal "local packager retains legacy Docker app fallback" "$RELEASE_ALL" 'open -a Docker'
 require_file_literal "macOS bundle signing fails closed" "$PACKAGE_RELEASE" 'failed to verify $PLATFORM release signature'
 require_file_literal "Windows preflight requires LLVM" "$RELEASE_ALL" 'command -v llvm-ar'
 require_file_literal "Windows preflight requires NASM" "$RELEASE_ALL" 'command -v nasm'
+require_file_literal "Windows release treats warnings as errors" "$RELEASE_ALL" 'RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"'
 require_file_literal "Windows excludes Unix OpenSSL forcing" "$ROOT_DIR/crates/captain-channels/Cargo.toml" '[target.'\''cfg(not(target_os = "windows"))'\''.dependencies]'
 require_file_literal "release image consumes amd64 bundle" "$LOCAL_DOCKERFILE" 'captain-x86_64-unknown-linux-gnu.tar.gz'
 require_file_literal "release image consumes arm64 bundle" "$LOCAL_DOCKERFILE" 'captain-aarch64-unknown-linux-gnu.tar.gz'
@@ -270,6 +274,7 @@ require_file_absent_literal "release smoke rejects the obsolete web result param
 require_file_absent_literal "release smoke rejects the obsolete web fetch parameter" "$EXCELLENCE_SMOKE" 'fetch_char_limit'
 require_shell_syntax "$ROOT_DIR/scripts/package-release.sh"
 require_shell_syntax "$RELEASE_ALL"
+require_shell_syntax "$RELEASE_ALL_TEST"
 require_shell_syntax "$LOCAL_PUBLISHER"
 require_shell_syntax "$RELEASE_PROVENANCE"
 require_shell_syntax "$RELEASE_PROVENANCE_TEST"
@@ -288,6 +293,7 @@ require_shell_syntax "$DOCKER_EMBEDDING_CACHE"
 require_shell_syntax "$RELEASE_READINESS"
 require_shell_syntax "$EXCELLENCE_SMOKE"
 require_command_success "release readiness help exits cleanly" "$RELEASE_READINESS" --help
+require_command_success "local packager rejects failed builds and stale binaries" "$RELEASE_ALL_TEST"
 CAPTAIN_RELEASE_POLICY_TEST=1 "$LOCAL_PUBLISHER" >/dev/null
 pass "local release channel policy"
 require_command_success "release provenance contract" "$RELEASE_PROVENANCE_TEST"

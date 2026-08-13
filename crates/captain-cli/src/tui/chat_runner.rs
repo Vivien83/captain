@@ -87,8 +87,12 @@ struct StandaloneChat {
 
 impl StandaloneChat {
     fn new(event_tx: mpsc::Sender<AppEvent>) -> Self {
+        let mut chat = ChatState::new();
+        if crate::remote_client::client_profile_configured() {
+            chat.use_authoritative_sessions_only();
+        }
         Self {
-            chat: ChatState::new(),
+            chat,
             event_tx,
             backend: Backend::None,
             agent_id_daemon: None,
@@ -828,6 +832,15 @@ impl StandaloneChat {
             return true;
         }
         if slash_daemon::is_daemon_forward_command(command) {
+            if crate::remote_client::client_profile_configured()
+                && matches!(command, "/config" | "/restart" | "/shutdown")
+            {
+                self.chat.push_message(
+                    Role::System,
+                    crate::remote_client::restricted_action_message("Daemon administration"),
+                );
+                return true;
+            }
             self.forward_daemon_slash_command(canonical_command);
             return true;
         }
@@ -886,6 +899,13 @@ impl StandaloneChat {
     }
 
     fn handle_kill_slash(&mut self, lang: crate::i18n::Lang) {
+        if crate::remote_client::client_profile_configured() {
+            self.chat.push_message(
+                Role::System,
+                crate::remote_client::restricted_action_message("Agent management"),
+            );
+            return;
+        }
         let name = self.agent_name.clone();
         if slash_kill::is_protected_agent(&name) {
             self.chat.push_message(
@@ -1123,6 +1143,20 @@ impl StandaloneChat {
     }
 
     fn handle_reload_session_slash(&mut self, lang: crate::i18n::Lang) {
+        if !self.chat.local_session_persistence_enabled {
+            if let (Some(session_id), Some(backend)) = (
+                self.chat.authoritative_session_id.clone(),
+                self.backend_ref(),
+            ) {
+                event::spawn_load_session(backend, session_id, self.event_tx.clone());
+            } else {
+                self.chat.push_message(
+                    Role::System,
+                    slash_reload::no_saved_session_message(lang).to_string(),
+                );
+            }
+            return;
+        }
         let key = self.chat.session_key.clone();
         if key.is_empty() {
             self.chat.push_message(
@@ -1152,6 +1186,11 @@ impl StandaloneChat {
 
     fn handle_status_slash(&mut self, lang: crate::i18n::Lang) {
         let snapshot = match &self.backend {
+            Backend::Daemon { .. } if crate::remote_client::client_profile_configured() => {
+                slash_info::StatusSnapshot::RemoteClient {
+                    agent_name: Some(&self.agent_name),
+                }
+            }
             Backend::Daemon { base_url } => slash_info::StatusSnapshot::Daemon {
                 base_url,
                 agent_name: Some(&self.agent_name),
@@ -1280,6 +1319,15 @@ impl StandaloneChat {
     }
 
     fn forward_daemon_slash_command(&mut self, command: &str) {
+        if crate::remote_client::client_profile_configured()
+            && crate::remote_client::daemon_command_is_restricted(command)
+        {
+            self.chat.push_message(
+                Role::System,
+                crate::remote_client::restricted_action_message("Daemon administration"),
+            );
+            return;
+        }
         if matches!(self.backend, Backend::Daemon { .. }) {
             self.send_message(command.to_string());
         } else {
@@ -1623,6 +1671,17 @@ impl StandaloneChat {
             return;
         }
 
+        if crate::remote_client::client_profile_configured() {
+            self.backend = Backend::Daemon {
+                base_url: base_url.to_string(),
+            };
+            self.chat.status_msg = Some(
+                "No matching Hub agent is available. Agent creation requires an authenticated Hub operator surface."
+                    .to_string(),
+            );
+            return;
+        }
+
         // Auto-spawn from template
         let target_name = agent_name.unwrap_or("assistant");
         let all_templates = crate::templates::load_all_templates();
@@ -1907,6 +1966,7 @@ fn daemon_agent_name(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -2448,6 +2508,31 @@ pub fn run_chat_tui(config: Option<PathBuf>, agent_name: Option<String>) {
     };
     use ratatui::crossterm::execute;
 
+    // A configured lightweight Client is an explicit operating mode. Resolve
+    // it before entering raw terminal mode and never reinterpret a broken Hub
+    // connection as permission to boot a local kernel.
+    let remote_backend = if crate::remote_client::client_profile_configured() {
+        match crate::find_tui_backend() {
+            Ok(Some(base_url)) => Some(base_url),
+            Ok(None) => {
+                crate::ui::error_with_fix(
+                    "The paired Client has no remote Hub",
+                    "Check `captain client status`, then pair this device again.",
+                );
+                return;
+            }
+            Err(error) => {
+                crate::ui::error_with_fix(
+                    &format!("Client Hub unavailable: {error}"),
+                    "Check `captain client status`, then pair again if this device was revoked.",
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
@@ -2471,11 +2556,21 @@ pub fn run_chat_tui(config: Option<PathBuf>, agent_name: Option<String>) {
     }
 
     // Boot sequence: check for daemon, or boot kernel in-process
-    if let Some(base_url) = crate::find_daemon() {
-        state.resolve_daemon_agent(&base_url, agent_name.as_deref());
-    } else {
-        state.booting = true;
-        event::spawn_kernel_boot(config, tx);
+    let backend = match remote_backend {
+        Some(base_url) => Ok(Some(base_url)),
+        None => crate::find_tui_backend(),
+    };
+    match backend {
+        Ok(Some(base_url)) => state.resolve_daemon_agent(&base_url, agent_name.as_deref()),
+        Ok(None) => {
+            state.booting = true;
+            event::spawn_kernel_boot(config, tx);
+        }
+        Err(error) => {
+            state.chat.push_message(Role::System, format!(
+                "Client Hub unavailable: {error}. Check `captain client status`, then pair again if this device was revoked."
+            ));
+        }
     }
 
     // ── Main loop ────────────────────────────────────────────────────────────

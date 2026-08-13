@@ -1,4 +1,5 @@
 use captain_api::server::read_daemon_info;
+use std::time::Duration;
 
 use crate::{cli_captain_home, production_credential_resolver_at, ui};
 
@@ -42,9 +43,20 @@ pub(crate) fn find_daemon() -> Option<String> {
 }
 
 pub(crate) fn daemon_client() -> reqwest::blocking::Client {
-    let mut builder = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .no_proxy();
+    daemon_client_with_timeout(Some(Duration::from_secs(120)))
+}
+
+pub(crate) fn daemon_client_with_timeout(timeout: Option<Duration>) -> reqwest::blocking::Client {
+    if crate::remote_client::client_profile_configured() {
+        return crate::remote_client::blocking_client(timeout)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| crate::remote_client::fail_closed_client(timeout));
+    }
+    let mut builder = reqwest::blocking::Client::builder().no_proxy();
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
 
     let headers = daemon_auth_headers();
     if !headers.is_empty() {
@@ -52,6 +64,17 @@ pub(crate) fn daemon_client() -> reqwest::blocking::Client {
     }
 
     builder.build().expect("Failed to build HTTP client")
+}
+
+/// Resolve the conversational backend. A configured lightweight Client has
+/// strict precedence and returns an error instead of falling back to a local
+/// daemon or in-process kernel.
+pub(crate) fn find_tui_backend() -> Result<Option<String>, crate::remote_client::RemoteClientError>
+{
+    match crate::remote_client::initialize()? {
+        Some(base_url) => Ok(Some(base_url)),
+        None => Ok(find_daemon()),
+    }
 }
 
 pub(crate) fn daemon_json(
@@ -70,13 +93,31 @@ pub(crate) fn daemon_json(
             body
         }
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("timed out") || msg.contains("Timeout") {
+            let msg = daemon_request_error("Daemon request", &e);
+            if crate::remote_client::client_profile_configured() {
+                let (title, fix) = if e.is_timeout() {
+                    (
+                        "Remote Hub request timed out",
+                        "Check the network or proxy, then run `captain client status`",
+                    )
+                } else if e.is_connect() {
+                    (
+                        "Cannot reach remote Hub",
+                        "Check the network or proxy, then run `captain client status`",
+                    )
+                } else {
+                    (
+                        "Remote Hub communication error",
+                        "Run `captain client status`; pair the Client again if access was revoked",
+                    )
+                };
+                ui::error_with_fix(&format!("{title}: {msg}"), fix);
+            } else if e.is_timeout() {
                 ui::error_with_fix(
                     "Request timed out",
                     "The agent may be processing a complex request. Try again, or check `captain status`",
                 );
-            } else if msg.contains("Connection refused") || msg.contains("connect") {
+            } else if e.is_connect() {
                 ui::error_with_fix(
                     "Cannot connect to daemon",
                     "Is the daemon running? Start it with: captain start",
@@ -92,7 +133,17 @@ pub(crate) fn daemon_json(
     }
 }
 
+pub(crate) fn daemon_request_error(action: &str, error: &reqwest::Error) -> String {
+    crate::remote_client::request_error(action, error)
+}
+
 pub(crate) fn daemon_auth_headers() -> reqwest::header::HeaderMap {
+    if crate::remote_client::client_profile_configured() {
+        return crate::remote_client::auth_headers()
+            .ok()
+            .flatten()
+            .unwrap_or_else(crate::remote_client::fail_closed_headers);
+    }
     let mut headers = reqwest::header::HeaderMap::new();
 
     if let Some(token) = read_env_token("CAPTAIN_SESSION_TOKEN").or_else(read_local_session_token) {

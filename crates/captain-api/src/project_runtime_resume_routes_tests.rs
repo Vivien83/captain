@@ -79,7 +79,7 @@ async fn prepare_resume_project_runtime_resumes_pending_phase_and_requests_spawn
     let state = std::sync::Arc::new(state);
 
     let ((status, Json(body)), spawn_key) =
-        prepare_resume_project_runtime(&state, &format!(" {} ", project.slug)).await;
+        prepare_resume_project_runtime(&state, &format!(" {} ", project.slug), None).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(spawn_key.as_deref(), Some(" resume-runtime "));
@@ -113,6 +113,7 @@ async fn resume_project_runtime_rejects_invalid_identifier_without_spawn() {
     let response = resume_project_runtime(
         axum::extract::State(state),
         axum::extract::Path("bad-/Users/example/private-ghp_secret".to_string()),
+        None,
     )
     .await
     .into_response();

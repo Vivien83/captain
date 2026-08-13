@@ -25,6 +25,9 @@ pub(crate) async fn run_pre_dispatch_checks(
     if let Some(result) = enforce_lineage_depth(tool_use_id, tool_name) {
         return Some(result);
     }
+    if let Some(result) = enforce_paired_client_authority(tool_use_id, tool_name, input) {
+        return Some(result);
+    }
     if let Some(result) =
         enforce_kernel_tool_blocklist(tool_use_id, tool_name, kernel, caller_agent_id)
     {
@@ -42,6 +45,32 @@ pub(crate) async fn run_pre_dispatch_checks(
         workspace_root,
     )
     .await
+}
+
+fn enforce_paired_client_authority(
+    tool_use_id: &str,
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> Option<ToolResult> {
+    let origin = super::current_origin_channel();
+    if !crate::client_authority::is_paired_client_origin(origin.as_deref())
+        || crate::client_authority::paired_client_tool_is_allowed(tool_name, input)
+    {
+        return None;
+    }
+    warn!(
+        tool = %tool_name,
+        authority_version = crate::client_authority::PAIRED_CLIENT_AUTHORITY_VERSION,
+        "Tool denied by paired Client authority"
+    );
+    Some(denied_tool_result(
+        tool_use_id,
+        tool_name,
+        &format!(
+            "Permission denied: tool '{tool_name}' is outside paired Client authority v{}. The operation was not performed and must not be retried through another local tool.",
+            crate::client_authority::PAIRED_CLIENT_AUTHORITY_VERSION
+        ),
+    ))
 }
 
 fn enforce_kernel_tool_blocklist(
@@ -149,6 +178,16 @@ async fn request_approval_if_needed(
     caller_agent_id: Option<&str>,
     workspace_root: Option<&Path>,
 ) -> Option<ToolResult> {
+    if matches!(
+        crate::execution_routing::current_turn_execution_context().map(|context| context.target),
+        Some(crate::execution_routing::ResolvedExecutionTarget::Node { .. })
+    ) && crate::node_tool_runtime::local_node_tool_family(tool_name).is_some()
+    {
+        // The Node reviews the exact workspace-local action and raises one
+        // digest-bound approval through the Hub. Prompting here as well would
+        // create two competing approvals for the same operation.
+        return None;
+    }
     let kernel = kernel?;
     if !kernel.requires_approval(tool_name) {
         return None;
@@ -410,6 +449,46 @@ fn first_line_diff_preview(old_content: &str, new_content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn paired_client_origin_denies_administrative_tools_before_dispatch() {
+        let result = super::super::with_origin_channel(
+            Some(crate::client_authority::paired_client_origin("test")),
+            run_pre_dispatch_checks(
+                "tool-call-1",
+                "config_read",
+                &serde_json::json!({}),
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("paired Client guard must return a denial");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("outside paired Client authority"));
+    }
+
+    #[tokio::test]
+    async fn paired_client_origin_keeps_explicit_memory_authority() {
+        let result = super::super::with_origin_channel(
+            Some(crate::client_authority::paired_client_origin("test")),
+            run_pre_dispatch_checks(
+                "tool-call-2",
+                "memory_recall",
+                &serde_json::json!({"query": "preferences"}),
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        .await;
+
+        assert!(result.is_none());
+    }
 
     struct PreviewKernel;
 

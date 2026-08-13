@@ -5,10 +5,16 @@ import { readFile } from 'node:fs/promises';
 import {
   AUTOMATION_TABS,
   CAPABILITY_TABS,
+  CLIENT_AUTOMATION_TABS,
+  CLIENT_PRIMARY_HUBS,
   PRIMARY_HUBS,
+  automationTabsForMode,
   automationTabForRoute,
   capabilityTabForRoute,
+  hubForMode,
   hubForRoute,
+  primaryHubsForMode,
+  routeForMode,
 } from '../crates/captain-api/static/js/app/control_contract.mjs';
 import {
   formatDuration,
@@ -34,6 +40,22 @@ assert.deepEqual(
   AUTOMATION_TABS.map((tab) => tab.route),
   ['workflows', 'triggers', 'crons', 'approvals', 'webhooks'],
 );
+assert.deepEqual(
+  CLIENT_PRIMARY_HUBS.map((hub) => hub.route),
+  ['chat', 'projects', 'automation', 'status'],
+);
+assert.deepEqual(
+  CLIENT_AUTOMATION_TABS.map((tab) => tab.route),
+  ['workflows', 'approvals'],
+);
+assert.equal(primaryHubsForMode(true), CLIENT_PRIMARY_HUBS);
+assert.equal(primaryHubsForMode(false), PRIMARY_HUBS);
+assert.equal(automationTabsForMode(true), CLIENT_AUTOMATION_TABS);
+assert.equal(routeForMode('capabilities', true), 'chat');
+assert.equal(routeForMode('triggers', true), 'chat');
+assert.equal(routeForMode('approvals', true), 'approvals');
+assert.equal(hubForMode('approvals', true), 'automation');
+assert.equal(automationTabForRoute('webhooks', true).route, 'workflows');
 assert.deepEqual(
   CAPABILITY_TABS.map((tab) => tab.route),
   ['native-capabilities', 'skills', 'tools'],
@@ -305,6 +327,10 @@ assert.match(apiSource, /nativeCapabilities:.*\/api\/capabilities\/native/);
 assert.match(apiSource, /decideNativeCapability:/);
 assert.match(apiSource, /rollbackNativeCapability:/);
 assert.match(apiSource, /disableNativeCapability:/);
+assert.match(apiSource, /hubDevices:.*\/api\/hub\/devices/);
+assert.match(apiSource, /reviewHubPairingCode:.*\/api\/hub\/pairing\/review/);
+assert.match(apiSource, /encodeURIComponent\(requestId\).*deny/s);
+assert.match(apiSource, /encodeURIComponent\(deviceId\)/);
 assert.match(apiSource, /dispatchEvent\(new Event\('captain:unauthorized'\)\)/);
 assert.match(mainSource, /addEventListener\('captain:unauthorized', onUnauthorized\)/);
 assert.match(mainSource, /authed: false/);
@@ -361,6 +387,11 @@ globalThis.window = unauthorizedTarget;
 globalThis.fetch = async () => new Response('', { status: 401 });
 await assert.rejects(api.agents(), (error) => error.unauthorized === true);
 assert.equal(unauthorizedSignals, 1);
+globalThis.fetch = async () => new Response(
+  JSON.stringify({ error: { code: 'pairing_not_found', message: 'Pairing request not found' } }),
+  { status: 404, headers: { 'content-type': 'application/json' } },
+);
+await assert.rejects(api.reviewHubPairingCode('ABCD-EFGH'), /Pairing request not found/);
 globalThis.fetch = originalFetch;
 globalThis.window = originalWindow;
 

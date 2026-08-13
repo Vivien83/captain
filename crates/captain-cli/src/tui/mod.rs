@@ -74,10 +74,11 @@ use captain_types::agent::AgentId;
 use copy_slash_state::{copy_slash_target_for_arg, CopySlashTarget};
 use event::{AppEvent, BackendRef};
 use hub_key_state::{
-    automation_key_route_for_view, automation_view_after_shortcut, capabilities_key_route_for_view,
-    capabilities_view_after_shortcut, connections_key_route_for_view,
-    connections_view_after_shortcut, learning_key_route_for_view, learning_view_after_shortcut,
-    AutomationKeyRoute, CapabilitiesKeyRoute, ConnectionsKeyRoute, LearningKeyRoute,
+    automation_key_route_for_view, automation_view_after_shortcut_in,
+    capabilities_key_route_for_view, capabilities_view_after_shortcut,
+    connections_key_route_for_view, connections_view_after_shortcut, learning_key_route_for_view,
+    learning_view_after_shortcut, AutomationKeyRoute, CapabilitiesKeyRoute, ConnectionsKeyRoute,
+    LearningKeyRoute,
 };
 use hub_slash_state::{hub_slash_route_for_command, HubSlashRoute};
 use hub_view_state::{
@@ -98,7 +99,8 @@ use navigation_state::{
     startup_phase_for_state, AutomationView, BootScreen, CapabilitiesView, ConnectionsView,
     CtrlCAction, FilePickerKeyAction, HubShortcutRoute, LearningView, MainGlobalKeyAction,
     MainPhaseEntryRoute, OverlayKeyAction, OverlayState, Phase, ResumePromptAction, ScreenKeyRoute,
-    Tab, TabCycle, AUTOMATION_VIEWS, CAPABILITIES_VIEWS, CONNECTIONS_VIEWS, LEARNING_VIEWS, TABS,
+    Tab, TabCycle, AUTOMATION_VIEWS, CAPABILITIES_VIEWS, CLIENT_AUTOMATION_VIEWS,
+    CONNECTIONS_VIEWS, LEARNING_VIEWS, TABS,
 };
 use refresh_state::{
     automation_refresh_route_for_view, capabilities_refresh_route_for_view,
@@ -278,10 +280,64 @@ struct App {
 // ─── App construction ────────────────────────────────────────────────────────
 
 impl App {
+    fn is_lightweight_client(&self) -> bool {
+        crate::remote_client::client_profile_configured()
+    }
+
+    fn automation_views(&self) -> &'static [AutomationView] {
+        if self.is_lightweight_client() {
+            CLIENT_AUTOMATION_VIEWS
+        } else {
+            AUTOMATION_VIEWS
+        }
+    }
+
+    fn client_automation_view_is_restricted(&self, view: AutomationView) -> bool {
+        self.is_lightweight_client() && !CLIENT_AUTOMATION_VIEWS.contains(&view)
+    }
+
+    fn client_tab_is_restricted(&self, tab: Tab) -> bool {
+        self.is_lightweight_client()
+            && !matches!(
+                tab,
+                Tab::Dashboard
+                    | Tab::Agents
+                    | Tab::Chat
+                    | Tab::Projects
+                    | Tab::Sessions
+                    | Tab::Workflows
+                    | Tab::Triggers
+                    | Tab::Memory
+                    | Tab::Graph
+                    | Tab::Learning
+                    | Tab::Skills
+                    | Tab::SkillsProposed
+                    | Tab::Approvals
+                    | Tab::Budget
+                    | Tab::Usage
+            )
+    }
+
+    fn client_restricted_notice(&mut self, action: &str) {
+        self.chat.push_message(
+            chat::Role::System,
+            crate::remote_client::restricted_action_message(action),
+        );
+    }
+
     fn new(config_path: Option<PathBuf>, event_tx: mpsc::Sender<AppEvent>) -> Self {
-        let workspace = Self::discover_workspace_config();
+        let is_client = crate::remote_client::client_profile_configured();
+        let workspace = if is_client {
+            None
+        } else {
+            Self::discover_workspace_config()
+        };
         if let Some(ref ws) = workspace {
             tracing::info!(path = %ws.config_path.display(), "loaded workspace config");
+        }
+        let mut chat = chat::ChatState::new();
+        if is_client {
+            chat.use_authoritative_sessions_only();
         }
         Self {
             phase: Phase::Boot(BootScreen::Welcome),
@@ -306,7 +362,7 @@ impl App {
             welcome: welcome::WelcomeState::new(),
             wizard: wizard::WizardState::new(),
             agents: agents::AgentSelectState::new(),
-            chat: chat::ChatState::new(),
+            chat,
             projects: projects::ProjectState::new(),
             dashboard: dashboard::DashboardState::new(),
             channels: channels::ChannelState::new(),
@@ -1893,7 +1949,8 @@ impl App {
     fn handle_hub_shortcut(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
         match hub_shortcut_route_for_key(self.active_tab, key.code, key.modifiers) {
             Some(HubShortcutRoute::Automation(action)) => {
-                automation_view_after_shortcut(self.automation_view, action)
+                let views = self.automation_views();
+                automation_view_after_shortcut_in(views, self.automation_view, action)
                     .map(|view| self.switch_automation_view(view))
                     .is_some()
             }
@@ -2142,6 +2199,10 @@ impl App {
     }
 
     fn switch_tab(&mut self, tab: Tab) {
+        if self.client_tab_is_restricted(tab) {
+            self.client_restricted_notice(tab.label());
+            return;
+        }
         let state = tab_switch_state_after_switch(self.tab_scroll_offset, tab);
         self.active_tab = state.active_tab;
         self.tab_scroll_offset = state.scroll_offset;
@@ -2153,6 +2214,10 @@ impl App {
     /// Reuses `on_tab_enter` so the overlay's data is loaded lazily,
     /// exactly as when the tab itself is focused.
     fn open_overlay(&mut self, tab: Tab) {
+        if self.client_tab_is_restricted(tab) {
+            self.client_restricted_notice(tab.label());
+            return;
+        }
         self.apply_overlay_state(overlay_state_after_open(tab));
     }
 
@@ -2239,12 +2304,20 @@ impl App {
     }
 
     fn switch_automation_view(&mut self, view: AutomationView) {
+        if self.client_automation_view_is_restricted(view) {
+            self.client_restricted_notice(view.label());
+            return;
+        }
         let state = automation_view_state_after_switch(view);
         self.automation_view = state.view;
         self.apply_hub_view_effect(state.effect);
     }
 
     fn open_automation_view(&mut self, view: AutomationView) {
+        if self.client_automation_view_is_restricted(view) {
+            self.client_restricted_notice(view.label());
+            return;
+        }
         let state = automation_view_state_after_open(view);
         self.automation_view = state.view;
         self.apply_hub_view_effect(state.effect);
@@ -2360,6 +2433,15 @@ impl App {
     }
 
     fn apply_main_phase_entry_route(&mut self, route: MainPhaseEntryRoute) {
+        if crate::remote_client::client_profile_configured()
+            && matches!(
+                route,
+                MainPhaseEntryRoute::RefreshChannels
+                    | MainPhaseEntryRoute::ApplyWorkspaceExtraPaths
+            )
+        {
+            return;
+        }
         match route {
             MainPhaseEntryRoute::RefreshAgents => self.refresh_agents(),
             MainPhaseEntryRoute::RefreshDashboard => self.refresh_dashboard(),
@@ -2761,6 +2843,10 @@ impl App {
     }
 
     fn handle_cron_action(&mut self, action: cron::CronAction) {
+        if self.is_lightweight_client() {
+            self.client_restricted_notice("Schedules");
+            return;
+        }
         match action {
             cron::CronAction::Continue => {}
             cron::CronAction::Refresh => self.refresh_cron(),
@@ -2790,6 +2876,17 @@ impl App {
     }
 
     fn handle_skills_proposed_action(&mut self, action: skills_proposed::SkillsProposedAction) {
+        if self.is_lightweight_client()
+            && !matches!(
+                &action,
+                skills_proposed::SkillsProposedAction::Continue
+                    | skills_proposed::SkillsProposedAction::Refresh
+            )
+        {
+            self.skills_proposed.status_msg =
+                crate::remote_client::restricted_action_message("Learning decisions");
+            return;
+        }
         match action {
             skills_proposed::SkillsProposedAction::Continue => {}
             skills_proposed::SkillsProposedAction::Refresh => self.refresh_skills_proposed(),
@@ -2814,6 +2911,16 @@ impl App {
     }
 
     fn handle_learning_action(&mut self, action: learning::LearningAction) {
+        if self.is_lightweight_client()
+            && !matches!(
+                &action,
+                learning::LearningAction::Continue | learning::LearningAction::Refresh
+            )
+        {
+            self.learning.status_msg =
+                crate::remote_client::restricted_action_message("Learning decisions");
+            return;
+        }
         match action {
             learning::LearningAction::Continue => {}
             learning::LearningAction::Refresh => self.refresh_learning(),
@@ -3025,6 +3132,12 @@ impl App {
     // ─── Kernel lifecycle ────────────────────────────────────────────────────
 
     fn handle_kernel_ready(&mut self, kernel: Arc<CaptainKernel>) {
+        if self.is_lightweight_client() {
+            self.kernel_booting = false;
+            self.kernel_boot_error =
+                Some("A lightweight Client refused an unexpected local runtime.".to_string());
+            return;
+        }
         self.kernel_booting = false;
         // Phase O.2: subscribe to broadcast events so we surface
         // auto-memorize commits in the chat.
@@ -3153,7 +3266,10 @@ impl App {
                 std::thread::spawn(move || {
                     let client = crate::daemon_client();
                     if let Err(e) = client.post(&url).json(&body).send() {
-                        tracing::warn!(error = %e, url = %url, "session restore POST failed");
+                        tracing::warn!(
+                            error_class = %crate::daemon_request_error("Session restore", &e),
+                            "session restore POST failed"
+                        );
                     }
                 });
             }
@@ -3182,6 +3298,28 @@ impl App {
                 }
             }
             welcome::WelcomeAction::InProcess => {
+                // A paired Client is deliberately lightweight. Even when the
+                // welcome screen is forced through an escape hatch, it must
+                // never start an in-process kernel or local provider.
+                if crate::remote_client::client_profile_configured() {
+                    if let Ok(Some(url)) = crate::find_tui_backend() {
+                        tracing::info!("Remote Client backend selected");
+                        self.welcome.on_daemon_detected(Some(url.clone()), 0);
+                        self.backend = Backend::Daemon {
+                            base_url: url.clone(),
+                        };
+                        event::spawn_daemon_memory_subscriber(url, self.event_tx.clone());
+                        self.agents.reset();
+                        self.enter_main_phase();
+                    } else {
+                        self.kernel_boot_error = Some(
+                            "Client Hub unavailable. Run `captain client status` before retrying."
+                                .to_string(),
+                        );
+                    }
+                    return;
+                }
+
                 // Late-detection guard: between the initial async daemon probe
                 // and this InProcess decision, a daemon may have come up (or
                 // the async probe may not have landed yet because the user
@@ -3192,7 +3330,9 @@ impl App {
                 // daemon answers /api/health on a known address.
                 if std::env::var("CAPTAIN_NO_AUTO_DAEMON").is_err() {
                     if let Some(url) = crate::find_daemon() {
-                        tracing::info!(daemon_url = %url, "Late-detected daemon, switching to ConnectDaemon to avoid bridge collision");
+                        tracing::info!(
+                            "Late-detected daemon; using it to avoid a bridge collision"
+                        );
                         self.welcome.on_daemon_detected(Some(url.clone()), 0);
                         self.backend = Backend::Daemon {
                             base_url: url.clone(),
@@ -3234,6 +3374,12 @@ impl App {
                 // In Main phase, Esc from agents just stays on the tab
             }
             agents::AgentAction::CreatedManifest(toml_content) => {
+                if self.is_lightweight_client() {
+                    self.agents.status_msg =
+                        crate::remote_client::restricted_action_message("Agent creation");
+                    self.agents.sub = agents::AgentSubScreen::AgentList;
+                    return;
+                }
                 self.spawn_agent(toml_content);
             }
             agents::AgentAction::ChatWithAgent { id, name } => {
@@ -3253,16 +3399,31 @@ impl App {
                 }
             }
             agents::AgentAction::KillAgent(id) => {
+                if self.is_lightweight_client() {
+                    self.agents.status_msg =
+                        crate::remote_client::restricted_action_message("Agent management");
+                    return;
+                }
                 if let Some(backend) = self.backend.to_ref() {
                     event::spawn_kill_agent(backend, id, self.event_tx.clone());
                 }
             }
             agents::AgentAction::UpdateSkills { id, skills } => {
+                if self.is_lightweight_client() {
+                    self.agents.status_msg =
+                        crate::remote_client::restricted_action_message("Agent configuration");
+                    return;
+                }
                 if let Some(backend) = self.backend.to_ref() {
                     event::spawn_update_agent_skills(backend, id, skills, self.event_tx.clone());
                 }
             }
             agents::AgentAction::UpdateMcpServers { id, servers } => {
+                if self.is_lightweight_client() {
+                    self.agents.status_msg =
+                        crate::remote_client::restricted_action_message("Agent configuration");
+                    return;
+                }
                 if let Some(backend) = self.backend.to_ref() {
                     event::spawn_update_agent_mcp_servers(
                         backend,
@@ -3658,6 +3819,16 @@ impl App {
     }
 
     fn handle_trigger_action(&mut self, action: triggers::TriggerAction) {
+        if self.is_lightweight_client()
+            && !matches!(
+                &action,
+                triggers::TriggerAction::Continue | triggers::TriggerAction::Refresh
+            )
+        {
+            self.triggers.status_msg =
+                crate::remote_client::restricted_action_message("Trigger changes");
+            return;
+        }
         match action {
             triggers::TriggerAction::Continue => {}
             triggers::TriggerAction::Refresh => self.refresh_triggers(),
@@ -3749,6 +3920,18 @@ impl App {
     ) {
         use event_native_capabilities::NativeMutation;
 
+        if self.is_lightweight_client()
+            && !matches!(
+                &action,
+                native_capabilities::NativeCapabilitiesAction::Continue
+                    | native_capabilities::NativeCapabilitiesAction::Refresh
+                    | native_capabilities::NativeCapabilitiesAction::Inspect { .. }
+            )
+        {
+            self.native_capabilities.status_msg =
+                crate::remote_client::restricted_action_message("Capability changes");
+            return;
+        }
         let Some(backend) = self.backend.to_ref() else {
             return;
         };
@@ -3843,6 +4026,9 @@ impl App {
     }
 
     fn native_capability_workspace(&self) -> Option<String> {
+        if crate::remote_client::client_profile_configured() {
+            return None;
+        }
         self.workspace
             .as_ref()
             .and_then(|workspace| workspace.config_path.parent().map(PathBuf::from))
@@ -3852,6 +4038,16 @@ impl App {
     }
 
     fn handle_skills_action(&mut self, action: skills::SkillsAction) {
+        if self.is_lightweight_client()
+            && !matches!(
+                &action,
+                skills::SkillsAction::Continue | skills::SkillsAction::RefreshInstalled
+            )
+        {
+            self.skills.status_msg =
+                crate::remote_client::restricted_action_message("Capability changes");
+            return;
+        }
         match action {
             skills::SkillsAction::Continue => {}
             skills::SkillsAction::RefreshInstalled => self.refresh_skills(),
@@ -4492,6 +4688,12 @@ impl App {
     }
 
     fn forward_daemon_slash_command(&mut self, command: &str) {
+        if self.is_lightweight_client()
+            && crate::remote_client::daemon_command_is_restricted(command)
+        {
+            self.client_restricted_notice("Daemon administration");
+            return;
+        }
         if matches!(self.backend, Backend::Daemon { .. }) {
             self.send_message(command.to_string());
         } else {
@@ -4649,6 +4851,15 @@ impl App {
     }
 
     fn enter_startup_phase(&mut self) {
+        if crate::remote_client::client_profile_configured() {
+            self.pending_resume = None;
+            self.pending_resume_target = None;
+            self.pending_restore_messages = None;
+            self.pending_chat_replay = None;
+            self.phase = Phase::Boot(BootScreen::Welcome);
+            self.start_daemon_detect();
+            return;
+        }
         let needs_setup = wizard::needs_setup();
         let latest_resume = if needs_setup {
             None
@@ -5007,6 +5218,9 @@ impl App {
             .as_ref()
             .map(|target| target.agent_name.as_str());
         let snapshot = match &self.backend {
+            Backend::Daemon { base_url } if crate::remote_client::client_profile_configured() => {
+                slash_info::StatusSnapshot::RemoteClient { agent_name }
+            }
             Backend::Daemon { base_url } => slash_info::StatusSnapshot::Daemon {
                 base_url,
                 agent_name,
@@ -5047,6 +5261,12 @@ impl App {
             return true;
         }
         if slash_daemon::is_daemon_forward_command(command) {
+            if self.is_lightweight_client()
+                && matches!(command, "/config" | "/restart" | "/shutdown")
+            {
+                self.client_restricted_notice("Daemon administration");
+                return true;
+            }
             self.forward_daemon_slash_command(canonical_command);
             return true;
         }
@@ -5290,6 +5510,20 @@ impl App {
     }
 
     fn handle_reload_slash(&mut self) {
+        if !self.chat.local_session_persistence_enabled {
+            if let (Some(session_id), Some(backend)) = (
+                self.chat.authoritative_session_id.clone(),
+                self.backend.to_ref(),
+            ) {
+                event::spawn_load_session(backend, session_id, self.event_tx.clone());
+            } else {
+                self.chat.push_message(
+                    chat::Role::System,
+                    slash_reload::no_saved_session_message(crate::i18n::Lang::Fr).to_string(),
+                );
+            }
+            return;
+        }
         let key = self.chat.session_key.clone();
         if key.is_empty() {
             self.chat.push_message(
@@ -5451,6 +5685,10 @@ impl App {
     }
 
     fn handle_kill_slash(&mut self) {
+        if self.is_lightweight_client() {
+            self.client_restricted_notice("Agent management");
+            return;
+        }
         if let Some(ref target) = self.chat_target {
             let name = target.agent_name.clone();
             let lang = crate::i18n::current();
@@ -5512,6 +5750,15 @@ impl App {
     }
 
     fn open_hub_slash_route(&mut self, route: HubSlashRoute) {
+        if self.is_lightweight_client()
+            && matches!(
+                route,
+                HubSlashRoute::Connections(_) | HubSlashRoute::Automation(AutomationView::Cron)
+            )
+        {
+            self.client_restricted_notice("Administrative surface");
+            return;
+        }
         match route {
             HubSlashRoute::Automation(view) => self.open_automation_view(view),
             HubSlashRoute::Learning(view) => self.open_learning_view(view),
@@ -5637,16 +5884,14 @@ impl App {
     fn draw_automation_hub(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         let composition = hub_draw_composition_for_area(area);
         let content = composition.content_area;
-        let labels = AUTOMATION_VIEWS
-            .iter()
-            .map(|view| view.label())
-            .collect::<Vec<_>>();
+        let views = self.automation_views();
+        let labels = views.iter().map(|view| view.label()).collect::<Vec<_>>();
         hub_nav::draw(
             frame,
             composition.nav_area,
             "Automation",
             &labels,
-            self.automation_view.index(),
+            hub_nav::index(views, self.automation_view),
         );
         match automation_hub_draw_route_for_view(self.automation_view) {
             AutomationHubDrawRoute::Workflows => {
@@ -5767,6 +6012,7 @@ impl App {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod app_event_route_tests {
     use super::*;
 
@@ -6143,6 +6389,29 @@ pub fn run(config: Option<PathBuf>) {
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
     };
     use ratatui::crossterm::execute;
+
+    // Preflight the explicit Client mode before terminal raw mode. A pairing,
+    // transport or Hub failure is terminal for this invocation and cannot
+    // silently fall through to a standalone kernel.
+    if crate::remote_client::client_profile_configured() {
+        match crate::find_tui_backend() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                crate::ui::error_with_fix(
+                    "The paired Client has no remote Hub",
+                    "Check `captain client status`, then pair this device again.",
+                );
+                return;
+            }
+            Err(error) => {
+                crate::ui::error_with_fix(
+                    &format!("Client Hub unavailable: {error}"),
+                    "Check `captain client status`, then pair again if this device was revoked.",
+                );
+                return;
+            }
+        }
+    }
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

@@ -309,11 +309,7 @@ fn mutation_label(mutation: &NativeMutation) -> String {
 }
 
 fn daemon_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .default_headers(crate::daemon_auth_headers())
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new())
+    crate::daemon_client_with_timeout(Some(Duration::from_secs(10)))
 }
 
 fn response_json(

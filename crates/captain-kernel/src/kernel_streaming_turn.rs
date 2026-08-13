@@ -79,8 +79,26 @@ impl CaptainKernel {
             channel_type,
         };
         let entry = self.resolve_agent_session_entry(agent_id, session_id)?;
+        let paired_client = captain_runtime::client_authority::is_paired_client_origin(
+            request.channel_type.as_deref(),
+        );
 
-        if let Some(result) = self.maybe_handle_first_use_onboarding(
+        if paired_client
+            && !captain_runtime::client_authority::paired_client_agent_module_is_allowed(
+                &entry.manifest.module,
+            )
+        {
+            return Err(KernelError::Captain(
+                captain_types::error::CaptainError::AuthDenied(
+                    "Paired Clients cannot execute local or custom agent modules on the Hub"
+                        .to_string(),
+                ),
+            ));
+        }
+
+        if paired_client {
+            self.ensure_first_use_onboarding_resolved()?;
+        } else if let Some(result) = self.maybe_handle_first_use_onboarding(
             &entry,
             message,
             request.channel_type.as_deref(),
@@ -91,17 +109,27 @@ impl CaptainKernel {
         // Enforce the coherent global budget and the agent quota before work.
         self.check_turn_budget(agent_id)?;
 
-        if let Some(response) =
-            self.consume_codex_model_update_keep_request(agent_id, request.message)?
+        if let Some(response) = (!paired_client)
+            .then(|| self.consume_codex_model_update_keep_request(agent_id, request.message))
+            .transpose()?
+            .flatten()
         {
             return self.static_stream_result(agent_id, Self::empty_agent_loop_result(response));
         }
 
-        if let Some(result) = self.consume_pending_model_switch_choice(agent_id, request.message)? {
+        if let Some(result) = (!paired_client)
+            .then(|| self.consume_pending_model_switch_choice(agent_id, request.message))
+            .transpose()?
+            .flatten()
+        {
             return self.static_stream_result(agent_id, result);
         }
 
-        if let Some(result) = self.handle_direct_model_switch_request(agent_id, request.message)? {
+        if let Some(result) = (!paired_client)
+            .then(|| self.handle_direct_model_switch_request(agent_id, request.message))
+            .transpose()?
+            .flatten()
+        {
             return self.static_stream_result(agent_id, result);
         }
 
@@ -126,6 +154,11 @@ impl CaptainKernel {
             sender_name: request.sender_name,
             content_blocks: request.content_blocks,
             channel_type: request.channel_type,
+            execution_context: self.resolve_turn_execution_context(
+                agent_id,
+                &entry.manifest,
+                entry.session_id,
+            )?,
         })
     }
 
