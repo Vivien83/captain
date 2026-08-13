@@ -430,7 +430,7 @@ corporate firewall, or certificate chain. A release deployment must run a
 separate end-to-end smoke against its actual HTTPS Hub before it is described
 as externally certified.
 
-The Alpha 14 release candidate also passed that separate deployment smoke on
+The published Alpha 14 release also passed that separate deployment smoke on
 an isolated external HTTPS Hub and a distinct macOS Node. A paired lightweight
 Client restored the same pinned session from two terminal processes, executed
 exactly one guarded `file_write` and one `file_read` on the Node, and received

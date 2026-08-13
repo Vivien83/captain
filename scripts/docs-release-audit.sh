@@ -160,7 +160,7 @@ scan_banned \
   'Add Matrix channel adapter|Telegram, Discord, Slack|Slack, WhatsApp, Signal, Matrix, Email'
 
 require_contains \
-  "current release candidate has an agent-facing changelog" \
+  "current public release has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
   "### 0.1.0-alpha.14"
 require_contains \
@@ -172,11 +172,11 @@ require_contains \
   scripts/excellence-smoke.sh \
   '0.1.0-alpha.14'
 require_contains \
-  "public changelog exposes the release candidate" \
+  "public changelog exposes the current release" \
   CHANGELOG.md \
   '## [0.1.0-alpha.14] - 2026-08-13'
 require_contains \
-  "reviewed release candidate notes exist" \
+  "reviewed current release notes exist" \
   docs/releases/v0.1.0-alpha.14.md \
   '# Captain 0.1.0-alpha.14'
 require_contains \
@@ -520,9 +520,29 @@ require_not_contains \
   docs/releases/v0.1.0-alpha.14.md \
   'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
 require_contains \
-  "DOC2 exposes the alpha.14 candidate contract" \
+  "alpha.14 notes pin the published source revision" \
+  docs/releases/v0.1.0-alpha.14.md \
+  'e43a9bdfd7f065fc780c8baf4fc73ff1858fa652'
+require_contains \
+  "alpha.14 notes pin the annotated tag object" \
+  docs/releases/v0.1.0-alpha.14.md \
+  '77d7981adb828f0f0d89deb436893b365029e88d'
+require_contains \
+  "alpha.14 notes pin the published OCI index" \
+  docs/releases/v0.1.0-alpha.14.md \
+  'sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43'
+require_contains \
+  "alpha.14 notes pin the 22-asset contract" \
+  docs/releases/v0.1.0-alpha.14.md \
+  'exactly 22 host'
+require_contains \
+  "alpha.14 notes record zero hosted workflows" \
+  docs/releases/v0.1.0-alpha.14.md \
+  'GitHub Actions API returned zero runs'
+require_contains \
+  "DOC2 exposes the alpha.14 published contract" \
   docs/DOCS_STATUS.md \
-  '## Alpha 14 Release Candidate Contract'
+  '## Alpha 14 Published Contract'
 require_contains \
   "Hub user guide pins Client fail-closed behavior" \
   docs/hub-clients-nodes.md \
@@ -564,17 +584,21 @@ require_contains \
   docs/releases/v0.1.0-alpha.13.md \
   'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
 require_contains \
-  "DOC2 names alpha.13 as the current public release" \
+  "DOC2 names alpha.14 as the current public release" \
   docs/DOCS_STATUS.md \
-  '`v0.1.0-alpha.13` is the current public prerelease'
+  '`v0.1.0-alpha.14` is the current public prerelease'
+require_contains \
+  "DOC2 names alpha.13 as the previous public release" \
+  docs/DOCS_STATUS.md \
+  '`v0.1.0-alpha.13` is the previous public prerelease'
 require_not_contains \
   "DOC2 no longer presents alpha.13 as unpublished" \
   docs/DOCS_STATUS.md \
   'Alpha 13 is not yet the current public release'
 require_contains \
-  "agent changelog pins the public alpha.13 source" \
+  "agent changelog pins the public alpha.14 source" \
   docs/captain-tools/runtime-changelog.md \
-  '6c05ae0c667e865a198764c1cd88c9050bd87db1'
+  'e43a9bdfd7f065fc780c8baf4fc73ff1858fa652'
 require_not_contains \
   "current deployment docs do not call the domain rail post-Alpha 11" \
   docs/deployment/github-vps-install.md \

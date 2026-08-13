@@ -4,7 +4,7 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
-## Alpha 14 Release Candidate Contract
+## Alpha 14 Published Contract
 
 Alpha 14 introduces one authoritative Hub, lightweight Clients, and optional
 execution Nodes. The Hub remains a complete Captain and the only authority for
@@ -48,7 +48,7 @@ reverse proxy, or certificate has passed deployment-specific validation.
 Alpha 14 also replaces the premature 12/15-second service readiness warning
 with a bounded 90-second cold-boot health window. Complete mobile apps,
 application connectors, native Node service installation, and multi-primary
-memory remain deferred and are not implied by this candidate.
+memory remain deferred and are not implied by this release.
 
 ## Alpha 13 Published Contract
 
@@ -180,10 +180,10 @@ ambiguous cancellation or replay after restart.
 
 ## Current Public Release
 
-`v0.1.0-alpha.13` is the current public prerelease. It adds adaptive delivery
-verification, crash-safe evidence, bounded correction, verified streaming
-delivery, discreet progress across every active surface, safer macOS updates,
-and joined Wasmtime watchdog shutdown.
+`v0.1.0-alpha.14` is the current public prerelease. It adds one authoritative
+Hub, lightweight Clients, outbound execution Nodes, durable pairing and
+delivery, explicit execution targets, enterprise proxy support, and a bounded
+service cold-boot readiness window while preserving standalone behavior.
 
 Its host release contract contains exactly 22 files: five archives, five
 SHA-256 sidecars, five platform manifests, four installers, one aggregate
@@ -194,23 +194,23 @@ at a time with disk/load checkpoints.
 Its verified public surfaces are:
 
 - release:
-  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.13>
-- source commit: `6c05ae0c667e865a198764c1cd88c9050bd87db1`
-- source tree: `c62a39fc15d0672995a58464cb59d3d3296d23d9`
-- annotated tag object: `8451b5934739ce383475f336654e6f68a63152bf`
-- publication time: `2026-08-09T18:32:01Z`
+  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14>
+- source commit: `e43a9bdfd7f065fc780c8baf4fc73ff1858fa652`
+- source tree: `9133cae70476ff431b38ae7cef8e6986280e25f4`
+- annotated tag object: `77d7981adb828f0f0d89deb436893b365029e88d`
+- publication time: `2026-08-13T21:48:01Z`
 - immutable image:
-  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.13`
+  `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14`
 - OCI index digest:
-  `sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec`
+  `sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43`
 - `linux/amd64` manifest:
-  `sha256:043a282d26a44d888d1b8c675922291a8fb27054486dd7a5669ef72b19dce809`
+  `sha256:23cae17c8c7db47fc1a6890a650c2acfe796cf7b748caaadce02e9b0a64135d4`
 - `linux/arm64` manifest:
-  `sha256:8c6ce1584aa54c75c725cfe454bb59ed193983134fe04428f68e23431f10260d`
+  `sha256:0064bd292c80cae8004bea612450fc14a15e35122127df2972276b0329bbbff8`
 - AMD64 attestation manifest:
-  `sha256:1527ae7003e41ad3078befca59f9d3bc1f3f61be2c3108ee15ac4714483bc572`
+  `sha256:149df0f08421f8619d6a7923f1252ccd2d1a9105df17315b2af650b9ed754e27`
 - ARM64 attestation manifest:
-  `sha256:042391403d759c76cafaafb7036b08ed6d8b6102a043e106bd65fb092ddce0a0`
+  `sha256:b743f864e21dc7524d2172b8e6589279f72d1c0eca24c51239c41c32edf7f872`
 
 The annotated tag dereferences to the source commit above. The GitHub Release
 contains exactly 22 uploaded assets, and every GitHub-reported SHA-256 digest
@@ -223,7 +223,17 @@ release was built and published locally and sequentially.
 
 ## Previous Public Release
 
-`v0.1.0-alpha.12` is the previous public prerelease. It adds crash-recoverable
+`v0.1.0-alpha.13` is the previous public prerelease. Its verified public
+surfaces are source commit `6c05ae0c667e865a198764c1cd88c9050bd87db1`,
+source tree `c62a39fc15d0672995a58464cb59d3d3296d23d9`, annotated
+tag object `8451b5934739ce383475f336654e6f68a63152bf`, and OCI index
+`sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec`.
+It contains exactly 22 locally built assets and was published at
+`2026-08-09T18:32:01Z` with zero GitHub Actions runs.
+
+## Earlier Public Release
+
+`v0.1.0-alpha.12` is an earlier public prerelease. It adds crash-recoverable
 Live Runs, evidence-grounded Web research, immutable checksum-bound artifacts,
 managed VPS domains, continuous Deployment Readiness, and process-level
 power-loss certification while preserving Captain's six-hub product shape.

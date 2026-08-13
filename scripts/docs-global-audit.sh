@@ -513,9 +513,9 @@ require_contains "kernel uses an exact twelve-hour update interval" crates/capta
 require_contains "Telegram update callbacks precede workflow and session routing" crates/captain-channels/src/bridge.rs "try_resolve_runtime_update_operator_callback().await"
 require_contains "runtime updates preserve the exact release tag" crates/captain-kernel/src/release_updates_state.rs "release_tag: release.tag_name.clone()"
 require_contains "runtime updates distinguish host container and manual modes" crates/captain-types/src/release_update.rs "pub enum RuntimeUpdateInstallMode"
-require_contains "release candidate runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.14"
-require_contains "release candidate public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.14] - 2026-08-13"
-require_contains "reviewed alpha.14 release candidate notes exist" docs/releases/v0.1.0-alpha.14.md "# Captain 0.1.0-alpha.14"
+require_contains "current release runtime changelog entry is pinned" docs/captain-tools/runtime-changelog.md "### 0.1.0-alpha.14"
+require_contains "current public changelog entry is pinned" CHANGELOG.md "## [0.1.0-alpha.14] - 2026-08-13"
+require_contains "reviewed alpha.14 release notes exist" docs/releases/v0.1.0-alpha.14.md "# Captain 0.1.0-alpha.14"
 require_contains "historical alpha.13 release notes remain available" docs/releases/v0.1.0-alpha.13.md "# Captain 0.1.0-alpha.13"
 require_contains "historical alpha.12 release notes remain available" docs/releases/v0.1.0-alpha.12.md "# Captain 0.1.0-alpha.12"
 require_contains "historical alpha.11 release notes remain available" docs/releases/v0.1.0-alpha.11.md "# Captain 0.1.0-alpha.11"
@@ -547,7 +547,8 @@ require_contains "alpha.10 notes pin live OCI provenance" docs/releases/v0.1.0-a
 require_contains "alpha.10 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.10.md "GitHub Actions API returned zero runs"
 require_not_contains "alpha.10 notes do not copy alpha.9 source provenance" docs/releases/v0.1.0-alpha.10.md "1248c5928dd4968b6ff7c62ef79a607fb8d94348"
 require_not_contains "alpha.10 notes do not copy alpha.9 OCI provenance" docs/releases/v0.1.0-alpha.10.md "sha256:b043ec5637551c2e238be15c32033ca693ecc2f765a470ba721a5986709fd692"
-require_contains "DOC2 identifies the alpha.13 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.13` is the current public prerelease'
+require_contains "DOC2 identifies the alpha.14 public release" docs/DOCS_STATUS.md '`v0.1.0-alpha.14` is the current public prerelease'
+require_contains "DOC2 identifies the alpha.13 previous release" docs/DOCS_STATUS.md '`v0.1.0-alpha.13` is the previous public prerelease'
 require_contains "DOC2 records the published alpha.13 provenance" docs/DOCS_STATUS.md '6c05ae0c667e865a198764c1cd88c9050bd87db1'
 require_contains "DOC2 records the published alpha.13 tag object" docs/DOCS_STATUS.md '8451b5934739ce383475f336654e6f68a63152bf'
 require_contains "DOC2 records the published alpha.13 multi-arch digest" docs/DOCS_STATUS.md 'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
@@ -562,13 +563,17 @@ require_contains "alpha.12 notes record zero hosted workflows" docs/releases/v0.
 require_not_contains "alpha.12 notes do not copy alpha.11 source provenance" docs/releases/v0.1.0-alpha.12.md 'cd7f580a5e89ea77852468bc4fad9875f00dce61'
 require_not_contains "alpha.12 notes do not copy alpha.11 OCI provenance" docs/releases/v0.1.0-alpha.12.md 'sha256:7dbed4eff2d57e88a0fcc33d343f942454d3a1b29ea933102d050c8d7a9b1192'
 require_contains "DOC2 identifies the Alpha 13 published contract" docs/DOCS_STATUS.md "## Alpha 13 Published Contract"
-require_contains "DOC2 identifies the Alpha 14 candidate contract" docs/DOCS_STATUS.md "## Alpha 14 Release Candidate Contract"
+require_contains "DOC2 identifies the Alpha 14 published contract" docs/DOCS_STATUS.md "## Alpha 14 Published Contract"
 require_contains "alpha.14 notes expose one authoritative Hub" docs/releases/v0.1.0-alpha.14.md "## One Hub, shared work"
 require_contains "alpha.14 notes expose outbound execution Nodes" docs/releases/v0.1.0-alpha.14.md "## Outbound execution Nodes"
 require_contains "alpha.14 notes expose durable pairing" docs/releases/v0.1.0-alpha.14.md "## Durable pairing and execution"
 require_contains "alpha.14 notes expose certification limits" docs/releases/v0.1.0-alpha.14.md "## Certification boundary"
 require_not_contains "alpha.14 notes do not copy alpha.13 source provenance" docs/releases/v0.1.0-alpha.14.md '6c05ae0c667e865a198764c1cd88c9050bd87db1'
 require_not_contains "alpha.14 notes do not copy alpha.13 OCI provenance" docs/releases/v0.1.0-alpha.14.md 'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
+require_contains "alpha.14 notes pin live source provenance" docs/releases/v0.1.0-alpha.14.md 'e43a9bdfd7f065fc780c8baf4fc73ff1858fa652'
+require_contains "alpha.14 notes pin live tag provenance" docs/releases/v0.1.0-alpha.14.md '77d7981adb828f0f0d89deb436893b365029e88d'
+require_contains "alpha.14 notes pin live OCI provenance" docs/releases/v0.1.0-alpha.14.md 'sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43'
+require_contains "alpha.14 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.14.md 'GitHub Actions API returned zero runs'
 require_contains "Hub user guide pins outbound HTTPS" docs/hub-clients-nodes.md "outbound HTTPS port 443"
 require_contains "Hub user guide pins Client fail-closed behavior" docs/hub-clients-nodes.md "cannot silently fall back"
 require_contains "Hub protocol pins distributed smoke" docs/HUB_CLIENT_NODE_PROTOCOL.md "## Reproducible Distributed Smoke"
@@ -577,7 +582,7 @@ require_contains "alpha.13 notes expose verified streaming delivery" docs/releas
 require_contains "alpha.13 notes expose crash-safe evidence" docs/releases/v0.1.0-alpha.13.md "## Crash-safe evidence"
 require_not_contains "alpha.13 notes do not copy alpha.12 source provenance" docs/releases/v0.1.0-alpha.13.md 'cd7bf8ab5674b402d06e36bb1c4ae9b4a5ab16a2'
 require_not_contains "alpha.13 notes do not copy alpha.12 OCI provenance" docs/releases/v0.1.0-alpha.13.md 'sha256:5626ba43317b6341f123a5041f6d1e473db0486217c9b9912f3fd5bb41e45afa'
-require_contains "DOC2 identifies the alpha.12 previous release" docs/DOCS_STATUS.md '`v0.1.0-alpha.12` is the previous public prerelease'
+require_contains "DOC2 identifies the alpha.12 earlier release" docs/DOCS_STATUS.md '`v0.1.0-alpha.12` is an earlier public prerelease'
 require_contains "DOC2 identifies the alpha.11 earlier release" docs/DOCS_STATUS.md '`v0.1.0-alpha.11` is an earlier public prerelease'
 require_contains "DOC2 records the published alpha.11 provenance" docs/DOCS_STATUS.md 'cd7f580a5e89ea77852468bc4fad9875f00dce61'
 require_contains "DOC2 records the published alpha.11 tag object" docs/DOCS_STATUS.md 'fafc41e33386ec370f3da17d24650e370d46af4e'
