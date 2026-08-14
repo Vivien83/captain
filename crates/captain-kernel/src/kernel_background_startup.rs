@@ -3,7 +3,7 @@ use captain_runtime::reflection_job::ReflectionBatch;
 use captain_types::agent::{AgentEntry, AgentId, ScheduleMode};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::kernel_memory_bridge::KernelCommitNotifier;
 use super::CaptainKernel;
@@ -16,6 +16,15 @@ impl CaptainKernel {
     /// `Continuous`, `Periodic`, or `Proactive` schedules.
     pub fn start_background_agents(self: &Arc<Self>) {
         self.reconcile_compaction_progress_after_restart();
+        match crate::automation_session::reconcile_abandoned_automation_sessions(self) {
+            Ok(removed) if removed > 0 => {
+                info!(removed, "Removed abandoned internal automation sessions");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(error = %error, "Could not reconcile internal automation sessions");
+            }
+        }
         self.spawn_bootstrap_support_tasks();
         let learning_aggressiveness = self.config.learning.effective_autonomy_aggressiveness();
         self.start_learning_pipeline(learning_aggressiveness);

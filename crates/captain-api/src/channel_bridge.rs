@@ -66,7 +66,7 @@ use captain_kernel::CaptainKernel;
 use captain_runtime::agent_loop::AgentLoopResult;
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::StreamEvent;
-use captain_types::agent::AgentId;
+use captain_types::agent::{AgentId, SessionId};
 use captain_types::reasoning::AgentReasoningStatus;
 use captain_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
 use std::collections::HashMap;
@@ -328,14 +328,16 @@ fn telegram_thread_metadata(thread_id: Option<i64>) -> HashMap<String, serde_jso
 async fn publish_telegram_channel_message(
     event_bus: &captain_kernel::event_bus::EventBus,
     agent_id: AgentId,
+    session_id: SessionId,
     sender: &'static str,
     content: String,
     response: Option<String>,
 ) {
     use captain_types::event::ChatStreamEvent;
-    crate::chat_broadcast_publish(
+    crate::chat_broadcast_publish_for_session(
         event_bus,
         agent_id,
+        session_id,
         ChatStreamEvent::ChannelMessage {
             agent_id,
             channel: "telegram".to_string(),
@@ -350,11 +352,12 @@ async fn publish_telegram_channel_message(
 fn start_telegram_agent_stream(
     kernel: &Arc<CaptainKernel>,
     agent_id: AgentId,
+    session_id: SessionId,
     message: &str,
 ) -> Result<TelegramStreamParts, String> {
     let kernel_handle: Arc<dyn KernelHandle> = kernel.clone() as Arc<dyn KernelHandle>;
     kernel
-        .send_message_streaming(
+        .send_message_streaming_in_session(
             agent_id,
             message,
             Some(kernel_handle),
@@ -362,6 +365,7 @@ fn start_telegram_agent_stream(
             None,
             None,
             Some("telegram".to_string()),
+            Some(session_id),
         )
         .map_err(|e| format!("send_message_streaming failed: {e}"))
 }
@@ -726,10 +730,12 @@ async fn send_telegram_stream_fallback(
         .map_err(|e| format!("telegram stream fallback send failed after {stream_error}: {e}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finalize_telegram_stream_response(
     event_bus: &captain_kernel::event_bus::EventBus,
     fallback_telegram: Arc<TelegramAdapter>,
     agent_id: AgentId,
+    session_id: SessionId,
     chat_id: i64,
     thread_id: Option<i64>,
     stream_error: Option<String>,
@@ -758,6 +764,7 @@ async fn finalize_telegram_stream_response(
     publish_telegram_channel_message(
         event_bus,
         agent_id,
+        session_id,
         "agent",
         String::new(),
         Some(result.response.clone()),
@@ -1248,13 +1255,20 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         channel_type: Option<&str>,
     ) -> Result<String, String> {
         let channel_name = channel_type.unwrap_or("unknown").to_string();
+        let session_id = self
+            .kernel
+            .registry
+            .get(agent_id)
+            .map(|entry| entry.session_id)
+            .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
 
         // Broadcast incoming message immediately so web clients see it in real time
         {
             use captain_types::event::ChatStreamEvent;
-            crate::chat_broadcast_publish(
+            crate::chat_broadcast_publish_for_session(
                 &self.kernel.event_bus,
                 agent_id,
+                session_id,
                 ChatStreamEvent::ChannelMessage {
                     agent_id,
                     channel: channel_name.clone(),
@@ -1268,7 +1282,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
 
         let result = self
             .kernel
-            .send_message_full(
+            .send_message_full_in_session(
                 agent_id,
                 message,
                 Some(self.kernel.clone()),
@@ -1276,6 +1290,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                 None,
                 None,
                 channel_type.map(String::from),
+                Some(session_id),
             )
             .await
             .map_err(|e| format!("{e}"))?;
@@ -1286,9 +1301,10 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         // Broadcast agent response
         {
             use captain_types::event::ChatStreamEvent;
-            crate::chat_broadcast_publish(
+            crate::chat_broadcast_publish_for_session(
                 &self.kernel.event_bus,
                 agent_id,
+                session_id,
                 ChatStreamEvent::ChannelMessage {
                     agent_id,
                     channel: channel_name,
@@ -1508,13 +1524,20 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         } else {
             text
         };
+        let session_id = self
+            .kernel
+            .registry
+            .get(agent_id)
+            .map(|entry| entry.session_id)
+            .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
 
         // Broadcast incoming message immediately
         {
             use captain_types::event::ChatStreamEvent;
-            crate::chat_broadcast_publish(
+            crate::chat_broadcast_publish_for_session(
                 &self.kernel.event_bus,
                 agent_id,
+                session_id,
                 ChatStreamEvent::ChannelMessage {
                     agent_id,
                     channel: "telegram".to_string(),
@@ -1542,7 +1565,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         };
         let result = self
             .kernel
-            .send_message_full(
+            .send_message_full_in_session(
                 agent_id,
                 &enriched_text,
                 Some(self.kernel.clone()),
@@ -1550,6 +1573,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                 None,
                 None,
                 Some("telegram".to_string()),
+                Some(session_id),
             )
             .await;
 
@@ -1558,9 +1582,10 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         // Broadcast agent response
         {
             use captain_types::event::ChatStreamEvent;
-            crate::chat_broadcast_publish(
+            crate::chat_broadcast_publish_for_session(
                 &self.kernel.event_bus,
                 agent_id,
+                session_id,
                 ChatStreamEvent::ChannelMessage {
                     agent_id,
                     channel: "telegram".to_string(),
@@ -1600,6 +1625,10 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         if !telegram_streaming_enabled(&self.kernel.config.channels) {
             return None;
         }
+        let session_id = match self.kernel.registry.get(agent_id) {
+            Some(entry) => entry.session_id,
+            None => return Some(Err(format!("Agent not found: {agent_id}"))),
+        };
 
         // IJ.2/IJ.3 — if a streaming loop is already running, forward the
         // message into `user_input_rx` and update the Telegram reply target.
@@ -1620,6 +1649,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         publish_telegram_channel_message(
             &self.kernel.event_bus,
             agent_id,
+            session_id,
             "user",
             message.to_string(),
             None,
@@ -1627,7 +1657,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         .await;
 
         let (rx, join, user_input_tx) =
-            match start_telegram_agent_stream(&self.kernel, agent_id, message) {
+            match start_telegram_agent_stream(&self.kernel, agent_id, session_id, message) {
                 Ok(triple) => triple,
                 Err(e) => return Some(Err(e)),
             };
@@ -1657,6 +1687,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             &self.kernel.event_bus,
             fallback_telegram,
             agent_id,
+            session_id,
             chat_id,
             thread_id,
             stream_error,
@@ -2296,6 +2327,49 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         match self.kernel.workflow_learning_status() {
             Ok(status) => captain_channels::render_telegram_workflow_learning_status(&status),
             Err(error) => format!("Impossible de lire l’état Learning : {error}"),
+        }
+    }
+
+    async fn retry_learning_workflow_text(&self, id_prefix: &str, decided_by: &str) -> String {
+        let status = match self.kernel.workflow_learning_status() {
+            Ok(status) => status,
+            Err(error) => return format!("Impossible de lire l’état Learning : {error}"),
+        };
+        let matches = status
+            .attention
+            .iter()
+            .filter(|item| item.proposal_id.starts_with(id_prefix))
+            .collect::<Vec<_>>();
+        let item = match matches.as_slice() {
+            [] => return format!("Aucun workflow bloqué ne correspond à « {id_prefix} »."),
+            [item] => *item,
+            _ => {
+                return format!("Préfixe ambigu « {id_prefix} » ; utilise davantage de caractères.")
+            }
+        };
+        if !item.retry_available {
+            return "Ce workflow ne peut pas être rejoué automatiquement ; une vérification opérateur est requise."
+                .to_string();
+        }
+        let Some(error_code) = item.error_code.as_deref() else {
+            return "Ce workflow n’expose pas de cause rejouable sûre.".to_string();
+        };
+        match self.kernel.workflow_learning_retry_dead_proposal(
+            &item.proposal_id,
+            error_code,
+            decided_by,
+        ) {
+            Ok(resolution) if resolution.replayed => {
+                format!(
+                    "Reprise déjà planifiée pour <code>{}</code>.",
+                    item.proposal_id
+                )
+            }
+            Ok(_) => format!(
+                "✅ Workflow <code>{}</code> remis en file avec son modèle actif.",
+                item.proposal_id
+            ),
+            Err(error) => format!("Relance impossible : {error}"),
         }
     }
 
@@ -4372,7 +4446,8 @@ mod tests {
         ChannelAdapter, ChannelContent, ChannelMessage, ChannelType, ChannelUser,
     };
     use captain_runtime::llm_driver::StreamEvent;
-    use captain_types::agent::AgentId;
+    use captain_types::agent::{AgentId, SessionId};
+    use captain_types::event::{ChatStreamEvent, EventPayload};
     use captain_types::message::{ContentBlock, Message, MessageContent, Role};
 
     #[test]
@@ -4602,6 +4677,35 @@ mod tests {
             super::TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS < 30,
             "drafts expire after 30 seconds and must be refreshed sooner"
         );
+    }
+
+    #[tokio::test]
+    async fn telegram_chat_projection_keeps_the_captured_session() {
+        let bus = captain_kernel::event_bus::EventBus::new();
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        let mut receiver = bus.subscribe_agent(agent_id);
+
+        super::publish_telegram_channel_message(
+            &bus,
+            agent_id,
+            session_id,
+            "user",
+            "hello".to_string(),
+            None,
+        )
+        .await;
+
+        let event = receiver.recv().await.unwrap();
+        assert_eq!(event.session_id, Some(session_id));
+        assert!(matches!(
+            event.payload,
+            EventPayload::ChatStream(ChatStreamEvent::ChannelMessage {
+                sender,
+                content,
+                ..
+            }) if sender == "user" && content == "hello"
+        ));
     }
 
     #[test]

@@ -181,6 +181,24 @@ The status never derives a percentage from elapsed time or queue size. Work
 performed inside an opaque model call is therefore shown as active or waiting,
 not as fabricated progress.
 
+An exhausted job is reported as a Learning incident, never as degraded durable
+memory. The shared status exposes at most 20 public-safe incident summaries:
+proposal, stage, state, bounded error code, attempt counts, timestamp, and
+whether an explicit retry is safe. It never projects the job payload, provider
+output, raw error message, credential, or host path.
+An unresolved incident is counted under operator attention, not simultaneously
+as processing or awaiting a decision. Surfaces that also read the memory
+journal may confirm it is healthy; surfaces without that second contract only
+state that Workflow Learning and durable memory are distinct.
+
+An operator may retry only a pre-approval model failure whose external result
+is known and whose retryable error class exhausted its bounded attempts.
+Captain requeues the same durable job, resets its attempt budget atomically,
+and audits the decision. Uncertain effects and install/canary/rollback work are
+never replayed by this action. Control Web and TUI provide a direct action;
+Telegram exposes the same state as a Rich card and the bounded
+`/learning_retry <proposal>` command.
+
 ## Migration
 
 Schema v32 retires the legacy sliding-window detector transactionally. Existing

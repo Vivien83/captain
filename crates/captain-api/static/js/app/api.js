@@ -106,7 +106,10 @@ export const api = {
   decideModelUpdate: (body) => request('/api/models/updates/decision', { method: 'POST', body: JSON.stringify(body) }),
 
   agentSessions: (agentId) => request(`/api/agents/${encodeURIComponent(agentId)}/sessions`),
-  createSession: (agentId) => request(`/api/agents/${encodeURIComponent(agentId)}/sessions`, { method: 'POST' }),
+  createSession: (agentId, body = { activate: false }) => request(
+    `/api/agents/${encodeURIComponent(agentId)}/sessions`,
+    { method: 'POST', body: JSON.stringify(body) },
+  ),
   switchSession: (agentId, sessionId) => request(`/api/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/switch`, { method: 'POST' }),
   sessionEvents: (sessionId, limit = 400) => request(`/api/sessions/${encodeURIComponent(sessionId)}/events?limit=${limit}`),
   labelSession: (sessionId, label) => request(`/api/sessions/${encodeURIComponent(sessionId)}/label`, { method: 'PUT', body: JSON.stringify({ label }) }),
@@ -152,6 +155,10 @@ export const api = {
   workflowLearningDecide: (token, decisionVersion, action) => request(`/api/learning/workflows/${encodeURIComponent(token)}/decide`, {
     method: 'POST',
     body: JSON.stringify({ decision_version: decisionVersion, action, surface: 'web' }),
+  }),
+  workflowLearningRetry: (proposalId, expectedErrorCode) => request(`/api/learning/workflows/${encodeURIComponent(proposalId)}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({ expected_error_code: expectedErrorCode, surface: 'web' }),
   }),
 
   workflows: () => request('/api/workflows'),
@@ -222,12 +229,16 @@ export const api = {
 };
 
 // Agent chat WebSocket. Handlers: onmessage(obj), onopen(), onclose().
-export async function openAgentWs(agentId, handlers) {
+export async function openAgentWs(agentId, sessionId, handlers) {
   const path = `/api/agents/${encodeURIComponent(agentId)}/ws`;
   const grant = await api.realtimeTicket(path);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const query = new URLSearchParams({
+    ticket: grant.ticket,
+    session_id: sessionId,
+  });
   const ws = new WebSocket(
-    `${proto}://${location.host}${path}?ticket=${encodeURIComponent(grant.ticket)}`,
+    `${proto}://${location.host}${path}?${query.toString()}`,
   );
   ws.onopen = () => handlers.onopen && handlers.onopen();
   ws.onclose = () => handlers.onclose && handlers.onclose();

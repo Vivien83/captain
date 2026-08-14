@@ -371,6 +371,12 @@ pub struct WorkflowJobRecord {
     pub updated_at_unix_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowJobRetryResolution {
+    pub job: WorkflowJobRecord,
+    pub replayed: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WorkflowJobRecoverySummary {
     pub retried_without_effect: usize,

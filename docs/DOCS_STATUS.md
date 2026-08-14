@@ -1077,6 +1077,27 @@ Building or deploying that site never changes the public source export,
 release bundles, or authenticated Control app; the local browser smoke proves
 the build, not the state of the separately deployed host.
 
+## Post-Alpha 14 Learning Incident Contract
+
+The current development head after the immutable Alpha 14 publication
+separates durable memory health from Workflow Learning health. A dead Learning
+job can still require operator attention, but Web, TUI, API, and Telegram now
+identify it as a workflow incident and explicitly state that durable memory is
+unaffected only when its journal independently reports `in_sync`. Surfaces
+without that journal snapshot state only that the two subsystems are distinct.
+The blocked proposal belongs to attention alone and is not simultaneously
+reported as processing or awaiting a decision.
+
+Learning status schema v2 adds at most 20 incident summaries containing only a
+proposal id, stage, dead/uncertain state, bounded error code, attempt counters,
+timestamp, and a server-computed retry flag. Payloads, provider output, raw
+error messages, credentials, and host paths remain private. An authenticated
+operator can requeue the same dead pre-approval job only for a known-completed
+retryable model failure. The transaction resets that job's attempt budget and
+is idempotent; uncertain effects and activation lifecycle work fail closed.
+The action is audited and is deliberately unavailable to paired lightweight
+Client credentials.
+
 ## Reproducible Gates
 
 DOC2 is enforced by:
@@ -1092,6 +1113,10 @@ DOC2 is enforced by:
   output, and session-label probes under the production CSP.
   `scripts/control-chat-performance-smoke.mjs` certifies exact delta batching,
   long transcript hydration, tail pinning, and desktop/mobile layout.
+- `scripts/core-surface-gates.sh --surface learning` includes
+  `scripts/learning-visibility-surfaces-smoke.mjs`, which certifies the exact
+  dead-job incident wording, durable-memory separation, explicit retry request,
+  workflow visibility, and overflow-free desktop/mobile rendering.
 - `scripts/docs-global-audit.sh` also parses the bundled JavaScript/Python API
   clients and pins their cross-surface session primitives.
 - In the private maintainer checkout only, `scripts/launch-site-audit.sh` and

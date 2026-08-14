@@ -12,10 +12,11 @@ use captain_runtime::workflow_learning_refinement::{
 use captain_runtime::workflow_learning_staging::WorkflowStagingRoot;
 use captain_types::workflow_learning::{
     ProposalCardAction, ProposalOperatorContext, ProposalOperatorResolution,
-    ProposalRefinementCaptureResolution, ProposalRefinementMessage, WorkflowLearningList,
-    WorkflowLearningModelIdentity, WorkflowLearningRecoveryState, WorkflowLearningRuntimeState,
-    WorkflowLearningStatus, WorkflowLearningWorkerPhase, WorkflowLearningWorkerView,
-    WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
+    ProposalRefinementCaptureResolution, ProposalRefinementMessage, WorkflowLearningJobStage,
+    WorkflowLearningList, WorkflowLearningModelIdentity, WorkflowLearningRecoveryState,
+    WorkflowLearningRetryResolution, WorkflowLearningRuntimeState, WorkflowLearningStatus,
+    WorkflowLearningWorkerPhase, WorkflowLearningWorkerView,
+    WORKFLOW_LEARNING_RETRY_SCHEMA_VERSION, WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
 };
 
 use super::CaptainKernel;
@@ -48,6 +49,54 @@ impl CaptainKernel {
             snapshot,
             now_unix_ms,
         ))
+    }
+
+    pub fn workflow_learning_retry_dead_proposal(
+        &self,
+        proposal_id: &str,
+        expected_error_code: &str,
+        actor: &str,
+    ) -> Result<WorkflowLearningRetryResolution, String> {
+        let now_unix_ms = chrono::Utc::now().timestamp_millis();
+        let control = WorkflowLearningStore::new(self.memory.usage_conn());
+        let result =
+            control.retry_dead_preapproval_job(proposal_id, expected_error_code, now_unix_ms);
+        match result {
+            Ok(result) => {
+                let resolution = WorkflowLearningRetryResolution {
+                    schema_version: WORKFLOW_LEARNING_RETRY_SCHEMA_VERSION,
+                    proposal_id: result.job.proposal_id.clone(),
+                    stage: public_job_stage(result.job.kind),
+                    queued_at_unix_ms: result.job.updated_at_unix_ms,
+                    replayed: result.replayed,
+                };
+                self.audit_log.record_or_alert(
+                    actor,
+                    AuditAction::LearningDecision,
+                    format!(
+                        "workflow learning retry proposal={} stage={} error_code={} replayed={}",
+                        resolution.proposal_id,
+                        result.job.kind.as_str(),
+                        expected_error_code,
+                        resolution.replayed
+                    ),
+                    "accepted",
+                );
+                Ok(resolution)
+            }
+            Err(error) => {
+                self.audit_log.record_or_alert(
+                    actor,
+                    AuditAction::LearningDecision,
+                    format!(
+                        "workflow learning retry proposal={} error_code={}",
+                        proposal_id, expected_error_code
+                    ),
+                    format!("rejected: {error}"),
+                );
+                Err(error.to_string())
+            }
+        }
     }
 
     pub fn workflow_learning_resolve_surface_action(
@@ -324,7 +373,22 @@ fn project_workflow_learning_status(
         jobs: snapshot.jobs,
         notifications: snapshot.notifications,
         workflows: snapshot.workflows,
+        attention: snapshot.attention,
         generated_at_unix_ms: now_unix_ms,
+    }
+}
+
+fn public_job_stage(
+    kind: captain_memory::workflow_learning_queue::WorkflowJobKind,
+) -> WorkflowLearningJobStage {
+    use captain_memory::workflow_learning_queue::WorkflowJobKind;
+    match kind {
+        WorkflowJobKind::Analyze => WorkflowLearningJobStage::Analyze,
+        WorkflowJobKind::Draft => WorkflowLearningJobStage::Draft,
+        WorkflowJobKind::Validate => WorkflowLearningJobStage::Validate,
+        WorkflowJobKind::Install => WorkflowLearningJobStage::Install,
+        WorkflowJobKind::Canary => WorkflowLearningJobStage::Canary,
+        WorkflowJobKind::Rollback => WorkflowLearningJobStage::Rollback,
     }
 }
 
@@ -440,6 +504,7 @@ mod tests {
             jobs: WorkflowLearningJobQueueView::default(),
             notifications: WorkflowLearningNotificationQueueView::default(),
             workflows: WorkflowLearningWorkloadView::default(),
+            attention: Vec::new(),
         }
     }
 

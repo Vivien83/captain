@@ -289,8 +289,7 @@ async fn run_streaming_llm_task(
     )
     .await;
 
-    let (messages_before, skill_snapshot, phase_cb) =
-        prepare_streaming_task_state(&kernel_clone, &mut task);
+    let (skill_snapshot, phase_cb) = prepare_streaming_task_state(&kernel_clone, &mut task);
 
     let result = execute_streaming_agent_loop(
         &kernel_clone,
@@ -317,10 +316,10 @@ async fn run_streaming_llm_task(
         &kernel_clone,
         task.agent_id,
         &task.session,
-        messages_before,
         &task.manifest,
         &task.tools,
         task.ctx_window,
+        task.channel_type.as_deref(),
         result,
     )
 }
@@ -399,8 +398,7 @@ async fn apply_streaming_pre_loop_compaction(
 fn prepare_streaming_task_state(
     kernel: &Arc<CaptainKernel>,
     task: &mut StreamingTaskParts,
-) -> (usize, SkillRegistry, PhaseCallback) {
-    let messages_before = task.session.messages.len();
+) -> (SkillRegistry, PhaseCallback) {
     let skill_snapshot = kernel.prepare_llm_skill_snapshot(
         task.agent_id,
         &mut task.manifest,
@@ -408,7 +406,7 @@ fn prepare_streaming_task_state(
         true,
     );
     let phase_cb = kernel.streaming_phase_callback(task.tx.clone());
-    (messages_before, skill_snapshot, phase_cb)
+    (skill_snapshot, phase_cb)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -474,10 +472,10 @@ fn finish_streaming_task_result(
     kernel: &Arc<CaptainKernel>,
     agent_id: AgentId,
     session: &Session,
-    messages_before: usize,
     manifest: &AgentManifest,
     tools: &[ToolDefinition],
     ctx_window: Option<usize>,
+    channel_type: Option<&str>,
     result: Result<AgentLoopResult, captain_types::error::CaptainError>,
 ) -> KernelResult<AgentLoopResult> {
     match result {
@@ -486,10 +484,10 @@ fn finish_streaming_task_result(
                 agent_id,
                 &kernel.memory,
                 session,
-                messages_before,
                 manifest,
                 tools,
                 ctx_window,
+                channel_type,
                 &result,
             );
             Ok(result)

@@ -319,7 +319,7 @@ impl CaptainKernel {
 
         !matches!(
             channel_type,
-            Some("cron" | "workflow" | "background" | "system" | "agent")
+            Some("cron" | "workflow" | "background" | "automation" | "system" | "agent")
         )
     }
 

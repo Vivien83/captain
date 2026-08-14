@@ -2,7 +2,7 @@
 //!
 //! All inter-agent and system communication flows through events.
 
-use crate::agent::AgentId;
+use crate::agent::{AgentId, SessionId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -610,6 +610,9 @@ pub struct Event {
     pub target: EventTarget,
     /// The event payload.
     pub payload: EventPayload,
+    /// Conversation that owns this event, when the payload is session-scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
     /// When the event was created.
     pub timestamp: DateTime<Utc>,
     /// For request-response patterns: links response to request.
@@ -627,6 +630,7 @@ impl Event {
             source,
             target,
             payload,
+            session_id: None,
             timestamp: Utc::now(),
             correlation_id: None,
             ttl: None,
@@ -636,6 +640,12 @@ impl Event {
     /// Set the correlation ID for request-response linking.
     pub fn with_correlation(mut self, correlation_id: EventId) -> Self {
         self.correlation_id = Some(correlation_id);
+        self
+    }
+
+    /// Attach an event to one persisted conversation.
+    pub fn with_session(mut self, session_id: SessionId) -> Self {
+        self.session_id = Some(session_id);
         self
     }
 
@@ -659,8 +669,37 @@ mod tests {
             EventPayload::System(SystemEvent::KernelStarted),
         );
         assert_eq!(event.source, agent_id);
+        assert!(event.session_id.is_none());
         assert!(event.correlation_id.is_none());
         assert!(event.ttl.is_none());
+    }
+
+    #[test]
+    fn test_event_with_session() {
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        let event = Event::new(
+            agent_id,
+            EventTarget::Agent(agent_id),
+            EventPayload::System(SystemEvent::KernelStarted),
+        )
+        .with_session(session_id);
+        assert_eq!(event.session_id, Some(session_id));
+    }
+
+    #[test]
+    fn legacy_event_json_without_session_remains_readable() {
+        let agent_id = AgentId::new();
+        let event = Event::new(
+            agent_id,
+            EventTarget::System,
+            EventPayload::System(SystemEvent::KernelStarted),
+        );
+        let mut value = serde_json::to_value(event).unwrap();
+        value.as_object_mut().unwrap().remove("session_id");
+
+        let decoded: Event = serde_json::from_value(value).unwrap();
+        assert!(decoded.session_id.is_none());
     }
 
     #[test]

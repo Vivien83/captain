@@ -12,7 +12,8 @@
 
 use crate::compaction_boundary::coherent_recent_split;
 use crate::compactor_summarization::{
-    adaptive_chunk_size, summarize_in_chunks_with_progress, summarize_messages,
+    adaptive_chunk_size, summarize_in_chunks_with_progress_and_handoff,
+    summarize_messages_with_handoff,
 };
 use crate::tool_output_pruning::{prune_old_tool_outputs, PRUNE_RESERVED_RECENT_TOKENS};
 use crate::{compaction_handoff, llm_driver::LlmDriver};
@@ -242,6 +243,27 @@ pub async fn compact_session_with_progress(
     non_message_overhead_tokens: usize,
     observer: Option<CompactionStageObserver>,
 ) -> Result<CompactionResult, String> {
+    compact_session_with_progress_and_handoff(
+        driver,
+        model,
+        session,
+        config,
+        non_message_overhead_tokens,
+        None,
+        observer,
+    )
+    .await
+}
+
+pub async fn compact_session_with_progress_and_handoff(
+    driver: Arc<dyn LlmDriver>,
+    model: &str,
+    session: &Session,
+    config: &CompactionConfig,
+    non_message_overhead_tokens: usize,
+    previous_handoff: Option<&str>,
+    observer: Option<CompactionStageObserver>,
+) -> Result<CompactionResult, String> {
     emit_compaction_stage(
         observer.as_ref(),
         CompactionStageUpdate {
@@ -340,7 +362,15 @@ pub async fn compact_session_with_progress(
         },
     );
 
-    match summarize_messages(driver.clone(), model, to_compact, config).await {
+    match summarize_messages_with_handoff(
+        driver.clone(),
+        model,
+        to_compact,
+        config,
+        previous_handoff,
+    )
+    .await
+    {
         Ok(summary) => {
             info!(
                 summary_len = summary.len(),
@@ -365,12 +395,13 @@ pub async fn compact_session_with_progress(
         }
     }
 
-    match summarize_in_chunks_with_progress(
+    match summarize_in_chunks_with_progress_and_handoff(
         driver.clone(),
         model,
         to_compact,
         config,
         observer.as_ref(),
+        previous_handoff,
     )
     .await
     {
@@ -402,10 +433,13 @@ pub async fn compact_session_with_progress(
         }
     }
 
-    let minimal = compaction_handoff::enforce_active_task_note(
-        &compaction_handoff::fallback_handoff_summary(to_compact.len(), kept_messages.len()),
-        active_note.as_deref(),
-    );
+    let fallback = previous_handoff
+        .filter(|summary| !summary.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            compaction_handoff::fallback_handoff_summary(to_compact.len(), kept_messages.len())
+        });
+    let minimal = compaction_handoff::enforce_active_task_note(&fallback, active_note.as_deref());
 
     warn!(
         compacted = compacted_count,

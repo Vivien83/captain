@@ -857,7 +857,7 @@ is present only after the worker successfully binds that exact proposer.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "enabled": true,
   "mode": "approval",
   "state": "recovering",
@@ -892,6 +892,18 @@ is present only after the worker successfully binds that exact proposer.
     "active": 3, "attention": 0,
     "last_activity_at_unix_ms": 1784700100000
   },
+  "attention": [
+    {
+      "proposal_id": "wl-example",
+      "stage": "draft",
+      "state": "dead",
+      "error_code": "model_timeout",
+      "attempt_count": 3,
+      "max_attempts": 3,
+      "retry_available": true,
+      "updated_at_unix_ms": 1784700100000
+    }
+  ],
   "generated_at_unix_ms": 1784700102000
 }
 ```
@@ -899,6 +911,12 @@ is present only after the worker successfully binds that exact proposer.
 No percentage is returned: opaque model work has no observable fractional
 progress. A heartbeat older than the runtime threshold yields `stalled`; a
 model binding failure yields `degraded`.
+`attention` is bounded to 20 unresolved items and never contains job payloads,
+provider output, raw error messages, host paths, or credentials.
+An unresolved proposal counted in `attention` is excluded from `processing`
+and `awaiting_decision`; the workload counters do not describe stopped work as
+active. Durable-memory health remains a separate `GET /api/learning/metrics`
+contract and is never inferred from this workflow status.
 
 ### GET /api/learning/workflows
 
@@ -911,6 +929,20 @@ TUI, Control Web, Desktop, and operator cards. Optional `limit` is clamped to
 Apply one exact authenticated operator action using `decision_version`,
 `action`, and an authenticated `surface`. Stale revisions return `409`; there
 is no agent-facing positive-decision tool.
+
+### POST /api/learning/workflows/{proposal_id}/retry
+
+Requeue the same exhausted pre-approval job after an explicit authenticated
+operator action. The request carries the `expected_error_code` returned by the
+status snapshot plus `surface` (`api`, `web`, `desktop`, or `tui`). Captain
+accepts only a known-completed `analyze`, `draft`, or `validate` model failure
+whose error class was retryable. It resets that same job's attempt budget and
+never creates a duplicate. An already queued identical retry is idempotent.
+
+Jobs with an uncertain effect, installation/canary/rollback jobs, stale error
+codes, and proposals with competing work return `409` without mutation. The
+action is audit-logged. Paired lightweight Client credentials remain denied;
+the route requires the existing administrator API key or Web session.
 
 The generic memory-learning endpoints remain separate:
 

@@ -134,24 +134,19 @@ impl CaptainKernel {
         agent_id: AgentId,
         memory: &Arc<MemorySubstrate>,
         session: &captain_memory::session::Session,
-        messages_before: usize,
         manifest: &AgentManifest,
         tools: &[ToolDefinition],
         ctx_window: Option<usize>,
+        channel_type: Option<&str>,
         result: &AgentLoopResult,
     ) {
-        if session.messages.len() > messages_before {
-            let new_messages = session.messages[messages_before..].to_vec();
-            if let Err(e) = memory.append_canonical(agent_id, &new_messages, None) {
-                warn!(agent_id = %agent_id, "Failed to update canonical session (streaming): {e}");
+        if super::kernel_llm_runtime::interactive_turn_persistence_enabled(channel_type) {
+            if let Some(ref workspace) = manifest.workspace {
+                if let Err(e) = memory.write_jsonl_mirror(session, &workspace.join("sessions")) {
+                    warn!("Failed to write JSONL session mirror (streaming): {e}");
+                }
+                append_daily_memory_log(workspace, &result.response);
             }
-        }
-
-        if let Some(ref workspace) = manifest.workspace {
-            if let Err(e) = memory.write_jsonl_mirror(session, &workspace.join("sessions")) {
-                warn!("Failed to write JSONL session mirror (streaming): {e}");
-            }
-            append_daily_memory_log(workspace, &result.response);
         }
 
         self.scheduler.record_usage(agent_id, &result.total_usage);
@@ -172,10 +167,14 @@ impl CaptainKernel {
                 Some(tools),
             );
             let kernel = Arc::clone(self);
+            let session_id = session.id;
             tokio::spawn(async move {
-                info!(agent_id = %agent_id, estimated_tokens = estimated, "Post-loop compaction triggered");
-                if let Err(e) = kernel.compact_agent_session(agent_id).await {
-                    warn!(agent_id = %agent_id, "Post-loop compaction failed: {e}");
+                info!(agent_id = %agent_id, session_id = %session_id, estimated_tokens = estimated, "Post-loop compaction triggered");
+                if let Err(e) = kernel
+                    .compact_agent_session_by_id(agent_id, session_id)
+                    .await
+                {
+                    warn!(agent_id = %agent_id, session_id = %session_id, "Post-loop compaction failed: {e}");
                 }
             });
         }

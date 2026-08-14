@@ -659,6 +659,11 @@ pub trait ChannelBridgeHandle: Send + Sync {
         "Learning status not available.".to_string()
     }
 
+    /// Requeue one exhausted replay-safe workflow by proposal id prefix.
+    async fn retry_learning_workflow_text(&self, _id_prefix: &str, _decided_by: &str) -> String {
+        "Learning retry not available.".to_string()
+    }
+
     /// Approve or reject a pending learning candidate by id prefix.
     async fn resolve_learning_review_text(&self, _id_prefix: &str, _approve: bool) -> String {
         "Learning review not available.".to_string()
@@ -2090,6 +2095,10 @@ mod tests {
             "LEARNING_STATUS_RICH_CARD".to_string()
         }
 
+        async fn retry_learning_workflow_text(&self, id_prefix: &str, decided_by: &str) -> String {
+            format!("LEARNING_RETRY:{id_prefix}:{decided_by}")
+        }
+
         async fn list_learning_review_text(&self) -> String {
             "LEARNING_REVIEW_QUEUE".to_string()
         }
@@ -3067,10 +3076,12 @@ mod tests {
 
         let status = handle_command("learning", &[], context()).await;
         let review = handle_command("learnings", &[], context()).await;
+        let retry = handle_command("learning_retry", &["proposal-1".to_string()], context()).await;
 
         assert!(status.contains("LEARNING_STATUS_RICH_CARD"));
         assert!(!status.contains("LEARNING_REVIEW_QUEUE"));
         assert!(review.contains("LEARNING_REVIEW_QUEUE"));
+        assert!(retry.contains("LEARNING_RETRY:proposal-1:telegram:user1"));
     }
 
     #[tokio::test]

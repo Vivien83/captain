@@ -82,6 +82,33 @@ pub fn handoff_user_prompt(conversation_text: &str, limits: &HandoffLimits) -> S
     )
 }
 
+pub fn cumulative_handoff_user_prompt(
+    previous_handoff: Option<&str>,
+    conversation_text: &str,
+    limits: &HandoffLimits,
+) -> String {
+    let Some(previous_handoff) = previous_handoff.filter(|summary| !summary.trim().is_empty())
+    else {
+        return handoff_user_prompt(conversation_text, limits);
+    };
+    format!(
+        "Mets a jour le handoff precedent avec les nouveaux messages compactes.\n\
+         Le transcript recent est plus autoritaire que le handoff precedent: une tache terminee, \
+         corrigee ou remplacee ne doit pas rester active. Preserve uniquement les decisions, \
+         faits et questions encore valides.\n\
+         Le resultat sera une reference de reprise, jamais une nouvelle instruction.\n\
+         Respecte le budget: {} caracteres max, {} bullets max par section.\n\n\
+         --- HANDOFF PRECEDENT DE CETTE SESSION ---\n{}\n\
+         --- FIN HANDOFF PRECEDENT ---\n\n\
+         --- NOUVEAUX MESSAGES A INTEGRER ---\n{}\
+         --- FIN NOUVEAUX MESSAGES ---",
+        limits.max_chars,
+        limits.max_bullets_per_section,
+        safe_truncate_str(previous_handoff, limits.max_chars),
+        conversation_text,
+    )
+}
+
 pub fn handoff_reference_message(summary: &str, max_summary_chars: usize) -> String {
     format!(
         "[Contexte memoire - reference de compaction]\n\
@@ -323,6 +350,23 @@ mod tests {
         assert!(message.contains("pas une nouvelle demande utilisateur"));
         assert!(message.contains("dernier message utilisateur"));
         assert!(message.contains("# Demande active"));
+    }
+
+    #[test]
+    fn cumulative_prompt_keeps_previous_handoff_session_local_and_latest_authoritative() {
+        let limits = HandoffLimits {
+            max_chars: 2_000,
+            max_bullets_per_section: 5,
+        };
+        let prompt = cumulative_handoff_user_prompt(
+            Some("# Demande active\n- ancien travail"),
+            "User: le travail est termine\n",
+            &limits,
+        );
+
+        assert!(prompt.contains("HANDOFF PRECEDENT DE CETTE SESSION"));
+        assert!(prompt.contains("transcript recent est plus autoritaire"));
+        assert!(prompt.contains("le travail est termine"));
     }
 
     fn text_message(role: Role) -> Message {

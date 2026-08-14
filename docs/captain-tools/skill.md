@@ -133,7 +133,9 @@ The output includes an `engine` object followed by the learned items. `engine`
 is the exact versioned Learning status: configured and actually bound model,
 worker heartbeat and last scan/progress, durable job and notification queues,
 retry/dead/uncertain counts, and recovery state. It never invents a progress
-percentage. The item projection includes generation, validation, proposal,
+percentage. Schema v2 also includes bounded, code-only incident summaries and
+marks whether a dead pre-approval model job is safe to retry. The item
+projection includes generation, validation, proposal,
 isolated test, installation, canary, activation, failure, and rollback state.
 All output is operator-safe: secrets and local paths are redacted.
 
@@ -152,6 +154,11 @@ Operators can inspect the same engine status directly through
 `GET /api/learning/status` or Telegram Rich `/learning`. Telegram
 `/learnings` is intentionally different: it lists generic memory candidates
 awaiting review.
+
+An authenticated human can requeue the same replay-safe job through Control,
+TUI, `POST /api/learning/workflows/{proposal_id}/retry`, or Telegram
+`/learning_retry <proposal>`. This is not an agent tool and never replays an
+uncertain effect or activation lifecycle job.
 
 Supported card actions are `Activate`, `Test`, `Details`, `Edit`,
 `Later`, and `Ignore` when the validated card exposes them. An old card,

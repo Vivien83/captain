@@ -63,7 +63,6 @@ struct PreparedNonStreamingLlmTurn {
     tools: Vec<ToolDefinition>,
     driver: Arc<dyn LlmDriver>,
     lean_direct: bool,
-    messages_before: usize,
     ctx_window: Option<usize>,
 }
 
@@ -187,6 +186,7 @@ impl CaptainKernel {
         self.check_non_streaming_llm_quota(&request)?;
         let mut prepared = self.prepare_non_streaming_llm_turn(&request).await?;
         let agent_id = request.agent_id;
+        let channel_type = request.channel_type.clone();
         let result = self
             .run_prepared_non_streaming_llm_turn(request, &mut prepared)
             .await?;
@@ -194,8 +194,8 @@ impl CaptainKernel {
         Ok(self.finish_non_streaming_llm_success(
             agent_id,
             &prepared.session,
-            prepared.messages_before,
             &prepared.manifest,
+            channel_type.as_deref(),
             result,
         ))
     }
@@ -235,7 +235,6 @@ impl CaptainKernel {
         )
         .await;
 
-        let messages_before = session.messages.len();
         log_llm_tools_selected(request.entry, request.agent_id, &tools, lean_direct);
 
         let manifest =
@@ -260,7 +259,6 @@ impl CaptainKernel {
             tools,
             driver,
             lean_direct,
-            messages_before,
             ctx_window: Some(effective_ctx_window),
         })
     }

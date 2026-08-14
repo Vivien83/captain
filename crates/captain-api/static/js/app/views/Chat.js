@@ -44,6 +44,7 @@ export function Chat() {
   const [busy, setBusy] = useState(false);
   const [canvas, setCanvas] = useState(null); // {title, html}
   const [agentId, setAgentId] = useState(getState().currentAgentId);
+  const [sessionId, setSessionId] = useState(getState().currentSessionId);
   const [activeModel, setActiveModel] = useState(activeModelIdentity(getState()));
   const [providerQuota, setProviderQuota] = useState(providerSubscriptionFromBudget(null));
   const [compaction, setCompaction] = useState(null);
@@ -86,8 +87,31 @@ export function Chat() {
 
   useEffect(() => subscribe((s) => {
     if (s.currentAgentId !== agentId) setAgentId(s.currentAgentId);
+    if (s.currentSessionId !== sessionId) setSessionId(s.currentSessionId);
     setActiveModel(activeModelIdentity(s));
-  }), [agentId]);
+  }), [agentId, sessionId]);
+
+  // Resolve an initial conversation once. Subsequent session selection stays
+  // local to this Web client and never switches the agent-wide TUI/Telegram
+  // registry entry.
+  useEffect(() => {
+    if (!agentId || sessionId) return undefined;
+    let dead = false;
+    (async () => {
+      try {
+        const response = await api.agentSessions(agentId);
+        const sessions = response.sessions || response || [];
+        let selected = sessions.find((session) => session.active) || sessions[0];
+        if (!selected) selected = await api.createSession(agentId, { activate: false });
+        if (!dead && selected?.session_id) {
+          setState({ currentSessionId: selected.session_id });
+        }
+      } catch {
+        // Shell refresh and reconnect will retry transient startup failures.
+      }
+    })();
+    return () => { dead = true; };
+  }, [agentId, sessionId]);
 
   // Captain's daemon owns provider calls and persistence. Web/desktop only
   // poll the local budget snapshot, exactly like the Ratatui status line.
@@ -167,24 +191,24 @@ export function Chat() {
   }
   const flushTextDeltas = () => textBatcherRef.current.flush();
 
-  // Load past transcript for the active session, then connect the WS.
+  // Load and stream exactly the session selected by this Web client.
   useEffect(() => {
-    if (!agentId) return;
+    if (!agentId || !sessionId) {
+      setItems([]);
+      setConnected(false);
+      return undefined;
+    }
     let dead = false;
     setCompaction(null);
     setDeliveryVerification(null);
+    setItems([]);
+    setConnected(false);
     pinToBottomRef.current = true;
 
     (async () => {
       try {
-        const sessions = await api.agentSessions(agentId);
-        const active = (sessions.sessions || sessions || []).find((s) => s.active) ||
-          (sessions.sessions || sessions || [])[0];
-        if (active && !dead) {
-          setState({ currentSessionId: active.session_id });
-          const ev = await api.sessionEvents(active.session_id);
-          if (!dead) setItems(rebuildTranscript(ev.events || ev || []));
-        }
+        const events = await api.sessionEvents(sessionId);
+        if (!dead) setItems(rebuildTranscript(events.events || events || []));
       } catch { /* fresh session — empty transcript is fine */ }
     })();
 
@@ -193,7 +217,7 @@ export function Chat() {
     let retry = 0;
     const connect = async () => {
       try {
-        const opened = await openAgentWs(agentId, {
+        const opened = await openAgentWs(agentId, sessionId, {
           onopen: () => { retry = 0; setConnected(true); },
           onclose: () => {
             flushTextDeltas();
@@ -223,7 +247,7 @@ export function Chat() {
       if (ws) ws.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [agentId, sessionId]);
 
   const handleWsMessage = (m) => {
     const delta = textDeltaFromMessage(m);

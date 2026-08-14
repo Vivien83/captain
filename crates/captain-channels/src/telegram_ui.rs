@@ -187,7 +187,13 @@ pub fn render_telegram_workflow_learning_status(status: &WorkflowLearningStatus)
         })
         .unwrap_or_default();
     let next_retry = status.jobs.next_retry_at_unix_ms.map_or_else(
-        || "aucun retry planifié".to_string(),
+        || {
+            if status.jobs.dead > 0 {
+                "relance automatique arrêtée après épuisement des essais".to_string()
+            } else {
+                "aucune reprise nécessaire".to_string()
+            }
+        },
         |at| {
             format!(
                 "prochain retry {}",
@@ -195,9 +201,27 @@ pub fn render_telegram_workflow_learning_status(status: &WorkflowLearningStatus)
             )
         },
     );
+    let attention = status.attention.first().map_or_else(String::new, |item| {
+        let action = if item.retry_available {
+            format!(
+                "\nRelancer : <code>/learning_retry {}</code>",
+                escape_rich_text(&item.proposal_id)
+            )
+        } else {
+            "\nRejeu automatique interdit ; vérification opérateur requise.".to_string()
+        };
+        format!(
+            "\n\n<b>Incident à traiter</b>\n{} · {} · {}/{} essais{}\n<blockquote>Incident Workflow Learning distinct de la mémoire durable.</blockquote>",
+            job_stage_label(item.stage),
+            escape_rich_text(job_error_label(item.error_code.as_deref())),
+            item.attempt_count,
+            item.max_attempts,
+            action,
+        )
+    });
 
     format!(
-        "### 🧠 Learning Captain\n\n> {} <b>{}</b> · mode <code>{}</code>\n\n<b>Modèle réellement lié</b>\n<pre>{}</pre>\nAttendu : <code>{}</code>\n\n<b>Worker</b>\n{}\n\n<b>Files durables</b>\n• Jobs : {} attente · {} en cours · {} retry · {} incertain · {} dead\n• Notifications : {} attente · {} livraison · {} retry · {} dead\n• Workflows : {} actifs · {} en cours · {} à décider · {} attention\n\n<b>Reprise</b>\n{} · {}{}",
+        "### 🧠 Learning Captain\n\n> {} <b>{}</b> · mode <code>{}</code>\n\n<b>Modèle réellement lié</b>\n<pre>{}</pre>\nAttendu : <code>{}</code>\n\n<b>Worker</b>\n{}\n\n<b>Files durables</b>\n• Jobs : {} attente · {} en cours · {} retry · {} incertain · {} bloqué\n• Notifications : {} attente · {} livraison · {} retry · {} dead\n• Workflows : {} actifs · {} en cours · {} à décider · {} attention\n\n<b>Reprise</b>\n{} · {}{}{}",
         runtime_state_icon(status.state),
         runtime_state_label(status.state),
         format!("{:?}", status.mode).to_lowercase(),
@@ -220,6 +244,7 @@ pub fn render_telegram_workflow_learning_status(status: &WorkflowLearningStatus)
         recovery_label(status.recovery),
         next_retry,
         error,
+        attention,
     )
 }
 
@@ -239,8 +264,35 @@ fn runtime_state_label(state: WorkflowLearningRuntimeState) -> &'static str {
         WorkflowLearningRuntimeState::Healthy => "Opérationnel",
         WorkflowLearningRuntimeState::Active => "Actif",
         WorkflowLearningRuntimeState::Recovering => "Reprise automatique",
-        WorkflowLearningRuntimeState::Degraded => "Dégradé",
+        WorkflowLearningRuntimeState::Degraded => "Learning à vérifier",
         WorkflowLearningRuntimeState::Stalled => "Worker bloqué",
+    }
+}
+
+fn job_stage_label(
+    stage: captain_types::workflow_learning::WorkflowLearningJobStage,
+) -> &'static str {
+    use captain_types::workflow_learning::WorkflowLearningJobStage;
+    match stage {
+        WorkflowLearningJobStage::Analyze => "Analyse",
+        WorkflowLearningJobStage::Draft => "Génération",
+        WorkflowLearningJobStage::Validate => "Validation",
+        WorkflowLearningJobStage::Install => "Installation",
+        WorkflowLearningJobStage::Canary => "Canary",
+        WorkflowLearningJobStage::Rollback => "Rollback",
+    }
+}
+
+fn job_error_label(code: Option<&str>) -> &str {
+    match code {
+        Some("model_timeout") => "délai du modèle dépassé",
+        Some("model_completion_failed") => "appel au modèle interrompu",
+        Some("invalid_structured_output") => "réponse structurée invalide",
+        Some("invalid_draft") => "brouillon invalide",
+        Some("effect_interrupted") => "effet interrompu et incertain",
+        Some("attempts_exhausted") => "nombre maximal d’essais atteint",
+        Some(other) => other,
+        None => "cause non classée",
     }
 }
 
@@ -287,7 +339,8 @@ mod tests {
     use captain_types::compaction::{CompactionProgressUnit, COMPACTION_PROGRESS_SCHEMA_VERSION};
     use captain_types::config::LearningMode;
     use captain_types::workflow_learning::{
-        WorkflowLearningJobQueueView, WorkflowLearningModelIdentity,
+        WorkflowLearningAttentionItem, WorkflowLearningAttentionState,
+        WorkflowLearningJobQueueView, WorkflowLearningJobStage, WorkflowLearningModelIdentity,
         WorkflowLearningNotificationQueueView, WorkflowLearningWorkerPhase,
         WorkflowLearningWorkerView, WorkflowLearningWorkloadView,
         WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
@@ -423,7 +476,7 @@ mod tests {
 
     #[test]
     fn learning_status_is_rich_exact_and_never_invents_progress() {
-        let status = WorkflowLearningStatus {
+        let mut status = WorkflowLearningStatus {
             schema_version: WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
             enabled: true,
             mode: LearningMode::Approval,
@@ -457,6 +510,7 @@ mod tests {
                 awaiting_decision: 1,
                 ..Default::default()
             },
+            attention: Vec::new(),
             generated_at_unix_ms: 10_000,
         };
         let rendered = render_telegram_workflow_learning_status(&status);
@@ -465,5 +519,26 @@ mod tests {
         assert!(rendered.contains("2 retry"));
         assert!(rendered.contains("dans 30s"));
         assert!(!rendered.contains('%'));
+
+        status.state = WorkflowLearningRuntimeState::Degraded;
+        status.recovery = WorkflowLearningRecoveryState::OperatorAttention;
+        status.jobs.retry_wait = 0;
+        status.jobs.next_retry_at_unix_ms = None;
+        status.jobs.dead = 1;
+        status.attention = vec![WorkflowLearningAttentionItem {
+            proposal_id: "proposal-safe".to_string(),
+            stage: WorkflowLearningJobStage::Draft,
+            state: WorkflowLearningAttentionState::Dead,
+            error_code: Some("model_timeout".to_string()),
+            attempt_count: 3,
+            max_attempts: 3,
+            retry_available: true,
+            updated_at_unix_ms: 9_000,
+        }];
+        let degraded = render_telegram_workflow_learning_status(&status);
+        assert!(degraded.contains("Learning à vérifier"));
+        assert!(degraded.contains("délai du modèle dépassé"));
+        assert!(degraded.contains("distinct de la mémoire durable"));
+        assert!(degraded.contains("/learning_retry proposal-safe"));
     }
 }

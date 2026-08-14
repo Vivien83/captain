@@ -98,6 +98,40 @@ fn proposed(store: &WorkflowLearningStore, id: &str) -> String {
     revision
 }
 
+fn drafting(store: &WorkflowLearningStore, id: &str) {
+    store
+        .create_observed(&NewWorkflowProposal {
+            id: id.to_string(),
+            idempotency_key: format!("{id}:observed"),
+            workflow_signature: "d".repeat(64),
+            source_agent_id: "captain".to_string(),
+            origin_channel: None,
+            evidence_json: "{}".to_string(),
+            created_at_unix_ms: 1_000,
+        })
+        .unwrap();
+    store
+        .transition(&transition(
+            id,
+            WorkflowProposalState::Observed,
+            0,
+            None,
+            WorkflowProposalState::Eligible,
+            &format!("{id}:eligible"),
+        ))
+        .unwrap();
+    store
+        .transition(&transition(
+            id,
+            WorkflowProposalState::Eligible,
+            1,
+            None,
+            WorkflowProposalState::Drafting,
+            &format!("{id}:drafting"),
+        ))
+        .unwrap();
+}
+
 fn job(
     id: &str,
     proposal_id: &str,
@@ -325,6 +359,92 @@ fn observed_model_failure_can_retry_but_an_interrupted_call_cannot() {
             )
             .unwrap(),
         retry
+    );
+}
+
+#[test]
+fn operator_retry_requeues_the_same_exhausted_model_job_once() {
+    let store = store();
+    let proposal_id = "proposal-operator-retry";
+    let job_id = "draft-operator-retry";
+    drafting(&store, proposal_id);
+    store
+        .enqueue_job(&job(job_id, proposal_id, None, WorkflowJobKind::Draft))
+        .unwrap();
+
+    let mut failed_at = 3_100;
+    for attempt in 0..3 {
+        let now = 3_000 + attempt * 1_000;
+        let claimed = store.claim_due_job("worker", now, 1_000).unwrap().unwrap();
+        assert_eq!(claimed.id, job_id);
+        store
+            .mark_job_effect_started(job_id, "worker", now + 1)
+            .unwrap();
+        failed_at = now + 100;
+        store
+            .fail_job_after_known_effect(
+                job_id,
+                "worker",
+                "model_timeout",
+                "active model completion timed out",
+                true,
+                now + 1_000,
+                failed_at,
+                None,
+            )
+            .unwrap();
+    }
+    let dead = store.get_job(job_id).unwrap().unwrap();
+    assert_eq!(dead.status, WorkflowJobStatus::Dead);
+    assert_eq!(dead.effect_state, WorkflowJobEffectState::Completed);
+    assert_eq!(dead.attempt_count, 3);
+
+    let retried = store
+        .retry_dead_preapproval_job(proposal_id, "model_timeout", failed_at + 1)
+        .unwrap();
+    assert!(!retried.replayed);
+    assert_eq!(retried.job.id, job_id);
+    assert_eq!(retried.job.status, WorkflowJobStatus::Pending);
+    assert_eq!(retried.job.effect_state, WorkflowJobEffectState::None);
+    assert_eq!(retried.job.attempt_count, 0);
+
+    let duplicate = store
+        .retry_dead_preapproval_job(proposal_id, "model_timeout", failed_at + 2)
+        .unwrap();
+    assert!(duplicate.replayed);
+    assert_eq!(duplicate.job.id, job_id);
+    assert_eq!(
+        store
+            .claim_due_job("worker-2", failed_at + 3, 1_000)
+            .unwrap()
+            .unwrap()
+            .id,
+        job_id
+    );
+}
+
+#[test]
+fn operator_retry_never_replays_an_uncertain_effect() {
+    let store = store();
+    let proposal_id = "proposal-operator-uncertain";
+    let job_id = "draft-operator-uncertain";
+    drafting(&store, proposal_id);
+    store
+        .enqueue_job(&job(job_id, proposal_id, None, WorkflowJobKind::Draft))
+        .unwrap();
+    store.claim_due_job("worker", 3_000, 1_000).unwrap();
+    store
+        .mark_job_effect_started(job_id, "worker", 3_001)
+        .unwrap();
+    store.reconcile_expired_jobs(4_001).unwrap();
+
+    let error = store
+        .retry_dead_preapproval_job(proposal_id, "effect_interrupted", 4_002)
+        .unwrap_err();
+    assert!(error.to_string().contains("known-completed"));
+    assert_eq!(
+        store.get_job(job_id).unwrap().unwrap().status,
+        WorkflowJobStatus::Uncertain
     );
 }
 

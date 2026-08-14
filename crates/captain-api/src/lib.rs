@@ -246,11 +246,15 @@ pub mod workflow_routes;
 pub mod ws;
 pub mod ws_terminal;
 
-/// Convenience re-export for publishing chat events from WS and channel bridge.
-pub(crate) async fn chat_broadcast_publish(
+/// Publish a chat event that belongs to one persisted conversation.
+pub(crate) async fn chat_broadcast_publish_for_session(
     bus: &captain_kernel::event_bus::EventBus,
     agent_id: captain_types::agent::AgentId,
+    session_id: captain_types::agent::SessionId,
     event: captain_types::event::ChatStreamEvent,
 ) {
-    captain_kernel::chat_broadcast::publish_chat_event(bus, agent_id, event).await;
+    captain_kernel::chat_broadcast::publish_chat_event_for_session(
+        bus, agent_id, session_id, event,
+    )
+    .await;
 }

@@ -4,7 +4,7 @@ use crate::workflow::{Workflow, WorkflowId};
 use async_trait::async_trait;
 use captain_runtime::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
 use captain_types::agent::AgentId;
-use captain_types::config::KernelConfig;
+use captain_types::config::{DefaultModelConfig, KernelConfig};
 use captain_types::event::EventPayload;
 use captain_types::message::{ContentBlock, StopReason, TokenUsage};
 use captain_types::scheduler::{
@@ -12,6 +12,7 @@ use captain_types::scheduler::{
 };
 use chrono::Utc;
 use std::sync::Arc;
+use std::time::Duration;
 
 struct StaticDriver {
     text: &'static str,
@@ -45,6 +46,12 @@ fn boot_test_kernel(
     let config = KernelConfig {
         home_dir: home_dir.clone(),
         data_dir: home_dir.join("data"),
+        default_model: DefaultModelConfig {
+            provider: "cron-static-test".to_string(),
+            model: "cron-static-test-model".to_string(),
+            api_key_env: String::new(),
+            base_url: None,
+        },
         ..KernelConfig::default()
     };
     let mut kernel = Arc::new(CaptainKernel::boot_with_config(config).expect("kernel boot"));
@@ -161,6 +168,14 @@ async fn system_event_branch_publishes_payload_and_marks_success() {
 async fn agent_turn_delivery_failure_preserves_job_error_budget() {
     let (_tmp, kernel) = boot_test_kernel("cron-agent-delivery", "cron agent output");
     let agent_id = principal_agent_id(&kernel);
+    let active_before = kernel.registry.get(agent_id).unwrap().session_id;
+    let active_messages_before = kernel
+        .memory
+        .get_session(active_before)
+        .unwrap()
+        .unwrap()
+        .messages
+        .len();
     let job = register_job(
         &kernel,
         cron_job(
@@ -190,7 +205,78 @@ async fn agent_turn_delivery_failure_preserves_job_error_budget() {
         .contains("webhook blocked by SSRF guard"));
     assert_eq!(meta.dead_letters.len(), 1);
     assert_eq!(meta.redelivery_queue.len(), 1);
+    assert_eq!(
+        kernel.registry.get(agent_id).unwrap().session_id,
+        active_before
+    );
+    assert_eq!(
+        kernel
+            .memory
+            .get_session(active_before)
+            .unwrap()
+            .unwrap()
+            .messages
+            .len(),
+        active_messages_before,
+        "cron turns must not append to the operator's active conversation"
+    );
+    assert!(kernel
+        .memory
+        .list_sessions_including_internal()
+        .unwrap()
+        .into_iter()
+        .all(|row| row["label"]
+            .as_str()
+            .map(|label| !captain_types::agent::is_internal_session_label(label))
+            .unwrap_or(true)));
 
+    kernel.shutdown();
+}
+
+#[tokio::test]
+async fn non_streaming_cron_turn_is_also_isolated_and_cleaned() {
+    let (_tmp, kernel) = boot_test_kernel("cron-agent-non-streaming", "cron direct output");
+    let agent_id = principal_agent_id(&kernel);
+    let active_before = kernel.registry.get(agent_id).unwrap().session_id;
+    let active_messages_before = kernel
+        .memory
+        .get_session(active_before)
+        .unwrap()
+        .unwrap()
+        .messages
+        .len();
+    let kernel_handle: Arc<dyn captain_runtime::kernel_handle::KernelHandle> = kernel.clone();
+
+    let result = crate::cron_agent_turn::run_agent_turn_with_inactivity_timeout(
+        &kernel,
+        agent_id,
+        "just say direct cron ok",
+        kernel_handle,
+        Duration::ZERO,
+    )
+    .await
+    .expect("non-streaming cron turn");
+
+    assert_eq!(result.response, "cron direct output");
+    assert_eq!(
+        kernel
+            .memory
+            .get_session(active_before)
+            .unwrap()
+            .unwrap()
+            .messages
+            .len(),
+        active_messages_before
+    );
+    assert!(kernel
+        .memory
+        .list_sessions_including_internal()
+        .unwrap()
+        .into_iter()
+        .all(|row| row["label"]
+            .as_str()
+            .map(|label| !captain_types::agent::is_internal_session_label(label))
+            .unwrap_or(true)));
     kernel.shutdown();
 }
 

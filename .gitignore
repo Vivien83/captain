@@ -5,6 +5,8 @@
 /dist/docker/
 /dist/handoff/
 /site/releases/
+/captainagent-fr-*-site-complete.zip
+/captainagent-fr-*-site-complete.zip.sha256
 **/*.rs.bk
 *.pdb
 

@@ -740,6 +740,11 @@ impl MemorySubstrate {
         self.sessions.list_sessions()
     }
 
+    /// Include Captain-internal sessions for bounded startup reconciliation.
+    pub fn list_sessions_including_internal(&self) -> CaptainResult<Vec<serde_json::Value>> {
+        self.sessions.list_sessions_including_internal()
+    }
+
     /// Delete a session by ID.
     pub fn delete_session(&self, session_id: SessionId) -> CaptainResult<()> {
         self.sessions.delete_session(session_id)
@@ -799,10 +804,31 @@ impl MemorySubstrate {
         self.sessions.canonical_context(agent_id, window_size)
     }
 
-    /// Store an LLM-generated summary, replacing older messages with the kept subset.
+    /// Load the compaction handoff attached to one conversation session.
+    pub fn session_compaction_summary(
+        &self,
+        session_id: captain_types::agent::SessionId,
+    ) -> CaptainResult<Option<String>> {
+        self.sessions.session_compaction_summary(session_id)
+    }
+
+    /// Persist a handoff for an existing conversation session.
+    pub fn store_session_llm_summary(
+        &self,
+        session_id: captain_types::agent::SessionId,
+        summary: &str,
+    ) -> CaptainResult<()> {
+        self.sessions.store_session_llm_summary(session_id, summary)
+    }
+
+    /// Atomically save a compacted conversation and its session-local handoff.
+    pub fn save_compacted_session(&self, session: &Session, summary: &str) -> CaptainResult<()> {
+        self.sessions.save_compacted_session(session, summary)
+    }
+
+    /// Store an explicit agent-wide canonical summary.
     ///
-    /// Used by the compactor to replace text-truncation compaction with an
-    /// LLM-generated summary of older conversation history.
+    /// Conversation compaction must use [`Self::save_compacted_session`].
     pub fn store_llm_summary(
         &self,
         agent_id: AgentId,

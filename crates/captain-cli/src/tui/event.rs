@@ -6,8 +6,8 @@ use captain_runtime::agent_loop::AgentLoopResult;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_types::agent::AgentId;
 use captain_types::workflow_learning::{
-    ProposalCardAction, ProposalOperatorResolution, WorkflowLearningList, WorkflowLearningStatus,
-    WorkflowLearningView,
+    ProposalCardAction, ProposalOperatorResolution, WorkflowLearningList,
+    WorkflowLearningRetryResolution, WorkflowLearningStatus, WorkflowLearningView,
 };
 use ratatui::crossterm::event::{
     self, Event as CtEvent, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
@@ -331,6 +331,8 @@ pub enum AppEvent {
         proposal_id: String,
         action: ProposalCardAction,
     },
+    /// One exhausted, replay-safe Learning job was queued again.
+    WorkflowLearningRetried { proposal_id: String, replayed: bool },
     /// Phase-h.3: cron jobs list loaded.
     CronJobsLoaded(Vec<crate::tui::screens::cron::CronJob>),
     /// Phase-h.3: a cron job mutation completed (toggle/run/delete).
@@ -2858,7 +2860,7 @@ pub fn spawn_fetch_skills_proposed(backend: BackendRef, tx: mpsc::Sender<AppEven
                 .and_then(|response| response.json::<WorkflowLearningStatus>());
             match (workflows, status) {
                 (Ok(list), Ok(status)) => {
-                    let metrics = Some(SkillsMetrics::from_workflows(&list.workflows));
+                    let metrics = Some(SkillsMetrics::from_workflows(&list.workflows, &status));
                     let _ = tx.send(AppEvent::SkillsProposedLoaded {
                         workflows: list.workflows,
                         metrics,
@@ -2946,6 +2948,7 @@ mod skills_proposed_fetch_tests {
                 "last_activity_at_unix_ms": null },
             "workflows": { "total": 0, "processing": 0, "awaiting_decision": 0,
                 "active": 0, "attention": 0, "last_activity_at_unix_ms": null },
+            "attention": [],
             "generated_at_unix_ms": 10
         });
         let status: WorkflowLearningStatus = serde_json::from_value(payload).unwrap();
@@ -3007,6 +3010,60 @@ pub fn spawn_decide_workflow_proposal(
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError(
                 "Workflow decisions require daemon mode".to_string(),
+            ));
+        }
+    });
+}
+
+pub fn spawn_retry_workflow_learning(
+    backend: BackendRef,
+    proposal_id: String,
+    expected_error_code: String,
+    tx: mpsc::Sender<AppEvent>,
+) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/learning/workflows/{proposal_id}/retry");
+            let body = serde_json::json!({
+                "expected_error_code": expected_error_code,
+                "surface": "tui"
+            });
+            match client.post(&url).json(&body).send() {
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<WorkflowLearningRetryResolution>() {
+                        Ok(resolution) if resolution.proposal_id == proposal_id => {
+                            let _ = tx.send(AppEvent::WorkflowLearningRetried {
+                                proposal_id,
+                                replayed: resolution.replayed,
+                            });
+                        }
+                        Ok(_) => {
+                            let _ = tx.send(AppEvent::FetchError(
+                                "Workflow retry returned another proposal".to_string(),
+                            ));
+                        }
+                        Err(error) => {
+                            let _ = tx.send(AppEvent::FetchError(format!(
+                                "Workflow retry response: {error}"
+                            )));
+                        }
+                    }
+                }
+                Ok(response) => {
+                    let _ = tx.send(AppEvent::FetchError(format!(
+                        "Workflow retry failed ({})",
+                        response.status()
+                    )));
+                }
+                Err(error) => {
+                    let _ = tx.send(AppEvent::FetchError(format!("Workflow retry: {error}")));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::FetchError(
+                "Workflow retry requires daemon mode".to_string(),
             ));
         }
     });

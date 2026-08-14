@@ -199,50 +199,148 @@ fn assert_ssh_command_allowed(
 }
 
 fn unbounded_remote_command_reason(command: &str) -> Option<&'static str> {
-    let lower = command.to_ascii_lowercase();
-    let normalized = format!(" {} ", lower.replace(['\n', '\r', '\t'], " "));
+    let invocations = shell_command_invocations(command);
 
-    if normalized.contains(" journalctl ")
-        && (normalized.contains(" -f ") || normalized.contains(" --follow "))
-    {
+    if invocation_args(&invocations, &["journalctl"]).any(has_follow_flag) {
         return Some("`journalctl -f`/`--follow` is an unbounded remote log stream");
     }
-    if normalized.contains(" docker logs ")
-        && (normalized.contains(" -f ") || normalized.contains(" --follow "))
-    {
+    if invocation_args(&invocations, &["docker", "logs"]).any(has_follow_flag) {
         return Some("`docker logs -f`/`--follow` is an unbounded remote log stream");
     }
-    if normalized.contains(" kubectl logs ")
-        && (normalized.contains(" -f ") || normalized.contains(" --follow "))
-    {
+    if invocation_args(&invocations, &["kubectl", "logs"]).any(has_follow_flag) {
         return Some("`kubectl logs -f`/`--follow` is an unbounded remote log stream");
     }
-    if normalized.contains(" tail -f ") || normalized.contains(" tail --follow ") {
+    if invocation_args(&invocations, &["tail"]).any(has_follow_flag) {
         return Some("`tail -f`/`--follow` is an unbounded remote file watcher");
     }
-    if normalized.contains(" docker events ") {
+    if invocation_args(&invocations, &["docker", "events"])
+        .next()
+        .is_some()
+    {
         return Some("`docker events` is an unbounded remote event stream");
     }
-    if normalized.contains(" docker stats ") && !normalized.contains(" --no-stream ") {
+    if invocation_args(&invocations, &["docker", "stats"])
+        .any(|args| !args.iter().any(|arg| arg == "--no-stream"))
+    {
         return Some("`docker stats` without `--no-stream` is an unbounded remote monitor");
     }
-    if normalized.contains(" pm2 logs ") {
+    if invocation_args(&invocations, &["pm2", "logs"])
+        .next()
+        .is_some()
+    {
         return Some("`pm2 logs` follows process logs until interrupted");
     }
-    if normalized.contains(" watch ") {
+    if invocation_args(&invocations, &["watch"]).next().is_some() {
         return Some("`watch` is an unbounded remote command repeater");
     }
-    if normalized.split_whitespace().next() == Some("top")
-        && !normalized.contains(" -b")
-        && !normalized.contains(" -n")
-        && !normalized.contains(" -l")
-    {
+    if invocation_args(&invocations, &["top"]).any(|args| {
+        !has_short_flag(args, 'b') && !has_short_flag(args, 'n') && !has_short_flag(args, 'l')
+    }) {
         return Some("`top` without batch/sample limits is an interactive monitor");
     }
-    if normalized.contains(" tcpdump ") && !normalized.contains(" -c ") {
+    if invocation_args(&invocations, &["tcpdump"]).any(|args| !has_short_option_value(args, 'c')) {
         return Some("`tcpdump` without packet count is an unbounded remote capture");
     }
     None
+}
+
+fn shell_command_invocations(command: &str) -> Vec<Vec<String>> {
+    shell_command_segments(command)
+        .into_iter()
+        .filter_map(|segment| shlex::split(&segment))
+        .map(|tokens| {
+            tokens
+                .into_iter()
+                .map(|token| token.to_ascii_lowercase())
+                .collect()
+        })
+        .filter(|tokens: &Vec<String>| !tokens.is_empty())
+        .collect()
+}
+
+fn shell_command_segments(command: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            current.push(ch);
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            current.push(ch);
+        } else if matches!(ch, ';' | '|' | '&' | '\n' | '\r') {
+            if !current.trim().is_empty() {
+                segments.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.trim().is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+fn invocation_args<'a>(
+    invocations: &'a [Vec<String>],
+    command: &'a [&str],
+) -> impl Iterator<Item = &'a [String]> + 'a {
+    invocations.iter().filter_map(move |tokens| {
+        tokens
+            .windows(command.len())
+            .position(|window| {
+                window.iter().enumerate().all(|(index, token)| {
+                    let token = if index == 0 {
+                        token.rsplit('/').next().unwrap_or(token)
+                    } else {
+                        token.as_str()
+                    };
+                    token == command[index]
+                })
+            })
+            .map(|index| &tokens[index + command.len()..])
+    })
+}
+
+fn has_follow_flag(args: &[String]) -> bool {
+    has_short_flag(args, 'f')
+        || args
+            .iter()
+            .any(|arg| arg == "--follow" || arg.starts_with("--follow="))
+}
+
+fn has_short_flag(args: &[String], flag: char) -> bool {
+    args.iter().any(|arg| {
+        arg.strip_prefix('-')
+            .filter(|flags| !flags.starts_with('-'))
+            .is_some_and(|flags| flags.contains(flag))
+    })
+}
+
+fn has_short_option_value(args: &[String], option: char) -> bool {
+    args.iter().enumerate().any(|(index, arg)| {
+        arg == &format!("-{option}") && args.get(index + 1).is_some()
+            || arg
+                .strip_prefix(&format!("-{option}"))
+                .is_some_and(|value| !value.is_empty())
+    })
 }
 
 async fn execute_ssh_command(
@@ -516,6 +614,32 @@ mod tests {
         ] {
             assert_ssh_command_allowed(command, None)
                 .unwrap_or_else(|err| panic!("bounded snapshot should pass: {command}: {err}"));
+        }
+    }
+
+    #[test]
+    fn finite_journalctl_is_not_poisoned_by_later_shell_flags() {
+        for command in [
+            "journalctl -u tempo -n 80 --no-pager; test -f /srv/tempo/compose.yml",
+            "journalctl -u tempo --since '1 hour ago' --no-pager\nfind /srv -type f -maxdepth 2",
+            "printf '%s\\n' 'journalctl -f is forbidden'; journalctl -u tempo -n 20 --no-pager",
+        ] {
+            assert_ssh_command_allowed(command, None)
+                .unwrap_or_else(|error| panic!("finite journal snapshot was blocked: {error}"));
+        }
+    }
+
+    #[test]
+    fn follow_flags_still_bind_to_their_own_command_segment() {
+        for command in [
+            "test -f /tmp/ready; journalctl -u tempo -f",
+            "journalctl -u tempo -n 10 | tail --follow=name /var/log/tempo.log",
+            "/usr/bin/docker logs --follow=true tempo",
+        ] {
+            assert!(
+                unbounded_remote_command_reason(command).is_some(),
+                "unbounded command should be rejected: {command}"
+            );
         }
     }
 

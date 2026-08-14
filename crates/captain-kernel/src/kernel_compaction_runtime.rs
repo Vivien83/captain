@@ -130,13 +130,15 @@ async fn broadcast_compaction_progress(event_bus: &EventBus, progress: Compactio
         progress.agent_id,
         EventTarget::Agent(progress.agent_id),
         payload.clone(),
-    );
+    )
+    .with_session(progress.session_id);
     event_bus.publish(agent_event).await;
 
     // Agent-targeted WebSockets and daemon-wide SSE subscribers use distinct
     // EventBus lanes. Mirror this idempotent state to the system lane without
     // broadcasting it to unrelated agents.
-    let system_event = Event::new(progress.agent_id, EventTarget::System, payload);
+    let system_event = Event::new(progress.agent_id, EventTarget::System, payload)
+        .with_session(progress.session_id);
     event_bus.publish(system_event).await;
 }
 
@@ -222,17 +224,44 @@ impl CaptainKernel {
         agent_id: AgentId,
         sink: Option<CompactionProgressSink>,
     ) -> KernelResult<String> {
+        let session_id = self
+            .registry
+            .get(agent_id)
+            .ok_or_else(|| KernelError::Captain(CaptainError::AgentNotFound(agent_id.to_string())))?
+            .session_id;
+        self.compact_agent_session_by_id_with_progress(agent_id, session_id, sink)
+            .await
+    }
+
+    /// Compact one persisted conversation without switching the agent's
+    /// registry session. Web and remote clients use this to keep session
+    /// selection local to their connection.
+    pub async fn compact_agent_session_by_id(
+        &self,
+        agent_id: AgentId,
+        session_id: SessionId,
+    ) -> KernelResult<String> {
+        self.compact_agent_session_by_id_with_progress(agent_id, session_id, None)
+            .await
+    }
+
+    async fn compact_agent_session_by_id_with_progress(
+        &self,
+        agent_id: AgentId,
+        session_id: SessionId,
+        sink: Option<CompactionProgressSink>,
+    ) -> KernelResult<String> {
         let lock = self
             .agent_msg_locks
             .entry(agent_id)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
         let _guard = lock.lock().await;
-        let (session_id, manifest) = {
+        let manifest = {
             let entry = self.registry.get(agent_id).ok_or_else(|| {
                 KernelError::Captain(CaptainError::AgentNotFound(agent_id.to_string()))
             })?;
-            (entry.session_id, entry.manifest.clone())
+            entry.manifest.clone()
         };
         self.compact_session_unlocked(agent_id, session_id, &manifest, sink)
             .await
@@ -417,12 +446,17 @@ impl CaptainKernel {
             let _ = stage_tx.send(update);
         });
 
-        let outcome = compactor::compact_session_with_progress(
+        let previous_handoff = self
+            .memory
+            .session_compaction_summary(session.id)
+            .map_err(KernelError::Captain)?;
+        let outcome = compactor::compact_session_with_progress_and_handoff(
             driver,
             &model,
             session,
             config,
             overhead_tokens,
+            previous_handoff.as_deref(),
             Some(observer.clone()),
         )
         .await;
@@ -434,7 +468,7 @@ impl CaptainKernel {
 
     fn save_compaction_result(
         &self,
-        agent_id: AgentId,
+        _agent_id: AgentId,
         mut session: Session,
         config: &CompactionConfig,
         result: &CompactionResult,
@@ -443,21 +477,21 @@ impl CaptainKernel {
             return Ok((session, RepairStats::default()));
         }
 
-        // Pruning-only rounds produce no summary: skip the canonical update so
-        // the previous handoff summary is not clobbered by an empty string.
-        if result.compacted_count > 0 {
-            self.memory
-                .store_llm_summary(agent_id, &result.summary, result.kept_messages.clone())
-                .map_err(KernelError::Captain)?;
-        }
-
         let (repaired_messages, repair_stats) =
             session_repair::validate_and_repair_with_stats(&result.kept_messages);
         session.messages = repaired_messages;
         session.context_window_tokens = config.context_window_tokens as u64;
-        self.memory
-            .save_session(&session)
-            .map_err(KernelError::Captain)?;
+        if result.compacted_count > 0 {
+            self.memory
+                .save_compacted_session(&session, &result.summary)
+                .map_err(KernelError::Captain)?;
+        } else {
+            // Pruning-only rounds have no replacement handoff. Preserve the
+            // existing session summary while saving the smaller transcript.
+            self.memory
+                .save_session(&session)
+                .map_err(KernelError::Captain)?;
+        }
         Ok((session, repair_stats))
     }
 
@@ -646,6 +680,7 @@ mod tests {
                 .expect("global event timeout")
                 .expect("global event"),
         ] {
+            assert_eq!(event.session_id, Some(session_id));
             let EventPayload::ChatStream(ChatStreamEvent::CompactionProgress { progress }) =
                 event.payload
             else {

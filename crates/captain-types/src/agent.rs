@@ -834,6 +834,13 @@ fn grant_capability_implications_for_tools(caps: &mut ManifestCapabilities, tool
 
 /// Human-readable session label (e.g., "support inbox", "research").
 /// Max 128 chars, alphanumeric + spaces + hyphens + underscores only.
+pub const INTERNAL_SESSION_LABEL_PREFIX: &str = ".captain-internal/";
+pub const AUTOMATION_SESSION_LABEL_PREFIX: &str = ".captain-internal/automation/";
+
+pub fn is_internal_session_label(label: &str) -> bool {
+    label.starts_with(INTERNAL_SESSION_LABEL_PREFIX)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct SessionLabel(String);
 
@@ -1673,6 +1680,14 @@ max_tool_calls_per_min = 10
         let json = serde_json::to_string(&label).unwrap();
         let back: SessionLabel = serde_json::from_str(&json).unwrap();
         assert_eq!(label, back);
+    }
+
+    #[test]
+    fn internal_session_namespace_is_not_a_public_label() {
+        let internal = format!("{AUTOMATION_SESSION_LABEL_PREFIX}run-id");
+        assert!(is_internal_session_label(&internal));
+        assert!(SessionLabel::new(&internal).is_err());
+        assert!(!is_internal_session_label("Automation quotidienne"));
     }
 
     // ----- generate_identity_files field tests -----

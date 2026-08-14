@@ -1,10 +1,90 @@
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use captain_kernel::CaptainKernel;
+use fs2::FileExt;
 
 use crate::{boot_kernel_error, cli_captain_home, daemon_client, find_daemon, ui};
 
 use super::memory_native::NativeMempalaceStartOutcome;
+
+const DAEMON_START_LOCK_FILE: &str = "daemon.start.lock";
+
+struct DaemonStartLock {
+    file: File,
+}
+
+impl DaemonStartLock {
+    fn acquire(home_dir: &Path) -> Result<Self, String> {
+        std::fs::create_dir_all(home_dir).map_err(|error| {
+            format!(
+                "Cannot prepare Captain home {} for daemon startup: {error}",
+                home_dir.display()
+            )
+        })?;
+
+        let lock_path = home_dir.join(DAEMON_START_LOCK_FILE);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|error| {
+                format!(
+                    "Cannot open daemon startup lock {}: {error}",
+                    lock_path.display()
+                )
+            })?;
+        restrict_daemon_lock_permissions(&lock_path);
+
+        if let Err(error) = FileExt::try_lock_exclusive(&file) {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                let owner = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .map(|pid| format!(" (PID {pid})"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Another Captain daemon is starting or running{owner}"
+                ));
+            }
+            return Err(format!(
+                "Cannot acquire daemon startup lock {}: {error}",
+                lock_path.display()
+            ));
+        }
+
+        file.set_len(0)
+            .and_then(|()| file.write_all(std::process::id().to_string().as_bytes()))
+            .and_then(|()| file.sync_data())
+            .map_err(|error| {
+                format!(
+                    "Cannot persist daemon startup ownership {}: {error}",
+                    lock_path.display()
+                )
+            })?;
+
+        Ok(Self { file })
+    }
+}
+
+impl Drop for DaemonStartLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+#[cfg(unix)]
+fn restrict_daemon_lock_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_daemon_lock_permissions(_path: &Path) {}
 
 pub(crate) fn cmd_start(config: Option<PathBuf>, yolo: bool) {
     if let Some(base) = find_daemon() {
@@ -15,6 +95,18 @@ pub(crate) fn cmd_start(config: Option<PathBuf>, yolo: bool) {
         std::process::exit(1);
     }
 
+    let mut kernel_config = captain_kernel::config::load_config(config.as_deref());
+    let _daemon_start_lock = match DaemonStartLock::acquire(&kernel_config.home_dir) {
+        Ok(lock) => lock,
+        Err(error) => {
+            ui::error_with_fix(
+                &error,
+                "Wait for the current startup, or stop the existing daemon before retrying",
+            );
+            std::process::exit(1);
+        }
+    };
+
     ui::banner();
     ui::blank();
     println!("  Starting daemon...");
@@ -23,7 +115,6 @@ pub(crate) fn cmd_start(config: Option<PathBuf>, yolo: bool) {
     // MemPalace installation uses blocking HTTP/process work. Keep the whole
     // preflight outside Tokio: dropping reqwest's blocking runtime from inside
     // an async context panics and can prevent a fresh home from ever booting.
-    let mut kernel_config = captain_kernel::config::load_config(config.as_deref());
     set_daemon_working_directory(&kernel_config.home_dir);
     std::env::set_var("CAPTAIN_HOME", &kernel_config.home_dir);
     let memory_is_required =
@@ -258,5 +349,21 @@ mod tests {
             "Daemon is draining 3 active work item(s), including 1 background process(es); Captain will not stop healthy active work."
         );
         assert!(!summary.contains("private prompt"));
+    }
+
+    #[test]
+    fn daemon_start_lock_rejects_concurrent_boot_and_recovers_after_release() {
+        let home = tempfile::tempdir().expect("temporary Captain home");
+        let first = DaemonStartLock::acquire(home.path()).expect("first startup lock");
+
+        let error = DaemonStartLock::acquire(home.path())
+            .err()
+            .expect("concurrent startup must be rejected");
+        assert!(error.contains("Another Captain daemon is starting or running"));
+        assert!(error.contains(&format!("PID {}", std::process::id())));
+
+        drop(first);
+        let _recovered = DaemonStartLock::acquire(home.path())
+            .expect("released lock must be reusable after shutdown or crash");
     }
 }

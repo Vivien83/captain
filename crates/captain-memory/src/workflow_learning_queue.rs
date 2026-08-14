@@ -15,7 +15,7 @@ use crate::workflow_learning_control::{
 use crate::workflow_learning_outbox::{insert_outbox_in_tx, NewWorkflowOutboxItem};
 pub use crate::workflow_learning_types::{
     NewWorkflowJob, WorkflowJobEffectState, WorkflowJobKind, WorkflowJobRecord,
-    WorkflowJobRecoverySummary, WorkflowJobStatus,
+    WorkflowJobRecoverySummary, WorkflowJobRetryResolution, WorkflowJobStatus,
 };
 use crate::workflow_learning_validation::{
     validate_hash, validate_json, validate_text, validate_token,
@@ -62,6 +62,98 @@ impl WorkflowLearningStore {
         validate_token("job id", id, 96)?;
         let conn = self.lock_conn()?;
         job_by_id(&conn, id).map_err(Into::into)
+    }
+
+    /// Explicitly requeue the same exhausted pre-approval job.
+    ///
+    /// Only a known-completed, retryable model failure can be replayed. Jobs
+    /// with an uncertain effect and activation lifecycle jobs are never
+    /// eligible through this operator path.
+    pub fn retry_dead_preapproval_job(
+        &self,
+        proposal_id: &str,
+        expected_error_code: &str,
+        now_unix_ms: i64,
+    ) -> Result<WorkflowJobRetryResolution, WorkflowLearningControlError> {
+        validate_token("proposal_id", proposal_id, 96)?;
+        validate_token("job error_code", expected_error_code, 96)?;
+        if now_unix_ms < 0 {
+            return Err(WorkflowLearningControlError::InvalidInput(
+                "workflow-learning retry timestamp must be nonnegative".to_string(),
+            ));
+        }
+
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let proposal = proposal_by_id(&tx, proposal_id)?
+            .ok_or_else(|| WorkflowLearningControlError::NotFound(proposal_id.to_string()))?;
+        let current = latest_job_by_proposal(&tx, proposal_id)?.ok_or_else(|| {
+            WorkflowLearningControlError::NotFound(format!(
+                "no workflow-learning job for proposal {proposal_id}"
+            ))
+        })?;
+
+        if current.error_code.as_deref() != Some(expected_error_code) {
+            return Err(WorkflowLearningControlError::Conflict(
+                "workflow-learning failure changed before retry".to_string(),
+            ));
+        }
+        if matches!(
+            current.status,
+            WorkflowJobStatus::Pending | WorkflowJobStatus::Running | WorkflowJobStatus::RetryWait
+        ) && preapproval_kind(current.kind)
+            && current.effect_state == WorkflowJobEffectState::None
+        {
+            tx.commit()?;
+            return Ok(WorkflowJobRetryResolution {
+                job: current,
+                replayed: true,
+            });
+        }
+        if !operator_retry_allowed(&current, proposal.state) {
+            return Err(WorkflowLearningControlError::Conflict(
+                "only an exhausted, known-completed pre-approval model failure can be retried"
+                    .to_string(),
+            ));
+        }
+
+        let competing: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM workflow_learning_jobs
+             WHERE proposal_id = ?1 AND id <> ?2
+               AND status IN ('pending','running','retry_wait','uncertain')",
+            params![proposal_id, current.id],
+            |row| row.get(0),
+        )?;
+        if competing > 0 {
+            return Err(WorkflowLearningControlError::Conflict(
+                "another workflow-learning job is already active for this proposal".to_string(),
+            ));
+        }
+
+        let changed = tx.execute(
+            "UPDATE workflow_learning_jobs
+             SET status = 'pending', attempt_count = 0, run_after = ?1,
+                 lease_owner = NULL, lease_expires_at = NULL,
+                 effect_state = 'none', result_json = NULL, updated_at = ?1
+             WHERE id = ?2 AND status = 'dead' AND effect_state = 'completed'
+               AND error_code = ?3",
+            params![now_unix_ms, current.id, expected_error_code],
+        )?;
+        if changed != 1 {
+            return Err(WorkflowLearningControlError::Conflict(
+                "workflow-learning job changed concurrently while retrying".to_string(),
+            ));
+        }
+        let queued = job_by_id(&tx, &current.id)?.ok_or_else(|| {
+            WorkflowLearningControlError::CorruptData(
+                "retried workflow-learning job vanished".to_string(),
+            )
+        })?;
+        tx.commit()?;
+        Ok(WorkflowJobRetryResolution {
+            job: queued,
+            replayed: false,
+        })
     }
 
     pub fn list_uncertain_jobs(
@@ -694,6 +786,18 @@ pub(crate) fn job_by_id(
     .optional()
 }
 
+pub(crate) fn latest_job_by_proposal(
+    conn: &rusqlite::Connection,
+    proposal_id: &str,
+) -> rusqlite::Result<Option<WorkflowJobRecord>> {
+    conn.query_row(
+        &format!("{JOB_SELECT} WHERE proposal_id = ?1 ORDER BY updated_at DESC, id DESC LIMIT 1"),
+        params![proposal_id],
+        job_from_row,
+    )
+    .optional()
+}
+
 pub(crate) fn complete_job_in_tx(
     tx: &Transaction<'_>,
     id: &str,
@@ -850,4 +954,46 @@ fn job_allowed_in_state(kind: WorkflowJobKind, state: WorkflowProposalState) -> 
                 | WorkflowProposalState::InstallFailed
         ),
     }
+}
+
+fn preapproval_kind(kind: WorkflowJobKind) -> bool {
+    matches!(
+        kind,
+        WorkflowJobKind::Analyze | WorkflowJobKind::Draft | WorkflowJobKind::Validate
+    )
+}
+
+pub(crate) fn operator_retry_allowed(
+    job: &WorkflowJobRecord,
+    proposal_state: WorkflowProposalState,
+) -> bool {
+    operator_retry_allowed_parts(
+        job.kind,
+        job.status,
+        job.effect_state,
+        job.error_code.as_deref(),
+        proposal_state,
+    )
+}
+
+pub(crate) fn operator_retry_allowed_parts(
+    kind: WorkflowJobKind,
+    status: WorkflowJobStatus,
+    effect_state: WorkflowJobEffectState,
+    error_code: Option<&str>,
+    proposal_state: WorkflowProposalState,
+) -> bool {
+    status == WorkflowJobStatus::Dead
+        && effect_state == WorkflowJobEffectState::Completed
+        && preapproval_kind(kind)
+        && job_allowed_in_state(kind, proposal_state)
+        && matches!(
+            error_code,
+            Some(
+                "model_timeout"
+                    | "model_completion_failed"
+                    | "invalid_structured_output"
+                    | "invalid_draft"
+            )
+        )
 }

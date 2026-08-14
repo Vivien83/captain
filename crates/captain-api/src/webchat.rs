@@ -136,6 +136,9 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
             Some(include_str!("../static/js/app/provider_quota_model.mjs"))
         }
         "chat_stream_batcher.mjs" => Some(include_str!("../static/js/app/chat_stream_batcher.mjs")),
+        "verification_phase_model.mjs" => Some(include_str!(
+            "../static/js/app/verification_phase_model.mjs"
+        )),
         "components/Shell.js" => Some(include_str!("../static/js/app/components/Shell.js")),
         "components/ArtifactDrawer.js" => Some(include_str!(
             "../static/js/app/components/ArtifactDrawer.js"
@@ -149,6 +152,9 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
         "components/AskUserPrompt.js" => {
             Some(include_str!("../static/js/app/components/AskUserPrompt.js"))
         }
+        "components/SuggestedReplies.js" => Some(include_str!(
+            "../static/js/app/components/SuggestedReplies.js"
+        )),
         "views/Chat.js" => Some(include_str!("../static/js/app/views/Chat.js")),
         "views/Approvals.js" => Some(include_str!("../static/js/app/views/Approvals.js")),
         "views/Projects.js" => Some(include_str!("../static/js/app/views/Projects.js")),
@@ -189,6 +195,48 @@ mod control_app_asset_tests {
     use axum::body::to_bytes;
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
+    use std::collections::{HashSet, VecDeque};
+
+    fn browser_import_specifiers(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .filter_map(|line| {
+                if let Some((_, suffix)) = line.split_once(" from '") {
+                    return suffix.split_once('\'').map(|(specifier, _)| specifier);
+                }
+                line.trim_start()
+                    .strip_prefix("import '")
+                    .and_then(|suffix| suffix.split_once('\'').map(|(specifier, _)| specifier))
+            })
+            .collect()
+    }
+
+    fn resolve_app_import(importer: &str, specifier: &str) -> Option<String> {
+        let mut parts = Vec::new();
+        let relative = if let Some(path) = specifier.strip_prefix("/assets/app/") {
+            path
+        } else if specifier.starts_with('.') {
+            parts.extend(importer.split('/'));
+            parts.pop();
+            specifier
+        } else {
+            return None;
+        };
+
+        for part in relative.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    assert!(
+                        parts.pop().is_some(),
+                        "import escapes app root: {specifier}"
+                    );
+                }
+                part => parts.push(part),
+            }
+        }
+        Some(parts.join("/"))
+    }
 
     #[test]
     fn six_hub_control_assets_are_embedded() {
@@ -198,10 +246,12 @@ mod control_app_asset_tests {
             "status_model.mjs",
             "provider_quota_model.mjs",
             "chat_stream_batcher.mjs",
+            "verification_phase_model.mjs",
             "components/Login.js",
             "components/Shell.js",
             "components/ArtifactDrawer.js",
             "components/LiveRunsDrawer.js",
+            "components/SuggestedReplies.js",
             "views/Automation.js",
             "views/Workflows.js",
             "views/Capabilities.js",
@@ -219,6 +269,33 @@ mod control_app_asset_tests {
         }
         assert!(embedded_app_asset("views/System.js").is_none());
         assert!(embedded_app_asset("../../config.toml").is_none());
+    }
+
+    #[test]
+    fn control_entrypoint_import_graph_is_fully_embedded() {
+        let mut pending = VecDeque::from(["main.js".to_string()]);
+        let mut visited = HashSet::new();
+
+        while let Some(path) = pending.pop_front() {
+            if !visited.insert(path.clone()) {
+                continue;
+            }
+            let source = embedded_app_asset(&path)
+                .unwrap_or_else(|| panic!("Control entrypoint requires missing asset {path}"));
+            for specifier in browser_import_specifiers(source) {
+                let Some(imported_path) = resolve_app_import(&path, specifier) else {
+                    continue;
+                };
+                assert!(
+                    embedded_app_asset(&imported_path).is_some(),
+                    "Control asset {path} imports {specifier}, but {imported_path} is not embedded"
+                );
+                pending.push_back(imported_path);
+            }
+        }
+
+        assert!(visited.contains("components/SuggestedReplies.js"));
+        assert!(visited.contains("verification_phase_model.mjs"));
     }
 
     #[test]

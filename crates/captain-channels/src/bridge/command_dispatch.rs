@@ -383,7 +383,14 @@ async fn dispatch_learning_review_command(
     ctx: &CommandContext<'_>,
 ) -> Option<String> {
     let handle = ctx.handle;
+    let decided_by = format!("{}:{}", ctx.channel, ctx.sender_user_id);
     match name {
+        "learning_retry" => Some(
+            run_id_prefix_command(args, "learning_retry", |id| async move {
+                handle.retry_learning_workflow_text(&id, &decided_by).await
+            })
+            .await,
+        ),
         "learn_approve" => Some(
             run_id_prefix_command(args, "learn_approve", |id| async move {
                 handle.resolve_learning_review_text(&id, true).await

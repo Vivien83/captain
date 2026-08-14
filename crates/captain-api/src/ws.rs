@@ -14,13 +14,13 @@
 
 use crate::routes::AppState;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ConnectInfo, Extension, Path, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Extension, Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use captain_kernel::hub_pairing_service::DeviceAccessIdentity;
 use captain_runtime::kernel_handle::KernelHandle;
 use captain_runtime::llm_driver::StreamEvent;
 use captain_runtime::llm_errors;
-use captain_types::agent::AgentId;
+use captain_types::agent::{AgentId, SessionId};
 use dashmap::DashMap;
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
@@ -138,11 +138,17 @@ fn try_acquire_ws_slot(ip: IpAddr) -> Option<WsConnectionGuard> {
 /// Authentication is enforced by the shared API middleware. Browser clients
 /// use a path/IP/epoch-bound one-time ticket because WebSocket cannot attach a
 /// custom Authorization header.
+#[derive(Debug, serde::Deserialize)]
+pub struct AgentWsQuery {
+    session_id: Option<String>,
+}
+
 pub async fn agent_ws(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
+    Query(query): Query<AgentWsQuery>,
     client: Option<Extension<DeviceAccessIdentity>>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
@@ -173,10 +179,37 @@ pub async fn agent_ws(
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
 
+    let session_id = match query.session_id {
+        Some(raw) => match raw.parse::<uuid::Uuid>().map(SessionId) {
+            Ok(session_id) => session_id,
+            Err(_) => return axum::http::StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => match state.kernel.registry.get(agent_id) {
+            Some(entry) => entry.session_id,
+            None => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        },
+    };
+    match state.kernel.memory.get_session(session_id) {
+        Ok(Some(session)) if session.agent_id == agent_id => {}
+        Ok(Some(_)) | Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            warn!(agent_id = %agent_id, session_id = %session_id, %error, "WebSocket session lookup failed");
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
     let id_str = id.clone();
     let client_device_id = client.map(|Extension(identity)| identity.device_id);
     ws.on_upgrade(move |socket| {
-        handle_agent_ws(socket, state, agent_id, id_str, guard, client_device_id)
+        handle_agent_ws(
+            socket,
+            state,
+            agent_id,
+            session_id,
+            id_str,
+            guard,
+            client_device_id,
+        )
     })
     .into_response()
 }
@@ -190,10 +223,24 @@ struct WsMessageContext {
     sender: Arc<Mutex<SplitSink<WebSocket, Message>>>,
     state: Arc<AppState>,
     agent_id: AgentId,
+    session_id: SessionId,
     verbose: Arc<AtomicU8>,
     active_user_input_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
     is_initiator: Arc<std::sync::atomic::AtomicBool>,
     client_device_id: Option<String>,
+}
+
+fn chat_event_for_session(
+    event: &captain_types::event::Event,
+    session_id: SessionId,
+) -> Option<&captain_types::event::ChatStreamEvent> {
+    if event.session_id != Some(session_id) {
+        return None;
+    }
+    match &event.payload {
+        captain_types::event::EventPayload::ChatStream(chat_event) => Some(chat_event),
+        _ => None,
+    }
 }
 
 /// Handle a WebSocket connection to an agent.
@@ -204,11 +251,12 @@ async fn handle_agent_ws(
     socket: WebSocket,
     state: Arc<AppState>,
     agent_id: AgentId,
+    session_id: SessionId,
     id_str: String,
     _guard: WsConnectionGuard,
     client_device_id: Option<String>,
 ) {
-    info!(agent_id = %id_str, "WebSocket connected");
+    info!(agent_id = %id_str, session_id = %session_id, "WebSocket connected");
 
     let (sender, mut receiver) = socket.split();
     let sender = Arc::new(Mutex::new(sender));
@@ -222,12 +270,13 @@ async fn handle_agent_ws(
         &serde_json::json!({
             "type": "connected",
             "agent_id": id_str,
+            "session_id": session_id.to_string(),
         }),
     )
     .await;
 
     // Catch-up: if an agent response is currently in progress, send the accumulated state
-    if let Some(active) = state.kernel.active_streams.get(agent_id) {
+    if let Some(active) = state.kernel.active_streams.get(agent_id, session_id) {
         let catch_up = serde_json::json!({
             "type": "catch_up",
             "user_message": active.user_message,
@@ -252,9 +301,7 @@ async fn handle_agent_ws(
         loop {
             match event_rx.recv().await {
                 Ok(event) => {
-                    if let captain_types::event::EventPayload::ChatStream(ref chat_ev) =
-                        event.payload
-                    {
+                    if let Some(chat_ev) = chat_event_for_session(&event, session_id) {
                         // The initiator already receives normal stream events directly.
                         // Compaction may also run just after that direct stream closes,
                         // so always forward its idempotent operation projection.
@@ -345,6 +392,7 @@ async fn handle_agent_ws(
         sender: Arc::clone(&sender),
         state: Arc::clone(&state),
         agent_id,
+        session_id,
         verbose: Arc::clone(&verbose),
         active_user_input_tx: Arc::clone(&active_user_input_tx),
         is_initiator: Arc::clone(&is_initiator),
@@ -462,7 +510,7 @@ async fn handle_agent_ws(
     // Cleanup
     update_handle.abort();
     event_forward_handle.abort();
-    info!(agent_id = %id_str, "WebSocket disconnected");
+    info!(agent_id = %id_str, session_id = %session_id, "WebSocket disconnected");
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +522,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
     let sender = &context.sender;
     let state = &context.state;
     let agent_id = context.agent_id;
+    let session_id = context.session_id;
     let verbose = &context.verbose;
     let active_user_input_tx = &context.active_user_input_tx;
     let is_initiator = &context.is_initiator;
@@ -657,9 +706,10 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
             {
                 use captain_types::event::{ChatStreamEvent, TypingState};
                 let bus = &state.kernel.event_bus;
-                crate::chat_broadcast_publish(
+                crate::chat_broadcast_publish_for_session(
                     bus,
                     agent_id,
+                    session_id,
                     ChatStreamEvent::UserMessage {
                         message_id: user_msg_id.clone(),
                         content: content.clone(),
@@ -671,9 +721,10 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                     },
                 )
                 .await;
-                crate::chat_broadcast_publish(
+                crate::chat_broadcast_publish_for_session(
                     bus,
                     agent_id,
+                    session_id,
                     ChatStreamEvent::Typing {
                         agent_id,
                         state: TypingState::Start,
@@ -685,6 +736,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
             // Start tracking active stream for catch-up on new connections
             state.kernel.active_streams.start(
                 agent_id,
+                session_id,
                 content.clone(),
                 user_msg_id.clone(),
                 provenance
@@ -696,7 +748,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
             // Send message to agent with streaming
             let kernel_handle: Arc<dyn KernelHandle> =
                 state.kernel.clone() as Arc<dyn KernelHandle>;
-            match state.kernel.send_message_streaming(
+            match state.kernel.send_message_streaming_in_session(
                 agent_id,
                 &content,
                 Some(kernel_handle),
@@ -704,6 +756,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                 provenance.sender_name,
                 ws_content_blocks,
                 provenance.channel_type,
+                Some(session_id),
             ) {
                 Ok((mut rx, handle, user_input_tx)) => {
                     let stream_metric = crate::stream_metrics::StreamMetricHandle::start(
@@ -716,16 +769,10 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                         *tx_slot = Some(user_input_tx);
                     }
 
-                    // Timeline replay reads back by the agent's real active
-                    // session UUID (GET /api/sessions/{id}/events), not by
-                    // agent_id — resolve it once here rather than inside the
-                    // hot per-event persist call.
-                    let session_id = state
-                        .kernel
-                        .registry
-                        .get(agent_id)
-                        .map(|entry| entry.session_id.to_string())
-                        .unwrap_or_else(|| agent_id.to_string());
+                    // Freeze the selected conversation for timeline writes and
+                    // broadcasts. Registry switches from TUI or Telegram must
+                    // not retarget an in-flight Web turn.
+                    let session_id_string = session_id.to_string();
 
                     // Forward stream events to WebSocket with debouncing.
                     //
@@ -778,6 +825,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                                             broadcast_stream_event(
                                                 &state_stream.kernel,
                                                 agent_id,
+                                                session_id,
                                                 &ev,
                                             ).await;
 
@@ -789,7 +837,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                                             crate::timeline::persist_stream_event(
                                                 &state_stream.kernel.memory,
                                                 agent_id,
-                                                &session_id,
+                                                &session_id_string,
                                                 &ev,
                                             );
 
@@ -959,14 +1007,15 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                             // Finish active stream tracking + broadcast completion.
                             // Keep is_initiator=true DURING broadcasts so the initiating
                             // connection's event_forward_handle skips them (no duplicates).
-                            state.kernel.active_streams.finish(agent_id);
+                            state.kernel.active_streams.finish(agent_id, session_id);
                             {
                                 use captain_types::event::{ChatStreamEvent, TypingState};
                                 let bus = &state.kernel.event_bus;
                                 let cleaned_for_broadcast = strip_think_tags(&accumulated_text);
-                                crate::chat_broadcast_publish(
+                                crate::chat_broadcast_publish_for_session(
                                     bus,
                                     agent_id,
+                                    session_id,
                                     ChatStreamEvent::Response {
                                         agent_id,
                                         content: cleaned_for_broadcast,
@@ -975,9 +1024,10 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                                     },
                                 )
                                 .await;
-                                crate::chat_broadcast_publish(
+                                crate::chat_broadcast_publish_for_session(
                                     bus,
                                     agent_id,
+                                    session_id,
                                     ChatStreamEvent::Typing {
                                         agent_id,
                                         state: TypingState::Stop,
@@ -1075,7 +1125,7 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                                 warn!("Stream relay task cancelled: {e}");
                                 "Stream cancelled"
                             };
-                            state.kernel.active_streams.finish(agent_id);
+                            state.kernel.active_streams.finish(agent_id, session_id);
                             is_initiator.store(false, Ordering::Relaxed);
                             let _ = send_json(
                                 sender,
@@ -1097,6 +1147,8 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
                 }
                 Err(e) => {
                     warn!("Streaming setup failed: {e}");
+                    state.kernel.active_streams.finish(agent_id, session_id);
+                    is_initiator.store(false, Ordering::Relaxed);
                     let _ = send_json(
                         sender,
                         &serde_json::json!({
@@ -1119,7 +1171,8 @@ async fn handle_text_message(context: WsMessageContext, text: &str) {
         "command" => {
             let cmd = parsed["command"].as_str().unwrap_or("");
             let args = parsed["args"].as_str().unwrap_or("");
-            let response = handle_command(sender, state, agent_id, cmd, args, verbose).await;
+            let response =
+                handle_command(sender, state, agent_id, session_id, cmd, args, verbose).await;
             let _ = send_json(sender, &response).await;
         }
         "ping" => {
@@ -1148,18 +1201,23 @@ async fn handle_command(
     _sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>,
     state: &Arc<AppState>,
     agent_id: AgentId,
+    session_id: SessionId,
     cmd: &str,
     args: &str,
     verbose: &Arc<AtomicU8>,
 ) -> serde_json::Value {
     match cmd {
-        "new" | "reset" => match state.kernel.reset_session(agent_id) {
-            Ok(()) => {
-                serde_json::json!({"type": "command_result", "command": cmd, "message": "New session started. The previous session remains available in history."})
+        "new" | "reset" => match state.kernel.create_agent_session_detached(agent_id, None) {
+            Ok(session) => {
+                serde_json::json!({"type": "command_result", "command": cmd, "message": "New session created. Select it from session history to open it.", "session": session})
             }
             Err(e) => serde_json::json!({"type": "error", "content": format!("Reset failed: {e}")}),
         },
-        "compact" => match state.kernel.compact_agent_session(agent_id).await {
+        "compact" => match state
+            .kernel
+            .compact_agent_session_by_id(agent_id, session_id)
+            .await
+        {
             Ok(msg) => {
                 serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
             }
@@ -1167,6 +1225,15 @@ async fn handle_command(
                 serde_json::json!({"type": "error", "content": format!("Compaction failed: {e}")})
             }
         },
+        "stop"
+            if state
+                .kernel
+                .active_streams
+                .get(agent_id, session_id)
+                .is_none() =>
+        {
+            serde_json::json!({"type": "command_result", "command": cmd, "message": "No active run in this session."})
+        }
         "stop" => match state.kernel.stop_agent_run(agent_id) {
             Ok(true) => {
                 serde_json::json!({"type": "command_result", "command": cmd, "message": "Run cancelled."})
@@ -1703,13 +1770,16 @@ pub fn strip_think_tags(text: &str) -> String {
 async fn broadcast_stream_event(
     kernel: &Arc<captain_kernel::CaptainKernel>,
     agent_id: AgentId,
+    session_id: SessionId,
     ev: &StreamEvent,
 ) {
     use captain_types::event::ChatStreamEvent;
 
     let chat_event = match ev {
         StreamEvent::TextDelta { text } => {
-            kernel.active_streams.append_text(agent_id, text);
+            kernel
+                .active_streams
+                .append_text(agent_id, session_id, text);
             Some(ChatStreamEvent::TextDelta {
                 agent_id,
                 delta: text.clone(),
@@ -1718,7 +1788,7 @@ async fn broadcast_stream_event(
         StreamEvent::ToolUseStart { id, name } => {
             kernel
                 .active_streams
-                .tool_start(agent_id, id.clone(), name.clone());
+                .tool_start(agent_id, session_id, id.clone(), name.clone());
             Some(ChatStreamEvent::ToolStart {
                 agent_id,
                 tool_name: name.clone(),
@@ -1733,7 +1803,7 @@ async fn broadcast_stream_event(
         } => {
             let maybe_tid = if !tool_use_id.is_empty() {
                 Some(tool_use_id.clone())
-            } else if let Some(stream) = kernel.active_streams.get(agent_id) {
+            } else if let Some(stream) = kernel.active_streams.get(agent_id, session_id) {
                 stream
                     .tools
                     .iter()
@@ -1745,9 +1815,13 @@ async fn broadcast_stream_event(
             };
 
             maybe_tid.map(|tid| {
-                kernel
-                    .active_streams
-                    .tool_end(agent_id, &tid, result_preview.clone(), *is_error);
+                kernel.active_streams.tool_end(
+                    agent_id,
+                    session_id,
+                    &tid,
+                    result_preview.clone(),
+                    *is_error,
+                );
                 ChatStreamEvent::ToolEnd {
                     agent_id,
                     tool_use_id: tid,
@@ -1784,7 +1858,13 @@ async fn broadcast_stream_event(
     };
 
     if let Some(evt) = chat_event {
-        captain_kernel::chat_broadcast::publish_chat_event(&kernel.event_bus, agent_id, evt).await;
+        captain_kernel::chat_broadcast::publish_chat_event_for_session(
+            &kernel.event_bus,
+            agent_id,
+            session_id,
+            evt,
+        )
+        .await;
     }
 }
 
@@ -1799,6 +1879,36 @@ mod tests {
     fn test_ws_module_loads() {
         // Verify module compiles and loads correctly
         let _ = VerboseLevel::Off;
+    }
+
+    #[test]
+    fn websocket_chat_events_are_visible_only_to_their_session() {
+        use captain_types::event::{ChatStreamEvent, Event, EventPayload, EventTarget};
+
+        let agent_id = AgentId::new();
+        let first = SessionId::new();
+        let second = SessionId::new();
+        let scoped = Event::new(
+            agent_id,
+            EventTarget::Agent(agent_id),
+            EventPayload::ChatStream(ChatStreamEvent::TextDelta {
+                agent_id,
+                delta: "first only".to_string(),
+            }),
+        )
+        .with_session(first);
+        let legacy_unscoped = Event::new(
+            agent_id,
+            EventTarget::Agent(agent_id),
+            EventPayload::ChatStream(ChatStreamEvent::TextDelta {
+                agent_id,
+                delta: "unscoped".to_string(),
+            }),
+        );
+
+        assert!(chat_event_for_session(&scoped, first).is_some());
+        assert!(chat_event_for_session(&scoped, second).is_none());
+        assert!(chat_event_for_session(&legacy_unscoped, first).is_none());
     }
 
     #[test]

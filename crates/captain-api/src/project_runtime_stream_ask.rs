@@ -83,12 +83,16 @@ async fn publish_project_worker_ask_user(
     question: String,
     options: Option<Vec<String>>,
 ) {
-    crate::chat_broadcast_publish(
-        &state.kernel.event_bus,
-        agent_id,
-        project_ask_chat_event(agent_id, ask_id, project, spec, phase, question, options),
-    )
-    .await;
+    let event = project_ask_chat_event(agent_id, ask_id, project, spec, phase, question, options);
+    if let Some(entry) = state.kernel.registry.get(agent_id) {
+        crate::chat_broadcast_publish_for_session(
+            &state.kernel.event_bus,
+            agent_id,
+            entry.session_id,
+            event,
+        )
+        .await;
+    }
 }
 
 fn project_ask_chat_event(

@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelSwitchSessionStrategy {
-    /// Start with an empty active session and drop active canonical context.
+    /// Start with an empty active session without mutating durable memories or
+    /// summaries owned by other sessions.
     NewSession,
-    /// Convert the current context into a provider-neutral summary first.
+    /// Carry a provider-neutral summary into the newly created session.
     CompactSession,
 }
 
@@ -55,7 +56,11 @@ pub struct ModelSwitchPlan {
     pub model_changed: bool,
     pub active_session_id: String,
     pub active_message_count: usize,
+    /// Historical wire name: reports whether the active session has a
+    /// session-local compaction handoff.
     pub canonical_summary_present: bool,
+    /// Historical wire field retained for compatibility. Agent-wide recent
+    /// messages are no longer mixed into model-switch context.
     pub canonical_recent_count: usize,
     pub session_strategy_required: bool,
     pub recommended_session_strategy: ModelSwitchSessionStrategy,

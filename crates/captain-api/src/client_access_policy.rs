@@ -308,6 +308,7 @@ mod tests {
             (Method::POST, "/api/schedules/schedule-1/run"),
             (Method::POST, "/api/learning/review/review-1/decide"),
             (Method::POST, "/api/learning/workflows/proposal-1/decide"),
+            (Method::POST, "/api/learning/workflows/proposal-1/retry"),
             (Method::POST, "/api/skills/proposals/proposal-1/decide"),
             (Method::POST, "/api/memory/migrate"),
             (Method::POST, "/api/capabilities/native/install"),

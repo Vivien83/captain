@@ -18,11 +18,23 @@ const ACTION_LABELS = { activate: 'Activer', test: 'Tester', later: 'Reporter', 
 const MUTATING_ACTIONS = new Set(['activate', 'test']);
 const RUNTIME_LABELS = {
   disabled: 'Désactivé', starting: 'Démarrage', healthy: 'Opérationnel', active: 'Actif',
-  recovering: 'Reprise automatique', degraded: 'Dégradé', stalled: 'Worker bloqué',
+  recovering: 'Reprise automatique', degraded: 'Learning à vérifier', stalled: 'Worker bloqué',
 };
 const RECOVERY_LABELS = {
   disabled: 'désactivée', starting: 'démarrage', in_sync: 'synchronisée',
   automatic_retry_active: 'retry automatique', operator_attention: 'attention requise',
+};
+const JOB_ERROR_LABELS = {
+  model_timeout: 'délai du modèle dépassé',
+  model_completion_failed: 'appel au modèle interrompu',
+  invalid_structured_output: 'réponse structurée invalide',
+  invalid_draft: 'brouillon invalide',
+  effect_interrupted: 'effet interrompu, rejeu automatique interdit',
+  attempts_exhausted: 'nombre maximal d’essais atteint',
+};
+const JOB_STAGE_LABELS = {
+  analyze: 'analyse', draft: 'génération', validate: 'validation',
+  install: 'installation', canary: 'canary', rollback: 'rollback',
 };
 
 function relativeAge(now, at) {
@@ -62,15 +74,31 @@ function visibleActions(workflow) {
   return (workflow.card.available_actions || []).filter((action) => ACTION_LABELS[action]);
 }
 
-function workflowCounts(workflows) {
+function workflowCounts(workflows, attention) {
   const counts = { total: workflows.length, decisions: 0, processing: 0, active: 0, attention: 0 };
+  const attentionIds = new Set((attention || []).map((item) => item.proposal_id));
   workflows.forEach((workflow) => {
+    if (attentionIds.has(workflow.proposal_id)) {
+      counts.attention += 1;
+      return;
+    }
     if (workflow.projection_status === 'invalid' || ['rejected', 'install_failed', 'rolled_back'].includes(workflow.state)) counts.attention += 1;
     if (workflow.state === 'proposed') counts.decisions += 1;
     if (workflow.state === 'active') counts.active += 1;
     if (['observed', 'eligible', 'drafting', 'validating', 'approved_pending_install', 'active_canary'].includes(workflow.state)) counts.processing += 1;
   });
   return counts;
+}
+
+function jobErrorLabel(code) {
+  return JOB_ERROR_LABELS[code] || code || 'cause non classée';
+}
+
+function memoryDisplay(metrics) {
+  if (!metrics) return { className: '', label: 'mémoire en vérification', healthy: false };
+  if (!metrics.learning_enabled) return { className: 'off', label: 'mémoire désactivée', healthy: false };
+  if (metrics.memory_writes?.recovery === 'in_sync') return { className: 'ok', label: 'mémoire active', healthy: true };
+  return { className: 'warn', label: 'mémoire en reprise', healthy: false };
 }
 
 export function Learning() {
@@ -82,6 +110,7 @@ export function Learning() {
   const [workflowFilter, setWorkflowFilter] = useState('decisions');
   const [expandedId, setExpandedId] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [busyRecoveryId, setBusyRecoveryId] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -132,12 +161,34 @@ export function Learning() {
     }
   };
 
-  const counts = useMemo(() => workflowCounts(workflows || []), [workflows]);
+  const retryWorkflow = async (incident) => {
+    if (!incident?.retry_available || !incident.error_code) return;
+    setBusyRecoveryId(incident.proposal_id);
+    try {
+      const result = await api.workflowLearningRetry(incident.proposal_id, incident.error_code);
+      toast(result.replayed ? 'La reprise était déjà planifiée' : 'Workflow remis en file de génération');
+      await load();
+    } catch (e) {
+      toast(`Relance impossible : ${e.message}`, 'err');
+      await load();
+    } finally {
+      setBusyRecoveryId(null);
+    }
+  };
+
+  const incidents = runtimeStatus?.attention || [];
+  const incidentIds = useMemo(() => new Set(incidents.map((item) => item.proposal_id)), [runtimeStatus]);
+  const counts = useMemo(() => workflowCounts(workflows || [], incidents), [workflows, runtimeStatus]);
   const filteredWorkflows = useMemo(() => {
     if (!workflows) return [];
     if (workflowFilter === 'all') return workflows;
-    return workflows.filter((workflow) => workflow.state === 'proposed' || workflow.projection_status === 'invalid');
-  }, [workflows, workflowFilter]);
+    if (workflowFilter === 'processing') return workflows.filter((workflow) => !incidentIds.has(workflow.proposal_id) && ['observed', 'eligible', 'drafting', 'validating', 'approved_pending_install', 'active_canary'].includes(workflow.state));
+    if (workflowFilter === 'active') return workflows.filter((workflow) => workflow.state === 'active');
+    if (workflowFilter === 'attention') return workflows.filter((workflow) => incidentIds.has(workflow.proposal_id) || workflow.projection_status === 'invalid' || ['rejected', 'install_failed', 'rolled_back'].includes(workflow.state));
+    return workflows.filter((workflow) => workflow.state === 'proposed' || workflow.projection_status === 'invalid' || incidentIds.has(workflow.proposal_id));
+  }, [workflows, workflowFilter, incidentIds]);
+  const primaryIncident = incidents[0] || null;
+  const memoryState = memoryDisplay(metrics);
 
   return html`
     <div class="page">
@@ -165,15 +216,38 @@ export function Learning() {
             </div>
             <div class="learning-runtime-cell">
               <span>Files</span>
-              <strong>${runtimeStatus.jobs.pending}/${runtimeStatus.jobs.running}/${runtimeStatus.jobs.retry_wait + runtimeStatus.jobs.uncertain + runtimeStatus.jobs.dead} jobs</strong>
-              <small>${runtimeStatus.notifications.pending}/${runtimeStatus.notifications.delivering}/${runtimeStatus.notifications.retry_wait + runtimeStatus.notifications.dead} notifications</small>
+              <strong>${runtimeStatus.jobs.pending} en attente · ${runtimeStatus.jobs.running} actif</strong>
+              <small>${runtimeStatus.jobs.retry_wait} retry · ${runtimeStatus.jobs.uncertain} incertain · ${runtimeStatus.jobs.dead} bloqué</small>
             </div>
             <div class="learning-runtime-cell">
               <span>Reprise</span>
               <strong>${RECOVERY_LABELS[runtimeStatus.recovery] || runtimeStatus.recovery}</strong>
-              <small>${runtimeStatus.jobs.next_retry_at_unix_ms ? `prochain retry ${retryDelay(runtimeStatus.generated_at_unix_ms, runtimeStatus.jobs.next_retry_at_unix_ms)}` : 'aucun retry planifié'}</small>
+              <small>${runtimeStatus.jobs.next_retry_at_unix_ms
+                ? `prochain retry ${retryDelay(runtimeStatus.generated_at_unix_ms, runtimeStatus.jobs.next_retry_at_unix_ms)}`
+                : runtimeStatus.jobs.dead > 0
+                  ? 'relance automatique arrêtée après épuisement des essais'
+                  : 'aucune reprise nécessaire'}</small>
             </div>
           </section>
+          ${primaryIncident && html`
+            <section class="learning-runtime-alert" aria-label="Incident du moteur Learning">
+              <div>
+                <strong>${primaryIncident.state === 'uncertain' ? 'Rejeu automatique bloqué' : 'Génération arrêtée'}</strong>
+                <span>${`${JOB_STAGE_LABELS[primaryIncident.stage] || primaryIncident.stage} · ${jobErrorLabel(primaryIncident.error_code)} · ${primaryIncident.attempt_count}/${primaryIncident.max_attempts} essais.`}</span>
+                <small>${memoryState.healthy
+                  ? 'La mémoire durable reste active et n’est pas affectée.'
+                  : 'Cet incident Workflow Learning est distinct de l’état de la mémoire durable affiché ci-dessous.'}</small>
+              </div>
+              ${primaryIncident.retry_available && html`
+                <button
+                  class="primary"
+                  disabled=${busyRecoveryId === primaryIncident.proposal_id}
+                  onClick=${() => retryWorkflow(primaryIncident)}
+                >${busyRecoveryId === primaryIncident.proposal_id ? 'Relance…' : 'Relancer ce workflow'}</button>
+              `}
+              ${!primaryIncident.retry_available && html`<small>Une vérification opérateur est requise avant toute nouvelle action.</small>`}
+            </section>
+          `}
         `}
 
         <h2 class="section-title">Workflows appris</h2>
@@ -182,9 +256,9 @@ export function Learning() {
           <div class="metrics-row">
             <button class=${`metric-chip ${workflowFilter === 'decisions' ? 'ok' : ''}`} onClick=${() => setWorkflowFilter('decisions')}>${counts.decisions} à décider</button>
             <button class=${`metric-chip ${workflowFilter === 'all' ? 'ok' : ''}`} onClick=${() => setWorkflowFilter('all')}>${counts.total} au total</button>
-            <div class="metric-chip">${counts.processing} en cours</div>
-            <div class="metric-chip ok">${counts.active} actifs</div>
-            ${counts.attention > 0 && html`<div class="metric-chip off">${counts.attention} à examiner</div>`}
+            <button class=${`metric-chip ${workflowFilter === 'processing' ? 'ok' : ''}`} onClick=${() => setWorkflowFilter('processing')}>${counts.processing} en cours</button>
+            <button class=${`metric-chip ${workflowFilter === 'active' ? 'ok' : ''}`} onClick=${() => setWorkflowFilter('active')}>${counts.active} actifs</button>
+            ${counts.attention > 0 && html`<button class=${`metric-chip off ${workflowFilter === 'attention' ? 'selected' : ''}`} onClick=${() => setWorkflowFilter('attention')}>${counts.attention} à examiner</button>`}
           </div>
         `}
         ${workflows && filteredWorkflows.length === 0 && html`
@@ -248,7 +322,7 @@ export function Learning() {
             <div class="metric-chip">${metrics.review_queue_pending ?? (pending || []).length} mémoires en attente</div>
             <div class="metric-chip">${(committed || []).length} retenues récentes</div>
             <div class="metric-chip">mode : ${metrics.learning_mode || 'n/a'}</div>
-            <div class=${`metric-chip ${metrics.learning_enabled ? 'ok' : 'off'}`}>${metrics.learning_enabled ? 'mémoire active' : 'mémoire désactivée'}</div>
+            <div class=${`metric-chip ${memoryState.className}`}>${memoryState.label}</div>
           </div>
         `}
 

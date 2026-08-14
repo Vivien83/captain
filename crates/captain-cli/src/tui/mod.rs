@@ -648,6 +648,10 @@ impl App {
             } => {
                 self.handle_workflow_proposal_decided(proposal_id, action);
             }
+            AppEvent::WorkflowLearningRetried {
+                proposal_id,
+                replayed,
+            } => self.handle_workflow_learning_retried(proposal_id, replayed),
             AppEvent::CronJobsLoaded(jobs) => self.handle_cron_jobs_loaded(jobs),
             AppEvent::CronJobMutated { id, what } => self.handle_cron_job_mutated(id, what),
             AppEvent::ApprovalsLoaded { pending, rules } => {
@@ -1224,6 +1228,15 @@ impl App {
     ) {
         self.skills_proposed.status_msg =
             format!("action {} acceptée pour {}", action.as_str(), proposal_id);
+        self.refresh_skills_proposed();
+    }
+
+    fn handle_workflow_learning_retried(&mut self, proposal_id: String, replayed: bool) {
+        self.skills_proposed.status_msg = if replayed {
+            format!("reprise déjà planifiée pour {proposal_id}")
+        } else {
+            format!("workflow {proposal_id} remis en file")
+        };
         self.refresh_skills_proposed();
     }
 
@@ -2903,6 +2916,19 @@ impl App {
                         operator_token,
                         decision_version,
                         action,
+                        self.event_tx.clone(),
+                    );
+                }
+            }
+            skills_proposed::SkillsProposedAction::Retry {
+                proposal_id,
+                expected_error_code,
+            } => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_retry_workflow_learning(
+                        backend,
+                        proposal_id,
+                        expected_error_code,
                         self.event_tx.clone(),
                     );
                 }

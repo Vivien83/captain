@@ -10,6 +10,7 @@ mod approval_suggestion_manager_tests;
 mod approval_suggestions;
 pub mod auth;
 pub mod auto_reply;
+mod automation_session;
 pub mod background;
 pub mod builtin_crons;
 pub mod capabilities;

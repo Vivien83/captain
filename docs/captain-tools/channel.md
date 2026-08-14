@@ -120,8 +120,10 @@ Most end-user traffic is expected to come from Telegram. Treat Telegram as a pri
 - `/learning` renders the live Skill Learning V2 engine as a Rich operational
   card: exact bound model, heartbeat and last scan, durable jobs and
   notifications, retries/dead/uncertain state, and recovery. It never fabricates
-  a completion percentage. `/learnings` remains the separate list of generic
-  memory candidates awaiting review.
+  a completion percentage. A replay-safe exhausted draft includes the bounded
+  `/learning_retry <proposal>` action; uncertain effects and activation work
+  stay blocked. `/learnings` remains the separate list of generic memory
+  candidates awaiting review.
 - Consecutive independent tool starts share one live activity board. A progress or result event closes that parallel wave; a dependent tool belongs to the next board. Do not narrate each tool in a second message.
 - Private long turns refresh one ephemeral operational draft after 20 seconds of real inactivity and before Telegram's 30-second draft TTL. Text, tool activity, and visible edits reset that timer. Do not manually add duplicate "still working" messages unless the next action genuinely changed.
 - `ask_user` questions are stateful Rich cards. A button or freeform reply must reach the active turn before the card is confirmed; answered and expired cards clear their keyboard. Never tell the user a choice was recorded merely because a callback arrived.

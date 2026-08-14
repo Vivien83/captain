@@ -167,6 +167,16 @@ pub(crate) async fn summarize_messages(
     messages: &[Message],
     config: &CompactionConfig,
 ) -> Result<String, String> {
+    summarize_messages_with_handoff(driver, model, messages, config, None).await
+}
+
+pub(crate) async fn summarize_messages_with_handoff(
+    driver: Arc<dyn LlmDriver>,
+    model: &str,
+    messages: &[Message],
+    config: &CompactionConfig,
+    previous_handoff: Option<&str>,
+) -> Result<String, String> {
     let mut conversation_text = build_conversation_text(messages, config);
     let handoff_limits = compaction_handoff::handoff_limits(config);
 
@@ -175,8 +185,11 @@ pub(crate) async fn summarize_messages(
         conversation_text = truncate_conversation_tail(conversation_text, effective_max);
     }
 
-    let summarize_prompt =
-        compaction_handoff::handoff_user_prompt(&conversation_text, &handoff_limits);
+    let summarize_prompt = compaction_handoff::cumulative_handoff_user_prompt(
+        previous_handoff,
+        &conversation_text,
+        &handoff_limits,
+    );
     let request = summarization_request(model, summarize_prompt, config, &handoff_limits);
 
     let mut last_error = String::new();
@@ -261,12 +274,25 @@ pub(crate) async fn summarize_in_chunks(
     summarize_in_chunks_with_progress(driver, model, messages, config, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn summarize_in_chunks_with_progress(
     driver: Arc<dyn LlmDriver>,
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
     observer: Option<&CompactionStageObserver>,
+) -> Result<String, String> {
+    summarize_in_chunks_with_progress_and_handoff(driver, model, messages, config, observer, None)
+        .await
+}
+
+pub(crate) async fn summarize_in_chunks_with_progress_and_handoff(
+    driver: Arc<dyn LlmDriver>,
+    model: &str,
+    messages: &[Message],
+    config: &CompactionConfig,
+    observer: Option<&CompactionStageObserver>,
+    previous_handoff: Option<&str>,
 ) -> Result<String, String> {
     let handoff_limits = compaction_handoff::handoff_limits(config);
     let chunk_size = adaptive_chunk_size(messages, config);
@@ -290,7 +316,7 @@ pub(crate) async fn summarize_in_chunks_with_progress(
         "Starting chunked summarization"
     );
 
-    let summaries = summarize_chunks(
+    let mut summaries = summarize_chunks(
         driver.clone(),
         model,
         messages,
@@ -300,6 +326,9 @@ pub(crate) async fn summarize_in_chunks_with_progress(
         observer,
     )
     .await?;
+    if let Some(previous) = previous_handoff.filter(|summary| !summary.trim().is_empty()) {
+        summaries.insert(0, previous.to_string());
+    }
     if summaries.len() == 1 {
         return Ok(summaries.into_iter().next().unwrap());
     }

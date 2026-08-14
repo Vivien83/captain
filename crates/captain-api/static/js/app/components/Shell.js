@@ -240,10 +240,12 @@ async function refreshSessions(agentId) {
   try {
     const res = await api.agentSessions(agentId);
     const sessions = res.sessions || res || [];
-    const active = sessions.find((s) => s.active);
+    const current = getState().currentSessionId;
+    const selected = sessions.find((s) => s.session_id === current) ||
+      sessions.find((s) => s.active) || sessions[0] || null;
     setState({
       sessions,
-      currentSessionId: active ? active.session_id : getState().currentSessionId,
+      currentSessionId: selected ? selected.session_id : null,
     });
   } catch { /* transient */ }
 }
@@ -251,12 +253,9 @@ async function refreshSessions(agentId) {
 async function newSession(agentId) {
   if (!agentId) return;
   try {
-    await api.createSession(agentId);
+    const session = await api.createSession(agentId, { activate: false });
+    setState({ currentSessionId: session.session_id });
     await refreshSessions(agentId);
-    // Reload chat by re-selecting the agent (Chat listens to currentAgentId).
-    const cur = getState().currentAgentId;
-    setState({ currentAgentId: null });
-    setState({ currentAgentId: cur });
     toast('Nouvelle session créée');
   } catch (e) {
     toast(`Création impossible : ${e.message}`, 'err');
@@ -264,15 +263,8 @@ async function newSession(agentId) {
 }
 
 async function switchTo(agentId, session) {
-  try {
-    await api.switchSession(agentId, session.session_id);
-    setState({ currentSessionId: session.session_id });
-    const cur = getState().currentAgentId;
-    setState({ currentAgentId: null });
-    setState({ currentAgentId: cur });
-  } catch (e) {
-    toast(`Bascule impossible : ${e.message}`, 'err');
-  }
+  if (!agentId || !session?.session_id) return;
+  setState({ currentSessionId: session.session_id });
 }
 
 // No blocking browser dialogs: inline rename input, two-click delete confirm.

@@ -23,12 +23,23 @@ pub struct SkillsMetrics {
 }
 
 impl SkillsMetrics {
-    pub fn from_workflows(workflows: &[WorkflowLearningView]) -> Self {
+    pub fn from_workflows(
+        workflows: &[WorkflowLearningView],
+        status: &WorkflowLearningStatus,
+    ) -> Self {
         let mut metrics = Self {
             total: workflows.len() as u64,
             ..Self::default()
         };
         for workflow in workflows {
+            let has_runtime_incident = status
+                .attention
+                .iter()
+                .any(|item| item.proposal_id == workflow.proposal_id);
+            if has_runtime_incident {
+                metrics.attention += 1;
+                continue;
+            }
             if workflow.projection_status == WorkflowProjectionStatus::Invalid
                 || matches!(
                     workflow.state,
@@ -75,6 +86,10 @@ pub enum SkillsProposedAction {
         decision_version: u64,
         action: ProposalCardAction,
     },
+    Retry {
+        proposal_id: String,
+        expected_error_code: String,
+    },
 }
 
 impl SkillsProposedState {
@@ -98,6 +113,7 @@ impl SkillsProposedState {
     pub fn handle_key(&mut self, key: KeyEvent) -> SkillsProposedAction {
         match key.code {
             KeyCode::Char('r') => return SkillsProposedAction::Refresh,
+            KeyCode::Char('e') => return self.retry(),
             KeyCode::Tab => {
                 self.show_all = !self.show_all;
                 self.list_state
@@ -140,6 +156,12 @@ impl SkillsProposedState {
                 self.show_all
                     || workflow.state == ProposalCardState::Proposed
                     || workflow.projection_status == WorkflowProjectionStatus::Invalid
+                    || self.status.as_ref().is_some_and(|status| {
+                        status
+                            .attention
+                            .iter()
+                            .any(|item| item.proposal_id == workflow.proposal_id)
+                    })
             })
             .collect()
     }
@@ -166,6 +188,27 @@ impl SkillsProposedState {
             operator_token: card.lookup_token.clone(),
             decision_version: card.decision_version,
             action,
+        }
+    }
+
+    fn retry(&self) -> SkillsProposedAction {
+        let Some(workflow) = self.selected_workflow() else {
+            return SkillsProposedAction::Continue;
+        };
+        let Some(item) = self.status.as_ref().and_then(|status| {
+            status
+                .attention
+                .iter()
+                .find(|item| item.proposal_id == workflow.proposal_id && item.retry_available)
+        }) else {
+            return SkillsProposedAction::Continue;
+        };
+        let Some(error_code) = item.error_code.clone() else {
+            return SkillsProposedAction::Continue;
+        };
+        SkillsProposedAction::Retry {
+            proposal_id: workflow.proposal_id.clone(),
+            expected_error_code: error_code,
         }
     }
 }
@@ -266,7 +309,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SkillsProposedState) {
     );
 
     let footer = if state.status_msg.is_empty() {
-        "[↑↓] nav  [Tab] filtre  [a] activer  [t] tester  [l] plus tard  [x] ignorer  [r] actualiser"
+        "[↑↓] nav  [Tab] filtre  [a] activer  [t] tester  [e] relancer  [l] plus tard  [x] ignorer  [r] actualiser"
     } else {
         state.status_msg.as_str()
     };
@@ -321,6 +364,15 @@ fn runtime_lines(state: &SkillsProposedState) -> Vec<Line<'static>> {
         },
     );
     let mode = format!("{:?}", status.mode).to_lowercase();
+    let incident = status.attention.first().map(|item| {
+        format!(
+            " · {}:{} ({}/{})",
+            job_stage_label(item.stage),
+            job_error_label(item.error_code.as_deref()),
+            item.attempt_count,
+            item.max_attempts
+        )
+    });
     vec![
         Line::from(vec![
             Span::styled(
@@ -335,14 +387,14 @@ fn runtime_lines(state: &SkillsProposedState) -> Vec<Line<'static>> {
         Line::from(Span::styled(worker_line, theme::dim_style())),
         Line::from(Span::styled(
             format!(
-                "jobs {}/{}/{} · sorties {}/{}/{} · reprise:{}",
+                "jobs attente:{} actifs:{} retry:{} incertains:{} bloqués:{} · reprise:{}{}",
                 status.jobs.pending,
                 status.jobs.running,
-                status.jobs.retry_wait + status.jobs.uncertain + status.jobs.dead,
-                status.notifications.pending,
-                status.notifications.delivering,
-                status.notifications.retry_wait + status.notifications.dead,
+                status.jobs.retry_wait,
+                status.jobs.uncertain,
+                status.jobs.dead,
                 recovery_label(status.recovery),
+                incident.unwrap_or_default(),
             ),
             theme::dim_style(),
         )),
@@ -356,8 +408,35 @@ fn runtime_state_label(state: WorkflowLearningRuntimeState) -> &'static str {
         WorkflowLearningRuntimeState::Healthy => "opérationnel",
         WorkflowLearningRuntimeState::Active => "actif",
         WorkflowLearningRuntimeState::Recovering => "reprise automatique",
-        WorkflowLearningRuntimeState::Degraded => "dégradé",
+        WorkflowLearningRuntimeState::Degraded => "Learning à vérifier",
         WorkflowLearningRuntimeState::Stalled => "worker bloqué",
+    }
+}
+
+fn job_stage_label(
+    stage: captain_types::workflow_learning::WorkflowLearningJobStage,
+) -> &'static str {
+    use captain_types::workflow_learning::WorkflowLearningJobStage;
+    match stage {
+        WorkflowLearningJobStage::Analyze => "analyse",
+        WorkflowLearningJobStage::Draft => "génération",
+        WorkflowLearningJobStage::Validate => "validation",
+        WorkflowLearningJobStage::Install => "installation",
+        WorkflowLearningJobStage::Canary => "canary",
+        WorkflowLearningJobStage::Rollback => "rollback",
+    }
+}
+
+fn job_error_label(code: Option<&str>) -> &str {
+    match code {
+        Some("model_timeout") => "délai modèle dépassé",
+        Some("model_completion_failed") => "appel modèle interrompu",
+        Some("invalid_structured_output") => "réponse structurée invalide",
+        Some("invalid_draft") => "brouillon invalide",
+        Some("effect_interrupted") => "effet incertain",
+        Some("attempts_exhausted") => "essais épuisés",
+        Some(other) => other,
+        None => "cause non classée",
     }
 }
 
@@ -594,16 +673,18 @@ fn installation_phase_label(
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_lines, SkillsMetrics, SkillsProposedState};
+    use super::{runtime_lines, SkillsMetrics, SkillsProposedAction, SkillsProposedState};
     use captain_types::config::LearningMode;
     use captain_types::workflow_learning::{
-        ProposalCardState, WorkflowLearningJobQueueView, WorkflowLearningModelIdentity,
+        ProposalCardState, WorkflowLearningAttentionItem, WorkflowLearningAttentionState,
+        WorkflowLearningJobQueueView, WorkflowLearningJobStage, WorkflowLearningModelIdentity,
         WorkflowLearningNotificationQueueView, WorkflowLearningRecoveryState,
         WorkflowLearningRuntimeState, WorkflowLearningStatus, WorkflowLearningView,
         WorkflowLearningWorkerPhase, WorkflowLearningWorkerView, WorkflowLearningWorkloadView,
         WorkflowProjectionStatus, WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
         WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION,
     };
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn workflow(
         state: ProposalCardState,
@@ -631,23 +712,79 @@ mod tests {
         }
     }
 
+    fn incident_status(retry_available: bool) -> WorkflowLearningStatus {
+        WorkflowLearningStatus {
+            schema_version: WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
+            enabled: true,
+            mode: LearningMode::Approval,
+            state: WorkflowLearningRuntimeState::Degraded,
+            recovery: WorkflowLearningRecoveryState::OperatorAttention,
+            expected_model: WorkflowLearningModelIdentity {
+                provider: "codex".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+            },
+            worker: None,
+            jobs: WorkflowLearningJobQueueView {
+                dead: 1,
+                ..Default::default()
+            },
+            notifications: WorkflowLearningNotificationQueueView::default(),
+            workflows: WorkflowLearningWorkloadView {
+                total: 1,
+                attention: 1,
+                ..Default::default()
+            },
+            attention: vec![WorkflowLearningAttentionItem {
+                proposal_id: "proposal".to_string(),
+                stage: WorkflowLearningJobStage::Draft,
+                state: WorkflowLearningAttentionState::Dead,
+                error_code: Some("model_timeout".to_string()),
+                attempt_count: 3,
+                max_attempts: 3,
+                retry_available,
+                updated_at_unix_ms: 9_000,
+            }],
+            generated_at_unix_ms: 10_000,
+        }
+    }
+
     #[test]
     fn metrics_keep_processing_active_and_attention_distinct() {
-        let metrics = SkillsMetrics::from_workflows(&[
-            workflow(
-                ProposalCardState::Drafting,
-                WorkflowProjectionStatus::Building,
-            ),
-            workflow(
-                ProposalCardState::Proposed,
-                WorkflowProjectionStatus::Verified,
-            ),
-            workflow(
-                ProposalCardState::Active,
-                WorkflowProjectionStatus::Verified,
-            ),
-            workflow(ProposalCardState::Active, WorkflowProjectionStatus::Invalid),
-        ]);
+        let status = WorkflowLearningStatus {
+            schema_version: WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION,
+            enabled: true,
+            mode: LearningMode::Approval,
+            state: WorkflowLearningRuntimeState::Healthy,
+            recovery: WorkflowLearningRecoveryState::InSync,
+            expected_model: WorkflowLearningModelIdentity {
+                provider: "codex".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+            },
+            worker: None,
+            jobs: WorkflowLearningJobQueueView::default(),
+            notifications: WorkflowLearningNotificationQueueView::default(),
+            workflows: WorkflowLearningWorkloadView::default(),
+            attention: Vec::new(),
+            generated_at_unix_ms: 10_000,
+        };
+        let metrics = SkillsMetrics::from_workflows(
+            &[
+                workflow(
+                    ProposalCardState::Drafting,
+                    WorkflowProjectionStatus::Building,
+                ),
+                workflow(
+                    ProposalCardState::Proposed,
+                    WorkflowProjectionStatus::Verified,
+                ),
+                workflow(
+                    ProposalCardState::Active,
+                    WorkflowProjectionStatus::Verified,
+                ),
+                workflow(ProposalCardState::Active, WorkflowProjectionStatus::Invalid),
+            ],
+            &status,
+        );
         assert_eq!(metrics.total, 4);
         assert_eq!(metrics.processing, 1);
         assert_eq!(metrics.awaiting_decision, 1);
@@ -687,6 +824,7 @@ mod tests {
             },
             notifications: WorkflowLearningNotificationQueueView::default(),
             workflows: WorkflowLearningWorkloadView::default(),
+            attention: Vec::new(),
             generated_at_unix_ms: 10_000,
         });
         let text = runtime_lines(&state)
@@ -697,7 +835,37 @@ mod tests {
             .join(" ");
         assert!(text.contains("reprise automatique"));
         assert!(text.contains("codex:gpt-5.6-sol"));
-        assert!(text.contains("jobs 0/0/2"));
+        assert!(text.contains("jobs attente:0 actifs:0 retry:2"));
         assert!(!text.contains('%'));
+    }
+
+    #[test]
+    fn blocked_workflow_is_attention_not_processing_and_retries_only_when_safe() {
+        let workflow = workflow(
+            ProposalCardState::Drafting,
+            WorkflowProjectionStatus::Building,
+        );
+        let status = incident_status(true);
+        let metrics = SkillsMetrics::from_workflows(std::slice::from_ref(&workflow), &status);
+        assert_eq!(metrics.processing, 0);
+        assert_eq!(metrics.attention, 1);
+
+        let mut state = SkillsProposedState::new();
+        state.workflows.push(workflow);
+        state.status = Some(status);
+        state.list_state.select(Some(0));
+        assert!(matches!(
+            state.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            SkillsProposedAction::Retry {
+                proposal_id,
+                expected_error_code
+            } if proposal_id == "proposal" && expected_error_code == "model_timeout"
+        ));
+
+        state.status = Some(incident_status(false));
+        assert!(matches!(
+            state.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            SkillsProposedAction::Continue
+        ));
     }
 }

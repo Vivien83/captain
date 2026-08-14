@@ -196,6 +196,14 @@ pub struct WorkflowDecisionBody {
     pub surface: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRetryBody {
+    pub expected_error_code: String,
+    #[serde(default)]
+    pub surface: Option<String>,
+}
+
 /// POST /api/learning/workflows/{token}/decide — exact CAS operator action.
 pub async fn decide_workflow(
     State(state): State<Arc<AppState>>,
@@ -228,6 +236,50 @@ pub async fn decide_workflow(
             } else if normalized.contains("stale")
                 || normalized.contains("unavailable while")
                 || normalized.contains("conflict")
+            {
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": error })),
+                )
+            } else {
+                bad_request(error)
+            }
+        }
+    }
+}
+
+/// POST /api/learning/workflows/{proposal_id}/retry — requeue one safe dead job.
+pub async fn retry_workflow(
+    State(state): State<Arc<AppState>>,
+    Path(proposal_id): Path<String>,
+    Json(body): Json<WorkflowRetryBody>,
+) -> impl IntoResponse {
+    let actor = match workflow_surface_actor(body.surface.as_deref()) {
+        Ok(actor) => actor,
+        Err(error) => return bad_request(error),
+    };
+    match state.kernel.workflow_learning_retry_dead_proposal(
+        &proposal_id,
+        &body.expected_error_code,
+        actor,
+    ) {
+        Ok(resolution) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(resolution).unwrap_or_else(|error| {
+                serde_json::json!({ "error": format!("workflow retry encoding failed: {error}") })
+            })),
+        ),
+        Err(error) => {
+            let normalized = error.to_ascii_lowercase();
+            if normalized.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": error })),
+                )
+            } else if normalized.contains("conflict")
+                || normalized.contains("changed")
+                || normalized.contains("already active")
+                || normalized.contains("can be retried")
             {
                 (
                     StatusCode::CONFLICT,
@@ -308,8 +360,11 @@ mod tests {
         let learning_source = include_str!("../static/js/app/views/Learning.js");
         assert!(api_source.contains("/api/learning/workflows"));
         assert!(api_source.contains("/api/learning/status"));
+        assert!(api_source.contains("workflowLearningRetry"));
         assert!(learning_source.contains("workflowLearning"));
         assert!(learning_source.contains("learningStatus"));
+        assert!(learning_source.contains("La mémoire durable reste active"));
+        assert!(learning_source.contains("Relancer ce workflow"));
         assert!(!learning_source.contains("/api/skills/proposals"));
     }
 }

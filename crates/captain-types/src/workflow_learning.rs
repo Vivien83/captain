@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 pub const PROPOSAL_CARD_SCHEMA_VERSION: u16 = 2;
 pub const WORKFLOW_LIFECYCLE_CARD_SCHEMA_VERSION: u16 = 1;
 pub const WORKFLOW_LEARNING_VIEW_SCHEMA_VERSION: u16 = 1;
-pub const WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION: u16 = 1;
+pub const WORKFLOW_LEARNING_STATUS_SCHEMA_VERSION: u16 = 2;
+pub const WORKFLOW_LEARNING_RETRY_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,6 +96,41 @@ pub struct WorkflowLearningWorkloadView {
     pub last_activity_at_unix_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLearningJobStage {
+    Analyze,
+    Draft,
+    Validate,
+    Install,
+    Canary,
+    Rollback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLearningAttentionState {
+    Uncertain,
+    Dead,
+}
+
+/// Bounded, operator-safe detail for one unresolved Learning job.
+///
+/// Payloads, provider output, host paths and raw error messages deliberately
+/// stay outside this projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningAttentionItem {
+    pub proposal_id: String,
+    pub stage: WorkflowLearningJobStage,
+    pub state: WorkflowLearningAttentionState,
+    pub error_code: Option<String>,
+    pub attempt_count: u32,
+    pub max_attempts: u32,
+    pub retry_available: bool,
+    pub updated_at_unix_ms: i64,
+}
+
 /// Shared operational truth for Skill Learning V2.
 ///
 /// Counts and timestamps come from one SQLite snapshot. `bound_model` is only
@@ -112,7 +148,18 @@ pub struct WorkflowLearningStatus {
     pub jobs: WorkflowLearningJobQueueView,
     pub notifications: WorkflowLearningNotificationQueueView,
     pub workflows: WorkflowLearningWorkloadView,
+    pub attention: Vec<WorkflowLearningAttentionItem>,
     pub generated_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLearningRetryResolution {
+    pub schema_version: u16,
+    pub proposal_id: String,
+    pub stage: WorkflowLearningJobStage,
+    pub queued_at_unix_ms: i64,
+    pub replayed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

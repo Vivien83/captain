@@ -367,6 +367,13 @@ pub(crate) const USER_CHANNEL_COMMANDS: &[ChannelCommandSpec] = &[
         "Afficher le moteur Learning actif",
     ),
     command(
+        "learning_retry",
+        "learning_retry <id>",
+        CommandSection::Review,
+        "Retry one safe blocked workflow",
+        "Relancer un workflow bloqué rejouable",
+    ),
+    command(
         "learnings",
         "learnings",
         CommandSection::Review,

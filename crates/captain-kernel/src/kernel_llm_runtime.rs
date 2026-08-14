@@ -113,25 +113,20 @@ impl CaptainKernel {
         &self,
         agent_id: AgentId,
         session: &Session,
-        messages_before: usize,
         manifest: &AgentManifest,
+        channel_type: Option<&str>,
         mut result: AgentLoopResult,
     ) -> AgentLoopResult {
-        if session.messages.len() > messages_before {
-            let new_messages = session.messages[messages_before..].to_vec();
-            if let Err(e) = self.memory.append_canonical(agent_id, &new_messages, None) {
-                warn!("Failed to update canonical session: {e}");
+        if interactive_turn_persistence_enabled(channel_type) {
+            if let Some(ref workspace) = manifest.workspace {
+                if let Err(e) = self
+                    .memory
+                    .write_jsonl_mirror(session, &workspace.join("sessions"))
+                {
+                    warn!("Failed to write JSONL session mirror: {e}");
+                }
+                append_daily_memory_log(workspace, &result.response);
             }
-        }
-
-        if let Some(ref workspace) = manifest.workspace {
-            if let Err(e) = self
-                .memory
-                .write_jsonl_mirror(session, &workspace.join("sessions"))
-            {
-                warn!("Failed to write JSONL session mirror: {e}");
-            }
-            append_daily_memory_log(workspace, &result.response);
         }
 
         let cost = self.record_usage_metering(
@@ -144,6 +139,10 @@ impl CaptainKernel {
         apply_usage_footer_cost(&self.config.usage_footer, &mut result, cost);
         result
     }
+}
+
+pub(super) fn interactive_turn_persistence_enabled(channel_type: Option<&str>) -> bool {
+    !matches!(channel_type, Some("automation"))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -387,5 +386,17 @@ mod tests {
         let mut full = result_with_cost(Some(1.25));
         apply_usage_footer_cost(&UsageFooterMode::Full, &mut full, 0.0);
         assert_eq!(full.cost_usd, None);
+    }
+
+    #[test]
+    fn interactive_turns_keep_conversation_persistence_enabled() {
+        assert!(interactive_turn_persistence_enabled(None));
+        assert!(interactive_turn_persistence_enabled(Some("web")));
+        assert!(interactive_turn_persistence_enabled(Some("telegram")));
+    }
+
+    #[test]
+    fn automation_turns_do_not_pollute_conversation_persistence() {
+        assert!(!interactive_turn_persistence_enabled(Some("automation")));
     }
 }

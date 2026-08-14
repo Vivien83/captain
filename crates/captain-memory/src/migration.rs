@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 51;
+const SCHEMA_VERSION: u32 = 52;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -213,6 +213,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 51 {
         migrate_v51(conn)?;
+    }
+
+    if current_version < 52 {
+        migrate_v52(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -2682,21 +2686,59 @@ fn migrate_v51(conn: &Connection) -> Result<(), rusqlite::Error> {
          CREATE INDEX IF NOT EXISTS idx_execution_target_bindings_node
              ON execution_target_bindings(device_id, workspace_id, scope_kind, scope_id)
              WHERE target_kind = 'node';
-         CREATE TRIGGER IF NOT EXISTS cleanup_session_execution_target
-             AFTER DELETE ON sessions
-             BEGIN
-                 DELETE FROM execution_target_bindings
-                 WHERE scope_kind = 'session' AND scope_id = OLD.id;
-             END;
-         CREATE TRIGGER IF NOT EXISTS cleanup_project_execution_target
-             AFTER DELETE ON projects
-             BEGIN
-                 DELETE FROM execution_target_bindings
-                 WHERE scope_kind = 'project' AND scope_id = OLD.id;
-             END;
          INSERT OR IGNORE INTO migrations (version, applied_at, description)
          VALUES (51, datetime('now'), 'Persist logical session and project execution targets');",
     )?;
+    if table_exists(conn, "sessions")? {
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS cleanup_session_execution_target
+                 AFTER DELETE ON sessions
+                 BEGIN
+                     DELETE FROM execution_target_bindings
+                     WHERE scope_kind = 'session' AND scope_id = OLD.id;
+                 END;",
+        )?;
+    }
+    if table_exists(conn, "projects")? {
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS cleanup_project_execution_target
+                 AFTER DELETE ON projects
+                 BEGIN
+                     DELETE FROM execution_target_bindings
+                     WHERE scope_kind = 'project' AND scope_id = OLD.id;
+                 END;",
+        )?;
+    }
+    Ok(())
+}
+
+/// Version 52: keep LLM compaction handoffs on the conversation they
+/// summarize. Existing canonical data is preserved for audit and rollback,
+/// but new session compactions no longer write into that agent-wide slot.
+fn migrate_v52(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS session_compaction_summaries (
+             session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+             agent_id TEXT NOT NULL,
+             summary TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             CHECK(length(summary) > 0)
+         );
+         CREATE INDEX IF NOT EXISTS idx_session_compaction_summaries_agent
+             ON session_compaction_summaries(agent_id, updated_at);
+         INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (52, datetime('now'), 'Scope LLM compaction handoffs to persisted sessions');",
+    )?;
+    if table_exists(conn, "sessions")? {
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS cleanup_session_compaction_summary
+                 AFTER DELETE ON sessions
+                 BEGIN
+                     DELETE FROM session_compaction_summaries
+                     WHERE session_id = OLD.id;
+                 END;",
+        )?;
+    }
     Ok(())
 }
 
@@ -2782,6 +2824,7 @@ mod tests {
 
         assert!(tables.contains(&"agents".to_string()));
         assert!(tables.contains(&"sessions".to_string()));
+        assert!(tables.contains(&"session_compaction_summaries".to_string()));
         assert!(tables.contains(&"kv_store".to_string()));
         assert!(tables.contains(&"memories".to_string()));
         assert!(tables.contains(&"entities".to_string()));
@@ -3828,6 +3871,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(retained, 1);
+        assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v52_adds_session_compaction_handoffs_without_mutating_canonical_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER cleanup_session_compaction_summary;
+             DROP TABLE session_compaction_summaries;
+             DELETE FROM migrations WHERE version = 52;
+             INSERT INTO canonical_sessions
+                 (agent_id, messages, compaction_cursor, compacted_summary, updated_at)
+             VALUES ('captain', X'90', 4,
+                     '# Demande active\n- ancien rapport\n\n# Travail restant\n- continuer',
+                     datetime('now'))
+             ON CONFLICT(agent_id) DO UPDATE SET
+                 compacted_summary = excluded.compacted_summary,
+                 compaction_cursor = excluded.compaction_cursor;
+             PRAGMA user_version = 51;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        assert!(table_exists(&conn, "session_compaction_summaries").unwrap());
+        let preserved: (Option<String>, i64) = conn
+            .query_row(
+                "SELECT compacted_summary, compaction_cursor
+                 FROM canonical_sessions WHERE agent_id = 'captain'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(preserved.1, 4);
+        assert!(preserved.0.as_deref().is_some_and(|summary| {
+            summary.contains("ancien rapport") && summary.contains("continuer")
+        }));
+
+        conn.execute("DELETE FROM migrations WHERE version = 52", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 51).unwrap();
+        run_migrations(&conn).unwrap();
         assert_eq!(get_schema_version(&conn), SCHEMA_VERSION);
     }
 }

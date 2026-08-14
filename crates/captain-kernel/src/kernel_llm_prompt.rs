@@ -70,7 +70,7 @@ impl CaptainKernel {
         }
 
         let snapshot = self.prompt_runtime_snapshot();
-        let prompt_ctx = self.full_prompt_context(
+        let mut prompt_ctx = self.full_prompt_context(
             FullPromptContextRequest {
                 agent_id,
                 message,
@@ -82,6 +82,13 @@ impl CaptainKernel {
                 include_graph_recall,
             },
             &snapshot,
+        );
+        prompt_ctx.canonical_context = filter_prompt_memory_context(
+            self.memory
+                .session_compaction_summary(session.id)
+                .ok()
+                .flatten(),
+            &snapshot.memory_retractions,
         );
         apply_full_prompt(manifest, &prompt_ctx, session, message);
     }
@@ -245,13 +252,6 @@ impl CaptainKernel {
             retractions,
         );
         ctx.persistent_memory_capsule = build_persistent_memory_capsule(&self.memory, retractions);
-        ctx.canonical_context = filter_prompt_memory_context(
-            self.memory
-                .canonical_context(request.agent_id, None)
-                .ok()
-                .and_then(|(context, _)| context),
-            retractions,
-        );
         ctx.graph_md = filter_prompt_memory_context(
             read_identity_file(&self.config.home_dir, "GRAPH.md"),
             retractions,

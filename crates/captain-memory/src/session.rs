@@ -1,6 +1,6 @@
 //! Session management — load/save conversation history.
 
-use captain_types::agent::{AgentId, SessionId};
+use captain_types::agent::{is_internal_session_label, AgentId, SessionId};
 use captain_types::error::{CaptainError, CaptainResult};
 use captain_types::message::{ContentBlock, Message, MessageContent, Role};
 use chrono::Utc;
@@ -311,6 +311,13 @@ impl SessionStore {
 
     /// List all sessions with metadata.
     pub fn list_sessions(&self) -> CaptainResult<Vec<serde_json::Value>> {
+        let mut sessions = self.list_sessions_including_internal()?;
+        sessions.retain(session_row_is_user_visible);
+        Ok(sessions)
+    }
+
+    /// List user and Captain-internal sessions for bounded startup recovery.
+    pub fn list_sessions_including_internal(&self) -> CaptainResult<Vec<serde_json::Value>> {
         let conn = self
             .conn
             .lock()
@@ -440,6 +447,14 @@ fn unix_seconds_rfc3339(seconds: u64) -> String {
         .to_rfc3339()
 }
 
+fn session_row_is_user_visible(session: &serde_json::Value) -> bool {
+    session
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .map(|label| !is_internal_session_label(label))
+        .unwrap_or(true)
+}
+
 impl SessionStore {
     /// List all sessions for a specific agent.
     pub fn list_agent_sessions(&self, agent_id: AgentId) -> CaptainResult<Vec<serde_json::Value>> {
@@ -483,6 +498,7 @@ impl SessionStore {
         for row in rows {
             sessions.push(row.map_err(|e| CaptainError::Memory(e.to_string()))?);
         }
+        sessions.retain(session_row_is_user_visible);
         Ok(sessions)
     }
 
@@ -503,11 +519,135 @@ impl SessionStore {
         Ok(session)
     }
 
-    /// Store an LLM-generated summary, replacing older messages with the summary
-    /// and keeping only the specified recent messages.
+    /// Load the LLM handoff that belongs to one persisted conversation.
+    pub fn session_compaction_summary(
+        &self,
+        session_id: SessionId,
+    ) -> CaptainResult<Option<String>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Internal(e.to_string()))?;
+        let result = conn.query_row(
+            "SELECT summary FROM session_compaction_summaries WHERE session_id = ?1",
+            rusqlite::params![session_id.0.to_string()],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(summary) => Ok(Some(summary)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(CaptainError::Memory(error.to_string())),
+        }
+    }
+
+    /// Persist a handoff for an existing session without changing its messages.
+    pub fn store_session_llm_summary(
+        &self,
+        session_id: SessionId,
+        summary: &str,
+    ) -> CaptainResult<()> {
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return Err(CaptainError::InvalidInput(
+                "Session compaction summary cannot be empty".to_string(),
+            ));
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Internal(e.to_string()))?;
+        let agent_id: String = conn
+            .query_row(
+                "SELECT agent_id FROM sessions WHERE id = ?1",
+                rusqlite::params![session_id.0.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        conn.execute(
+            "INSERT INTO session_compaction_summaries
+                 (session_id, agent_id, summary, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                 agent_id = excluded.agent_id,
+                 summary = excluded.summary,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![
+                session_id.0.to_string(),
+                agent_id,
+                summary,
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Atomically replace a compacted session's recent messages and handoff.
+    pub fn save_compacted_session(&self, session: &Session, summary: &str) -> CaptainResult<()> {
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return Err(CaptainError::InvalidInput(
+                "Session compaction summary cannot be empty".to_string(),
+            ));
+        }
+        let messages_blob = rmp_serde::to_vec_named(&session.messages)
+            .map_err(|error| CaptainError::Serialization(error.to_string()))?;
+        let label = resolved_session_label(session.label.clone(), &session.messages);
+        let now = Utc::now().to_rfc3339();
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| CaptainError::Internal(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        transaction
+            .execute(
+                "INSERT INTO sessions
+                     (id, agent_id, messages, context_window_tokens, label, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                     messages = excluded.messages,
+                     context_window_tokens = excluded.context_window_tokens,
+                     label = COALESCE(sessions.label, excluded.label),
+                     updated_at = excluded.updated_at",
+                rusqlite::params![
+                    session.id.0.to_string(),
+                    session.agent_id.0.to_string(),
+                    messages_blob,
+                    session.context_window_tokens as i64,
+                    label.as_deref(),
+                    now,
+                ],
+            )
+            .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        transaction
+            .execute(
+                "INSERT INTO session_compaction_summaries
+                     (session_id, agent_id, summary, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                     agent_id = excluded.agent_id,
+                     summary = excluded.summary,
+                     updated_at = excluded.updated_at",
+                rusqlite::params![
+                    session.id.0.to_string(),
+                    session.agent_id.0.to_string(),
+                    summary,
+                    now,
+                ],
+            )
+            .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        transaction
+            .commit()
+            .map_err(|error| CaptainError::Memory(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Store an agent-wide canonical summary.
     ///
-    /// This is used by the LLM-based compactor to replace text-truncation compaction
-    /// with an intelligent, LLM-generated summary of older conversation history.
+    /// Session compaction must use [`Self::save_compacted_session`]. This
+    /// legacy global primitive remains only for explicit cross-channel data.
     pub fn store_llm_summary(
         &self,
         agent_id: AgentId,
@@ -973,9 +1113,91 @@ mod tests {
         let agent_id = AgentId::new();
         let session = store.create_session(agent_id).unwrap();
         let sid = session.id;
+        store
+            .store_session_llm_summary(sid, "session-local handoff")
+            .unwrap();
         assert!(store.get_session(sid).unwrap().is_some());
         store.delete_session(sid).unwrap();
         assert!(store.get_session(sid).unwrap().is_none());
+        assert!(store.session_compaction_summary(sid).unwrap().is_none());
+    }
+
+    #[test]
+    fn internal_sessions_are_hidden_but_available_for_recovery() {
+        let store = setup();
+        let agent_id = AgentId::new();
+        let visible = store
+            .create_session_with_label(agent_id, Some("Projet utilisateur"))
+            .unwrap();
+        let internal_label = format!(
+            "{}{}",
+            captain_types::agent::AUTOMATION_SESSION_LABEL_PREFIX,
+            uuid::Uuid::new_v4()
+        );
+        let internal = store
+            .create_session_with_label(agent_id, Some(&internal_label))
+            .unwrap();
+
+        let visible_ids = store
+            .list_sessions()
+            .unwrap()
+            .into_iter()
+            .filter_map(|row| row["session_id"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert!(visible_ids.contains(&visible.id.to_string()));
+        assert!(!visible_ids.contains(&internal.id.to_string()));
+
+        let agent_ids = store
+            .list_agent_sessions(agent_id)
+            .unwrap()
+            .into_iter()
+            .filter_map(|row| row["session_id"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert!(agent_ids.contains(&visible.id.to_string()));
+        assert!(!agent_ids.contains(&internal.id.to_string()));
+
+        let recovery_ids = store
+            .list_sessions_including_internal()
+            .unwrap()
+            .into_iter()
+            .filter_map(|row| row["session_id"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert!(recovery_ids.contains(&visible.id.to_string()));
+        assert!(recovery_ids.contains(&internal.id.to_string()));
+    }
+
+    #[test]
+    fn compacted_handoffs_are_isolated_by_session() {
+        let store = setup();
+        let agent_id = AgentId::new();
+        let mut first = store.create_session(agent_id).unwrap();
+        let second = store.create_session(agent_id).unwrap();
+        first.messages.push(Message::assistant("recent answer"));
+
+        store
+            .save_compacted_session(&first, "handoff for first session")
+            .unwrap();
+
+        assert_eq!(
+            store
+                .session_compaction_summary(first.id)
+                .unwrap()
+                .as_deref(),
+            Some("handoff for first session")
+        );
+        assert!(store
+            .session_compaction_summary(second.id)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store.get_session(first.id).unwrap().unwrap().messages.len(),
+            1
+        );
+        assert!(store
+            .load_canonical(agent_id)
+            .unwrap()
+            .compacted_summary
+            .is_none());
     }
 
     #[test]

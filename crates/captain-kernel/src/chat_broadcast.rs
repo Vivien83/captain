@@ -1,10 +1,9 @@
 //! Chat broadcast — tracks active streams and publishes chat events to the EventBus.
 //!
-//! Each agent can have at most one active stream at a time (enforced by
-//! `agent_msg_locks`). The `ActiveStreamTracker` stores the accumulated state
-//! so that new WebSocket connections can "catch up" on an in-progress response.
+//! The `ActiveStreamTracker` stores accumulated state by agent and persisted
+//! session so a WebSocket can catch up only on its own conversation.
 
-use captain_types::agent::AgentId;
+use captain_types::agent::{AgentId, SessionId};
 use captain_types::event::{ChatStreamEvent, Event, EventPayload, EventTarget};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -16,6 +15,7 @@ use crate::event_bus::EventBus;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveStream {
     pub agent_id: AgentId,
+    pub session_id: SessionId,
     pub user_message: String,
     pub user_message_id: String,
     pub accumulated_text: String,
@@ -37,7 +37,7 @@ pub struct ActiveTool {
 
 /// Tracks active (in-progress) agent streams for catch-up on new connections.
 pub struct ActiveStreamTracker {
-    streams: DashMap<AgentId, ActiveStream>,
+    streams: DashMap<(AgentId, SessionId), ActiveStream>,
 }
 
 impl ActiveStreamTracker {
@@ -51,14 +51,16 @@ impl ActiveStreamTracker {
     pub fn start(
         &self,
         agent_id: AgentId,
+        session_id: SessionId,
         user_message: String,
         user_message_id: String,
         channel: String,
     ) {
         self.streams.insert(
-            agent_id,
+            (agent_id, session_id),
             ActiveStream {
                 agent_id,
+                session_id,
                 user_message,
                 user_message_id,
                 accumulated_text: String::new(),
@@ -71,15 +73,21 @@ impl ActiveStreamTracker {
     }
 
     /// Append text delta to the accumulated response.
-    pub fn append_text(&self, agent_id: AgentId, delta: &str) {
-        if let Some(mut stream) = self.streams.get_mut(&agent_id) {
+    pub fn append_text(&self, agent_id: AgentId, session_id: SessionId, delta: &str) {
+        if let Some(mut stream) = self.streams.get_mut(&(agent_id, session_id)) {
             stream.accumulated_text.push_str(delta);
         }
     }
 
     /// Record a tool start.
-    pub fn tool_start(&self, agent_id: AgentId, tool_use_id: String, tool_name: String) {
-        if let Some(mut stream) = self.streams.get_mut(&agent_id) {
+    pub fn tool_start(
+        &self,
+        agent_id: AgentId,
+        session_id: SessionId,
+        tool_use_id: String,
+        tool_name: String,
+    ) {
+        if let Some(mut stream) = self.streams.get_mut(&(agent_id, session_id)) {
             stream.tools.push(ActiveTool {
                 tool_use_id,
                 tool_name,
@@ -94,11 +102,12 @@ impl ActiveStreamTracker {
     pub fn tool_end(
         &self,
         agent_id: AgentId,
+        session_id: SessionId,
         tool_use_id: &str,
         result_preview: String,
         is_error: bool,
     ) {
-        if let Some(mut stream) = self.streams.get_mut(&agent_id) {
+        if let Some(mut stream) = self.streams.get_mut(&(agent_id, session_id)) {
             if let Some(tool) = stream
                 .tools
                 .iter_mut()
@@ -112,16 +121,18 @@ impl ActiveStreamTracker {
     }
 
     /// Mark a stream as complete and remove it.
-    pub fn finish(&self, agent_id: AgentId) -> Option<ActiveStream> {
-        self.streams.remove(&agent_id).map(|(_, mut s)| {
-            s.is_streaming = false;
-            s
-        })
+    pub fn finish(&self, agent_id: AgentId, session_id: SessionId) -> Option<ActiveStream> {
+        self.streams
+            .remove(&(agent_id, session_id))
+            .map(|(_, mut s)| {
+                s.is_streaming = false;
+                s
+            })
     }
 
     /// Get the current active stream for catch-up (if any).
-    pub fn get(&self, agent_id: AgentId) -> Option<ActiveStream> {
-        self.streams.get(&agent_id).map(|s| s.clone())
+    pub fn get(&self, agent_id: AgentId, session_id: SessionId) -> Option<ActiveStream> {
+        self.streams.get(&(agent_id, session_id)).map(|s| s.clone())
     }
 
     /// Remove stale streams older than the given duration.
@@ -152,6 +163,22 @@ pub async fn publish_chat_event(
     event_bus.publish(event).await;
 }
 
+/// Publish a chat event owned by one persisted conversation.
+pub async fn publish_chat_event_for_session(
+    event_bus: &EventBus,
+    agent_id: AgentId,
+    session_id: SessionId,
+    chat_event: ChatStreamEvent,
+) {
+    let event = Event::new(
+        agent_id,
+        EventTarget::Agent(agent_id),
+        EventPayload::ChatStream(chat_event),
+    )
+    .with_session(session_id);
+    event_bus.publish(event).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,29 +188,42 @@ mod tests {
     fn test_active_stream_lifecycle() {
         let tracker = ActiveStreamTracker::new();
         let agent_id = AgentId::new();
+        let session_id = SessionId::new();
 
         // Start
         tracker.start(
             agent_id,
+            session_id,
             "Hello".to_string(),
             "msg-1".to_string(),
             "web".to_string(),
         );
-        let stream = tracker.get(agent_id).unwrap();
+        let stream = tracker.get(agent_id, session_id).unwrap();
         assert!(stream.is_streaming);
         assert_eq!(stream.user_message, "Hello");
         assert_eq!(stream.accumulated_text, "");
 
         // Append text
-        tracker.append_text(agent_id, "Hi ");
-        tracker.append_text(agent_id, "there!");
-        let stream = tracker.get(agent_id).unwrap();
+        tracker.append_text(agent_id, session_id, "Hi ");
+        tracker.append_text(agent_id, session_id, "there!");
+        let stream = tracker.get(agent_id, session_id).unwrap();
         assert_eq!(stream.accumulated_text, "Hi there!");
 
         // Tool start + end
-        tracker.tool_start(agent_id, "tu-1".to_string(), "web_search".to_string());
-        tracker.tool_end(agent_id, "tu-1", "results found".to_string(), false);
-        let stream = tracker.get(agent_id).unwrap();
+        tracker.tool_start(
+            agent_id,
+            session_id,
+            "tu-1".to_string(),
+            "web_search".to_string(),
+        );
+        tracker.tool_end(
+            agent_id,
+            session_id,
+            "tu-1",
+            "results found".to_string(),
+            false,
+        );
+        let stream = tracker.get(agent_id, session_id).unwrap();
         assert_eq!(stream.tools.len(), 1);
         assert!(stream.tools[0].completed);
         assert_eq!(
@@ -192,15 +232,15 @@ mod tests {
         );
 
         // Finish
-        let finished = tracker.finish(agent_id).unwrap();
+        let finished = tracker.finish(agent_id, session_id).unwrap();
         assert!(!finished.is_streaming);
-        assert!(tracker.get(agent_id).is_none());
+        assert!(tracker.get(agent_id, session_id).is_none());
     }
 
     #[test]
     fn test_no_stream_returns_none() {
         let tracker = ActiveStreamTracker::new();
-        assert!(tracker.get(AgentId::new()).is_none());
+        assert!(tracker.get(AgentId::new(), SessionId::new()).is_none());
     }
 
     #[test]
@@ -208,24 +248,67 @@ mod tests {
         let tracker = ActiveStreamTracker::new();
         let a1 = AgentId::new();
         let a2 = AgentId::new();
+        let s1 = SessionId::new();
+        let s2 = SessionId::new();
 
-        tracker.start(a1, "msg1".to_string(), "id1".to_string(), "web".to_string());
+        tracker.start(
+            a1,
+            s1,
+            "msg1".to_string(),
+            "id1".to_string(),
+            "web".to_string(),
+        );
         tracker.start(
             a2,
+            s2,
             "msg2".to_string(),
             "id2".to_string(),
             "telegram".to_string(),
         );
 
-        tracker.append_text(a1, "response1");
-        tracker.append_text(a2, "response2");
+        tracker.append_text(a1, s1, "response1");
+        tracker.append_text(a2, s2, "response2");
 
-        assert_eq!(tracker.get(a1).unwrap().accumulated_text, "response1");
-        assert_eq!(tracker.get(a2).unwrap().accumulated_text, "response2");
+        assert_eq!(tracker.get(a1, s1).unwrap().accumulated_text, "response1");
+        assert_eq!(tracker.get(a2, s2).unwrap().accumulated_text, "response2");
 
-        tracker.finish(a1);
-        assert!(tracker.get(a1).is_none());
-        assert!(tracker.get(a2).is_some());
+        tracker.finish(a1, s1);
+        assert!(tracker.get(a1, s1).is_none());
+        assert!(tracker.get(a2, s2).is_some());
+    }
+
+    #[test]
+    fn streams_for_two_sessions_of_the_same_agent_are_isolated() {
+        let tracker = ActiveStreamTracker::new();
+        let agent_id = AgentId::new();
+        let first = SessionId::new();
+        let second = SessionId::new();
+        tracker.start(
+            agent_id,
+            first,
+            "first".to_string(),
+            "m1".to_string(),
+            "web".to_string(),
+        );
+        tracker.start(
+            agent_id,
+            second,
+            "second".to_string(),
+            "m2".to_string(),
+            "web".to_string(),
+        );
+
+        tracker.append_text(agent_id, first, "one");
+        tracker.append_text(agent_id, second, "two");
+
+        assert_eq!(
+            tracker.get(agent_id, first).unwrap().accumulated_text,
+            "one"
+        );
+        assert_eq!(
+            tracker.get(agent_id, second).unwrap().accumulated_text,
+            "two"
+        );
     }
 
     #[tokio::test]
@@ -253,6 +336,27 @@ mod tests {
             }
             _ => panic!("Wrong payload"),
         }
+    }
+
+    #[tokio::test]
+    async fn session_scoped_event_carries_exact_conversation_id() {
+        let bus = EventBus::new();
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        let mut rx = bus.subscribe_agent(agent_id);
+
+        publish_chat_event_for_session(
+            &bus,
+            agent_id,
+            session_id,
+            ChatStreamEvent::TextDelta {
+                agent_id,
+                delta: "scoped".to_string(),
+            },
+        )
+        .await;
+
+        assert_eq!(rx.recv().await.unwrap().session_id, Some(session_id));
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 //! Inactivity-based execution guard for cron agent turns.
 
+use crate::automation_session::AutomationSessionGuard;
 use crate::error::KernelError;
 use crate::kernel::CaptainKernel;
 use captain_runtime::agent_loop::AgentLoopResult;
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 pub const DEFAULT_CRON_AGENT_INACTIVITY_TIMEOUT_SECS: u64 = 600;
+const AUTOMATION_CHANNEL_TYPE: &str = "automation";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronAgentInactivity {
@@ -89,21 +91,34 @@ pub async fn run_agent_turn_with_inactivity_timeout(
     kernel_handle: Arc<dyn KernelHandle>,
     inactivity_limit: Duration,
 ) -> Result<AgentLoopResult, CronAgentTurnError> {
+    let automation_session = AutomationSessionGuard::create(Arc::clone(kernel), agent_id)?;
+    let session_id = automation_session.session_id();
+
     if inactivity_limit.is_zero() {
         return kernel
-            .send_message_with_handle(agent_id, message, Some(kernel_handle), None, None)
+            .send_message_full_in_session(
+                agent_id,
+                message,
+                Some(kernel_handle),
+                None,
+                None,
+                None,
+                Some(AUTOMATION_CHANNEL_TYPE.to_string()),
+                Some(session_id),
+            )
             .await
             .map_err(CronAgentTurnError::Kernel);
     }
 
-    let (mut events, handle, _user_input_tx) = kernel.send_message_streaming(
+    let (mut events, handle, _user_input_tx) = kernel.send_message_streaming_in_session(
         agent_id,
         message,
         Some(kernel_handle),
         None,
         None,
         None,
-        None,
+        Some(AUTOMATION_CHANNEL_TYPE.to_string()),
+        Some(session_id),
     )?;
     let mut activity = CronAgentActivity::started();
 

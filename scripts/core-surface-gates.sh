@@ -144,15 +144,21 @@ gate_learning() {
     --test captain-runtime skill_diff \
     --test captain-runtime skill_writer \
     --test captain-kernel kernel_handle_memory \
+    --test captain-kernel workflow_learning \
     --test captain-api skill_routes \
     --test captain-api learning_routes \
+    --test captain-api learning_retry_route \
     --test captain-cli skill \
+    --test captain-cli skills_proposed \
     --test captain-cli learning_fetch \
     --test captain-memory learning_review \
+    --test captain-memory workflow_learning \
     --test captain-memory skill_patterns \
     --test captain-memory skill_proposals \
     --test captain-channels command_review \
-    --test captain-channels telegram_callbacks
+    --test captain-channels telegram_callbacks \
+    --test captain-channels learning \
+    --run-script scripts/learning-visibility-surfaces-smoke.mjs
 }
 
 gate_capabilities() {

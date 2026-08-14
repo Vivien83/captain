@@ -78,7 +78,7 @@ impl CaptainKernel {
         })?;
         let (target_provider, target_model) =
             self.resolve_model_switch_target(agent_id, model, explicit_provider)?;
-        let context = self.model_switch_context(agent_id, &entry)?;
+        let context = self.model_switch_context(&entry)?;
         let provider_changed = entry.manifest.model.provider != target_provider;
         let model_changed = entry.manifest.model.model != target_model;
         let target =
@@ -136,30 +136,22 @@ impl CaptainKernel {
         })
     }
 
-    fn model_switch_context(
-        &self,
-        agent_id: AgentId,
-        entry: &AgentEntry,
-    ) -> KernelResult<ModelSwitchContext> {
-        let active_message_count = self
+    fn model_switch_context(&self, entry: &AgentEntry) -> KernelResult<ModelSwitchContext> {
+        let active_session = self
             .memory
             .get_session(entry.session_id)
-            .map_err(KernelError::Captain)?
-            .map(|s| s.messages.len())
+            .map_err(KernelError::Captain)?;
+        let active_message_count = active_session
+            .as_ref()
+            .map(|session| session.messages.len())
             .unwrap_or(0);
-        let (canonical_summary_present, canonical_recent_count) = self
+        let canonical_summary_present = self
             .memory
-            .canonical_context(agent_id, Some(8))
-            .map(|(summary, recent)| {
-                (
-                    summary
-                        .as_ref()
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false),
-                    recent.len(),
-                )
-            })
-            .unwrap_or((false, 0));
+            .session_compaction_summary(entry.session_id)
+            .map_err(KernelError::Captain)?
+            .as_deref()
+            .is_some_and(|summary| !summary.trim().is_empty());
+        let canonical_recent_count = 0;
 
         Ok(ModelSwitchContext {
             active_message_count,
@@ -200,37 +192,26 @@ impl CaptainKernel {
         }
     }
 
-    fn portable_switch_summary(
-        &self,
-        agent_id: AgentId,
-        entry: &AgentEntry,
-    ) -> KernelResult<Option<String>> {
+    fn portable_switch_summary(&self, entry: &AgentEntry) -> KernelResult<Option<String>> {
         let session = self
             .memory
             .get_session(entry.session_id)
             .map_err(KernelError::Captain)?;
-        let (canonical_summary, canonical_recent) = self
+        let session_summary = self
             .memory
-            .canonical_context(agent_id, Some(12))
-            .unwrap_or((None, Vec::new()));
+            .session_compaction_summary(entry.session_id)
+            .map_err(KernelError::Captain)?;
         let session_messages = session
             .as_ref()
             .map(|s| s.messages.as_slice())
             .unwrap_or(&[]);
-        if !portable_context_exists(
-            session_messages,
-            canonical_summary.as_deref(),
-            &canonical_recent,
-        ) {
+        if !portable_context_exists(session_messages, session_summary.as_deref(), &[]) {
             return Ok(None);
         }
 
         let mut lines = portable_summary_header(entry);
-        append_canonical_summary(&mut lines, canonical_summary.as_deref());
-        append_recent_switch_messages(
-            &mut lines,
-            portable_recent_messages(session_messages, &canonical_recent),
-        );
+        append_canonical_summary(&mut lines, session_summary.as_deref());
+        append_recent_switch_messages(&mut lines, portable_recent_messages(session_messages, &[]));
 
         let joined = lines.join("\n");
         Ok(Some(
@@ -258,7 +239,7 @@ impl CaptainKernel {
         })?;
         let previous_session_id = entry_before.session_id.to_string();
         let portable_summary =
-            self.portable_summary_for_strategy(agent_id, &entry_before, session_strategy)?;
+            self.portable_summary_for_strategy(&entry_before, session_strategy)?;
         let global_default_updated = Self::is_principal_agent(&entry_before);
 
         if global_default_updated {
@@ -272,12 +253,12 @@ impl CaptainKernel {
         )?;
 
         let compacted_summary_chars = portable_summary.as_ref().map(|s| s.len()).unwrap_or(0);
+        let new_session_id = self.create_model_switch_session(agent_id, &plan.target_provider)?;
         self.apply_model_switch_context_strategy(
-            agent_id,
+            &new_session_id,
             session_strategy,
             portable_summary.as_deref(),
         )?;
-        let new_session_id = self.create_model_switch_session(agent_id, &plan.target_provider)?;
         let message = model_switch_apply_message(&plan, session_strategy);
         self.resolve_codex_model_update_after_switch(
             agent_id,
@@ -299,12 +280,11 @@ impl CaptainKernel {
 
     fn portable_summary_for_strategy(
         &self,
-        agent_id: AgentId,
         entry: &AgentEntry,
         session_strategy: ModelSwitchSessionStrategy,
     ) -> KernelResult<Option<String>> {
         if session_strategy == ModelSwitchSessionStrategy::CompactSession {
-            self.portable_switch_summary(agent_id, entry)
+            self.portable_switch_summary(entry)
         } else {
             Ok(None)
         }
@@ -312,21 +292,25 @@ impl CaptainKernel {
 
     fn apply_model_switch_context_strategy(
         &self,
-        agent_id: AgentId,
+        new_session_id: &str,
         session_strategy: ModelSwitchSessionStrategy,
         portable_summary: Option<&str>,
     ) -> KernelResult<()> {
         match session_strategy {
-            ModelSwitchSessionStrategy::NewSession => {
-                let _ = self.memory.delete_canonical_session(agent_id);
-            }
+            ModelSwitchSessionStrategy::NewSession => {}
             ModelSwitchSessionStrategy::CompactSession => {
                 if let Some(summary) = portable_summary {
+                    let session_id = new_session_id
+                        .parse::<uuid::Uuid>()
+                        .map(captain_types::agent::SessionId)
+                        .map_err(|error| {
+                            KernelError::Captain(CaptainError::Internal(format!(
+                                "New model-switch session ID is invalid: {error}"
+                            )))
+                        })?;
                     self.memory
-                        .store_llm_summary(agent_id, summary, Vec::new())
+                        .store_session_llm_summary(session_id, summary)
                         .map_err(KernelError::Captain)?;
-                } else {
-                    let _ = self.memory.delete_canonical_session(agent_id);
                 }
             }
         }
