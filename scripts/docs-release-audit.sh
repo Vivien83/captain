@@ -522,15 +522,15 @@ require_not_contains \
 require_contains \
   "alpha.14 notes pin the published source revision" \
   docs/releases/v0.1.0-alpha.14.md \
-  'e43a9bdfd7f065fc780c8baf4fc73ff1858fa652'
+  '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f'
 require_contains \
   "alpha.14 notes pin the annotated tag object" \
   docs/releases/v0.1.0-alpha.14.md \
-  '77d7981adb828f0f0d89deb436893b365029e88d'
+  '9698f8ea3a7678c32436ebb31d71cba9df56704a'
 require_contains \
   "alpha.14 notes pin the published OCI index" \
   docs/releases/v0.1.0-alpha.14.md \
-  'sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43'
+  'sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d'
 require_contains \
   "alpha.14 notes pin the 22-asset contract" \
   docs/releases/v0.1.0-alpha.14.md \
@@ -598,7 +598,7 @@ require_not_contains \
 require_contains \
   "agent changelog pins the public alpha.14 source" \
   docs/captain-tools/runtime-changelog.md \
-  'e43a9bdfd7f065fc780c8baf4fc73ff1858fa652'
+  '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f'
 require_not_contains \
   "current deployment docs do not call the domain rail post-Alpha 11" \
   docs/deployment/github-vps-install.md \

@@ -183,7 +183,10 @@ ambiguous cancellation or replay after restart.
 `v0.1.0-alpha.14` is the current public prerelease. It adds one authoritative
 Hub, lightweight Clients, outbound execution Nodes, durable pairing and
 delivery, explicit execution targets, enterprise proxy support, and a bounded
-service cold-boot readiness window while preserving standalone behavior.
+service cold-boot readiness window while preserving standalone behavior. The
+corrected release assets also isolate concurrent Web streams, compaction
+handoffs, post-loop work, background automations, and SSH continuation state
+by session or command.
 
 Its host release contract contains exactly 22 files: five archives, five
 SHA-256 sidecars, five platform manifests, four installers, one aggregate
@@ -195,22 +198,23 @@ Its verified public surfaces are:
 
 - release:
   <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14>
-- source commit: `e43a9bdfd7f065fc780c8baf4fc73ff1858fa652`
-- source tree: `9133cae70476ff431b38ae7cef8e6986280e25f4`
-- annotated tag object: `77d7981adb828f0f0d89deb436893b365029e88d`
-- publication time: `2026-08-13T21:48:01Z`
+- source commit: `9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f`
+- source tree: `d605c490576eb59d76febc8ec538b740b074b955`
+- annotated tag object: `9698f8ea3a7678c32436ebb31d71cba9df56704a`
+- release publication time: `2026-08-13T21:48:01Z`
+- corrected asset refresh completed: `2026-08-14T15:33:36Z`
 - immutable image:
   `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14`
 - OCI index digest:
-  `sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43`
+  `sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d`
 - `linux/amd64` manifest:
-  `sha256:23cae17c8c7db47fc1a6890a650c2acfe796cf7b748caaadce02e9b0a64135d4`
+  `sha256:41db07bad158b9dd1de91bfbe522a60f5399e2e53cabb2ab414fc1c3f65df173`
 - `linux/arm64` manifest:
-  `sha256:0064bd292c80cae8004bea612450fc14a15e35122127df2972276b0329bbbff8`
+  `sha256:a057693e07a643e9ecdf4150dd844913738e907654a5a4a06cfb4a6f69535881`
 - AMD64 attestation manifest:
-  `sha256:149df0f08421f8619d6a7923f1252ccd2d1a9105df17315b2af650b9ed754e27`
+  `sha256:0b27c96cf31fdfa508615589b7906e3e9cf594b8f40ccc0a7705b89e1644af6c`
 - ARM64 attestation manifest:
-  `sha256:b743f864e21dc7524d2172b8e6589279f72d1c0eca24c51239c41c32edf7f872`
+  `sha256:a4c2c10b09e798db778ec2acde39a147725b6bba8de37247472ac444b668e771`
 
 The annotated tag dereferences to the source commit above. The GitHub Release
 contains exactly 22 uploaded assets, and every GitHub-reported SHA-256 digest

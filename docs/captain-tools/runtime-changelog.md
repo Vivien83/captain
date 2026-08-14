@@ -65,12 +65,15 @@ Agent-facing changes:
   prebuilt bundles continue to need no Rust toolchain.
 - Alpha 14 intentionally does not include application connectors, a Telegram
   machine tunnel, a complete mobile app, or multi-primary memory sync.
+- Corrected Alpha 14 assets bind concurrent Web streams, compaction handoffs,
+  post-loop work, and background automations to their originating session;
+  SSH continuation state is isolated per command.
 - The public `v0.1.0-alpha.14` prerelease contains exactly 22 assets. Its
-  annotated tag object `77d7981adb828f0f0d89deb436893b365029e88d`
+  annotated tag object `9698f8ea3a7678c32436ebb31d71cba9df56704a`
   dereferences to source commit
-  `e43a9bdfd7f065fc780c8baf4fc73ff1858fa652`; the immutable image and moving
+  `9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f`; the immutable image and moving
   `:alpha` channel share OCI index digest
-  `sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43`.
+  `sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d`.
   Anonymous HTTP asset and OCI-index checks succeeded, an ARM64 container
   executed the published binary, and GitHub reports zero Actions runs because
   the release was built and published locally and sequentially.

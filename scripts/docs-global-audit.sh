@@ -570,9 +570,9 @@ require_contains "alpha.14 notes expose durable pairing" docs/releases/v0.1.0-al
 require_contains "alpha.14 notes expose certification limits" docs/releases/v0.1.0-alpha.14.md "## Certification boundary"
 require_not_contains "alpha.14 notes do not copy alpha.13 source provenance" docs/releases/v0.1.0-alpha.14.md '6c05ae0c667e865a198764c1cd88c9050bd87db1'
 require_not_contains "alpha.14 notes do not copy alpha.13 OCI provenance" docs/releases/v0.1.0-alpha.14.md 'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
-require_contains "alpha.14 notes pin live source provenance" docs/releases/v0.1.0-alpha.14.md 'e43a9bdfd7f065fc780c8baf4fc73ff1858fa652'
-require_contains "alpha.14 notes pin live tag provenance" docs/releases/v0.1.0-alpha.14.md '77d7981adb828f0f0d89deb436893b365029e88d'
-require_contains "alpha.14 notes pin live OCI provenance" docs/releases/v0.1.0-alpha.14.md 'sha256:051dc4822fa1a1f89342a5ab7b29e2e9f990eeb6c6066c9bb0f3c8c3d7adcf43'
+require_contains "alpha.14 notes pin live source provenance" docs/releases/v0.1.0-alpha.14.md '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f'
+require_contains "alpha.14 notes pin live tag provenance" docs/releases/v0.1.0-alpha.14.md '9698f8ea3a7678c32436ebb31d71cba9df56704a'
+require_contains "alpha.14 notes pin live OCI provenance" docs/releases/v0.1.0-alpha.14.md 'sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d'
 require_contains "alpha.14 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.14.md 'GitHub Actions API returned zero runs'
 require_contains "Hub user guide pins outbound HTTPS" docs/hub-clients-nodes.md "outbound HTTPS port 443"
 require_contains "Hub user guide pins Client fail-closed behavior" docs/hub-clients-nodes.md "cannot silently fall back"
