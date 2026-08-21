@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.1.0-alpha.14 | :white_check_mark: |
+| 0.1.0-alpha.15 | :white_check_mark: |
+| 0.1.0-alpha.14 | :x: |
 | 0.1.0-alpha.13 | :x: |
 | 0.1.0-alpha.12 | :x: |
 | 0.1.0-alpha.11 | :x: |
@@ -55,7 +56,7 @@ The following are in scope for security reports:
 
 ## Early-Access Deployment Boundary
 
-Captain `0.1.0-alpha.14` is an early-access release. Keep the API bound to
+Captain `0.1.0-alpha.15` is an early-access release. Keep the API bound to
 loopback unless authentication, TLS, and a trusted reverse proxy are configured.
 Agents can execute tools with the permissions granted to them, so review
 capabilities and destructive-action confirmations before connecting untrusted
@@ -150,9 +151,10 @@ direct parent chains are checked explicitly instead of being hidden by an
 exception.
 
 Host release assets include a deterministic in-toto/SLSA v1 provenance
-statement that binds all 20 pre-existing assets to the public Git commit,
-tree, and exact `Cargo.lock`. The local publisher verifies the statement before
+statement that binds all 52 pre-existing assets to the public Git commit,
+tree, and exact `Cargo.lock`. Its SHA-256 sidecar brings the published host
+contract to 54 assets. The local publisher verifies the statement before
 upload and builds Docker architectures sequentially with BuildKit provenance
-before assembling the multi-architecture index. The alpha statement has a
-SHA-256 sidecar but no independent signing identity; it is not a claim of SLSA
-build-level certification. See [Release Provenance](docs/release-provenance.md).
+before assembling the multi-architecture index. The alpha statement has no
+independent signing identity; it is not a claim of SLSA build-level
+certification. See [Release Provenance](docs/release-provenance.md).

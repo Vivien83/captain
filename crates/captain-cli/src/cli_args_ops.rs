@@ -762,8 +762,22 @@ pub(crate) enum NodeCommands {
 pub(crate) enum ClientCommands {
     /// Pair this terminal or desktop interface with a Captain Hub.
     Pair(Box<ClientPairArgs>),
+    /// List independent Captain profiles without exposing their origins.
+    List {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Select the Captain profile used by future Client processes.
+    Use {
+        /// Full profile UUID, unique UUID prefix, or unique display name.
+        profile: String,
+    },
     /// Show the local lightweight Client state without exposing the Hub URL.
     Status {
+        /// Inspect a profile other than the active one.
+        #[arg(long)]
+        profile: Option<String>,
         /// Output as JSON for scripting.
         #[arg(long)]
         json: bool,
@@ -781,6 +795,12 @@ pub(crate) struct ClientPairArgs {
     /// HTTPS origin of the Captain Hub.
     #[arg(long, value_name = "HTTPS_URL")]
     pub(crate) hub: String,
+    /// Pair into an existing local profile instead of selecting by Hub origin.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
+    /// Local label for this Captain authority (never sent to the Hub).
+    #[arg(long)]
+    pub(crate) label: Option<String>,
     /// Human-readable Client name shown in Appareils.
     #[arg(long)]
     pub(crate) name: Option<String>,

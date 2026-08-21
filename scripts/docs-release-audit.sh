@@ -39,6 +39,7 @@ DOC_FILES=(
   docs/getting-started.md
   docs/troubleshooting.md
   docs/deployment/github-vps-install.md
+  docs/releases/v0.1.0-alpha.15.md
   docs/releases/v0.1.0-alpha.14.md
   docs/releases/v0.1.0-alpha.13.md
   docs/releases/v0.1.0-alpha.12.md
@@ -162,21 +163,25 @@ scan_banned \
 require_contains \
   "current public release has an agent-facing changelog" \
   docs/captain-tools/runtime-changelog.md \
-  "### 0.1.0-alpha.14"
+  "### 0.1.0-alpha.15"
 require_contains \
   "release readiness expects the current candidate" \
   scripts/release-readiness.sh \
-  '0.1.0-alpha.14'
+  '0.1.0-alpha.15'
 require_contains \
   "excellence smoke expects the current candidate" \
   scripts/excellence-smoke.sh \
-  '0.1.0-alpha.14'
+  '0.1.0-alpha.15'
 require_contains \
   "public changelog exposes the current release" \
   CHANGELOG.md \
-  '## [0.1.0-alpha.14] - 2026-08-13'
+  '## [0.1.0-alpha.15] - 2026-08-20'
 require_contains \
   "reviewed current release notes exist" \
+  docs/releases/v0.1.0-alpha.15.md \
+  '# Captain 0.1.0-alpha.15'
+require_contains \
+  "historical alpha.14 notes remain available" \
   docs/releases/v0.1.0-alpha.14.md \
   '# Captain 0.1.0-alpha.14'
 require_contains \
@@ -496,6 +501,34 @@ require_contains \
   docs/releases/v0.1.0-alpha.12.md \
   'selective metadata and redacted tail are not sent'
 require_contains \
+  "alpha.15 notes expose the standalone Console" \
+  docs/releases/v0.1.0-alpha.15.md \
+  '## Install Captain Console'
+require_contains \
+  "alpha.15 notes expose the optional Node" \
+  docs/releases/v0.1.0-alpha.15.md \
+  '## Install Captain Node'
+require_contains \
+  "alpha.15 notes pin explicit multi-Captain authority" \
+  docs/releases/v0.1.0-alpha.15.md \
+  '## Multi-Captain authority'
+require_contains \
+  "alpha.15 notes pin the 54-asset contract" \
+  docs/releases/v0.1.0-alpha.15.md \
+  'exactly 54 host assets'
+require_contains \
+  "alpha.15 notes defer publication facts until verification" \
+  docs/releases/v0.1.0-alpha.15.md \
+  'does not predict those values.'
+require_not_contains \
+  "alpha.15 notes do not copy alpha.14 source provenance" \
+  docs/releases/v0.1.0-alpha.15.md \
+  '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f'
+require_not_contains \
+  "alpha.15 notes do not copy alpha.14 OCI provenance" \
+  docs/releases/v0.1.0-alpha.15.md \
+  'sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d'
+require_contains \
   "alpha.14 notes expose one authoritative Hub" \
   docs/releases/v0.1.0-alpha.14.md \
   '## One Hub, shared work'
@@ -540,17 +573,37 @@ require_contains \
   docs/releases/v0.1.0-alpha.14.md \
   'GitHub Actions API returned zero runs'
 require_contains \
-  "DOC2 exposes the alpha.14 published contract" \
+  "DOC2 exposes the alpha.15 release contract" \
+  docs/DOCS_STATUS.md \
+  '## Alpha 15 Release Contract'
+require_contains \
+  "DOC2 preserves the alpha.14 published contract" \
   docs/DOCS_STATUS.md \
   '## Alpha 14 Published Contract'
 require_contains \
   "Hub user guide pins Client fail-closed behavior" \
   docs/hub-clients-nodes.md \
-  'cannot silently fall back'
+  'Console never starts a local Full fallback.'
 require_contains \
   "Hub protocol exposes the reproducible distributed smoke" \
   docs/HUB_CLIENT_NODE_PROTOCOL.md \
   '## Reproducible Distributed Smoke'
+require_contains \
+  "Hub protocol uses the standalone Node command" \
+  docs/HUB_CLIENT_NODE_PROTOCOL.md \
+  'captain-node pair --hub'
+require_not_contains \
+  "Hub protocol omits the legacy Full Node adapter" \
+  docs/HUB_CLIENT_NODE_PROTOCOL.md \
+  'captain node pair --hub'
+require_contains \
+  "security docs pin all 15 host bundles" \
+  docs/security.md \
+  'after all 15 Full, Console, and Node host bundles have'
+require_contains \
+  "security docs pin the 54-asset provenance contract" \
+  docs/security.md \
+  '54-asset contract'
 require_contains \
   "alpha.13 notes expose adaptive delivery verification" \
   docs/releases/v0.1.0-alpha.13.md \
@@ -584,13 +637,13 @@ require_contains \
   docs/releases/v0.1.0-alpha.13.md \
   'sha256:76119ad28b52d6028ae1ace8d60cb0919d1508839ffa56ea82d428f325bd8cec'
 require_contains \
-  "DOC2 names alpha.14 as the current public release" \
+  "DOC2 names alpha.15 as the current release contract" \
   docs/DOCS_STATUS.md \
-  '`v0.1.0-alpha.14` is the current public prerelease'
+  '`v0.1.0-alpha.15` is the current release contract'
 require_contains \
-  "DOC2 names alpha.13 as the previous public release" \
+  "DOC2 names alpha.14 as the previous public release" \
   docs/DOCS_STATUS.md \
-  '`v0.1.0-alpha.13` is the previous public prerelease'
+  '## Previous Public Release: Alpha 14'
 require_not_contains \
   "DOC2 no longer presents alpha.13 as unpublished" \
   docs/DOCS_STATUS.md \
@@ -644,31 +697,31 @@ require_contains \
   docs/release-provenance.md \
   'independently signed transparency-log attestation'
 require_contains \
-  "release provenance pins 22 uploaded assets" \
+  "release provenance pins 54 uploaded assets" \
   docs/release-provenance.md \
-  'asset count to 22'
+  'release asset count to 54'
 for readme in README.md README.fr.md README.es.md README.zh.md; do
   require_contains \
     "$readme pins the prerelease installer" \
     "$readme" \
-    'releases/download/v0.1.0-alpha.14/install.sh'
+    'releases/download/v0.1.0-alpha.15/install.sh'
   require_contains \
     "$readme pins the immutable prerelease image" \
     "$readme" \
-    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14'
+    'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15'
   require_not_contains \
     "$readme does not use GitHub latest for the prerelease" \
     "$readme" \
     'releases/latest/download/install.sh'
 done
 require_contains \
-  "security policy supports alpha.14" \
+  "security policy supports alpha.15" \
   SECURITY.md \
-  '| 0.1.0-alpha.14 | :white_check_mark: |'
+  '| 0.1.0-alpha.15 | :white_check_mark: |'
 require_contains \
-  "security policy retires alpha.13" \
+  "security policy retires alpha.14" \
   SECURITY.md \
-  '| 0.1.0-alpha.13 | :x: |'
+  '| 0.1.0-alpha.14 | :x: |'
 require_contains \
   "security policy retires alpha.11" \
   SECURITY.md \
@@ -758,9 +811,9 @@ require_contains \
   docs/captain-tools/runtime-changelog.md \
   'manual fallback only'
 require_contains \
-  "DOC2 exposes the active CLI release artifact" \
+  "DOC2 exposes all active release artifacts" \
   docs/DOCS_STATUS.md \
-  'active release artifact is the cross-platform Captain CLI'
+  'Captain Console, and Captain Node as distinct checksum-verified bundles'
 if [ "$SITE_PRESENT" = "1" ]; then
   require_contains \
     "launch site docs expose the static audit" \

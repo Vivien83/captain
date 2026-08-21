@@ -175,6 +175,10 @@ pub mod native_embeddings;
 pub mod native_mempalace;
 pub mod native_voice;
 pub mod node_tool_runtime;
+#[cfg(test)]
+mod node_tool_runtime_legacy;
+#[cfg(test)]
+mod node_tool_runtime_parity_tests;
 pub mod outcome_detector;
 pub mod peer_discovery;
 pub mod pii_filter;

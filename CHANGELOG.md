@@ -6,6 +6,65 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.15] - 2026-08-20
+
+Early-access release focused on a truly lightweight multi-Captain Console,
+native outbound Node services, and independently verifiable distribution.
+
+### Added
+
+- Added the standalone `captain-console` binary with multi-profile
+  `pair/list/use/rename/open/tui` workflows. It restores shared Hub sessions
+  through an authenticated loopback gateway without embedding a provider,
+  agent loop, memory database, channels, Python, or a Full daemon.
+- Added the standalone `captain-node` binary with pairing, foreground runtime,
+  redacted status, confirmed reset, native proxy-secret storage, and
+  `service install/start/stop/status/uninstall` for launchd, systemd user
+  services, and Windows Service Control Manager.
+- Added separate checksum-verified Console and Node installers for Unix and
+  Windows. Installation probes the exact component/version and restores the
+  previous binary on failure.
+
+### Changed
+
+- Desktop now composes `captain-console` instead of booting a kernel. Its tray
+  switches explicitly among local Captain profiles while the Hub-rendered
+  WebView remains unable to enumerate or select another authority.
+- Client credentials moved to native secret storage and are bound to the exact
+  Hub UUID and origin. Legacy single-profile state migrates atomically and
+  conflicts fail closed.
+- Node execution uses the standalone `captain-node-tools` engine. Console and
+  Node dependency trees exclude kernel, runtime, provider, memory, skills,
+  channels, Wasmtime, ORT, and Python.
+- Release packaging now builds Full, Console, and Node sequentially for five
+  targets. The host contract expands from 22 to 54 assets while preserving
+  deterministic manifests and provenance.
+
+### Security and reliability
+
+- Console profile probes are bounded and retain only sanitized operational
+  facts. Authority changes complete bootstrap before activation; offline or
+  invalid profiles never trigger a local fallback.
+- The Console gateway requires an exact loopback origin and private local
+  session cookie. Cross-site requests, alternate hosts, unsupported schemes,
+  userinfo URLs, oversized responses, and raw tool payloads are rejected.
+- Native Node services use cooperative shutdown, atomic private definitions,
+  restart policies, durable acknowledgements, local guards, and no blind
+  replay after a possible effect.
+- Hub acknowledgements clamp their durable timestamp to the outbox creation
+  time and keep the device cursor monotonic, so a wall-clock rollback cannot
+  break or partially commit the delivery handshake.
+- The release lockfile upgrades `h2` from `0.4.13` to patched `0.4.16`, closing
+  `RUSTSEC-2026-0258` before Alpha 15 publication.
+- `captain-types` now declares its existing `libc` dependency for Linux as
+  well as macOS, so the durable no-clobber rename path compiles on every
+  published Unix target instead of being covered only by the host build. The
+  Linux implementation invokes `SYS_renameat2` directly, preserving the
+  release's older glibc baseline.
+- The Alpha 15 system smoke certifies credential isolation, immediate
+  revocation, shared-session restoration, proxy fallback, workspace
+  confinement, crash/restart non-duplication, and Windows service compilation.
+
 ## [0.1.0-alpha.14] - 2026-08-13
 
 Early-access release focused on one authoritative Captain Hub, lightweight

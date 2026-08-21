@@ -1,0 +1,22 @@
+[package]
+name = "captain-node-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Workspace-confined local tool engine for Captain Node"
+
+[dependencies]
+captain-types = { path = "../captain-types" }
+globset = { workspace = true }
+ignore = { workspace = true }
+regex = { workspace = true }
+regex-lite = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+shlex = "1"
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

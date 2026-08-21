@@ -311,6 +311,34 @@ async fn paired_client_access_is_scoped_role_checked_and_immediately_revocable()
 }
 
 #[tokio::test]
+async fn paired_client_access_token_is_bound_to_one_hub_instance() {
+    let (_first_temp, first_router, first_state) = test_router();
+    let (_second_temp, second_router, _second_state) = test_router();
+    let (_client_id, first_token) =
+        paired_access_token(&first_state, DeviceRole::Client, "e".repeat(64));
+
+    let accepted = first_router
+        .oneshot(request_with_bearer(
+            Method::GET,
+            "/api/status",
+            &first_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let rejected = second_router
+        .oneshot(request_with_bearer(
+            Method::GET,
+            "/api/status",
+            &first_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn paired_client_web_identity_and_realtime_tickets_remain_scoped() {
     let (_temp, router, state) = test_router();
     let (_client_id, client_token) =

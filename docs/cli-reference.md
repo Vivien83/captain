@@ -29,14 +29,14 @@ cargo build --release -p captain-cli
 ### Docker
 
 ```bash
-docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
+docker run -it ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
 ```
 
 ### Shell installer
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 bash
 ```
 
 ## Global Options
@@ -269,7 +269,7 @@ captain update [--check] [--yes] [--version <release-tag>]
 |---|---|
 | `--check` | Resolve the compatible release channel without installing. |
 | `--yes` | Skip the interactive CLI confirmation. Control-plane approvals remain exact and explicit. |
-| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.14`. |
+| `--version <release-tag>` | Install one exact tag, for example `v0.1.0-alpha.15`. |
 
 Stable installations do not opt into prereleases. An existing prerelease may
 advance to a newer prerelease or the corresponding stable version. The archive
@@ -344,18 +344,55 @@ captain doctor --json
 
 ---
 
-### captain node
+### captain-console
+
+Operate one or more Captain Full authorities without installing a local agent
+runtime:
+
+```bash
+captain-console pair --hub <HTTPS_URL> [OPTIONS]
+captain-console list [--local]
+captain-console use <PROFILE>
+captain-console rename <PROFILE> <LABEL>
+captain-console open [PROFILE]
+captain-console tui [PROFILE]
+captain-console proxy-secret set|delete <NAME>
+```
+
+`PROFILE` can be an exact profile UUID, an unambiguous UUID prefix, or a local
+label. `use` changes the default for future Console processes; an already open
+gateway remains bound to its original authority. `list --local` performs no
+network request. Live inventory is bounded and contains only sanitized health,
+version, model, quota, alert, session, and project facts.
+
+`pair` accepts enterprise CA, explicit/environment proxy, native proxy-secret,
+local label, device name, and `--no-browser` options. Production Hub origins
+must use HTTPS on port 443. The credential is bound to the exact Hub UUID and
+origin and resides in the native OS secret store.
+
+`open` starts a private loopback gateway and opens the selected Hub Web surface.
+`tui` lists, restores, creates, and streams sessions from the selected Hub. No
+command starts a provider, agent loop, memory database, channels, Python, or a
+local Full daemon.
+
+---
+
+### captain-node
 
 Pair and run this machine as an optional outbound execution Node for one
 Captain Hub. The Hub remains a complete Captain installation and the sole
 authority for sessions, memory, projects, providers, audit, and orchestration.
 
 ```bash
-captain node pair --hub <HTTPS_URL> --workspace <DIR> [OPTIONS]
-captain node run
-captain node status [--json]
-captain node reset --yes
+captain-node pair --hub <HTTPS_URL> --workspace <DIR> [OPTIONS]
+captain-node run
+captain-node status [--json]
+captain-node reset --yes
+captain-node service install|start|stop|status|uninstall
 ```
+
+Captain Full retains `captain node ...` as a compatibility adapter. New
+lightweight installations should use the separate `captain-node` executable.
 
 `pair` accepts these options:
 
@@ -370,7 +407,7 @@ captain node reset --yes
 | `--ca-bundle <PEM_FILE>` | Add an enterprise CA bundle for the Hub/proxy connection. |
 | `--proxy <PROXY_URL>` | Use one explicit HTTP(S) proxy. Credentials must not be embedded in the URL. |
 | `--proxy-username <USER>` | Username for the explicit proxy. |
-| `--proxy-password-secret <NAME>` | Resolve the proxy password from Captain's secret store. |
+| `--proxy-password-secret <NAME>` | Resolve the proxy password from the native Console/Node secret store. |
 | `--no-proxy` | Ignore proxy environment variables. Conflicts with `--proxy`. |
 | `--no-browser` | Print the approval URL and code without opening a browser. |
 
@@ -379,33 +416,38 @@ HTTPS streaming, then HTTPS long-poll. `HTTPS_PROXY` and `NO_PROXY` are honored
 unless overridden. Pairing state, the one-device credential, and the run rail
 are private, atomic, and restartable; short-lived access tokens are not stored.
 
-`captain node run` is deliberately a foreground operator command in this
-Alpha 14 tranche. It reconnects with bounded backoff, refreshes short-lived
-credentials, reapplies the effective Hub grant and local execution policy, and
-keeps terminal evidence in the durable rail. Ctrl+C stops the runtime through
-the same cleanup path used for an internal failure.
+`captain-node run` is the foreground diagnostic path. It reconnects with
+bounded backoff, refreshes short-lived credentials, reapplies the effective Hub
+grant and local execution policy, and keeps terminal evidence in the durable
+rail. Ctrl+C stops through the same cooperative path used by SIGTERM and the
+native service manager.
 
-`captain node status --json` distinguishes requested authority from the
+`captain-node service install` installs and starts a user-scoped launchd,
+systemd, or Windows service using the current binary. Windows explicitly runs
+under the current user so its credential manager remains available; there is
+no `LocalSystem` fallback. Definitions are private and written atomically.
+
+`captain-node status --json` distinguishes requested authority from the
 effective Hub-approved authority. While the runtime lock is active it also
 reports the categorical transport, capability rotation state, bounded fallback
 count, last safe error code, and rail counters. It never emits the Hub URL,
 workspace roots, proxy credentials, tool input, or raw results.
 
-`captain node reset --yes` removes the local device credential and durable rail
+`captain-node reset --yes` removes the local device credential and durable rail
 state only. It refuses while the Node owns the state lock and leaves the local
 workspace configuration available for an explicit new pairing.
 
 **Example:**
 
 ```bash
-captain node pair \
+captain-node pair \
   --hub https://hub.example.com \
   --workspace "$PWD" \
   --workspace-id project-main \
   --no-browser
 
-captain node status --json
-captain node run
+captain-node status --json
+captain-node service install
 ```
 
 See [Captain Hub, Clients, and Nodes](HUB_CLIENT_NODE_PROTOCOL.md) for the wire,

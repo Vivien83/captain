@@ -63,46 +63,56 @@ platforms=(
     x86_64-unknown-linux-gnu
     x86_64-pc-windows-msvc
 )
+components=(full console node)
 
-for platform in "${platforms[@]}"; do
-    case "$platform" in
-        *-pc-windows-msvc) archive="$VERSION_DIR/captain-$platform.zip" ;;
-        *) archive="$VERSION_DIR/captain-$platform.tar.gz" ;;
+for component in "${components[@]}"; do
+    case "$component" in
+        full) archive_prefix="captain"; manifest_prefix="manifest" ;;
+        console) archive_prefix="captain-console"; manifest_prefix="manifest-console" ;;
+        node) archive_prefix="captain-node"; manifest_prefix="manifest-node" ;;
     esac
-    printf 'fixture %s\n' "$platform" >"$archive"
-    hash="$(sha256_file "$archive")"
-    printf '%s  %s\n' "$hash" "$(basename "$archive")" >"$archive.sha256"
-    jq -n \
-        --arg version "$VERSION" \
-        --arg platform "$platform" \
-        --arg archive "$(basename "$archive")" \
-        --arg sha256 "$hash" \
-        --arg build_started_at "2026-07-30T11:00:00Z" \
-        --arg generated_at "2026-07-30T12:00:00Z" \
-        --arg repository "$source_repository" \
-        --arg revision "$source_revision" \
-        --arg tree "$source_tree" \
-        --arg cargo_lock_sha256 "$lock_sha256" \
-        --argjson source_dirty "$source_dirty" \
-        '{
-          version:$version,
-          platform:$platform,
-          archive:$archive,
-          sha256:$sha256,
-          build_started_at:$build_started_at,
-          generated_at:$generated_at,
-          source:{
-            repository:$repository,
-            revision:$revision,
-            tree:$tree,
-            cargo_lock_sha256:$cargo_lock_sha256,
-            dirty:$source_dirty
-          }
-        }' \
-        >"$VERSION_DIR/manifest-$platform.json"
+    for platform in "${platforms[@]}"; do
+        case "$platform" in
+            *-pc-windows-msvc) archive="$VERSION_DIR/$archive_prefix-$platform.zip" ;;
+            *) archive="$VERSION_DIR/$archive_prefix-$platform.tar.gz" ;;
+        esac
+        printf 'fixture %s %s\n' "$component" "$platform" >"$archive"
+        hash="$(sha256_file "$archive")"
+        printf '%s  %s\n' "$hash" "$(basename "$archive")" >"$archive.sha256"
+        jq -n \
+            --arg version "$VERSION" \
+            --arg component "$component" \
+            --arg platform "$platform" \
+            --arg archive "$(basename "$archive")" \
+            --arg sha256 "$hash" \
+            --arg build_started_at "2026-07-30T11:00:00Z" \
+            --arg generated_at "2026-07-30T12:00:00Z" \
+            --arg repository "$source_repository" \
+            --arg revision "$source_revision" \
+            --arg tree "$source_tree" \
+            --arg cargo_lock_sha256 "$lock_sha256" \
+            --argjson source_dirty "$source_dirty" \
+            '{
+              version:$version,
+              component:$component,
+              platform:$platform,
+              archive:$archive,
+              sha256:$sha256,
+              build_started_at:$build_started_at,
+              generated_at:$generated_at,
+              source:{
+                repository:$repository,
+                revision:$revision,
+                tree:$tree,
+                cargo_lock_sha256:$cargo_lock_sha256,
+                dirty:$source_dirty
+              }
+            }' \
+            >"$VERSION_DIR/$manifest_prefix-$platform.json"
+    done
 done
 
-for installer in install.sh install-local.sh install-git.sh install.ps1; do
+for installer in install.sh install-local.sh install-git.sh install.ps1 install-edition.sh install-edition.ps1; do
     printf 'fixture %s\n' "$installer" >"$VERSION_DIR/$installer"
 done
 
@@ -113,7 +123,7 @@ jq -s \
       version:$version,
       generated_at:$generated_at,
       source:.[0].source,
-      artifacts:(map({platform,archive,sha256})|sort_by(.platform))
+      artifacts:(map({component,platform,archive,sha256})|sort_by(.component,.platform))
     }' \
     "$VERSION_DIR"/manifest-*.json >"$VERSION_DIR/manifest.json"
 

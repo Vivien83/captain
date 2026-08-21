@@ -6,29 +6,30 @@ normal path does not use GitHub Actions.
 ## Host Artifacts
 
 `scripts/release-provenance.sh` generates
-`provenance.intoto.jsonl` after all five host bundles have completed. The file
+`provenance.intoto.jsonl` after all 15 host bundles have completed. The file
 contains one [in-toto Statement v1](https://in-toto.io/Statement/v1) with a
 [SLSA provenance v1](https://slsa.dev/provenance/v1) predicate.
 
 The statement binds:
 
-- the 20 host assets that existed before the statement was generated;
+- the 52 host assets that existed before the statement was generated;
 - the public Git source URI, commit, and tree;
 - the exact `Cargo.lock` SHA-256;
-- all five release targets and the release Cargo profile;
+- all three components, all five release targets, and the release Cargo profile;
 - the local Rust and Cargo versions;
 - the earliest real target-build start and the last platform-package finish;
 - the fact that target builds were completed sequentially.
 
-The statement and its SHA-256 sidecar bring the release asset count to 22.
+The statement and its SHA-256 sidecar bring the release asset count to 54.
 `scripts/publish-release-local.sh` regenerates and verifies both files before
 upload. A changed archive, checksum, manifest, installer, source revision, or
 lockfile makes verification fail.
 
-Each platform manifest records the target-build start, package finish, source
-revision, tree, lockfile digest, and dirty-tree state. Aggregate-manifest
-generation rejects mixed source records, so an older bundle cannot be silently
-combined with a newer source checkout before attestation.
+Each component/platform manifest records the target-build start, package
+finish, source revision, tree, lockfile digest, and dirty-tree state.
+Aggregate-manifest generation rejects a missing component/target pair or mixed
+source records, so an older bundle cannot be silently combined with a newer
+source checkout before attestation.
 
 This alpha provenance is machine-readable and digest-bound, but it is not an
 independently signed transparency-log attestation. The macOS binaries remain

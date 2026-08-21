@@ -31,7 +31,7 @@ env:
 
 jobs:
   cli:
-    name: CLI / ${{ matrix.target }}
+    name: Host bundles / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     env:
       # Compile-time version baked into the binary via option_env!() —
@@ -91,21 +91,30 @@ jobs:
         if: matrix.cross == true
         run: cargo install cross --locked
 
-      - name: Build CLI (cross)
+      - name: Build Full, Console, and Node (cross, sequential)
         if: matrix.cross == true
         # Default features stay ON: local-embeddings must ship in release binaries
         # (ort-load-dynamic does not link ONNX at build time).
-        run: cross build --profile release-fast --target ${{ matrix.target }} -p captain-cli --bin captain
+        run: |
+          cross build --profile release-fast --target ${{ matrix.target }} -p captain-cli --bin captain
+          cross build --profile release-fast --target ${{ matrix.target }} -p captain-console --bin captain-console
+          cross build --profile release-fast --target ${{ matrix.target }} -p captain-node --bin captain-node
 
-      - name: Build CLI
+      - name: Build Full, Console, and Node (sequential)
         if: matrix.cross != true
-        run: cargo build --profile release-fast --target ${{ matrix.target }} -p captain-cli --bin captain
+        run: |
+          cargo build --profile release-fast --target ${{ matrix.target }} -p captain-cli --bin captain
+          cargo build --profile release-fast --target ${{ matrix.target }} -p captain-console --bin captain-console
+          cargo build --profile release-fast --target ${{ matrix.target }} -p captain-node --bin captain-node
 
-      - name: Ad-hoc codesign CLI binary (macOS)
+      - name: Verify or ad-hoc codesign host binaries (macOS)
         if: runner.os == 'macOS'
         run: |
-          xattr -cr target/${{ matrix.target }}/release-fast/captain || true
-          codesign --force --sign - target/${{ matrix.target }}/release-fast/captain
+          for binary in captain captain-console captain-node; do
+            path="target/${{ matrix.target }}/release-fast/$binary"
+            xattr -cr "$path" || true
+            codesign --verify "$path" || codesign --force --sign - "$path"
+          done
 
       # Reuses the same packager maintainers run locally (scripts/release-all.sh)
       # instead of re-implementing tarball layout inline: this is what embeds
@@ -118,10 +127,19 @@ jobs:
         shell: bash
         env:
           CAPTAIN_SKIP_BUILD: "1"
-          CAPTAIN_BIN_PATH: target/${{ matrix.target }}/release-fast/captain
           CAPTAIN_DIST_PLATFORM: ${{ matrix.target }}
           CAPTAIN_VERSION: ${{ github.ref_name }}
-        run: bash scripts/package-release.sh
+        run: |
+          for component in full console node; do
+            case "$component" in
+              full) binary=captain ;;
+              console) binary=captain-console ;;
+              node) binary=captain-node ;;
+            esac
+            CAPTAIN_DIST_COMPONENT="$component" \
+            CAPTAIN_BIN_PATH="target/${{ matrix.target }}/release-fast/$binary" \
+              bash scripts/package-release.sh
+          done
 
       - name: Upload packaged artifacts (Unix)
         if: matrix.archive == 'tar.gz'
@@ -131,10 +149,18 @@ jobs:
           path: |
             dist/releases/${{ github.ref_name }}/captain-${{ matrix.target }}.tar.gz
             dist/releases/${{ github.ref_name }}/captain-${{ matrix.target }}.tar.gz.sha256
+            dist/releases/${{ github.ref_name }}/captain-console-${{ matrix.target }}.tar.gz
+            dist/releases/${{ github.ref_name }}/captain-console-${{ matrix.target }}.tar.gz.sha256
+            dist/releases/${{ github.ref_name }}/captain-node-${{ matrix.target }}.tar.gz
+            dist/releases/${{ github.ref_name }}/captain-node-${{ matrix.target }}.tar.gz.sha256
             dist/releases/${{ github.ref_name }}/manifest-${{ matrix.target }}.json
+            dist/releases/${{ github.ref_name }}/manifest-console-${{ matrix.target }}.json
+            dist/releases/${{ github.ref_name }}/manifest-node-${{ matrix.target }}.json
             dist/releases/${{ github.ref_name }}/install.sh
             dist/releases/${{ github.ref_name }}/install-local.sh
             dist/releases/${{ github.ref_name }}/install-git.sh
+            dist/releases/${{ github.ref_name }}/install-edition.sh
+            dist/releases/${{ github.ref_name }}/install-edition.ps1
           if-no-files-found: error
 
       # package-release.sh is bash/tar-only; Windows keeps its own packaging
@@ -145,23 +171,32 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $archive = "captain-${{ matrix.target }}.zip"
-          $stage = "stage-windows"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release-fast/captain.exe" "$stage/captain.exe"
-          "${{ github.ref_name }}" | Out-File -Encoding ASCII -NoNewline "$stage/VERSION"
-          Compress-Archive -Path "$stage/*" -DestinationPath $archive
-          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
-          "$hash  $archive" | Out-File -Encoding ASCII "$archive.sha256"
-          $manifest = [ordered]@{
-            version = "${{ github.ref_name }}"
-            platform = "${{ matrix.target }}"
-            archive = $archive
-            sha256 = $hash
-            generated_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-          } | ConvertTo-Json
-          $manifest | Out-File -Encoding utf8 "manifest-${{ matrix.target }}.json"
+          $components = @(
+            @{ Name = "full"; Prefix = "captain"; Binary = "captain"; Manifest = "manifest" },
+            @{ Name = "console"; Prefix = "captain-console"; Binary = "captain-console"; Manifest = "manifest-console" },
+            @{ Name = "node"; Prefix = "captain-node"; Binary = "captain-node"; Manifest = "manifest-node" }
+          )
+          foreach ($component in $components) {
+            $archive = "$($component.Prefix)-${{ matrix.target }}.zip"
+            $stage = "stage-windows-$($component.Name)"
+            New-Item -ItemType Directory -Force -Path $stage | Out-Null
+            Copy-Item "target/${{ matrix.target }}/release-fast/$($component.Binary).exe" "$stage/$($component.Binary).exe"
+            "${{ github.ref_name }}" | Out-File -Encoding ASCII -NoNewline "$stage/VERSION"
+            Compress-Archive -Path "$stage/*" -DestinationPath $archive
+            $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+            "$hash  $archive" | Out-File -Encoding ASCII "$archive.sha256"
+            $manifest = [ordered]@{
+              version = "${{ github.ref_name }}"
+              component = $component.Name
+              platform = "${{ matrix.target }}"
+              archive = $archive
+              sha256 = $hash
+              generated_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            } | ConvertTo-Json
+            $manifest | Out-File -Encoding utf8 "$($component.Manifest)-${{ matrix.target }}.json"
+          }
           Copy-Item "scripts/install.ps1" "install.ps1"
+          Copy-Item "scripts/install-edition.ps1" "install-edition.ps1"
 
       - name: Upload packaged artifacts (Windows)
         if: matrix.archive == 'zip'
@@ -171,8 +206,15 @@ jobs:
           path: |
             captain-${{ matrix.target }}.zip
             captain-${{ matrix.target }}.zip.sha256
+            captain-console-${{ matrix.target }}.zip
+            captain-console-${{ matrix.target }}.zip.sha256
+            captain-node-${{ matrix.target }}.zip
+            captain-node-${{ matrix.target }}.zip.sha256
             manifest-${{ matrix.target }}.json
+            manifest-console-${{ matrix.target }}.json
+            manifest-node-${{ matrix.target }}.json
             install.ps1
+            install-edition.ps1
           if-no-files-found: error
 
       - name: Prepare deterministic Docker embedding cache
@@ -278,7 +320,7 @@ jobs:
           jq -s \
             --arg version "${{ github.ref_name }}" \
             --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{version: $version, generated_at: $generated_at, artifacts: map({platform, archive, sha256})}' \
+            '{version: $version, generated_at: $generated_at, artifacts: map({component: (.component // "full"), platform, archive, sha256}) | sort_by(.component, .platform)}' \
             dist/release-assets/manifest-*.json > dist/release-assets/manifest.json
 
       - name: List release assets

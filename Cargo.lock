@@ -1138,33 +1138,49 @@ dependencies = [
 ]
 
 [[package]]
-name = "captain-desktop"
+name = "captain-console"
 version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
- "captain-extensions",
  "captain-node",
+ "captain-types",
  "captain-wire",
+ "clap",
  "dirs 6.0.0",
  "futures",
  "hex",
  "rand 0.8.6",
+ "ratatui",
  "reqwest 0.12.28",
  "reqwest-websocket",
+ "rpassword",
  "serde",
  "serde_json",
  "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "captain-desktop"
+version = "0.1.0"
+dependencies = [
+ "captain-console",
+ "captain-wire",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
- "thiserror 2.0.18",
- "tokio",
  "tracing",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]
@@ -1294,16 +1310,21 @@ dependencies = [
  "bytes",
  "captain-api",
  "captain-kernel",
+ "captain-node-tools",
  "captain-runtime",
  "captain-types",
  "captain-wire",
+ "clap",
+ "dirs 6.0.0",
  "fs2",
  "futures",
  "hex",
+ "keyring",
  "libc",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "reqwest-websocket",
+ "rpassword",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1314,9 +1335,28 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "toml 0.8.2",
  "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
+ "windows-service",
  "zeroize",
+]
+
+[[package]]
+name = "captain-node-tools"
+version = "0.1.0"
+dependencies = [
+ "captain-types",
+ "globset",
+ "ignore",
+ "regex",
+ "regex-lite",
+ "serde_json",
+ "sha2 0.10.9",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1333,6 +1373,7 @@ dependencies = [
  "captain-capspec",
  "captain-extensions",
  "captain-memory",
+ "captain-node-tools",
  "captain-skills",
  "captain-types",
  "chrono",
@@ -4179,9 +4220,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.13"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f44da3a8150a6703ed5d34e164b875fd14c2cdab9af1252a9a1020bde2bdc54"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -11536,6 +11577,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11796,6 +11843,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "857224b3b211c6f3616921f081ee54721ee3ad2ace2fac6a6337e032f7b4dcf2"
+dependencies = [
+ "bitflags 2.13.1",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

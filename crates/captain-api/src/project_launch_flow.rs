@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(flow.launch_state["source"]["type"], "local");
         assert_eq!(flow.launch_state["branch"], "main");
         assert_eq!(flow.launch_state["autonomy_level"], "supervised");
-        assert_eq!(flow.rules_file_created, true);
+        assert!(flow.rules_file_created);
     }
 
     #[tokio::test]

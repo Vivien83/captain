@@ -53,15 +53,15 @@
 ## 快速安装
 
 当前公开早期访问版本：
-[v0.1.0-alpha.14](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14)。
-不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14`；
+[v0.1.0-alpha.15](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.15)。
+不可变 Docker 镜像：`ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15`；
 滚动 Alpha 通道：`ghcr.io/vivien83/captain-agent-os:alpha`。
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 bash
 ```
 
 官方仓库、Release 资产、校验和与容器镜像均为公开内容，无需 GitHub token 或容器仓库登录。
@@ -75,9 +75,33 @@ CPython 3.13.14、MemPalace 3.5.0，以及通过校验和约束的冻结依赖�
 Python、手动执行 `pip install` 或提供第二个 API key。`captain memory doctor`
 会验证真实的语义读取；启动时若运行时缺失、损坏或权限不安全，Captain 会先修复。若修复失败，Captain 不会在缺少语义内存时声称已达到生产就绪状态。
 
-Release 资产为 macOS 和 Linux 提供 `aarch64` 与 `x86_64`，并提供
-`x86_64-pc-windows-msvc` CLI zip。每个归档都带有 SHA-256 文件和平台清单；release
-还包含聚合清单以及 Unix 安装脚本。
+Captain Full、Captain Console 与 Captain Node 均提供 macOS/Linux 的
+`aarch64`、`x86_64` 版本，以及 `x86_64-pc-windows-msvc` 版本。Release 共包含
+15 个归档、15 个 SHA-256 sidecar、15 个组件/平台清单、6 个安装脚本、1 个聚合清单
+以及受校验和约束的 provenance。
+
+### 轻量 Console 或执行 Node
+
+只安装多 Captain Console，不安装本地 provider、memory、channel、agent loop 或 Full daemon：
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=console CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-console pair --hub https://your-captain.example
+captain-console tui
+```
+
+可选的出站 workspace Node 需要单独安装：
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=node CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-node pair --hub https://your-captain.example --workspace "$PWD"
+captain-node service install
+```
+
+两个版本都会验证精确 SHA-256；若安装后的版本检查失败，会恢复旧二进制。Node 默认只读，
+任何写入都需要 Hub 单独授权。
 
 > **Alpha 签名说明：** Release 归档和校验和会公开，但 macOS 二进制仅使用 ad-hoc
 > 签名，尚未经过 Apple notarization。Windows CLI 尚未使用 Authenticode
@@ -88,8 +112,8 @@ Release 资产为 macOS 和 Linux 提供 `aarch64` 与 `x86_64`，并提供
 ```bash
 export ANTHROPIC_API_KEY=...       # 或任意受支持的提供商 API key
 export TELEGRAM_BOT_TOKEN=...      # 可选——见下文
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 bash
 ```
 
@@ -108,8 +132,8 @@ Codex 是 Captain 内置的默认提供商——不需要 `ANTHROPIC_API_KEY`
 会安装好一切（二进制文件、systemd 服务），但先不启动守护进程，这样下面的就绪检查就不会在你登录之前抢先运行：
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # 会显示一个 URL + 代码——在手机上打开即可，无需本地浏览器
@@ -126,7 +150,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
 ```
 
 首次启动会生成守护进程 API key，并将其与全部状态一起持久化到命名卷中，该卷可在镜像更新后继续保留。本地
@@ -139,8 +163,8 @@ socket、PID namespace 或特权模式。运行不可变镜像：
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.15 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.15 docker compose up -d
 ```
 
 首次启动后再配置所选模型提供商。任何宿主机访问都必须是经过本地审查的显式部署变更；旧的广泛访问
@@ -234,6 +258,7 @@ Telegram 操作员聊天和显式用户白名单后，Rich 卡片会提供**立�
 | [VPS Deployment](docs/deployment/github-vps-install.md) | 无界面安装、反向代理、HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | 外部工具服务器与传输协议 |
 | [Troubleshooting](docs/troubleshooting.md) | 常见问题及其解决方法 |
+| [0.1.0-alpha.15 Release Notes](docs/releases/v0.1.0-alpha.15.md) | 多 Captain Console、原生 Node 服务与独立轻量 bundle |
 | [0.1.0-alpha.14 Release Notes](docs/releases/v0.1.0-alpha.14.md) | 一个 Hub、轻量 Client、出站 Node 与崩溃安全的分布式工作 |
 | [0.1.0-alpha.13 Release Notes](docs/releases/v0.1.0-alpha.13.md) | 自适应交付核验、崩溃安全证据与强化的主机更新 |
 | [0.1.0-alpha.12 Release Notes](docs/releases/v0.1.0-alpha.12.md) | 持久 Live Runs、基于证据的研究、已验证构件与托管 VPS 域名 |
@@ -272,20 +297,20 @@ Telegram 操作员聊天和显式用户白名单后，Rich 卡片会提供**立�
 cargo test --workspace              # 完整测试套件
 cargo build --release -p captain-cli
 scripts/release-readiness.sh         # 完整本地 release gate
-CAPTAIN_VERSION=vX.Y.Z scripts/release-all.sh  # 本地构建全部 5 个 CLI 目标
+CAPTAIN_VERSION=vX.Y.Z scripts/release-all.sh  # 本地顺序构建全部 15 个 bundle
 CAPTAIN_VERSION=vX.Y.Z scripts/publish-release-local.sh
 docker build --build-arg CAPTAIN_BUILD_VERSION=vX.Y.Z -t captain:vX.Y.Z .
 ```
 
-`release-all.sh` 会逐一构建两个 macOS、两个 Linux 以及 Windows CLI bundle；
-Windows 交叉构建使用 `cargo-xwin`、LLVM 和 NASM。完整 release gate
-通过且工作树干净后，`publish-release-local.sh` 会验证 20 个主机 asset，再加入
-一份 SLSA v1 provenance 声明及其校验和（共上传 22 个 asset），推送当前分支，
+`release-all.sh` 会严格逐一构建 Full、Console 与 Node 的两个 macOS、两个 Linux
+以及一个 Windows 目标；Windows 交叉构建使用 `cargo-xwin`、LLVM 和 NASM。完整
+release gate 通过且工作树干净后，`publish-release-local.sh` 会验证 52 个主机
+asset，再加入一份 SLSA v1 provenance 声明及其校验和（共上传 54 个 asset），推送当前分支，
 依次构建并推送 `linux/amd64` 和 `linux/arm64`，最后才组装 GHCR 索引并发布 tag
 与 GitHub Release。镜像会直接复用两个已验证的 Linux release 二进制文件，而不是
 在模拟环境中重新编译 Captain。组装镜像前，发布脚本会从维护者本机的 Captain
 缓存中准备一个由校验和固定的 FastEmbed snapshot，并放入 Git 忽略的
-`dist/docker/`。该缓存既不会提交到仓库，也不会加入 22 个 release asset；
+`dist/docker/`。该缓存既不会提交到仓库，也不会加入 54 个 release asset；
 Docker 构建还会再次验证它，因此无需依赖实时可用的模型 CDN。具体契约及当前签名
 限制见 [Release Provenance](docs/release-provenance.md)。只需运行一次
 `gh auth refresh -h github.com -s read:packages,write:packages`

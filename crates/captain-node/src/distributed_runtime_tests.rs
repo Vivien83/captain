@@ -6,14 +6,11 @@ use crate::{
     NodeToolExecutionOutput, NodeToolReview, NodeWorker, NodeWorkerError, NodeWorkspaceBinding,
 };
 use captain_kernel::CaptainKernel;
-use captain_runtime::{
-    execution_routing::RemoteToolExecutionRequest,
-    kernel_handle::KernelHandle,
-    node_tool_runtime::{
-        execute_local_node_tool, review_local_node_tool, LocalNodeToolEffect,
-        LocalNodeToolExecution, LocalNodeToolOutput, LocalNodeToolRejection,
-    },
+use captain_node_tools::node_tool_runtime::{
+    execute_local_node_tool, review_local_node_tool, LocalNodeToolEffect, LocalNodeToolExecution,
+    LocalNodeToolOutput, LocalNodeToolRejection,
 };
+use captain_runtime::{execution_routing::RemoteToolExecutionRequest, kernel_handle::KernelHandle};
 use captain_types::config::{DefaultModelConfig, ExecPolicy, KernelConfig};
 use captain_wire::{
     hub_protocol::RunRejection, CapabilityDescriptor, DeviceGrant, LogicalWorkspace, NodeTransport,
@@ -315,7 +312,8 @@ async fn pair_client(
         .expect("Client enrollment window should open");
     let client = ClientPairingClient::new(
         http,
-        ClientPairingStore::open(state_root).expect("Client pairing store should open"),
+        ClientPairingStore::open_legacy_for_test(state_root)
+            .expect("Client pairing store should open"),
     );
     let capabilities = client_capabilities();
     let progress = client
@@ -484,7 +482,7 @@ async fn paired_client_routes_real_node_execution_across_crash_without_duplicate
     drop(client);
     let second_surface = ClientAccessSession::open(
         http.clone(),
-        ClientPairingStore::open(&client_state)
+        ClientPairingStore::open_legacy_for_test(&client_state)
             .expect("paired Client state should reopen on another surface"),
     )
     .expect("another Client surface should reuse the paired identity");
@@ -496,6 +494,32 @@ async fn paired_client_routes_real_node_execution_across_crash_without_duplicate
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("bounded Client HTTP stack should build");
+    let session_url = format!("http://{}/api/sessions/{session_id}", server.address);
+    let first_session = api
+        .get(&session_url)
+        .bearer_auth(first_client_token.as_str())
+        .send()
+        .await
+        .expect("first Client surface should restore the shared Hub session");
+    assert_eq!(first_session.status(), reqwest::StatusCode::OK);
+    let first_session: serde_json::Value = first_session
+        .json()
+        .await
+        .expect("first shared session response should be JSON");
+    let second_session = api
+        .get(&session_url)
+        .bearer_auth(second_client_token.as_str())
+        .send()
+        .await
+        .expect("second Client surface should restore the shared Hub session");
+    assert_eq!(second_session.status(), reqwest::StatusCode::OK);
+    let second_session: serde_json::Value = second_session
+        .json()
+        .await
+        .expect("second shared session response should be JSON");
+    assert_eq!(first_session, second_session);
+    assert_eq!(second_session["session_id"], session_id);
+
     let target_url = format!(
         "http://{}/api/sessions/{session_id}/execution-target",
         server.address

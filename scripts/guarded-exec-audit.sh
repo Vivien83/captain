@@ -11,6 +11,7 @@ ROOT_DIR="$(cd "$ROOT_DIR" && pwd -P)"
 cd "$ROOT_DIR"
 
 CONTROLLED_SINKS=(
+  crates/captain-node-tools/src/shell_exec.rs
   crates/captain-runtime/src/goal_loop.rs
   crates/captain-runtime/src/skill_execute.rs
   crates/captain-runtime/src/tools/shell_ops.rs
@@ -24,15 +25,27 @@ CONTROLLED_SINKS=(
   crates/captain-api/src/hand_install_routes.rs
 )
 
+REVIEW_BOUNDARIES=(
+  crates/captain-node-tools/src/guarded_exec.rs
+  crates/captain-runtime/src/guarded_exec.rs
+)
+
 fail=0
 
 find_unreviewed_raw_shell_constructors() {
   local scan_root="$1"
-  local file line previous_line
+  local file line previous_line boundary reviewed_boundary
 
   while IFS=: read -r file line _; do
     [[ -n "$file" ]] || continue
-    [[ "$file" == */guarded_exec.rs ]] && continue
+    reviewed_boundary=0
+    for boundary in "${REVIEW_BOUNDARIES[@]}"; do
+      if [[ "$file" == "$boundary" ]]; then
+        reviewed_boundary=1
+        break
+      fi
+    done
+    [[ "$reviewed_boundary" -eq 1 ]] && continue
     previous_line="$(sed -n "$((line - 1))p" "$file")"
     if [[ "$previous_line" != *"guarded-exec-audit: fixed-command"* ]]; then
       printf '%s:%s\n' "$file" "$line"
@@ -41,6 +54,11 @@ find_unreviewed_raw_shell_constructors() {
     rg -n 'Command::new\("(bash|sh|cmd)"\)' "$scan_root" --glob '*.rs' || true
   )
 }
+
+if ! rg -q 'shell_guard::review' crates/captain-node-tools/src/guarded_exec.rs; then
+  printf 'guarded-exec audit: Node boundary does not perform local review\n' >&2
+  fail=1
+fi
 
 for file in "${CONTROLLED_SINKS[@]}"; do
   if ! rg -q 'guarded_exec' "$file"; then

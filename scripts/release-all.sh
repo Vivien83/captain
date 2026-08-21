@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and package Captain release bundles for every supported target from
+# Build and package Captain Full, Console, and Node bundles for every supported target from
 # a single Apple Silicon Mac — GitHub Actions minutes are metered, so the
 # whole release pipeline must be runnable locally.
 #
@@ -17,6 +17,7 @@
 # Environment:
 #   CAPTAIN_VERSION          — release version (default: 0.1.0-dev.<timestamp>)
 #   CAPTAIN_RELEASE_TARGETS  — space-separated subset of targets to build
+#   CAPTAIN_RELEASE_COMPONENTS — subset of: full console node
 #   CAPTAIN_DIST_DIR         — output root (default: dist/releases)
 #   CARGO_TARGET_DIR         — shared Cargo output root (default: target)
 #   CAPTAIN_GOOGLE_OAUTH_CLIENT_ID — optional verified Captain Desktop client
@@ -33,6 +34,7 @@ cd "$ROOT_DIR"
 
 VERSION="${CAPTAIN_VERSION:-0.1.0-dev.$(date +%Y%m%d%H%M%S)}"
 TARGETS="${CAPTAIN_RELEASE_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc}"
+COMPONENTS="${CAPTAIN_RELEASE_COMPONENTS:-full console node}"
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 TARGET_ROOT="${CARGO_TARGET_DIR:-target}"
 
@@ -98,28 +100,61 @@ fi
 command -v jq >/dev/null 2>&1 || fail "jq is required for the aggregate release manifest"
 
 BUILD_TARGET_BIN=""
+PACKAGE_NAME=""
+BINARY_NAME=""
+ARCHIVE_PREFIX=""
+MANIFEST_NAME=""
+
+select_component() {
+    component="$1"
+    case "$component" in
+        full)
+            PACKAGE_NAME="captain-cli"
+            BINARY_NAME="captain"
+            ARCHIVE_PREFIX="captain"
+            MANIFEST_NAME="manifest"
+            ;;
+        console)
+            PACKAGE_NAME="captain-console"
+            BINARY_NAME="captain-console"
+            ARCHIVE_PREFIX="captain-console"
+            MANIFEST_NAME="manifest-console"
+            ;;
+        node)
+            PACKAGE_NAME="captain-node"
+            BINARY_NAME="captain-node"
+            ARCHIVE_PREFIX="captain-node"
+            MANIFEST_NAME="manifest-node"
+            ;;
+        *) fail "Unsupported release component: $component" ;;
+    esac
+}
 
 # Stores the exact output path in BUILD_TARGET_BIN. Keep the build in the
 # current shell: command substitutions can suppress `set -e` inside functions
 # and must never allow a stale binary to survive a failed compiler invocation.
 build_target() {
     target="$1"
+    component="$2"
+    select_component "$component"
     BUILD_TARGET_BIN=""
     echo "" >&2
-    echo "════ Building $target ════" >&2
+    echo "════ Building $component / $target ════" >&2
     case "$target" in
         "$HOST_TARGET")
-            BUILD_TARGET_BIN="$TARGET_ROOT/release/captain"
+            BUILD_TARGET_BIN="$TARGET_ROOT/release/$BINARY_NAME"
             rm -f "$BUILD_TARGET_BIN"
-            CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli \
-                || fail "release build failed for $target"
+            CAPTAIN_BUILD_VERSION="$VERSION" \
+                cargo build --release -p "$PACKAGE_NAME" --bin "$BINARY_NAME" \
+                || fail "release build failed for $target ($component)"
             ;;
         *-apple-darwin)
             rustup target add "$target" >/dev/null
-            BUILD_TARGET_BIN="$TARGET_ROOT/$target/release/captain"
+            BUILD_TARGET_BIN="$TARGET_ROOT/$target/release/$BINARY_NAME"
             rm -f "$BUILD_TARGET_BIN"
-            CAPTAIN_BUILD_VERSION="$VERSION" cargo build --release -p captain-cli --target "$target" \
-                || fail "release build failed for $target"
+            CAPTAIN_BUILD_VERSION="$VERSION" \
+                cargo build --release -p "$PACKAGE_NAME" --bin "$BINARY_NAME" --target "$target" \
+                || fail "release build failed for $target ($component)"
             ;;
         *-unknown-linux-gnu)
             # Thin LTO for cross builds: the workspace release profile
@@ -131,23 +166,23 @@ build_target() {
             # the same directory the native macOS cache uses — sharing it
             # cross-contaminates both caches (host build scripts linked
             # against the container's glibc, and vice versa).
-            BUILD_TARGET_BIN="$TARGET_ROOT/cross-$target/$target/release/captain"
+            BUILD_TARGET_BIN="$TARGET_ROOT/cross-$target/$target/release/$BINARY_NAME"
             rm -f "$BUILD_TARGET_BIN"
             CAPTAIN_BUILD_VERSION="$VERSION" \
             CARGO_TARGET_DIR="$TARGET_ROOT/cross-$target" \
             CARGO_PROFILE_RELEASE_LTO=thin \
             CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8 \
-                cross build --release -p captain-cli --target "$target" \
-                || fail "release build failed for $target"
+                cross build --release -p "$PACKAGE_NAME" --bin "$BINARY_NAME" --target "$target" \
+                || fail "release build failed for $target ($component)"
             ;;
         *-pc-windows-msvc)
-            BUILD_TARGET_BIN="$TARGET_ROOT/xwin-$target/$target/release/captain.exe"
+            BUILD_TARGET_BIN="$TARGET_ROOT/xwin-$target/$target/release/$BINARY_NAME.exe"
             rm -f "$BUILD_TARGET_BIN"
             RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings" \
             CAPTAIN_BUILD_VERSION="$VERSION" \
             CARGO_TARGET_DIR="$TARGET_ROOT/xwin-$target" \
-                cargo xwin build --release --target "$target" -p captain-cli --bin captain \
-                || fail "release build failed for $target"
+                cargo xwin build --release --target "$target" -p "$PACKAGE_NAME" --bin "$BINARY_NAME" \
+                || fail "release build failed for $target ($component)"
             ;;
         *)
             fail "Unsupported target: $target"
@@ -175,7 +210,7 @@ fi
 verify_embedded_binary_version() {
     target="$1"
     bin_path="$2"
-    expected="captain ${VERSION#v}"
+    expected="$BINARY_NAME ${VERSION#v}"
     case "$bin_path" in
         /*) bin_abs="$bin_path" ;;
         *) bin_abs="$ROOT_DIR/$bin_path" ;;
@@ -218,10 +253,11 @@ package_windows_target() {
     local target="$1"
     local bin_path="$2"
     local build_started_at="$3"
+    local component="$4"
     local dist_dir="${CAPTAIN_DIST_DIR:-dist/releases}"
     local version_dir="$dist_dir/$VERSION"
-    local stage="$version_dir/stage-windows-$target"
-    local archive="$version_dir/captain-$target.zip"
+    local stage="$version_dir/stage-windows-$component-$target"
+    local archive="$version_dir/$ARCHIVE_PREFIX-$target.zip"
     local archive_abs
     case "$archive" in
         /*) archive_abs="$archive" ;;
@@ -230,17 +266,20 @@ package_windows_target() {
 
     rm -rf "$stage"
     mkdir -p "$stage" "$version_dir"
-    cp "$bin_path" "$stage/captain.exe"
+    cp "$bin_path" "$stage/$BINARY_NAME.exe"
     printf '%s\n' "$VERSION" > "$stage/VERSION"
-    [ ! -f captain.toml.example ] || cp captain.toml.example "$stage/captain.toml.example"
+    if [ "$component" = "full" ] && [ -f captain.toml.example ]; then
+        cp captain.toml.example "$stage/captain.toml.example"
+    fi
     cat > "$stage/README.txt" <<EOF
-Captain precompiled Windows CLI bundle
+Captain precompiled Windows $component bundle
 
-Version:  $VERSION
-Platform: $target
+Version:   $VERSION
+Component: $component
+Platform:  $target
 
-Run captain.exe from PowerShell or install it with install.ps1 from the
-GitHub Release. Verify the adjacent .sha256 file before installation.
+Run $BINARY_NAME.exe from PowerShell. Install Full with install.ps1, or install
+Console/Node with install-edition.ps1. Verify the adjacent .sha256 file first.
 EOF
 
     rm -f "$archive"
@@ -250,9 +289,10 @@ EOF
     )
     hash="$(sha256_file "$archive")"
     printf '%s  %s\n' "$hash" "$(basename "$archive")" > "$archive.sha256"
-    cat > "$version_dir/manifest-$target.json" <<EOF
+    cat > "$version_dir/$MANIFEST_NAME-$target.json" <<EOF
 {
   "version": "$VERSION",
+  "component": "$component",
   "platform": "$target",
   "archive": "$(basename "$archive")",
   "sha256": "$hash",
@@ -268,6 +308,7 @@ EOF
 }
 EOF
     cp scripts/install.ps1 "$version_dir/install.ps1"
+    cp scripts/install-edition.ps1 "$version_dir/install-edition.ps1"
     rm -rf "$stage"
 
     echo "  Bundle:   $archive"
@@ -294,8 +335,8 @@ refresh_aggregate_manifest() {
                 source: $sources[0],
                 artifacts: (
                   $manifests
-                  | map({platform, archive, sha256})
-                  | sort_by(.platform)
+                  | map({component: (.component // "full"), platform, archive, sha256})
+                  | sort_by(.component, .platform)
                 )
               }
             end
@@ -306,31 +347,35 @@ refresh_aggregate_manifest() {
 echo "  Captain multi-target release"
 echo "  Version: $VERSION"
 echo "  Targets: $TARGETS"
+echo "  Components: $COMPONENTS"
 echo "  Target root: $TARGET_ROOT"
 
 for target in $TARGETS; do
-    release_host_checkpoint "before $target"
-    build_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    build_target "$target"
-    bin_path="$BUILD_TARGET_BIN"
-    [ -n "$bin_path" ] || fail "Build produced no output path for $target"
-    [ -f "$bin_path" ] || fail "Build produced no binary for $target at $bin_path"
-    verify_embedded_binary_version "$target" "$bin_path"
-    case "$target" in
-        *-pc-windows-msvc)
-            package_windows_target "$target" "$bin_path" "$build_started_at"
-            ;;
-        *)
-            CAPTAIN_SKIP_BUILD=1 \
-            CAPTAIN_BIN_PATH="$bin_path" \
-            CAPTAIN_BUILD_STARTED_AT="$build_started_at" \
-            CAPTAIN_DIST_PLATFORM="$target" \
-            CAPTAIN_VERSION="$VERSION" \
-            CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}" \
-                bash "$ROOT_DIR/scripts/package-release.sh"
-            ;;
-    esac
-    release_host_checkpoint "after $target"
+    for component in $COMPONENTS; do
+        release_host_checkpoint "before $component / $target"
+        build_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        build_target "$target" "$component"
+        bin_path="$BUILD_TARGET_BIN"
+        [ -n "$bin_path" ] || fail "Build produced no output path for $component / $target"
+        [ -f "$bin_path" ] || fail "Build produced no binary for $component / $target at $bin_path"
+        verify_embedded_binary_version "$target" "$bin_path"
+        case "$target" in
+            *-pc-windows-msvc)
+                package_windows_target "$target" "$bin_path" "$build_started_at" "$component"
+                ;;
+            *)
+                CAPTAIN_SKIP_BUILD=1 \
+                CAPTAIN_BIN_PATH="$bin_path" \
+                CAPTAIN_BUILD_STARTED_AT="$build_started_at" \
+                CAPTAIN_DIST_COMPONENT="$component" \
+                CAPTAIN_DIST_PLATFORM="$target" \
+                CAPTAIN_VERSION="$VERSION" \
+                CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}" \
+                    bash "$ROOT_DIR/scripts/package-release.sh"
+                ;;
+        esac
+        release_host_checkpoint "after $component / $target"
+    done
 done
 
 DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"

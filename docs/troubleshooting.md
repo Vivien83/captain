@@ -46,12 +46,48 @@ export PATH="$HOME/.captain/bin:$PATH"
 GitHub's `/releases/latest` route excludes prereleases. Pin the alpha tag:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 bash
 ```
 
 No GitHub token is required for the official public repository. A token is
 only relevant when `CAPTAIN_GITHUB_REPO` points to a private fork or mirror.
+
+### Console cannot reach or switch Captain
+
+Start with a network-free inventory, then a bounded live inventory:
+
+```bash
+captain-console list --local
+captain-console list
+```
+
+An unconfigured profile must be paired again; an offline profile never falls
+back to a local Captain. Verify that the Hub origin is exact HTTPS on port 443,
+the enterprise CA is still readable, and proxy credentials were stored with
+`captain-console proxy-secret set <NAME>` rather than embedded in the URL.
+`captain-console use <PROFILE>` changes only future Console processes; reopen an
+existing gateway or TUI to use the new authority.
+
+If native secret storage is unavailable or disagrees with migrated profile
+metadata, Console fails closed. Do not paste the credential into JSON. Repair
+the operating-system keychain/credential service, then repeat pairing or an
+explicit profile reset.
+
+### Node is offline after reboot
+
+```bash
+captain-node status --json
+captain-node service status
+captain-node service start
+```
+
+Node service definitions run under the installing user. On Linux, inspect the
+user service rather than the system service; on Windows, do not change it to
+`LocalSystem`, because that would lose access to the user's native credentials.
+Use `captain-node run` in the foreground only for a bounded diagnostic. A
+possible effect that remained `uncertain` after a crash must be inspected or
+explicitly reconciled, never retried blindly.
 
 ### macOS or Windows blocks first launch
 
@@ -241,8 +277,8 @@ should not be the first production integration.
 The public alpha image supports Linux AMD64 and ARM64:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
-docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14 --version
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
+docker run --rm ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15 --version
 docker logs captain
 ```
 

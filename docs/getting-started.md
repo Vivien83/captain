@@ -27,6 +27,10 @@ your personal or self-hosted AI system.
 | `full-media` | Media-heavy setup | Adds extra dependencies for audio/media workflows |
 
 Most users should start with `desktop` on a local machine or `vps` on a server.
+These profiles install **Captain Full**. If this machine only needs to operate
+one or more remote Captains, install **Captain Console** instead. Add the
+separate **Captain Node** only when a remote Hub must use this machine's files
+or commands.
 
 ## Install from GitHub Releases
 
@@ -35,20 +39,20 @@ compile Rust code on the target machine.
 
 The public alpha and its checksums are readable without a GitHub token. GitHub
 does not return prereleases from `/releases/latest`, so every alpha install
-below pins `v0.1.0-alpha.14` explicitly.
+below pins `v0.1.0-alpha.15` explicitly.
 
 ### macOS / Linux Desktop
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=desktop bash
 ```
 
 ### Linux VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=vps bash
 ```
 
 The VPS profile installs the binary, prepares local state, runs setup, and
@@ -60,8 +64,8 @@ for DNS, firewall, rollback, and readiness requirements.
 ### Windows
 
 ```powershell
-$env:CAPTAIN_VERSION = "v0.1.0-alpha.14"
-irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.ps1 | iex
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.15"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.ps1 | iex
 ```
 
 Windows support targets the CLI first. WSL remains the recommended path for a
@@ -70,6 +74,43 @@ Authenticode-signed; verify the release checksum before approving first launch.
 
 The macOS alpha binary is ad-hoc signed but not Apple-notarized. Verify its
 SHA-256 sidecar before granting the operating system's first-launch approval.
+
+### Lightweight Console
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=console CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-console pair --hub https://hub.example.com
+captain-console tui
+```
+
+Windows PowerShell:
+
+```powershell
+$env:CAPTAIN_EDITION = "console"
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.15"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.ps1 | iex
+```
+
+Console does not create local Full configuration, agents, memory, channels,
+provider credentials, or a daemon. `captain-console open` uses a private
+loopback gateway for the selected Hub's authenticated Web surface.
+
+### Optional execution Node
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=node CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-node pair --hub https://hub.example.com --workspace "$PWD"
+captain-node service install
+```
+
+Node is read-only by default, opens only outbound HTTPS, and requires an
+explicit Hub approval for mutation. Console and Node installers verify the
+exact release checksum and restore the previous binary if their post-install
+version probe fails.
 
 ## Configure Captain
 
@@ -88,8 +129,8 @@ For unattended installs, provide credentials through environment variables and
 run:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 \
     CAPTAIN_PROFILE=vps \
     CAPTAIN_YES=1 \
     CAPTAIN_SETUP=1 \
@@ -142,9 +183,9 @@ execute tools on another machine without opening an inbound port, follow
 # On the Hub: open enrollment for ten minutes.
 captain devices pair
 
-# On the other machine: pair the lightweight interface.
-captain client pair --hub https://hub.example.com
-captain chat
+# On the other machine: install and pair the lightweight Console.
+captain-console pair --hub https://hub.example.com
+captain-console tui
 ```
 
 If Captain is installed as a service:

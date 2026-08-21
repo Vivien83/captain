@@ -1,52 +1,62 @@
-# Hub, Clients, and Nodes
+# Hub, Console, Clients, and Nodes
 
-Captain can run as one standalone installation or as one central Hub reached
-from lightweight Clients and optional execution Nodes. The Hub remains a full
-Captain installation. It is the only authority for memory, sessions, projects,
-goals, providers, channels, automation, audit, skills, agents, and durable work.
+Captain can run as one standalone installation or as one authoritative
+Captain Full reached from lightweight Clients and optional execution Nodes.
+Captain Full owns the model, memory, sessions, projects, goals, providers,
+channels, automation, audit, agents, tools, and durable work.
 
-There is no multi-primary database synchronization. A Client never creates a
-second memory, and a Node never becomes another agent runtime.
+There is no multi-primary synchronization. A Console never creates a second
+memory, and a Node never becomes another agent runtime.
 
-## Choose a Role
+## Choose an Edition
 
-| Role | Use it for | Runs tools locally |
-|---|---|---|
-| Standalone | One machine running the complete product | Yes |
-| Hub | Central Captain, commonly on a VPS | Yes |
-| Client | TUI, terminal, or Desktop access to the Hub | No |
-| Node | Files, commands, and workspaces on another machine | Yes, within approved grants |
+| Edition | Use it for | Local tools | Local agent state |
+|---|---|---:|---:|
+| Captain Full | Standalone use or an authoritative Hub | Yes | Yes |
+| Captain Console | TUI and local Web access to one or more Full installations | No | No |
+| Captain Node | Optional files, commands, and workspaces on another machine | Approved grants only | No |
 
-Standalone remains the default and composes the same Hub, Client, and local
-execution responsibilities on one machine.
+Standalone remains the default composition. Install Console alone when the
+machine only needs to operate remote Captains. Add Node separately only when a
+remote Captain must act on this machine.
 
-## Prepare the Hub
+## Install the Hub
 
-Install Captain on the server and expose it through authenticated HTTPS. The
-managed VPS installer can configure one domain; see
+Install Captain Full on the server and expose it through authenticated HTTPS.
+The managed VPS installer can configure one domain; see
 [GitHub + VPS Install](deployment/github-vps-install.md).
 
-On the Hub, open the fail-closed enrollment window for ten minutes:
+Open the fail-closed enrollment window for ten minutes:
 
 ```bash
 captain devices pair
 ```
 
-The Hub device rail is available on a standard installation, but enrollment
-is closed by default. `[pairing].hub_enabled = false` is the explicit hard-off
-switch; the separate legacy mobile pairing routes remain disabled unless
-`[pairing].enabled = true` is set.
+The same action is available from authenticated **Status > Devices**.
+Enrollment is closed by default, closes automatically, and is closed again
+after every Hub restart. Already approved devices can reconnect while new
+enrollment is closed.
 
-The same action is available from the authenticated **Status > Devices**
-surface. Enrollment closes automatically and is closed after every Hub
-restart. Existing approved devices can reconnect while enrollment is closed.
+## Install and Pair Captain Console
 
-## Pair a Lightweight Client
-
-On the Mac, Linux, or Windows machine that will display the remote Captain:
+macOS or Linux:
 
 ```bash
-captain client pair --hub https://hub.example.com
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=console CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+
+captain-console pair \
+  --hub https://hub.example.com \
+  --label Production
+```
+
+Windows PowerShell:
+
+```powershell
+$env:CAPTAIN_EDITION = "console"
+$env:CAPTAIN_VERSION = "v0.1.0-alpha.15"
+irm https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.ps1 | iex
+captain-console pair --hub https://hub.example.com --label Production
 ```
 
 Captain displays a one-time code and opens the Hub approval page when possible.
@@ -56,105 +66,122 @@ Approve the exact code while signed into the Hub, or use:
 captain devices approve <CODE>
 ```
 
-Then use the normal surfaces:
+Operate configured Captains locally:
 
 ```bash
-captain client status
-captain chat
-captain tui
+captain-console list             # live, bounded inventory
+captain-console list --local     # no network request
+captain-console use Production   # explicit default for future processes
+captain-console rename Production Main
+captain-console open             # private loopback Web gateway
+captain-console tui              # lightweight shared-session TUI
 ```
 
-The Client reuses the Hub's sessions, projects, memory, model, tools, and
-approvals. It has no local provider loop and cannot silently fall back to a
-local daemon if the Hub is unavailable. Its authority includes ordinary chat,
-session, project, workflow, memory, approval, and cancellable Live Run actions.
-It excludes secrets, configuration, install/update, shutdown, device
-administration, and persistent or session-wide approval grants.
+Console can hold several independent profiles. It never merges their data.
+Changing authority is explicit, visible, and completed only after the new
+profile bootstraps successfully. An unavailable Hub remains unavailable;
+Console never starts a local Full fallback.
 
-To remove only the local Client identity:
+Each profile is bound to one exact Hub instance UUID and HTTPS origin. The
+long-lived credential lives in macOS Keychain, Windows Credential Manager, or
+the supported Linux secret service. Local profile files contain only a secret
+reference. A legacy profile migrates atomically and a conflicting native secret
+blocks without overwrite.
+
+The Client authority covers ordinary chat, sessions, projects, workflows,
+memory, approvals, and cancellable Live Runs. It excludes secrets,
+configuration, install/update, shutdown, device administration, and durable
+approval grants. Revoke a lost Console immediately from **Status > Devices** or
+with `captain devices remove <DEVICE_ID>`.
+
+## Install and Pair Captain Node
+
+Install Node only on a machine that owns a workspace:
 
 ```bash
-captain client reset --yes
-```
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=node CAPTAIN_VERSION=v0.1.0-alpha.15 bash
 
-Revoke a lost Client immediately from Status > Devices or with
-`captain devices remove <DEVICE_ID>` on the Hub.
-
-## Pair an Execution Node
-
-On a machine that owns the workspace:
-
-```bash
-captain node pair \
+captain-node pair \
   --hub https://hub.example.com \
   --workspace /path/to/project \
   --workspace-id project-main
 ```
 
-Pairing requests read-only access by default. Add `--allow-mutation` only when
-the Hub must modify that workspace, then approve the mutation request
-explicitly on the Hub:
+Pairing requests read-only authority by default. Add `--allow-mutation` only
+when the Hub must modify that workspace, then approve the separate mutation
+request on the Hub:
 
 ```bash
 captain devices approve <CODE> --allow-mutation
 ```
 
-Inspect the local, redacted state and run the worker:
+Inspect redacted local state and install the native user service:
 
 ```bash
-captain node status --json
-captain node run
+captain-node status --json
+captain-node service install
+captain-node service status
 ```
 
-`captain node run` is the Alpha 14 foreground service surface. Keep it under an
-operator-controlled supervisor if it must start automatically. A future native
-service wrapper must reuse this identity and durable rail rather than create a
-second executor.
+Use `captain-node run` for a foreground diagnostic. The service lifecycle is:
 
-The Node opens only outbound HTTPS port 443. It prefers authenticated
-WebSocket, then falls back to HTTPS streaming and bounded long polling. No
-inbound port, NAT rule, UDP discovery, mDNS, or Telegram tunnel is required.
-`HTTPS_PROXY`, `NO_PROXY`, an explicit proxy, authenticated proxy credentials
-stored as a Captain secret, and an enterprise CA bundle are supported.
+```bash
+captain-node service start
+captain-node service stop
+captain-node service uninstall
+```
 
-Physical workspace paths remain on the Node. The Hub sees logical workspace
-identifiers and sanitized results only. Every run is checked again against the
-local workspace binding, tool family, mutation grant, approval digest, path
-policy, and runtime guard before an effect starts.
+launchd, systemd user services, and Windows Service Control Manager all invoke
+the same `service-runtime`. Ctrl+C, SIGTERM, and Windows SCM stop use the same
+cooperative shutdown, which closes the worker and persists the stopped state
+before returning. Windows installs explicitly under the current user so the
+service can access that user's native credential store; it never falls back to
+`LocalSystem`.
+
+## Enterprise Network Path
+
+Console and Node initiate outbound HTTPS 443 only. No inbound port, NAT rule,
+VPN, UDP discovery, mDNS, or Telegram tunnel is required. WebSocket is
+preferred; streaming HTTP and bounded long polling provide deterministic
+fallbacks when an enterprise proxy rejects the upgrade.
+
+Environment or explicit proxies, `NO_PROXY`, authenticated proxy passwords in
+the native secret store, and enterprise CA bundles are supported. Credentials,
+Hub origins, and raw network errors are excluded from status and logs.
 
 ## Routing Work
 
 The execution target is `Auto` by default. Captain selects the Hub or an online
-capable Node from the logical workspace and requested tool family. A session or
-project can pin `Hub` or one Node; users are not prompted for every tool call.
+capable Node from the logical workspace and required tool family. A session or
+project can pin `Hub` or one Node without prompting for every tool call.
 
-Offline or incompatible devices remain visible with a reason, but are not
-selectable. The Hub never rewrites a requested Node execution as a local Hub
-execution merely to make the request succeed.
+Physical workspace paths stay on the Node. The Hub sees a logical workspace
+identifier and sanitized results. Before every call, Node repeats workspace,
+traversal, tool-family, mutation, approval, timeout, output, and guarded-shell
+checks. An unavailable requested Node fails honestly and is never rewritten as
+a Hub execution merely to make the action succeed.
 
 ## Failure and Recovery
 
-Credentials are per-device, short-lived access tokens are kept out of durable
-configuration, and revocation is checked by the Hub. The local rail persists
-sequence numbers, acknowledgements, leases, approval evidence, terminal
-results, and an outbox before network delivery.
+The rail persists sequence numbers, acknowledgements, leases, heartbeat state,
+approval evidence, idempotency keys, terminal evidence, and an outbox before
+network delivery. Revocation is applied on the next authenticated request.
 
-An idle Node follows the heartbeat interval negotiated in the Hub `Welcome`
-(15 seconds with the current 60-second lease). The refresh keeps WebSocket,
-HTTPS streaming, and long-poll Nodes selectable even when no run starts or
-finishes. A long-poll is bounded by the negotiated interval and completes before
-the refresh, so a proxy never retains a poll that Captain abandoned only for a
-timer. An unacknowledged heartbeat is reused rather than duplicated.
-
-After a disconnect or process crash, read-only work may resume when the exact
+After disconnect or process crash, read-only work may resume when exact
 evidence permits it. A mutation that may have happened but lacks terminal
 evidence becomes `uncertain`; Captain does not replay it blindly. Repeating the
-same idempotency key returns the reconciled durable result without executing
-the local effect twice.
+same idempotency key returns the reconciled result without executing the local
+effect twice.
 
-## Alpha 14 Scope
+## Alpha 15 Scope
 
-Alpha 14 does not include a complete mobile application, application-data
-connectors, or a machine tunnel through Telegram. The complete wire and
-security contract is documented in
+Alpha 15 publishes the separate Console and Node binaries. The retained Tauri
+Desktop wrapper composes Console and can switch profiles from its native tray,
+but no separately signed/notarized Desktop application bundle is included in
+the public release.
+
+Alpha 15 does not include a complete mobile application, application-data
+connectors, multi-primary memory synchronization, or a machine tunnel through
+Telegram. The versioned security and durability details are in
 [Hub, Client, and Node Protocol](HUB_CLIENT_NODE_PROTOCOL.md).

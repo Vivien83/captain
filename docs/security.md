@@ -1837,11 +1837,13 @@ error when an unsupported key is imported or loaded.
 ### 19.3 Release Provenance
 
 The local release publisher generates one in-toto Statement v1 with a SLSA
-provenance v1 predicate after all five host targets have completed. It binds
-the 20 archive, checksum, manifest, and installer assets to the public Git
+provenance v1 predicate after all 15 Full, Console, and Node host bundles have
+completed. It binds the 52 archives, checksums, component/platform manifests,
+installers, and aggregate manifest that precede provenance to the public Git
 commit and tree, the exact `Cargo.lock`, local toolchain identity, target set,
-and platform-manifest timestamps. Its verifier recomputes the complete subject
-set and rejects any modified or mixed-revision release.
+and platform-manifest timestamps. The statement and its checksum complete the
+54-asset contract. Its verifier recomputes the complete subject set and rejects
+any modified or mixed-revision release.
 
 Docker `linux/amd64` and `linux/arm64` are built and pushed sequentially by
 digest with BuildKit provenance `mode=max`. The combined version/channel index

@@ -1236,7 +1236,7 @@ details.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.14"
+  "version": "0.1.0-alpha.15"
 }
 ```
 
@@ -1253,7 +1253,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 ```json
 {
   "status": "ok",
-  "version": "0.1.0-alpha.14",
+  "version": "0.1.0-alpha.15",
   "uptime_seconds": 3600,
   "failure_count": 4,
   "panic_count": 0,
@@ -1361,7 +1361,7 @@ historical failures alone do not keep operational awareness in warning state.
     "next_check_at": "2026-07-20T20:00:00Z",
     "last_error": null,
     "consecutive_failures": 0,
-    "pending_version": "0.1.0-alpha.14",
+    "pending_version": "0.1.0-alpha.15",
     "update_in_progress": false,
     "undelivered_notifications": 1,
     "dead_notifications": 0

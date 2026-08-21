@@ -158,7 +158,7 @@ struct MockHubState {
 
 #[tokio::test]
 #[ignore = "requires a loopback socket unavailable in the tranche sandbox"]
-async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
+async fn link_falls_back_through_explicit_proxy_with_exact_durable_hello() {
     use axum::{
         extract::{ws::WebSocketUpgrade, State},
         http::{header, HeaderMap, StatusCode},
@@ -234,6 +234,9 @@ async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
         upgrade: WebSocketUpgrade,
     ) -> Response {
         authorize(&headers);
+        if state.websocket_connections.fetch_add(1, Ordering::SeqCst) == 0 {
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
         upgrade.on_upgrade(move |mut socket| async move {
             let Some(Ok(axum::extract::ws::Message::Text(payload))) = socket.recv().await else {
                 return;
@@ -244,13 +247,6 @@ async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
                 panic!("Node sent a Hub-only frame")
             };
             record_hello(&state, &envelope);
-            if state.websocket_connections.fetch_add(1, Ordering::SeqCst) == 0 {
-                socket
-                    .send(axum::extract::ws::Message::Close(None))
-                    .await
-                    .unwrap();
-                return;
-            }
             let welcome = HubNodeDeliveryBatch {
                 protocol_version: HUB_NODE_PROTOCOL_VERSION,
                 device_id: envelope.device_id.clone(),
@@ -418,8 +414,12 @@ async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
         .unwrap();
     });
 
-    let mut config = NodeNetworkConfig::new(format!("http://{address}"));
-    config.proxy = NodeProxyMode::Disabled;
+    let mut config = NodeNetworkConfig::new(format!("http://127.0.0.2:{}", address.port()));
+    config.proxy = NodeProxyMode::Explicit {
+        url: format!("http://{address}"),
+        username: None,
+        password_secret: None,
+    };
     config.connect_timeout_secs = 1;
     config.request_timeout_secs = 2;
     let client = config.build_loopback_client().unwrap();
@@ -444,7 +444,7 @@ async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
         &[
             NodeTransportFallback {
                 transport: NodeTransport::WebSocket,
-                reason: NodeTransportFailure::TransportClosed,
+                reason: NodeTransportFailure::UpgradeFailed,
             },
             NodeTransportFallback {
                 transport: NodeTransport::HttpStream,
@@ -459,7 +459,7 @@ async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
     assert_eq!(snapshot.pending_inbound, 0);
     {
         let hellos = state.hellos.lock().unwrap();
-        assert_eq!(hellos.len(), 3);
+        assert_eq!(hellos.len(), 2);
         assert!(hellos.windows(2).all(|pair| pair[0] == pair[1]));
     }
     assert_eq!(*state.ingress_sequences.lock().unwrap(), vec![2, 3]);
@@ -481,7 +481,7 @@ async fn link_falls_back_with_exact_hello_and_flushes_the_durable_rail() {
     );
     {
         let hellos = state.hellos.lock().unwrap();
-        assert_eq!(hellos.len(), 4);
+        assert_eq!(hellos.len(), 3);
         assert!(hellos.windows(2).all(|pair| pair[0] == pair[1]));
     }
     assert_eq!(*state.ingress_sequences.lock().unwrap(), vec![2, 3, 4, 5]);

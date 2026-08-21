@@ -1,30 +1,34 @@
 use super::support::{
-    current_time_ms, load_kernel_config, next_retry, node_root, pairing_retry_delay,
-    resolve_proxy_password, retryable_link_error, safe_error, transport_name, wait_or_stop,
+    current_time_ms, next_retry, node_root, pairing_retry_delay, retryable_link_error, safe_error,
+    transport_name, wait_or_stop, NodeEventSink, NodeOperatorEvent, NodeProxyPasswordResolver,
     NODE_STATE_DIR,
 };
-use crate::{captain_version, node_runtime::CliNodeToolDriver, ui};
-use captain_node::{
-    NodeLinkError, NodeLocalConfigStore, NodePairingClient, NodePairingStore, NodeRailLink,
-    NodeRailSnapshot, NodeRailStore, NodeRuntimeStatus, NodeRuntimeStatusStore, NodeToolDriver,
-    NodeWorker,
+use crate::{
+    NodeLinkError, NodeLocalConfigStore, NodeLocalToolDriver, NodePairingClient, NodePairingStore,
+    NodeRailLink, NodeRailSnapshot, NodeRailStore, NodeRuntimeStatus, NodeRuntimeStatusStore,
+    NodeShutdown, NodeToolDriver, NodeWorker,
 };
+use captain_types::config::ExecPolicy;
 use captain_wire::{DeviceGrant, NodeTransport};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 const WORKER_INTERVAL: Duration = Duration::from_millis(100);
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
-pub(super) async fn run_node(config_path: Option<PathBuf>) -> Result<(), String> {
-    let root = node_root();
-    let home = root
-        .parent()
-        .ok_or_else(|| "Captain home is unavailable".to_string())?;
+pub async fn run_node(
+    home: &Path,
+    captain_version: &str,
+    exec_policy: ExecPolicy,
+    secrets: &dyn NodeProxyPasswordResolver,
+    events: &dyn NodeEventSink,
+    mut shutdown: NodeShutdown,
+) -> Result<(), String> {
+    let root = node_root(home);
     let config_store = NodeLocalConfigStore::open(&root).map_err(safe_error)?;
     let config = config_store.load().map_err(safe_error)?.ok_or_else(|| {
-        "This machine is not configured; run `captain node pair` first".to_string()
+        "This machine is not configured; pair this Captain Node first".to_string()
     })?;
-    let proxy_password = resolve_proxy_password(&config.network, home)?;
+    let proxy_password = secrets.resolve(&config.network)?;
     let http = config
         .network
         .build_client(proxy_password.as_ref())
@@ -33,59 +37,55 @@ pub(super) async fn run_node(config_path: Option<PathBuf>) -> Result<(), String>
         NodePairingStore::open(config_store.root().join(NODE_STATE_DIR)).map_err(safe_error)?;
     let rail = NodeRailStore::open(&pairing_store).map_err(safe_error)?;
     let pairing = NodePairingClient::new(http.clone(), pairing_store);
-    let capabilities = config.capabilities(&captain_version());
+    let capabilities = config.capabilities(captain_version);
     let Some((link, grants, expires_at_ms)) =
-        connect_until_available(&pairing, &http, &rail, &capabilities).await?
+        connect_until_available(&pairing, &http, &rail, &capabilities, &mut shutdown).await?
     else {
         return Ok(());
     };
     let policy = config
         .execution_policy(grants.clone())
         .map_err(safe_error)?;
-    let kernel_config = load_kernel_config(config_path, home)?;
-    let driver: Arc<dyn NodeToolDriver> =
-        Arc::new(CliNodeToolDriver::new(kernel_config.exec_policy));
+    let driver: Arc<dyn NodeToolDriver> = Arc::new(NodeLocalToolDriver::new(exec_policy));
     let worker = NodeWorker::new(rail.clone(), policy, driver);
     let status_store = NodeRuntimeStatusStore::open(config_store.root()).map_err(safe_error)?;
 
-    ui::success("Captain Node is connected.");
-    ui::kv("Transport", transport_name(link.transport()));
-    ui::kv(
-        "Authority",
-        if grants.allow_mutation {
-            "read/write"
-        } else {
-            "read-only"
-        },
-    );
-    ui::hint("Press Ctrl+C to stop; durable work remains recoverable after interruption.");
+    events.emit(NodeOperatorEvent::Connected {
+        transport: transport_name(link.transport()).to_string(),
+        allow_mutation: grants.allow_mutation,
+    });
     run_connected(
-        &pairing,
-        &rail,
-        &status_store,
+        ConnectedRuntime {
+            pairing: &pairing,
+            rail: &rail,
+            status_store: &status_store,
+            approved_grants: grants,
+            worker,
+            events,
+            shutdown,
+        },
         link,
-        grants,
         expires_at_ms,
-        worker,
     )
     .await
 }
 
 async fn connect_until_available(
     pairing: &NodePairingClient,
-    http: &captain_node::NodeHttpClient,
+    http: &crate::NodeHttpClient,
     rail: &NodeRailStore,
     capabilities: &captain_wire::CapabilityDescriptor,
+    shutdown: &mut NodeShutdown,
 ) -> Result<Option<(NodeRailLink, DeviceGrant, i64)>, String> {
     let mut retry = Duration::from_secs(1);
     loop {
         let token = tokio::select! {
-            _ = tokio::signal::ctrl_c() => return Ok(None),
+            _ = shutdown.wait() => return Ok(None),
             result = pairing.issue_access_token() => match result {
                 Ok(token) => token,
                 Err(error) if pairing_retry_delay(&error).is_some() => {
                     tracing::warn!(error_class = %error, "Node credential exchange will retry");
-                    if wait_or_stop(pairing_retry_delay(&error).unwrap_or(retry)).await {
+                    if wait_or_stop(pairing_retry_delay(&error).unwrap_or(retry), shutdown).await {
                         return Ok(None);
                     }
                     retry = next_retry(retry);
@@ -98,7 +98,7 @@ async fn connect_until_available(
         let expires_at_ms = token.expires_at_ms;
         let active_runs = rail.active_run_ids().map_err(safe_error)?;
         let connected = tokio::select! {
-            _ = tokio::signal::ctrl_c() => return Ok(None),
+            _ = shutdown.wait() => return Ok(None),
             result = NodeRailLink::connect(
                 http.clone(),
                 rail.clone(),
@@ -111,7 +111,7 @@ async fn connect_until_available(
             Ok(link) => return Ok(Some((link, grants, expires_at_ms))),
             Err(error) if retryable_link_error(&error) => {
                 tracing::warn!(error_class = %error, "Node transport connect will retry");
-                if wait_or_stop(retry).await {
+                if wait_or_stop(retry, shutdown).await {
                     return Ok(None);
                 }
                 retry = next_retry(retry);
@@ -121,15 +121,30 @@ async fn connect_until_available(
     }
 }
 
-async fn run_connected(
-    pairing: &NodePairingClient,
-    rail: &NodeRailStore,
-    status_store: &NodeRuntimeStatusStore,
-    mut link: NodeRailLink,
+struct ConnectedRuntime<'a> {
+    pairing: &'a NodePairingClient,
+    rail: &'a NodeRailStore,
+    status_store: &'a NodeRuntimeStatusStore,
     approved_grants: DeviceGrant,
-    mut expires_at_ms: i64,
     worker: NodeWorker<dyn NodeToolDriver>,
+    events: &'a dyn NodeEventSink,
+    shutdown: NodeShutdown,
+}
+
+async fn run_connected(
+    runtime: ConnectedRuntime<'_>,
+    mut link: NodeRailLink,
+    mut expires_at_ms: i64,
 ) -> Result<(), String> {
+    let ConnectedRuntime {
+        pairing,
+        rail,
+        status_store,
+        approved_grants,
+        worker,
+        events,
+        mut shutdown,
+    } = runtime;
     let mut refresh_at_ms = token_refresh_at(expires_at_ms, current_time_ms()?);
     persist_runtime_status(
         status_store,
@@ -158,7 +173,7 @@ async fn run_connected(
         let may_interrupt_receive =
             heartbeat_may_interrupt_receive(link.transport(), heartbeat_due);
         let event = tokio::select! {
-            _ = tokio::signal::ctrl_c() => NodeLoopEvent::Stop,
+            _ = shutdown.wait() => NodeLoopEvent::Stop,
             joined = &mut worker_task => NodeLoopEvent::Worker(joined),
             _ = tokio::time::sleep(refresh_wait) => NodeLoopEvent::Refresh,
             _ = async {
@@ -189,7 +204,7 @@ async fn run_connected(
             }
             NodeLoopEvent::Refresh => {
                 let refreshed = tokio::select! {
-                    _ = tokio::signal::ctrl_c() => break,
+                    _ = shutdown.wait() => break,
                     result = pairing.issue_access_token() => result,
                 };
                 match refreshed {
@@ -384,7 +399,7 @@ async fn run_connected(
     if let Some(error) = terminal_error {
         Err(error)
     } else {
-        ui::success("Captain Node stopped.");
+        events.emit(NodeOperatorEvent::Stopped);
         Ok(())
     }
 }

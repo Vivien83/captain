@@ -1,6 +1,6 @@
-# Captain Hub, Clients, and Nodes
+# Captain Hub, Console, Clients, and Nodes
 
-This document defines the Alpha 14 distributed runtime contract. It is a
+This document defines the Alpha 15 distributed runtime contract. It is a
 product and security contract; the Rust wire types live in
 `captain-wire::hub_protocol`.
 
@@ -10,13 +10,13 @@ product and security contract; the Rust wire types live in
   loops, providers, memory, sessions, projects, goals, channels, automation,
   audit, skills, sub-agents, and the durable work queue. A Hub can also execute
   tools locally.
-- **Client** is a light Web, TUI, or Desktop interface. It reads and controls
-  the Hub through the authenticated Captain API. It has no competing memory
-  database or provider loop.
+- **Console/Client** is a light Web, TUI, terminal, or Desktop interface. It
+  reads and controls the Hub through the authenticated Captain API. It has no
+  competing memory database, provider loop, or local Full fallback.
 - **Node** is an optional local executor for files, commands, processes, and
   workspaces on macOS, Linux, or Windows. It never becomes a second authority.
-- **Standalone** remains the default experience and composes a local Hub, Node,
-  and Client in one installation.
+- **Standalone** remains the default experience and composes Captain Full with
+  a local Client surface and optional local execution responsibility.
 
 There is no multi-primary database synchronization. A project has one active
 logical workspace target at a time.
@@ -57,8 +57,8 @@ without producing duplicate outbox records, and that durable observation
 remains authoritative for live leases.
 
 Nodes honor conventional `HTTPS_PROXY` and `NO_PROXY` configuration, optional
-proxy authentication from Captain's secret store, and an operator-selected
-enterprise CA bundle. Diagnostics must distinguish DNS, TCP, proxy, TLS,
+proxy authentication from the native Console/Node secret store, and an
+operator-selected enterprise CA bundle. Diagnostics must distinguish DNS, TCP, proxy, TLS,
 authentication, protocol, and Hub-version failures. A network that explicitly
 blocks the configured Hub hostname cannot be bypassed by Captain.
 
@@ -112,6 +112,20 @@ runtime controls their lifetime.
 Pairing codes and polling credentials are one-use secrets. Failed attempts are
 rate-limited without letting stale authenticated approval clicks trigger a
 brute-force lockout.
+
+Console profiles use the same Hub-issued Client role but a separate local
+registry. Each profile records only bounded metadata, the exact Hub UUID/origin
+binding, and a native secret reference. Its long-lived credential resides in
+macOS Keychain, Windows Credential Manager, or the supported Linux secret
+service. A profile from one authority cannot authenticate to another, and a
+legacy file credential is removed only after native write and read-back
+verification plus an atomic schema migration. Native/file disagreement fails
+closed without overwriting either value.
+
+Console can retain several profiles but one new process selects one authority.
+An open gateway keeps its immutable profile transport; switching the default
+cannot retarget an in-flight HTTP request or WebSocket. No profile contributes
+session, project, memory, tool, or quota content to another profile's request.
 
 ## Capabilities and Grants
 
@@ -349,7 +363,7 @@ durable outbox.
 
 ## Versioning
 
-The Alpha 14 protocol starts at `1.0`.
+The protocol introduced in Alpha 14 remains version `1.0` in Alpha 15.
 
 - A minor version is additive. Unknown JSON object fields are ignored.
 - Peers with the same major version negotiate the lower minor version.
@@ -376,14 +390,14 @@ does not fork memory or create a hidden local agent.
 The first production composition path is explicit and restartable:
 
 ```bash
-captain node pair --hub https://hub.example.com --workspace /path/to/project
-captain node status --json
-captain node run
+captain-node pair --hub https://hub.example.com --workspace /path/to/project
+captain-node status --json
+captain-node run
 ```
 
 Pairing is read-only unless `--allow-mutation` is supplied, and that flag is
 only a request: the effective authority is the subset approved by the Hub and
-accepted by the local policy. `captain node status` reports requested and
+accepted by the local policy. `captain-node status` reports requested and
 effective authority separately. It exposes logical workspace labels and safe
 rail/runtime facts, but never the configured Hub URL, physical workspace roots,
 proxy credentials, tool inputs, or retained output.
@@ -396,15 +410,17 @@ all converge through one shutdown path. Live task wrappers receive cooperative
 cancellation and are then aborted within a bounded grace period; a claimed
 mutation without exact terminal evidence remains `uncertain` on recovery.
 
-The foreground `captain node run` command is the certified initial service
-surface. A later service-manager wrapper may supervise that same command, but
-must not create another identity, rail, policy, or execution dispatcher.
+The separate `captain-node` binary exposes one foreground worker and one native
+service runtime. launchd, systemd user services, and Windows Service Control
+Manager invoke the same identity, rail, policy, and dispatcher. Foreground
+Ctrl+C, Unix SIGTERM, and Windows SCM stop all use the same cooperative
+shutdown and durable stopped-state commit.
 
 ## Reproducible Distributed Smoke
 
-`scripts/hub-node-distributed-smoke.sh` is the bounded Alpha 14 integration
-smoke. It runs each case by its exact Rust test name, refuses a zero-test green
-result, and keeps local-embedding features disabled. The smoke proves:
+`scripts/alpha15-system-smoke.sh` is the bounded Alpha 15 integration smoke. It
+runs each prerequisite sequentially, uses exact Rust test names, refuses a
+zero-test green result, and keeps local-embedding features disabled. It proves:
 
 - production Node origins remain exact HTTPS on port 443, with no credentials
   or path accepted in the Hub origin;
@@ -444,7 +460,7 @@ and local paths are intentionally excluded from repository evidence.
 
 ## Deferred Scope
 
-Alpha 14 does not add application connectors, a Telegram machine tunnel, or a
+Alpha 15 does not add application connectors, a Telegram machine tunnel, or a
 complete mobile application. Future connector hosts may advertise additional
 capabilities through this protocol, but no local application data is implicitly
 available or authorized by this release.

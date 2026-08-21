@@ -1,9 +1,10 @@
-//! Ephemeral loopback gateway for the paired Desktop Client.
+//! Ephemeral loopback gateway for one immutable Captain Console profile.
 //!
 //! The WebView never receives a Hub bearer. It talks to this one-process local
 //! origin, which attaches the short-lived paired credential through
 //! `ClientAccessTransport` and relays only the reviewed Desktop work surface.
 
+use crate::{secret_support::resolve_proxy_password, ConsoleProfileCatalog, ConsoleProfileError};
 use axum::{
     body::{to_bytes, Body},
     extract::{ws::WebSocketUpgrade, State},
@@ -11,10 +12,8 @@ use axum::{
     routing::any,
     Router,
 };
-use captain_extensions::{credentials::CredentialResolver, vault::CredentialVault};
 use captain_node::{
     ClientAccessError, ClientAccessTransport, ClientLocalConfigStore, ClientPairingStore,
-    NodeProxyMode, ResolvedProxyPassword,
 };
 use captain_wire::{client_relay_path_is_canonical, desktop_client_route_allows, ClientHttpMethod};
 use futures::{SinkExt, StreamExt};
@@ -34,11 +33,15 @@ const LOCAL_SESSION_COOKIE: &str = "captain_desktop_session";
 const MAX_LOCAL_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_URI_BYTES: usize = 8 * 1024;
+const LOOPBACK_BIND_ATTEMPTS: u32 = 8;
 
 pub struct GatewayHandle {
     pub port: u16,
     pub paired_profile_loaded: bool,
+    pub active_profile_id: Option<String>,
     bootstrap_url: Option<Zeroizing<String>>,
+    bootstrap_secret: Arc<Mutex<Option<Zeroizing<String>>>>,
+    authority: String,
     shutdown_tx: watch::Sender<bool>,
     server_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -49,6 +52,21 @@ impl GatewayHandle {
             .take()
             .map(|url| url.to_string())
             .ok_or(GatewayError::BootstrapUnavailable)
+    }
+
+    pub fn issue_bootstrap_url(&self) -> Result<String, GatewayError> {
+        let secret = random_secret()?;
+        let url = format!(
+            "http://{}/?desktop_ticket={}",
+            self.authority,
+            secret.as_str()
+        );
+        let mut slot = self
+            .bootstrap_secret
+            .lock()
+            .map_err(|_| GatewayError::BootstrapUnavailable)?;
+        *slot = Some(secret);
+        Ok(url)
     }
 
     pub fn shutdown(mut self) {
@@ -68,26 +86,44 @@ impl Drop for GatewayHandle {
 struct GatewayState {
     transport: Option<Arc<ClientAccessTransport>>,
     unavailable_reason: Option<GatewayUnavailableReason>,
-    bootstrap_secret: Mutex<Option<Zeroizing<String>>>,
+    bootstrap_secret: Arc<Mutex<Option<Zeroizing<String>>>>,
     session_secret: Zeroizing<String>,
     authority: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum GatewayUnavailableReason {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatewayUnavailableReason {
     Unconfigured,
+    ProfileUnavailable,
     PairingIncomplete,
     ProxyCredentialUnavailable,
     ConfigurationUnavailable,
 }
 
 pub fn start_gateway() -> Result<GatewayHandle, GatewayError> {
-    let (transport, unavailable_reason) = load_transport();
+    start_gateway_for_profile(None)
+}
+
+/// Start a gateway bound to one profile for its entire lifetime.
+///
+/// Passing a profile ID does not change the registry's active profile. This
+/// lets a Console manager keep multiple independent gateways alive without
+/// mutating a transport underneath an in-flight request or WebSocket.
+pub fn start_gateway_for_profile(profile_id: Option<&str>) -> Result<GatewayHandle, GatewayError> {
+    let home = captain_home().ok_or(GatewayError::HomeUnavailable)?;
+    start_gateway_at(&home, profile_id)
+}
+
+pub(crate) fn start_gateway_at(
+    home: &Path,
+    profile_id: Option<&str>,
+) -> Result<GatewayHandle, GatewayError> {
+    let (transport, unavailable_reason, active_profile_id) = load_transport(home, profile_id);
     let paired_profile_loaded = transport.is_some();
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| GatewayError::BindFailed)?;
+    let listener = bind_loopback()?;
     let port = listener
         .local_addr()
-        .map_err(|_| GatewayError::BindFailed)?
+        .map_err(|error| GatewayError::BindFailed { kind: error.kind() })?
         .port();
     let authority = format!("127.0.0.1:{port}");
     let bootstrap_secret = random_secret()?;
@@ -96,16 +132,17 @@ pub fn start_gateway() -> Result<GatewayHandle, GatewayError> {
         "http://{authority}/?desktop_ticket={}",
         bootstrap_secret.as_str()
     ));
+    let bootstrap_secret = Arc::new(Mutex::new(Some(bootstrap_secret)));
     let state = Arc::new(GatewayState {
         transport,
         unavailable_reason,
-        bootstrap_secret: Mutex::new(Some(bootstrap_secret)),
+        bootstrap_secret: Arc::clone(&bootstrap_secret),
         session_secret,
-        authority,
+        authority: authority.clone(),
     });
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let server_thread = std::thread::Builder::new()
-        .name("captain-desktop-gateway".to_string())
+        .name("captain-console-gateway".to_string())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -148,9 +185,40 @@ pub fn start_gateway() -> Result<GatewayHandle, GatewayError> {
     Ok(GatewayHandle {
         port,
         paired_profile_loaded,
+        active_profile_id,
         bootstrap_url: Some(bootstrap_url),
+        bootstrap_secret,
+        authority,
         shutdown_tx,
         server_thread: Some(server_thread),
+    })
+}
+
+fn bind_loopback() -> Result<TcpListener, GatewayError> {
+    for attempt in 1..=LOOPBACK_BIND_ATTEMPTS {
+        match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => return Ok(listener),
+            Err(error) if attempt < LOOPBACK_BIND_ATTEMPTS => {
+                warn!(
+                    attempt,
+                    error_kind = ?error.kind(),
+                    "Console loopback bind will retry"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(u64::from(attempt) * 10));
+            }
+            Err(error) => {
+                let kind = error.kind();
+                warn!(
+                    attempts = LOOPBACK_BIND_ATTEMPTS,
+                    error_kind = ?kind,
+                    "Console loopback bind failed"
+                );
+                return Err(GatewayError::BindFailed { kind });
+            }
+        }
+    }
+    Err(GatewayError::BindFailed {
+        kind: std::io::ErrorKind::Other,
     })
 }
 
@@ -487,6 +555,9 @@ fn unavailable_response(reason: Option<GatewayUnavailableReason>, html: bool) ->
         GatewayUnavailableReason::Unconfigured => {
             "No paired Client profile was found. Run `captain client pair --hub https://your-hub.example` first."
         }
+        GatewayUnavailableReason::ProfileUnavailable => {
+            "The requested Captain profile is unavailable. Select an existing profile before opening it."
+        }
         GatewayUnavailableReason::PairingIncomplete => {
             "Client pairing is incomplete. Run `captain client status`, then resume the pairing command."
         }
@@ -581,19 +652,29 @@ fn local_error(status: StatusCode, code: &'static str) -> Response<Body> {
         .unwrap_or_default()
 }
 
-fn load_transport() -> (
+pub(crate) fn load_transport(
+    home: &Path,
+    requested_profile_id: Option<&str>,
+) -> (
     Option<Arc<ClientAccessTransport>>,
     Option<GatewayUnavailableReason>,
+    Option<String>,
 ) {
-    let Some(home) = captain_home() else {
+    let selected = match select_profile_root(home, requested_profile_id) {
+        Ok(selected) => selected,
+        Err(reason) => return (None, Some(reason), None),
+    };
+    let Some((selected_profile_id, root)) = selected else {
+        return (None, Some(GatewayUnavailableReason::Unconfigured), None);
+    };
+    let credential_reference = selected_profile_id.clone();
+    let profile_id = Some(selected_profile_id);
+    if !root.join("config.toml").is_file() {
         return (
             None,
             Some(GatewayUnavailableReason::ConfigurationUnavailable),
+            profile_id,
         );
-    };
-    let root = home.join("client");
-    if !root.join("config.toml").is_file() {
-        return (None, Some(GatewayUnavailableReason::Unconfigured));
     }
     let store = match ClientLocalConfigStore::open(&root) {
         Ok(store) => store,
@@ -601,6 +682,7 @@ fn load_transport() -> (
             return (
                 None,
                 Some(GatewayUnavailableReason::ConfigurationUnavailable),
+                profile_id,
             )
         }
     };
@@ -610,52 +692,52 @@ fn load_transport() -> (
             return (
                 None,
                 Some(GatewayUnavailableReason::ConfigurationUnavailable),
+                profile_id,
             )
         }
     };
-    let proxy_password = match resolve_proxy_password(&config.network.proxy, &home) {
+    let proxy_password = match resolve_proxy_password(&config.network.proxy, home) {
         Ok(password) => password,
         Err(_) => {
             return (
                 None,
                 Some(GatewayUnavailableReason::ProxyCredentialUnavailable),
+                profile_id,
             )
         }
     };
-    let pairing = match ClientPairingStore::open(store.root().join(CLIENT_STATE_DIR)) {
-        Ok(pairing) => pairing,
-        Err(_) => return (None, Some(GatewayUnavailableReason::PairingIncomplete)),
-    };
+    let pairing =
+        match ClientPairingStore::open(store.root().join(CLIENT_STATE_DIR), credential_reference) {
+            Ok(pairing) => pairing,
+            Err(_) => {
+                return (
+                    None,
+                    Some(GatewayUnavailableReason::PairingIncomplete),
+                    profile_id,
+                )
+            }
+        };
     match ClientAccessTransport::open(config, proxy_password, pairing) {
-        Ok(transport) => (Some(Arc::new(transport)), None),
-        Err(_) => (None, Some(GatewayUnavailableReason::PairingIncomplete)),
+        Ok(transport) => (Some(Arc::new(transport)), None, profile_id),
+        Err(_) => (
+            None,
+            Some(GatewayUnavailableReason::PairingIncomplete),
+            profile_id,
+        ),
     }
 }
 
-fn resolve_proxy_password(
-    proxy: &NodeProxyMode,
+fn select_profile_root(
     home: &Path,
-) -> Result<Option<ResolvedProxyPassword>, ()> {
-    let NodeProxyMode::Explicit {
-        password_secret: Some(secret_name),
-        ..
-    } = proxy
-    else {
-        return Ok(None);
-    };
-    let vault_path = home.join("vault.enc");
-    let vault = if vault_path.exists() {
-        let mut vault = CredentialVault::new(vault_path);
-        vault.unlock().ok().map(|()| vault)
-    } else {
-        None
-    };
-    let resolver = CredentialResolver::from_home(vault, home).map_err(|_| ())?;
-    let password = resolver.resolve(secret_name).ok_or(())?;
-    Ok(Some(ResolvedProxyPassword::new(
-        secret_name,
-        password.as_str(),
-    )))
+    requested_profile_id: Option<&str>,
+) -> Result<Option<(String, PathBuf)>, GatewayUnavailableReason> {
+    ConsoleProfileCatalog::open(home)
+        .map_err(|_| GatewayUnavailableReason::ConfigurationUnavailable)?
+        .exact_profile_root(requested_profile_id)
+        .map_err(|error| match error {
+            ConsoleProfileError::ProfileNotFound => GatewayUnavailableReason::ProfileUnavailable,
+            _ => GatewayUnavailableReason::ConfigurationUnavailable,
+        })
 }
 
 fn captain_home() -> Option<PathBuf> {
@@ -680,11 +762,13 @@ fn constant_time_eq(expected: &str, candidate: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 pub enum GatewayError {
-    #[error("the Desktop loopback gateway could not bind")]
-    BindFailed,
-    #[error("the Desktop loopback gateway runtime is unavailable")]
+    #[error("the Captain Console home directory is unavailable")]
+    HomeUnavailable,
+    #[error("the Console loopback gateway could not bind ({kind:?})")]
+    BindFailed { kind: std::io::ErrorKind },
+    #[error("the Console loopback gateway runtime is unavailable")]
     RuntimeUnavailable,
-    #[error("the Desktop bootstrap secret is unavailable")]
+    #[error("the Console bootstrap secret is unavailable")]
     BootstrapUnavailable,
     #[error("the OS random source is unavailable")]
     RandomUnavailable,
@@ -693,6 +777,7 @@ pub enum GatewayError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captain_node::ClientProfileRegistry;
 
     fn request(method: Method, authority: &str, origin: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder()
@@ -768,5 +853,34 @@ mod tests {
             "/assets/app/%2e%2e/api/status"
         ));
         assert!(!is_static_get(&Method::GET, "/assets/app//main.js"));
+    }
+
+    #[test]
+    fn an_explicit_gateway_profile_never_mutates_the_active_authority() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = ClientProfileRegistry::open(home.path().join("console")).unwrap();
+        let active = registry.create_profile(10).unwrap();
+        let second = registry.create_profile(20).unwrap();
+
+        let (selected_id, selected_root) = select_profile_root(home.path(), Some(&second.id))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(selected_id, second.id);
+        assert_eq!(selected_root, registry.profile_root(&second.id).unwrap());
+        assert_eq!(registry.active_profile().unwrap().unwrap().id, active.id);
+    }
+
+    #[test]
+    fn a_missing_gateway_profile_fails_closed_without_changing_authority() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = ClientProfileRegistry::open(home.path().join("console")).unwrap();
+        let active = registry.create_profile(10).unwrap();
+
+        assert_eq!(
+            select_profile_root(home.path(), Some("00000000-0000-0000-0000-000000000000")),
+            Err(GatewayUnavailableReason::ProfileUnavailable)
+        );
+        assert_eq!(registry.active_profile().unwrap().unwrap().id, active.id);
     }
 }

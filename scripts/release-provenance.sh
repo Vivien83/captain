@@ -104,55 +104,80 @@ platforms=(
     x86_64-unknown-linux-gnu
     x86_64-pc-windows-msvc
 )
+components=(full console node)
+
+select_component_asset() {
+    local component="$1" platform="$2"
+    case "$component" in
+        full)
+            archive_prefix="captain"
+            manifest_name="manifest-$platform.json"
+            ;;
+        console)
+            archive_prefix="captain-console"
+            manifest_name="manifest-console-$platform.json"
+            ;;
+        node)
+            archive_prefix="captain-node"
+            manifest_name="manifest-node-$platform.json"
+            ;;
+        *) fail "unsupported release component: $component" ;;
+    esac
+}
 
 assets=()
-for platform in "${platforms[@]}"; do
-    case "$platform" in
-        *-pc-windows-msvc) archive="$VERSION_DIR/captain-$platform.zip" ;;
-        *) archive="$VERSION_DIR/captain-$platform.tar.gz" ;;
-    esac
-    checksum="$archive.sha256"
-    manifest="$VERSION_DIR/manifest-$platform.json"
-    [ -f "$archive" ] || fail "missing archive: $archive"
-    [ -f "$checksum" ] || fail "missing checksum: $checksum"
-    [ -f "$manifest" ] || fail "missing platform manifest: $manifest"
+for component in "${components[@]}"; do
+    for platform in "${platforms[@]}"; do
+        select_component_asset "$component" "$platform"
+        case "$platform" in
+            *-pc-windows-msvc) archive="$VERSION_DIR/$archive_prefix-$platform.zip" ;;
+            *) archive="$VERSION_DIR/$archive_prefix-$platform.tar.gz" ;;
+        esac
+        checksum="$archive.sha256"
+        manifest="$VERSION_DIR/$manifest_name"
+        [ -f "$archive" ] || fail "missing archive: $archive"
+        [ -f "$checksum" ] || fail "missing checksum: $checksum"
+        [ -f "$manifest" ] || fail "missing platform manifest: $manifest"
 
-    actual_hash="$(sha256_file "$archive")"
-    expected_hash="$(cut -d ' ' -f 1 <"$checksum")"
-    [ "$actual_hash" = "$expected_hash" ] || fail "checksum mismatch: $archive"
-    jq -e \
-        --arg version "$VERSION" \
-        --arg platform "$platform" \
-        --arg archive "$(basename "$archive")" \
-        --arg sha256 "$actual_hash" \
-        --arg source_repository "$SOURCE_REPOSITORY" \
-        --arg source_revision "$SOURCE_REVISION" \
-        --arg source_tree "$SOURCE_TREE" \
-        --arg lock_sha256 "$LOCK_SHA256" \
-        --argjson source_dirty "$SOURCE_DIRTY" \
-        '.version == $version
-         and .platform == $platform
-         and .archive == $archive
-         and .sha256 == $sha256
-         and (.build_started_at
-              | type == "string"
-                and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-         and (.generated_at
-              | type == "string"
-                and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-         and .build_started_at <= .generated_at
-         and .source == {
-           repository: $source_repository,
-           revision: $source_revision,
-           tree: $source_tree,
-           cargo_lock_sha256: $lock_sha256,
-           dirty: $source_dirty
-         }' \
-        "$manifest" >/dev/null || fail "platform manifest mismatch: $manifest"
-    assets+=("$archive" "$checksum" "$manifest")
+        actual_hash="$(sha256_file "$archive")"
+        expected_hash="$(cut -d ' ' -f 1 <"$checksum")"
+        [ "$actual_hash" = "$expected_hash" ] || fail "checksum mismatch: $archive"
+        jq -e \
+            --arg version "$VERSION" \
+            --arg component "$component" \
+            --arg platform "$platform" \
+            --arg archive "$(basename "$archive")" \
+            --arg sha256 "$actual_hash" \
+            --arg source_repository "$SOURCE_REPOSITORY" \
+            --arg source_revision "$SOURCE_REVISION" \
+            --arg source_tree "$SOURCE_TREE" \
+            --arg lock_sha256 "$LOCK_SHA256" \
+            --argjson source_dirty "$SOURCE_DIRTY" \
+            '.version == $version
+             and .component == $component
+             and .platform == $platform
+             and .archive == $archive
+             and .sha256 == $sha256
+             and (.build_started_at
+                  | type == "string"
+                    and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+             and (.generated_at
+                  | type == "string"
+                    and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+             and .build_started_at <= .generated_at
+             and .source == {
+               repository: $source_repository,
+               revision: $source_revision,
+               tree: $source_tree,
+               cargo_lock_sha256: $lock_sha256,
+               dirty: $source_dirty
+             }' \
+            "$manifest" >/dev/null || fail "component manifest mismatch: $manifest"
+        assets+=("$archive" "$checksum" "$manifest")
+    done
 done
 
-for installer in install.sh install-local.sh install-git.sh install.ps1; do
+for installer in install.sh install-local.sh install-git.sh install.ps1 install-edition.sh install-edition.ps1; do
     path="$VERSION_DIR/$installer"
     [ -f "$path" ] || fail "missing installer: $path"
     assets+=("$path")
@@ -168,12 +193,22 @@ jq -e \
     --arg lock_sha256 "$LOCK_SHA256" \
     --argjson source_dirty "$SOURCE_DIRTY" \
     '.version == $version
-     and ([.artifacts[].platform] | sort) == [
-       "aarch64-apple-darwin",
-       "aarch64-unknown-linux-gnu",
-       "x86_64-apple-darwin",
-       "x86_64-pc-windows-msvc",
-       "x86_64-unknown-linux-gnu"
+     and ([.artifacts[] | "\(.component)/\(.platform)"] | sort) == [
+       "console/aarch64-apple-darwin",
+       "console/aarch64-unknown-linux-gnu",
+       "console/x86_64-apple-darwin",
+       "console/x86_64-pc-windows-msvc",
+       "console/x86_64-unknown-linux-gnu",
+       "full/aarch64-apple-darwin",
+       "full/aarch64-unknown-linux-gnu",
+       "full/x86_64-apple-darwin",
+       "full/x86_64-pc-windows-msvc",
+       "full/x86_64-unknown-linux-gnu",
+       "node/aarch64-apple-darwin",
+       "node/aarch64-unknown-linux-gnu",
+       "node/x86_64-apple-darwin",
+       "node/x86_64-pc-windows-msvc",
+       "node/x86_64-unknown-linux-gnu"
      ]
      and .source == {
        repository: $source_repository,
@@ -182,7 +217,7 @@ jq -e \
        cargo_lock_sha256: $lock_sha256,
        dirty: $source_dirty
      }' \
-    "$aggregate" >/dev/null || fail "aggregate manifest does not describe five unique platforms"
+    "$aggregate" >/dev/null || fail "aggregate manifest does not describe fifteen component-platform artifacts"
 assets+=("$aggregate")
 
 subjects_json="$(
@@ -195,13 +230,19 @@ subjects_json="$(
 )"
 
 started_on="$(
-    for platform in "${platforms[@]}"; do
-        jq -r '.build_started_at' "$VERSION_DIR/manifest-$platform.json"
+    for component in "${components[@]}"; do
+        for platform in "${platforms[@]}"; do
+            select_component_asset "$component" "$platform"
+            jq -r '.build_started_at' "$VERSION_DIR/$manifest_name"
+        done
     done | LC_ALL=C sort | head -n 1
 )"
 finished_on="$(
-    for platform in "${platforms[@]}"; do
-        jq -r '.generated_at' "$VERSION_DIR/manifest-$platform.json"
+    for component in "${components[@]}"; do
+        for platform in "${platforms[@]}"; do
+            select_component_asset "$component" "$platform"
+            jq -r '.generated_at' "$VERSION_DIR/$manifest_name"
+        done
     done | LC_ALL=C sort | tail -n 1
 )"
 aggregate_sha256="$(sha256_file "$aggregate")"
@@ -239,6 +280,9 @@ verify_statement() {
          and .predicate.buildDefinition.buildType
              == "https://github.com/Vivien83/captain/blob/main/docs/release-provenance.md"
          and .predicate.buildDefinition.externalParameters.version == $version
+         and .predicate.buildDefinition.externalParameters.components == [
+           "full", "console", "node"
+         ]
          and .predicate.buildDefinition.externalParameters.targets == [
            "aarch64-apple-darwin",
            "x86_64-apple-darwin",
@@ -304,6 +348,7 @@ jq -cn \
           "externalParameters": {
             "version": $version,
             "cargoProfile": "release",
+            "components": ["full", "console", "node"],
             "targets": [
               "aarch64-apple-darwin",
               "x86_64-apple-darwin",

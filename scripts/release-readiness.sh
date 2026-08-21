@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.14}"
+EXPECTED_CHANGELOG="${CAPTAIN_RELEASE_CHANGELOG_VERSION:-0.1.0-alpha.15}"
 CARGO_PROFILE="${CAPTAIN_RELEASE_CARGO_PROFILE:-release}"
 ALLOW_DIRTY=0
 RUN_TESTS=1
@@ -351,7 +351,15 @@ run_tests() {
     run_cargo_test -p captain-kernel
     run_cargo_test -p captain-api
     run_cargo_test -p captain-cli
+    run_cargo_test -p captain-console
+    run_cargo_test -p captain-node
+    run "$ROOT_DIR/scripts/alpha15-system-smoke.sh"
+    run "$ROOT_DIR/scripts/lightweight-release-test.sh"
     run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" cargo build --release -p captain-cli
+    run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" \
+        cargo build --release -p captain-console --bin captain-console
+    run env CAPTAIN_BUILD_VERSION="$EXPECTED_CHANGELOG" \
+        cargo build --release -p captain-node --bin captain-node
 }
 
 run_smoke() {
@@ -359,6 +367,8 @@ run_smoke() {
     local candidate_bin
     local actual_version
     local health
+    local lightweight
+    local lightweight_bin
     local expected_version="captain $EXPECTED_CHANGELOG"
     local port="${CAPTAIN_RELEASE_SMOKE_PORT:-$((52000 + ($$ % 1000)))}"
     local ready_timeout="${CAPTAIN_RELEASE_SMOKE_READY_TIMEOUT:-180}"
@@ -370,6 +380,16 @@ run_smoke() {
         || fail "release candidate version command failed: $candidate_bin"
     [ "$actual_version" = "$expected_version" ] \
         || fail "release candidate version mismatch: expected '$expected_version', got '$actual_version'"
+
+    for lightweight in captain-console captain-node; do
+        lightweight_bin="$(release_target_root)/release/$lightweight"
+        [ -x "$lightweight_bin" ] \
+            || fail "lightweight release candidate is not executable: $lightweight_bin"
+        actual_version="$("$lightweight_bin" --version)" \
+            || fail "$lightweight release candidate version command failed"
+        [ "$actual_version" = "$lightweight $EXPECTED_CHANGELOG" ] \
+            || fail "$lightweight release candidate version mismatch: $actual_version"
+    done
 
     SMOKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/captain-release-smoke.XXXXXX")
     start_candidate_smoke_daemon "$candidate_bin" "$port"
@@ -396,8 +416,20 @@ run_smoke() {
 }
 
 package_release() {
+    local component binary
     step "release package"
-    CAPTAIN_VERSION="${CAPTAIN_VERSION:-$EXPECTED_CHANGELOG}" "$ROOT_DIR/scripts/package-release.sh"
+    for component in full console node; do
+        case "$component" in
+            full) binary="captain" ;;
+            console) binary="captain-console" ;;
+            node) binary="captain-node" ;;
+        esac
+        CAPTAIN_SKIP_BUILD=1 \
+        CAPTAIN_BIN_PATH="$(release_target_root)/release/$binary" \
+        CAPTAIN_DIST_COMPONENT="$component" \
+        CAPTAIN_VERSION="${CAPTAIN_VERSION:-$EXPECTED_CHANGELOG}" \
+            "$ROOT_DIR/scripts/package-release.sh"
+    done
 }
 
 cd "$ROOT_DIR"

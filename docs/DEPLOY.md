@@ -1,8 +1,9 @@
 # Deploying Captain
 
-Captain ships as a single CLI/daemon bundle and as a public multiarchitecture
-container image. The current public early-access release is the prerelease
-`v0.1.0-alpha.14`; pin it explicitly because GitHub's `/releases/latest`
+Captain ships as Captain Full, a lightweight Captain Console, an optional
+Captain Node, and a public multiarchitecture Full container image. The current
+public early-access release is the prerelease
+`v0.1.0-alpha.15`; pin it explicitly because GitHub's `/releases/latest`
 endpoint excludes prereleases.
 
 ## Host Install
@@ -10,8 +11,8 @@ endpoint excludes prereleases.
 macOS, Linux, or a Linux VPS:
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=desktop bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=desktop bash
 ```
 
 Use `CAPTAIN_PROFILE=vps` for a service-oriented server install. The installer
@@ -26,6 +27,33 @@ Captain at login and keeps it alive after unexpected exits; systemd uses
 stop and disables the active launchd job until `captain service start` is run.
 Use `captain service status` after a host restart to verify both the manager and
 daemon health.
+
+## Lightweight Console and Node
+
+Install Console when a workstation only needs TUI/Web access to remote Captain
+Full authorities:
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=console CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-console pair --hub https://hub.example.com
+captain-console open
+```
+
+Install Node separately only when that Hub must execute against a local
+workspace:
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=node CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-node pair --hub https://hub.example.com --workspace "$PWD"
+captain-node service install
+```
+
+Both are checksum-verified user-level installs. Console creates no Full state.
+Node opens outbound HTTPS only, is read-only by default, and uses launchd,
+systemd user services, or Windows Service Control Manager for restart recovery.
+See [Hub, Console, Clients, and Nodes](hub-clients-nodes.md).
 
 ## Durability and Sudden Power Loss
 
@@ -69,14 +97,14 @@ approving first launch.
 The immutable image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
 
 docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
   -e MISTRAL_API_KEY \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
 ```
 
 The moving prerelease channel is `ghcr.io/vivien83/captain-agent-os:alpha`.
@@ -103,8 +131,8 @@ docker compose up -d --build
 To consume the published image without rebuilding:
 
 ```bash
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose up -d --no-build
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.15 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.15 docker compose up -d --no-build
 ```
 
 The optional `personal`, `trusted`, and `yolo` overlays progressively grant
@@ -169,7 +197,7 @@ candidate observable and checks again after the reminder. Pull the desired
 immutable tag and recreate the container:
 
 ```bash
-docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
+docker pull ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
 docker rm -f captain
 # Re-run the same docker run command; captain-data preserves state.
 ```

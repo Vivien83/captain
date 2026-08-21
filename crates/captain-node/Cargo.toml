@@ -6,10 +6,29 @@ license.workspace = true
 repository.workspace = true
 description = "Outbound-only lightweight execution node for Captain Hub"
 
+[features]
+default = ["node-runtime"]
+node-runtime = [
+    "dep:captain-node-tools",
+    "dep:clap",
+    "dep:rpassword",
+    "dep:rusqlite",
+    "dep:tracing-subscriber",
+    "dep:windows-service",
+]
+
+[[bin]]
+name = "captain-node"
+path = "src/bin/captain-node/main.rs"
+required-features = ["node-runtime"]
+
 [dependencies]
 captain-types = { path = "../captain-types" }
 captain-wire = { path = "../captain-wire" }
+captain-node-tools = { path = "../captain-node-tools", optional = true }
 bytes = { workspace = true }
+clap = { workspace = true, optional = true }
+dirs = { workspace = true }
 fs2 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
@@ -17,7 +36,7 @@ libc = "0.2"
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 reqwest-websocket = { workspace = true }
-rusqlite = { workspace = true }
+rusqlite = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -26,9 +45,21 @@ tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true, features = ["serde"] }
+rpassword = { version = "7", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+windows-service = { version = "=0.8.1", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["linux-native-sync-persistent", "crypto-rust", "vendored"] }
 
 [dev-dependencies]
 axum = { workspace = true }

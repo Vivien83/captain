@@ -1,16 +1,30 @@
-use crate::{cli_captain_home, production_credential_resolver_at};
+use crate::production_credential_resolver_at;
 use captain_node::{
-    NodeLinkError, NodeNetworkConfig, NodeNetworkError, NodePairingError, NodeProxyMode,
+    operator::NodeProxyPasswordResolver, NodeNetworkConfig, NodePairingError, NodeProxyMode,
     ResolvedProxyPassword,
 };
 use std::{path::PathBuf, time::Duration};
 
-pub(super) const NODE_STATE_DIR: &str = "state";
 pub(crate) const PAIRING_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
-pub(super) fn node_root() -> PathBuf {
-    cli_captain_home().join("node")
+pub(super) struct CliNodeProxyResolver {
+    home: PathBuf,
+}
+
+impl CliNodeProxyResolver {
+    pub(super) fn new(home: PathBuf) -> Self {
+        Self { home }
+    }
+}
+
+impl NodeProxyPasswordResolver for CliNodeProxyResolver {
+    fn resolve(
+        &self,
+        network: &NodeNetworkConfig,
+    ) -> Result<Option<ResolvedProxyPassword>, String> {
+        resolve_proxy_password(network, &self.home)
+    }
 }
 
 pub(crate) fn proxy_mode(
@@ -77,42 +91,16 @@ pub(crate) fn pairing_retry_delay(error: &NodePairingError) -> Option<Duration> 
     }
 }
 
-pub(super) fn retryable_link_error(error: &NodeLinkError) -> bool {
-    match error {
-        NodeLinkError::InvalidAccessToken | NodeLinkError::TransportsUnavailable { .. } => true,
-        NodeLinkError::Network(network) => matches!(
-            network,
-            NodeNetworkError::RequestTimedOut
-                | NodeNetworkError::NetworkUnavailable
-                | NodeNetworkError::TransportClosed
-                | NodeNetworkError::HubUnavailable
-                | NodeNetworkError::HubAuthenticationFailed
-                | NodeNetworkError::HubTransportBusy { .. }
-        ),
-        _ => false,
-    }
-}
-
-pub(super) fn next_retry(current: Duration) -> Duration {
-    current.saturating_mul(2).min(MAX_RETRY_DELAY)
-}
-
-pub(super) async fn wait_or_stop(delay: Duration) -> bool {
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => true,
-        _ = tokio::time::sleep(delay) => false,
-    }
-}
-
-pub(super) fn current_time_ms() -> Result<i64, String> {
-    let duration = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "The system clock is invalid".to_string())?;
-    i64::try_from(duration.as_millis()).map_err(|_| "The system clock is invalid".to_string())
-}
-
 pub(crate) fn safe_error(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+pub(crate) fn proxy_name(proxy: &NodeProxyMode) -> &'static str {
+    match proxy {
+        NodeProxyMode::Environment => "environment",
+        NodeProxyMode::Disabled => "disabled",
+        NodeProxyMode::Explicit { .. } => "explicit",
+    }
 }
 
 pub(super) fn load_kernel_config(
@@ -131,21 +119,5 @@ pub(super) fn load_kernel_config(
         Ok(config)
     } else {
         Err("Captain execution policy is invalid for the local Node".to_string())
-    }
-}
-
-pub(crate) fn proxy_name(proxy: &NodeProxyMode) -> &'static str {
-    match proxy {
-        NodeProxyMode::Environment => "environment",
-        NodeProxyMode::Disabled => "disabled",
-        NodeProxyMode::Explicit { .. } => "explicit",
-    }
-}
-
-pub(super) fn transport_name(transport: captain_wire::NodeTransport) -> &'static str {
-    match transport {
-        captain_wire::NodeTransport::WebSocket => "WebSocket",
-        captain_wire::NodeTransport::HttpStream => "HTTPS stream",
-        captain_wire::NodeTransport::LongPoll => "HTTPS long-poll",
     }
 }

@@ -1,7 +1,8 @@
 //! Process-local access broker for one paired lightweight Client.
 
 use crate::cli_captain_home;
-use crate::commands::client::{client_root, CLIENT_STATE_DIR};
+use crate::client_profiles;
+use crate::commands::client::CLIENT_STATE_DIR;
 use crate::commands::node::support::resolve_proxy_password;
 use captain_node::{
     ClientAccessError, ClientAccessTransport, ClientLocalConfigStore, ClientPairingStore,
@@ -12,13 +13,17 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-const CLIENT_CONFIG_FILE: &str = "config.toml";
 const INITIAL_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 
 static ACTIVE_CLIENT: OnceLock<Arc<RemoteClientBroker>> = OnceLock::new();
 
 pub(crate) fn client_profile_configured() -> bool {
-    ACTIVE_CLIENT.get().is_some() || client_root().join(CLIENT_CONFIG_FILE).exists()
+    ACTIVE_CLIENT.get().is_some()
+        || match client_profiles::active_profile_selection() {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => client_profiles::client_state_present(),
+        }
 }
 
 pub(crate) fn initialize() -> Result<Option<String>, RemoteClientError> {
@@ -29,7 +34,10 @@ pub(crate) fn initialize() -> Result<Option<String>, RemoteClientError> {
         return Ok(None);
     }
 
-    let broker = Arc::new(RemoteClientBroker::load()?);
+    let selected = client_profiles::active_profile_selection()
+        .map_err(|_| RemoteClientError::ConfigurationUnavailable)?
+        .ok_or(RemoteClientError::ConfigurationUnavailable)?;
+    let broker = Arc::new(RemoteClientBroker::load(selected.root, &selected.id)?);
     broker.ensure_available()?;
     match ACTIVE_CLIENT.set(Arc::clone(&broker)) {
         Ok(()) => Ok(Some(broker.base_url.clone())),
@@ -78,8 +86,10 @@ struct RemoteClientBroker {
 }
 
 impl RemoteClientBroker {
-    fn load() -> Result<Self, RemoteClientError> {
-        let root = client_root();
+    fn load(
+        root: std::path::PathBuf,
+        credential_reference: &str,
+    ) -> Result<Self, RemoteClientError> {
         let config_store = ClientLocalConfigStore::open(&root)
             .map_err(|_| RemoteClientError::ConfigurationUnavailable)?;
         let config = config_store
@@ -88,8 +98,11 @@ impl RemoteClientBroker {
             .ok_or(RemoteClientError::ConfigurationUnavailable)?;
         let proxy_password = resolve_proxy_password(&config.network, &cli_captain_home())
             .map_err(|_| RemoteClientError::ProxyCredentialUnavailable)?;
-        let pairing_store = ClientPairingStore::open(config_store.root().join(CLIENT_STATE_DIR))
-            .map_err(|_| RemoteClientError::PairingUnavailable)?;
+        let pairing_store = ClientPairingStore::open(
+            config_store.root().join(CLIENT_STATE_DIR),
+            credential_reference,
+        )
+        .map_err(|_| RemoteClientError::PairingUnavailable)?;
         let base_url = config.network.hub_url.trim_end_matches('/').to_string();
         let access = ClientAccessTransport::open(config, proxy_password, pairing_store)
             .map_err(map_client_access_error)?;

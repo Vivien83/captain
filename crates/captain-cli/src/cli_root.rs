@@ -591,6 +591,8 @@ mod tests {
             "pair",
             "--hub",
             "https://hub.example.com",
+            "--label",
+            "Production",
             "--no-browser",
         ])
         .unwrap();
@@ -598,6 +600,7 @@ mod tests {
             panic!("expected Client pair command");
         };
         assert!(args.no_browser);
+        assert_eq!(args.label.as_deref(), Some("Production"));
         assert!(args.proxy.is_none());
         assert!(args.ca_bundle.is_none());
         assert!(Cli::try_parse_from([
@@ -611,6 +614,17 @@ mod tests {
             "--no-proxy",
         ])
         .is_err());
+        assert!(Cli::try_parse_from(["captain", "client", "list", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["captain", "client", "use", "Production"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "captain",
+            "client",
+            "status",
+            "--profile",
+            "Production",
+            "--json",
+        ])
+        .is_ok());
         assert!(Cli::try_parse_from(["captain", "client", "status", "--json"]).is_ok());
         assert!(Cli::try_parse_from(["captain", "client", "reset", "--yes"]).is_ok());
     }

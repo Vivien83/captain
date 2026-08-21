@@ -1088,13 +1088,14 @@ fn acknowledge_hub_sequence_in_tx(
         return Ok(());
     }
     tx.execute(
-        "UPDATE hub_node_outbox SET acked_at_ms = COALESCE(acked_at_ms, ?3)
+        "UPDATE hub_node_outbox
+         SET acked_at_ms = COALESCE(acked_at_ms, MAX(created_at_ms, ?3))
          WHERE device_id = ?1 AND sequence <= ?2",
         params![device_id, ack, now_ms],
     )?;
     tx.execute(
         "UPDATE hub_node_cursors
-         SET last_hub_ack_sequence = ?2, updated_at_ms = ?3
+         SET last_hub_ack_sequence = ?2, updated_at_ms = MAX(updated_at_ms, ?3)
          WHERE device_id = ?1",
         params![device_id, ack, now_ms],
     )?;

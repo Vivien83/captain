@@ -3,10 +3,12 @@
 use super::node::support::{
     pairing_retry_delay, proxy_mode, resolve_proxy_password, safe_error, PAIRING_POLL_INTERVAL,
 };
-use crate::{captain_version, cli_captain_home, open_in_browser, ui, ClientCommands};
+use crate::{
+    captain_version, cli_captain_home, client_profiles, open_in_browser, ui, ClientCommands,
+};
 use captain_node::{
     ClientLocalConfig, ClientLocalConfigStore, ClientPairingClient, ClientPairingProgress,
-    ClientPairingStore, NodeNetworkConfig,
+    ClientPairingStore, ClientProfileEntry, ClientProfileRegistry, NodeNetworkConfig,
 };
 use serde_json::json;
 use std::{future::Future, path::PathBuf};
@@ -17,6 +19,8 @@ pub(crate) fn cmd_client(command: ClientCommands) {
     let result = match command {
         ClientCommands::Pair(args) => block_on(pair_client(PairRequest {
             hub: args.hub,
+            profile: args.profile,
+            label: args.label,
             name: args.name,
             ca_bundle: args.ca_bundle,
             proxy: args.proxy,
@@ -25,7 +29,9 @@ pub(crate) fn cmd_client(command: ClientCommands) {
             no_proxy: args.no_proxy,
             no_browser: args.no_browser,
         })),
-        ClientCommands::Status { json } => client_status(json),
+        ClientCommands::List { json } => client_list(json),
+        ClientCommands::Use { profile } => use_client_profile(&profile),
+        ClientCommands::Status { profile, json } => client_status(profile.as_deref(), json),
         ClientCommands::Reset { yes } => reset_client(yes),
     };
     if let Err(error) = result {
@@ -36,6 +42,8 @@ pub(crate) fn cmd_client(command: ClientCommands) {
 
 struct PairRequest {
     hub: String,
+    profile: Option<String>,
+    label: Option<String>,
     name: Option<String>,
     ca_bundle: Option<PathBuf>,
     proxy: Option<String>,
@@ -47,7 +55,11 @@ struct PairRequest {
 
 async fn pair_client(request: PairRequest) -> Result<(), String> {
     let home = cli_captain_home();
-    let store = ClientLocalConfigStore::open(client_root()).map_err(safe_error)?;
+    let requested_label = request
+        .label
+        .as_deref()
+        .map(validated_profile_label)
+        .transpose()?;
     let network = NodeNetworkConfig {
         hub_url: request.hub,
         proxy: proxy_mode(
@@ -69,21 +81,48 @@ async fn pair_client(request: PairRequest) -> Result<(), String> {
         network,
     )
     .map_err(safe_error)?;
+    let registry = client_profiles::open_registry().map_err(safe_error)?;
+    let profile = match request.profile.as_deref() {
+        Some(selector) => resolve_profile(&registry, selector)?,
+        None => matching_hub_profile(&registry, &config.network.hub_url)?.unwrap_or(
+            registry
+                .create_profile(current_time_ms()?)
+                .map_err(safe_error)?,
+        ),
+    };
+    let profile_root = registry.profile_root(&profile.id).map_err(safe_error)?;
+    let store = ClientLocalConfigStore::open(profile_root).map_err(safe_error)?;
+    if let Some(existing) = store.load().map_err(safe_error)? {
+        if normalized_hub(&existing.network.hub_url) != normalized_hub(&config.network.hub_url) {
+            return Err(
+                "The selected Client profile belongs to a different Captain; reset it explicitly or create a new profile"
+                    .to_string(),
+            );
+        }
+    }
+    let label = requested_label
+        .or_else(|| profile.label.clone())
+        .unwrap_or_else(|| default_profile_label(&profile.id));
+    registry
+        .set_label(&profile.id, &label)
+        .map_err(safe_error)?;
+    store.save(&config).map_err(safe_error)?;
+    registry.set_active(&profile.id).map_err(safe_error)?;
     let state_root = store.root().join(CLIENT_STATE_DIR);
-    let mut pairing_store = ClientPairingStore::open(&state_root).map_err(safe_error)?;
+    let mut pairing_store =
+        ClientPairingStore::open(&state_root, &profile.id).map_err(safe_error)?;
     if matches!(
         pairing_store.status().map_err(safe_error)?,
         Some(ClientPairingProgress::Denied { .. } | ClientPairingProgress::Expired { .. })
     ) {
         pairing_store.reset().map_err(safe_error)?;
-        pairing_store = ClientPairingStore::open(&state_root).map_err(safe_error)?;
+        pairing_store = ClientPairingStore::open(&state_root, &profile.id).map_err(safe_error)?;
     }
     let pairing = ClientPairingClient::new(http, pairing_store);
     let progress = pairing
         .start_or_resume(&config.pairing_profile(&captain_version()))
         .await
         .map_err(safe_error)?;
-    store.save(&config).map_err(safe_error)?;
     wait_for_pairing(&pairing, &config, progress, request.no_browser).await
 }
 
@@ -158,22 +197,138 @@ async fn poll_until_available(
     }
 }
 
-fn client_status(json_output: bool) -> Result<(), String> {
-    let root = client_root();
-    if !root.join("config.toml").exists() {
+fn client_list(json_output: bool) -> Result<(), String> {
+    let registry = client_profiles::open_registry().map_err(safe_error)?;
+    let profiles = registry
+        .list()
+        .map_err(safe_error)?
+        .into_iter()
+        .map(|profile| profile_payload(&registry, &profile))
+        .collect::<Result<Vec<_>, _>>()?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "profiles": profiles }))
+                .map_err(|_| "The Client profile list could not be serialized".to_string())?
+        );
+        return Ok(());
+    }
+    ui::section("Captain profiles");
+    if profiles.is_empty() {
+        ui::hint("No Captain is paired. Run `captain client pair --hub https://...`.");
+        return Ok(());
+    }
+    for profile in profiles {
+        let marker = if profile["active"].as_bool() == Some(true) {
+            "active"
+        } else {
+            "available"
+        };
+        let name = profile["display_name"].as_str().unwrap_or("Unconfigured");
+        let id = profile["id"].as_str().unwrap_or("unknown");
+        let state = profile["state"].as_str().unwrap_or("unknown");
+        ui::kv(name, &format!("{marker} · {state} · {id}"));
+    }
+    Ok(())
+}
+
+fn use_client_profile(selector: &str) -> Result<(), String> {
+    let registry = client_profiles::open_registry().map_err(safe_error)?;
+    let profile = resolve_profile(&registry, selector)?;
+    if profile_config(&registry, &profile)?.is_none() {
+        return Err(
+            "That Client profile is not configured; pair it before selecting it".to_string(),
+        );
+    }
+    registry.set_active(&profile.id).map_err(safe_error)?;
+    let name = profile_display_name(&profile);
+    ui::success(&format!("Future Client sessions will use {name}."));
+    Ok(())
+}
+
+fn client_status(selector: Option<&str>, json_output: bool) -> Result<(), String> {
+    if !client_profiles::client_state_present() {
         return render_status(
             json_output,
             json!({"configured": false, "state": "unconfigured"}),
         );
     }
-    let config_store = ClientLocalConfigStore::open(&root).map_err(safe_error)?;
-    let config = config_store
-        .load()
+    let registry = client_profiles::open_registry().map_err(safe_error)?;
+    let profile = match selector {
+        Some(selector) => resolve_profile(&registry, selector)?,
+        None => registry
+            .active_profile()
+            .map_err(safe_error)?
+            .ok_or_else(|| "No active Client profile is selected".to_string())?,
+    };
+    render_status(json_output, profile_payload(&registry, &profile)?)
+}
+
+fn reset_client(confirmed: bool) -> Result<(), String> {
+    if !confirmed {
+        return Err("Client reset requires explicit confirmation with `--yes`".to_string());
+    }
+    let registry = client_profiles::open_registry().map_err(safe_error)?;
+    let profile = registry
+        .active_profile()
         .map_err(safe_error)?
-        .ok_or_else(|| "The local Client configuration is unavailable".to_string())?;
+        .ok_or_else(|| "No active Client profile is selected".to_string())?;
+    let config_store =
+        ClientLocalConfigStore::open(registry.profile_root(&profile.id).map_err(safe_error)?)
+            .map_err(safe_error)?;
     let state_root = config_store.root().join(CLIENT_STATE_DIR);
+    if state_root.exists() {
+        ClientPairingStore::open(&state_root, &profile.id)
+            .map_err(safe_error)?
+            .reset()
+            .map_err(safe_error)?;
+    }
+    config_store.remove_config().map_err(safe_error)?;
+    registry.clear_active(&profile.id).map_err(safe_error)?;
+    ui::success("Local Client identity and Hub configuration were reset.");
+    Ok(())
+}
+
+fn status_payload(
+    profile: &ClientProfileEntry,
+    config: &ClientLocalConfig,
+    state: &str,
+    device_id: Option<&str>,
+) -> serde_json::Value {
+    json!({
+        "id": profile.id,
+        "active": profile.active,
+        "configured": true,
+        "state": state,
+        "device_id": device_id,
+        "display_name": profile_display_name(profile),
+        "platform": config.platform,
+        "network": {
+            "proxy": super::node::support::proxy_name(&config.network.proxy),
+            "enterprise_ca_configured": config.network.enterprise_ca_bundle.is_some(),
+        },
+        "execution_capable": false,
+    })
+}
+
+fn profile_payload(
+    registry: &ClientProfileRegistry,
+    profile: &ClientProfileEntry,
+) -> Result<serde_json::Value, String> {
+    let Some(config) = profile_config(registry, profile)? else {
+        return Ok(json!({
+            "id": profile.id,
+            "active": profile.active,
+            "configured": false,
+            "state": "unconfigured",
+            "display_name": profile_display_name(profile),
+            "execution_capable": false,
+        }));
+    };
+    let root = registry.profile_root(&profile.id).map_err(safe_error)?;
+    let state_root = root.join(CLIENT_STATE_DIR);
     let (state, device_id) = if state_root.exists() {
-        let store = ClientPairingStore::open(state_root).map_err(safe_error)?;
+        let store = ClientPairingStore::open(state_root, &profile.id).map_err(safe_error)?;
         let progress = store.status().map_err(safe_error)?;
         (
             pairing_state_name(progress.as_ref()).to_string(),
@@ -182,46 +337,92 @@ fn client_status(json_output: bool) -> Result<(), String> {
     } else {
         ("unpaired".to_string(), None)
     };
-    render_status(
-        json_output,
-        status_payload(&config, &state, device_id.as_deref()),
-    )
+    Ok(status_payload(
+        profile,
+        &config,
+        &state,
+        device_id.as_deref(),
+    ))
 }
 
-fn reset_client(confirmed: bool) -> Result<(), String> {
-    if !confirmed {
-        return Err("Client reset requires explicit confirmation with `--yes`".to_string());
-    }
-    let config_store = ClientLocalConfigStore::open(client_root()).map_err(safe_error)?;
-    let state_root = config_store.root().join(CLIENT_STATE_DIR);
-    if state_root.exists() {
-        ClientPairingStore::open(&state_root)
-            .map_err(safe_error)?
-            .reset()
-            .map_err(safe_error)?;
-    }
-    config_store.remove_config().map_err(safe_error)?;
-    ui::success("Local Client identity and Hub configuration were reset.");
-    Ok(())
+fn profile_config(
+    registry: &ClientProfileRegistry,
+    profile: &ClientProfileEntry,
+) -> Result<Option<ClientLocalConfig>, String> {
+    let root = registry.profile_root(&profile.id).map_err(safe_error)?;
+    ClientLocalConfigStore::open(root)
+        .map_err(safe_error)?
+        .load()
+        .map_err(safe_error)
 }
 
-fn status_payload(
-    config: &ClientLocalConfig,
-    state: &str,
-    device_id: Option<&str>,
-) -> serde_json::Value {
-    json!({
-        "configured": true,
-        "state": state,
-        "device_id": device_id,
-        "display_name": config.display_name,
-        "platform": config.platform,
-        "network": {
-            "proxy": super::node::support::proxy_name(&config.network.proxy),
-            "enterprise_ca_configured": config.network.enterprise_ca_bundle.is_some(),
-        },
-        "execution_capable": false,
-    })
+fn resolve_profile(
+    registry: &ClientProfileRegistry,
+    selector: &str,
+) -> Result<ClientProfileEntry, String> {
+    let selector = selector.trim();
+    if selector.is_empty() || selector.chars().any(char::is_control) {
+        return Err("The Client profile selector is invalid".to_string());
+    }
+    let mut matches = Vec::new();
+    for profile in registry.list().map_err(safe_error)? {
+        let id_match = profile.id == selector
+            || (selector.len() >= 8 && profile.id.starts_with(&selector.to_ascii_lowercase()));
+        let name_match = profile_display_name(&profile).eq_ignore_ascii_case(selector);
+        if id_match || name_match {
+            matches.push(profile);
+        }
+    }
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Err("No Client profile matches that selector".to_string()),
+        _ => Err("The Client profile selector is ambiguous; use the full UUID".to_string()),
+    }
+}
+
+fn matching_hub_profile(
+    registry: &ClientProfileRegistry,
+    hub_url: &str,
+) -> Result<Option<ClientProfileEntry>, String> {
+    let mut matches = Vec::new();
+    for profile in registry.list().map_err(safe_error)? {
+        if profile_config(registry, &profile)?.is_some_and(|config| {
+            normalized_hub(&config.network.hub_url) == normalized_hub(hub_url)
+        }) {
+            matches.push(profile);
+        }
+    }
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(
+            "Several local Client profiles target the same Captain; select one explicitly"
+                .to_string(),
+        ),
+    }
+}
+
+fn normalized_hub(hub_url: &str) -> &str {
+    hub_url.trim_end_matches('/')
+}
+
+fn profile_display_name(profile: &ClientProfileEntry) -> String {
+    profile
+        .label
+        .clone()
+        .unwrap_or_else(|| default_profile_label(&profile.id))
+}
+
+fn default_profile_label(profile_id: &str) -> String {
+    format!("Captain {}", profile_id.get(..8).unwrap_or("unknown"))
+}
+
+fn validated_profile_label(label: &str) -> Result<String, String> {
+    let label = label.trim();
+    if label.is_empty() || label.len() > 80 || label.chars().any(char::is_control) {
+        return Err("The local Captain profile label is invalid".to_string());
+    }
+    Ok(label.to_string())
 }
 
 fn render_status(json_output: bool, payload: serde_json::Value) -> Result<(), String> {
@@ -278,8 +479,11 @@ fn approval_url(hub_url: &str, approval_path: &str) -> Result<String, String> {
     Ok(approval.to_string())
 }
 
-pub(crate) fn client_root() -> PathBuf {
-    cli_captain_home().join("client")
+fn current_time_ms() -> Result<i64, String> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "The system clock is unavailable".to_string())?;
+    i64::try_from(elapsed.as_millis()).map_err(|_| "The system clock is unavailable".to_string())
 }
 
 fn default_client_name() -> String {
@@ -309,6 +513,33 @@ mod tests {
     use super::*;
     use captain_node::NodeProxyMode;
 
+    fn configured_profile(
+        registry: &ClientProfileRegistry,
+        created_at_ms: i64,
+        label: &str,
+        hub_url: &str,
+    ) -> ClientProfileEntry {
+        let profile = registry.create_profile(created_at_ms).unwrap();
+        let root = registry.profile_root(&profile.id).unwrap();
+        let config = ClientLocalConfig::new(
+            "Test Client",
+            "test-platform",
+            NodeNetworkConfig::new(hub_url),
+        )
+        .unwrap();
+        ClientLocalConfigStore::open(root)
+            .unwrap()
+            .save(&config)
+            .unwrap();
+        registry.set_label(&profile.id, label).unwrap();
+        registry
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.id == profile.id)
+            .unwrap()
+    }
+
     #[test]
     fn status_never_exposes_the_hub_origin_or_execution_authority() {
         let config = ClientLocalConfig::new(
@@ -317,8 +548,16 @@ mod tests {
             NodeNetworkConfig::new("https://private-hub.example"),
         )
         .unwrap();
-        let rendered = status_payload(&config, "paired", Some("client-1")).to_string();
+        let profile = ClientProfileEntry {
+            id: "f72d3f5f-c980-4cef-a083-0494ea9efb90".to_string(),
+            created_at_ms: 1,
+            active: true,
+            label: Some("Production Captain".to_string()),
+        };
+        let rendered = status_payload(&profile, &config, "paired", Some("client-1")).to_string();
         assert!(!rendered.contains("private-hub"));
+        assert!(!rendered.contains("Office Client"));
+        assert!(rendered.contains("Production Captain"));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&rendered).unwrap()["execution_capable"],
             false
@@ -347,5 +586,50 @@ mod tests {
             pairing_retry_delay(&captain_node::ClientPairingError::InvalidDeviceCredential)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn profile_selection_is_explicit_and_origin_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = ClientProfileRegistry::open(dir.path().join("console")).unwrap();
+        let office = configured_profile(&registry, 10, "Office Captain", "https://office.example");
+        let personal = configured_profile(
+            &registry,
+            20,
+            "Personal Captain",
+            "https://personal.example",
+        );
+
+        assert_eq!(
+            resolve_profile(&registry, "office captain").unwrap().id,
+            office.id
+        );
+        assert_eq!(
+            resolve_profile(&registry, &personal.id[..8]).unwrap().id,
+            personal.id
+        );
+        assert_eq!(
+            matching_hub_profile(&registry, "https://office.example/")
+                .unwrap()
+                .unwrap()
+                .id,
+            office.id
+        );
+        assert!(matching_hub_profile(&registry, "https://other.example")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn ambiguous_display_names_never_select_an_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = ClientProfileRegistry::open(dir.path().join("console")).unwrap();
+        configured_profile(&registry, 10, "Captain", "https://one.example");
+        configured_profile(&registry, 20, "Captain", "https://two.example");
+
+        let error = resolve_profile(&registry, "captain").unwrap_err();
+        assert!(error.contains("ambiguous"));
+        assert!(!error.contains("one.example"));
+        assert!(!error.contains("two.example"));
     }
 }

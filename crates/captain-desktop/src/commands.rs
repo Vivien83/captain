@@ -5,12 +5,16 @@ use tauri_plugin_autostart::ManagerExt;
 
 #[tauri::command]
 pub fn get_status(state: tauri::State<'_, DesktopState>) -> serde_json::Value {
+    let authority = state.authority().ok();
+    let paired_profile_loaded = authority
+        .as_ref()
+        .is_some_and(|authority| authority.paired_profile_loaded);
     serde_json::json!({
-        "status": if state.paired_profile_loaded { "paired" } else { "setup_required" },
+        "status": if paired_profile_loaded { "paired" } else { "setup_required" },
         "surface": "client",
         "uptime_secs": state.started_at.elapsed().as_secs(),
         "desktop_policy_version": captain_wire::DESKTOP_CLIENT_POLICY_VERSION,
-        "paired_profile_loaded": state.paired_profile_loaded,
+        "paired_profile_loaded": paired_profile_loaded,
         "execution_capable": false,
     })
 }

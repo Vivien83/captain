@@ -1,3 +1,4 @@
+use super::client_credentials::ClientCredentialStore;
 use super::*;
 use crate::network::{NodeNetworkConfig, NodeProxyMode};
 use axum::http::StatusCode;
@@ -12,12 +13,43 @@ use captain_wire::{
     DEVICE_TOKEN_PATH, PAIRING_CLAIM_PATH, PAIRING_POLL_PATH,
 };
 use std::{
+    collections::HashMap,
     fs,
     sync::{
         atomic::{AtomicI64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
 };
+
+#[derive(Default)]
+struct MemoryClientCredentialStore {
+    values: Mutex<HashMap<String, String>>,
+}
+
+impl ClientCredentialStore for MemoryClientCredentialStore {
+    fn load(&self, reference: &str) -> Result<Option<Zeroizing<String>>, ()> {
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get(reference)
+            .cloned()
+            .map(Zeroizing::new))
+    }
+
+    fn store(&self, reference: &str, credential: &str) -> Result<(), ()> {
+        self.values
+            .lock()
+            .unwrap()
+            .insert(reference.to_string(), credential.to_string());
+        Ok(())
+    }
+
+    fn delete(&self, reference: &str) -> Result<(), ()> {
+        self.values.lock().unwrap().remove(reference);
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct FakeHub {
@@ -204,7 +236,10 @@ fn state_store_is_private_exclusive_and_fails_closed_on_corruption() {
     let claim = profile().claim(sha256_hex(credential.as_bytes()));
     let state = PersistedPairingState::new(
         "b".repeat(64),
-        PersistedPairingPhase::Prepared { credential, claim },
+        PersistedPairingPhase::Prepared {
+            credential: PersistedCredential::inline(credential),
+            claim,
+        },
     );
     let rendered = format!("{state:?}");
     assert!(!rendered.contains(&"a".repeat(64)));
@@ -240,7 +275,7 @@ fn state_store_is_private_exclusive_and_fails_closed_on_corruption() {
     let state_path = root.join(PAIRING_STATE_FILE);
     let mut unsupported: serde_json::Value =
         serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
-    unsupported["schema_version"] = serde_json::json!(2);
+    unsupported["schema_version"] = serde_json::json!(999);
     fs::write(&state_path, serde_json::to_vec(&unsupported).unwrap()).unwrap();
     let reopened = NodePairingStore::open(&root).unwrap();
     assert_eq!(
@@ -252,6 +287,103 @@ fn state_store_is_private_exclusive_and_fails_closed_on_corruption() {
     fs::write(root.join(PAIRING_STATE_FILE), b"not-json").unwrap();
     let reopened = NodePairingStore::open(&root).unwrap();
     assert_eq!(reopened.status(), Err(NodePairingError::StateCorrupt));
+}
+
+#[test]
+fn legacy_client_credential_migrates_to_native_store_without_raw_file_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("client");
+    let credential = "c".repeat(64);
+    let profile = client_profile();
+    let legacy = ClientPairingStore::open_legacy_for_test(&root).unwrap();
+    legacy
+        .save_for_test(&PersistedPairingState::new(
+            "b".repeat(64),
+            PersistedPairingPhase::Prepared {
+                credential: PersistedCredential::inline(Zeroizing::new(credential.clone())),
+                claim: profile.claim_for_test(sha256_hex(credential.as_bytes())),
+            },
+        ))
+        .unwrap();
+    drop(legacy);
+    let state_path = root.join(PAIRING_STATE_FILE);
+    assert!(fs::read_to_string(&state_path)
+        .unwrap()
+        .contains(&credential));
+
+    let native = Arc::new(MemoryClientCredentialStore::default());
+    let migrated =
+        ClientPairingStore::open_with_store_for_test(&root, "profile-office", native.clone())
+            .unwrap();
+    assert_eq!(
+        migrated.status().unwrap(),
+        Some(NodePairingProgress::ReadyToClaim)
+    );
+    let sanitized = fs::read_to_string(&state_path).unwrap();
+    assert!(!sanitized.contains(&credential));
+    assert!(sanitized.contains("profile-office"));
+    let document: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
+    assert_eq!(document["schema_version"], 2);
+    assert_eq!(
+        native.load("profile-office").unwrap().unwrap().as_str(),
+        credential
+    );
+    drop(migrated);
+
+    let wrong_profile =
+        ClientPairingStore::open_with_store_for_test(&root, "profile-personal", native.clone())
+            .unwrap();
+    assert_eq!(
+        wrong_profile.status(),
+        Err(NodePairingError::CredentialReferenceMismatch)
+    );
+    drop(wrong_profile);
+
+    let reopened =
+        ClientPairingStore::open_with_store_for_test(&root, "profile-office", native.clone())
+            .unwrap();
+    assert_eq!(
+        reopened.status().unwrap(),
+        Some(NodePairingProgress::ReadyToClaim)
+    );
+    reopened.reset().unwrap();
+    assert!(native.load("profile-office").unwrap().is_none());
+}
+
+#[test]
+fn native_client_credential_migration_refuses_conflicting_existing_secret() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("client");
+    let credential = "c".repeat(64);
+    let profile = client_profile();
+    let legacy = ClientPairingStore::open_legacy_for_test(&root).unwrap();
+    legacy
+        .save_for_test(&PersistedPairingState::new(
+            "b".repeat(64),
+            PersistedPairingPhase::Prepared {
+                credential: PersistedCredential::inline(Zeroizing::new(credential.clone())),
+                claim: profile.claim_for_test(sha256_hex(credential.as_bytes())),
+            },
+        ))
+        .unwrap();
+    drop(legacy);
+
+    let native = Arc::new(MemoryClientCredentialStore::default());
+    native.store("profile-office", &"d".repeat(64)).unwrap();
+    let migrated =
+        ClientPairingStore::open_with_store_for_test(&root, "profile-office", native.clone())
+            .unwrap();
+    assert_eq!(
+        migrated.status(),
+        Err(NodePairingError::LocalCredentialConflict)
+    );
+    assert!(fs::read_to_string(root.join(PAIRING_STATE_FILE))
+        .unwrap()
+        .contains(&credential));
+    assert_eq!(
+        native.load("profile-office").unwrap().unwrap().as_str(),
+        "d".repeat(64)
+    );
 }
 
 #[test]
@@ -275,7 +407,7 @@ fn shared_state_root_keeps_the_process_lock_until_its_last_owner_drops() {
 fn client_and_node_identity_stores_are_role_sealed() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("device");
-    let client_store = ClientPairingStore::open(&root).unwrap();
+    let client_store = ClientPairingStore::open_legacy_for_test(&root).unwrap();
     let profile = ClientPairingProfile::new(
         "Office Client",
         "macos-arm64",
@@ -294,7 +426,7 @@ fn client_and_node_identity_stores_are_role_sealed() {
             "b".repeat(64),
             PersistedPairingPhase::Prepared {
                 claim: profile.claim_for_test(sha256_hex(credential.as_bytes())),
-                credential,
+                credential: PersistedCredential::inline(credential),
             },
         ))
         .unwrap();
@@ -303,7 +435,7 @@ fn client_and_node_identity_stores_are_role_sealed() {
     let node_store = NodePairingStore::open(&root).unwrap();
     assert_eq!(node_store.status(), Err(NodePairingError::RoleMismatch));
     drop(node_store);
-    let client_store = ClientPairingStore::open(&root).unwrap();
+    let client_store = ClientPairingStore::open_legacy_for_test(&root).unwrap();
     assert_eq!(
         client_store.status().unwrap(),
         Some(NodePairingProgress::ReadyToClaim)
@@ -317,12 +449,12 @@ fn paired_client_access_sessions_release_the_store_lock_for_other_surfaces() {
     let mut network = NodeNetworkConfig::new("http://127.0.0.1:9");
     network.proxy = NodeProxyMode::Disabled;
     let http = network.build_loopback_client().unwrap();
-    let store = ClientPairingStore::open(&root).unwrap();
+    let store = ClientPairingStore::open_legacy_for_test(&root).unwrap();
     store
         .save_for_test(&PersistedPairingState::new(
             http.hub_sha256(),
             PersistedPairingPhase::Paired {
-                credential: Zeroizing::new("a".repeat(64)),
+                credential: PersistedCredential::inline(Zeroizing::new("a".repeat(64))),
                 device_id: "client-office".to_string(),
                 protocol_version: HUB_NODE_PROTOCOL_VERSION,
                 approved_grants: DeviceGrant::default(),
@@ -332,16 +464,23 @@ fn paired_client_access_sessions_release_the_store_lock_for_other_surfaces() {
         .unwrap();
     drop(store);
 
-    let first =
-        ClientAccessSession::open(http.clone(), ClientPairingStore::open(&root).unwrap()).unwrap();
-    let second = ClientAccessSession::open(http, ClientPairingStore::open(&root).unwrap()).unwrap();
+    let first = ClientAccessSession::open(
+        http.clone(),
+        ClientPairingStore::open_legacy_for_test(&root).unwrap(),
+    )
+    .unwrap();
+    let second = ClientAccessSession::open(
+        http,
+        ClientPairingStore::open_legacy_for_test(&root).unwrap(),
+    )
+    .unwrap();
 
     let first_debug = format!("{first:?}");
     let second_debug = format!("{second:?}");
     assert!(!first_debug.contains(&"a".repeat(64)));
     assert!(!first_debug.contains("127.0.0.1"));
     assert!(!second_debug.contains(&"a".repeat(64)));
-    assert!(ClientPairingStore::open(&root).is_ok());
+    assert!(ClientPairingStore::open_legacy_for_test(&root).is_ok());
 }
 
 #[test]
@@ -353,7 +492,7 @@ fn legacy_paired_state_without_grants_reopens_with_no_authority() {
         .save(&PersistedPairingState::new(
             "b".repeat(64),
             PersistedPairingPhase::Paired {
-                credential: Zeroizing::new("a".repeat(64)),
+                credential: PersistedCredential::inline(Zeroizing::new("a".repeat(64))),
                 device_id: "node-office".to_string(),
                 protocol_version: HUB_NODE_PROTOCOL_VERSION,
                 approved_grants: profile().0.requested_grants,
@@ -536,7 +675,10 @@ async fn client_pairing_survives_restart_and_rotates_scoped_tokens() {
     let restart_http = http.clone();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("client");
-    let client = ClientPairingClient::new(http, ClientPairingStore::open(&root).unwrap());
+    let client = ClientPairingClient::new(
+        http,
+        ClientPairingStore::open_legacy_for_test(&root).unwrap(),
+    );
     assert!(matches!(
         client.start_or_resume(&client_profile()).await.unwrap(),
         ClientPairingProgress::AwaitingApproval { .. }
@@ -555,11 +697,14 @@ async fn client_pairing_survives_restart_and_rotates_scoped_tokens() {
 
     let first_surface = ClientAccessSession::open(
         restart_http.clone(),
-        ClientPairingStore::open(&root).unwrap(),
+        ClientPairingStore::open_legacy_for_test(&root).unwrap(),
     )
     .unwrap();
-    let second_surface =
-        ClientAccessSession::open(restart_http, ClientPairingStore::open(&root).unwrap()).unwrap();
+    let second_surface = ClientAccessSession::open(
+        restart_http,
+        ClientPairingStore::open_legacy_for_test(&root).unwrap(),
+    )
+    .unwrap();
     let rotated = first_surface.issue_access_token().await.unwrap();
     assert_eq!(rotated.as_str(), "d".repeat(64));
     assert_ne!(rotated.as_str(), first.as_str());
@@ -602,9 +747,30 @@ async fn oversized_hub_response_preserves_the_prepared_state() {
 fn claims_secret_for_test(client: &NodePairingClient) -> String {
     let state = client.store.load().unwrap().unwrap();
     match state.phase {
-        PersistedPairingPhase::Prepared { credential, .. }
-        | PersistedPairingPhase::AwaitingApproval { credential, .. }
-        | PersistedPairingPhase::Paired { credential, .. } => credential.to_string(),
+        PersistedPairingPhase::Prepared {
+            credential: PersistedCredential::Inline(credential),
+            ..
+        }
+        | PersistedPairingPhase::AwaitingApproval {
+            credential: PersistedCredential::Inline(credential),
+            ..
+        }
+        | PersistedPairingPhase::Paired {
+            credential: PersistedCredential::Inline(credential),
+            ..
+        } => credential.to_string(),
+        PersistedPairingPhase::Prepared {
+            credential: PersistedCredential::Native { .. },
+            ..
+        }
+        | PersistedPairingPhase::AwaitingApproval {
+            credential: PersistedCredential::Native { .. },
+            ..
+        }
+        | PersistedPairingPhase::Paired {
+            credential: PersistedCredential::Native { .. },
+            ..
+        } => String::new(),
         PersistedPairingPhase::Terminal { .. } => String::new(),
     }
 }

@@ -25,6 +25,7 @@ Use this index to find the right document quickly.
 | [VPS Web Terminal](deployment/vps-web-terminal.md) | Browser terminal, auth, shell mode, and HTTPS proxy contract |
 | [Release Provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
 | [Repository Governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.15 Release Notes](releases/v0.1.0-alpha.15.md) | Multi-Captain Console, native Node services, and distinct lightweight bundles |
 | [0.1.0-alpha.14 Release Notes](releases/v0.1.0-alpha.14.md) | One Hub, lightweight Clients, outbound Nodes, and crash-safe distributed work |
 | [0.1.0-alpha.13 Release Notes](releases/v0.1.0-alpha.13.md) | Adaptive delivery verification, crash-safe evidence, and safer host updates |
 | [0.1.0-alpha.12 Release Notes](releases/v0.1.0-alpha.12.md) | Durable Live Runs, grounded research, verified artifacts, and managed VPS domains |
@@ -46,6 +47,8 @@ Use this index to find the right document quickly.
 |---|---|
 | CLI chat | `captain chat` |
 | Terminal UI | `captain tui` or `captain` |
+| Lightweight remote TUI | `captain-console tui` |
+| Lightweight remote Web | `captain-console open` |
 | Control web | `http://127.0.0.1:50051/` |
 | Web terminal (expert) | `http://127.0.0.1:50051/terminal` |
 | API | `http://127.0.0.1:50051/api/` |

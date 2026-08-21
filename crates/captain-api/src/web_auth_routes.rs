@@ -175,6 +175,7 @@ pub async fn auth_login(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};

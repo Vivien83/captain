@@ -26,7 +26,7 @@ counts when validating an installed runtime.
 | Guide | Description |
 |-------|-------------|
 | [Architecture](architecture.md) | Workspace structure, kernel boot, agent lifecycle, memory substrate |
-| [Hub/Client/Node Protocol](HUB_CLIENT_NODE_PROTOCOL.md) | Alpha 14 authority, outbound Node, pairing, grants, and durable rail contract |
+| [Hub/Client/Node Protocol](HUB_CLIENT_NODE_PROTOCOL.md) | Alpha 15 Console authority, outbound Node services, pairing, grants, and durable rail contract |
 | [Performance Budgets](performance-budgets.md) | Reproducible TUI, Web terminal, Control, and Desktop rendering contracts |
 | [Agents](agent-templates.md) | Manifests, lifecycle, capabilities, and external in/out API |
 | [Captain Forge / CapSpec](CAPTAIN_FORGE_CAPSPEC.md) | Certified contract for readable, hot-reloaded, durable native capabilities |
@@ -56,6 +56,7 @@ counts when validating an installed runtime.
 | [Deploying Captain](DEPLOY.md) | Pinned alpha install, Docker, Compose, HTTPS, backup, and update |
 | [Release provenance](release-provenance.md) | Local SLSA statement, sequential builds, verification, and signing limits |
 | [Repository governance](repository-governance.md) | Branch protection and the local-only CI policy |
+| [0.1.0-alpha.15 release notes](releases/v0.1.0-alpha.15.md) | Multi-Captain Console, native Node services, and distinct lightweight bundles |
 | [0.1.0-alpha.14 release notes](releases/v0.1.0-alpha.14.md) | One Hub, lightweight Clients, outbound Nodes, and crash-safe distributed work |
 | [0.1.0-alpha.13 release notes](releases/v0.1.0-alpha.13.md) | Adaptive delivery verification, crash-safe evidence, and safer host updates |
 | [0.1.0-alpha.12 release notes](releases/v0.1.0-alpha.12.md) | Durable Live Runs, grounded research, verified artifacts, and managed VPS domains |

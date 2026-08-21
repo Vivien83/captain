@@ -262,7 +262,7 @@ async fn real_websocket_upgrade_delivers_welcome_and_durable_node_ack() {
     let frame = captain_wire::HubNodeWebSocketFrame::NodeEnvelope { envelope: hello };
     socket
         .send(tokio_tungstenite::tungstenite::Message::Text(
-            serde_json::to_string(&frame).unwrap().into(),
+            serde_json::to_string(&frame).unwrap(),
         ))
         .await
         .unwrap();
@@ -301,8 +301,7 @@ async fn real_websocket_upgrade_delivers_welcome_and_durable_node_ack() {
             serde_json::to_string(&captain_wire::HubNodeWebSocketFrame::NodeEnvelope {
                 envelope: ack,
             })
-            .unwrap()
-            .into(),
+            .unwrap(),
         ))
         .await
         .unwrap();

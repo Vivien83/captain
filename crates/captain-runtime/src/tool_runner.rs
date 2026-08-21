@@ -65,6 +65,7 @@ use self::tool_runner_dispatch::{dispatch_tool, ToolDispatchOutcome, ToolDispatc
 pub(crate) enum ToolCacheMode {
     #[default]
     Global,
+    #[allow(dead_code)] // retained by the cfg(test) legacy parity oracle
     Disabled,
 }
 

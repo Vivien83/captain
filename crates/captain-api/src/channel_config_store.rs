@@ -279,6 +279,7 @@ fn restore_email_config(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod email_tests {
     use super::*;
 

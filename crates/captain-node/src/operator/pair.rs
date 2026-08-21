@@ -1,32 +1,35 @@
 use super::support::{
-    pairing_retry_delay, proxy_mode, resolve_proxy_password, safe_error, NODE_STATE_DIR,
-    PAIRING_POLL_INTERVAL,
+    node_root, pairing_retry_delay, proxy_mode, safe_error, NodeEventSink, NodeOperatorEvent,
+    NodeProxyPasswordResolver, NODE_STATE_DIR, PAIRING_POLL_INTERVAL,
 };
-use crate::{captain_version, cli_captain_home, open_in_browser, ui};
-use captain_node::{
+use crate::{
     NodeLocalConfig, NodeLocalConfigStore, NodeLocalWorkspace, NodeNetworkConfig,
     NodePairingClient, NodePairingProgress, NodePairingStore,
 };
 use std::path::PathBuf;
 
-pub(super) struct PairRequest {
-    pub(super) hub: String,
-    pub(super) workspace: PathBuf,
-    pub(super) workspace_id: String,
-    pub(super) name: Option<String>,
-    pub(super) label: Option<String>,
-    pub(super) allow_mutation: bool,
-    pub(super) ca_bundle: Option<PathBuf>,
-    pub(super) proxy: Option<String>,
-    pub(super) proxy_username: Option<String>,
-    pub(super) proxy_password_secret: Option<String>,
-    pub(super) no_proxy: bool,
-    pub(super) no_browser: bool,
+pub struct NodePairRequest {
+    pub home: PathBuf,
+    pub captain_version: String,
+    pub hub: String,
+    pub workspace: PathBuf,
+    pub workspace_id: String,
+    pub name: Option<String>,
+    pub label: Option<String>,
+    pub allow_mutation: bool,
+    pub ca_bundle: Option<PathBuf>,
+    pub proxy: Option<String>,
+    pub proxy_username: Option<String>,
+    pub proxy_password_secret: Option<String>,
+    pub no_proxy: bool,
 }
 
-pub(super) async fn pair_node(request: PairRequest) -> Result<(), String> {
-    let home = cli_captain_home();
-    let store = NodeLocalConfigStore::open(home.join("node")).map_err(safe_error)?;
+pub async fn pair_node(
+    request: NodePairRequest,
+    secrets: &dyn NodeProxyPasswordResolver,
+    events: &dyn NodeEventSink,
+) -> Result<(), String> {
+    let store = NodeLocalConfigStore::open(node_root(&request.home)).map_err(safe_error)?;
     let workspace = std::fs::canonicalize(&request.workspace)
         .map_err(|_| "The selected local Node workspace is unavailable".to_string())?;
     if !workspace.is_dir() {
@@ -44,7 +47,7 @@ pub(super) async fn pair_node(request: PairRequest) -> Result<(), String> {
         enterprise_ca_bundle: request.ca_bundle,
         ..NodeNetworkConfig::new("")
     };
-    let proxy_password = resolve_proxy_password(&network, &home)?;
+    let proxy_password = secrets.resolve(&network)?;
     let http = network
         .build_client(proxy_password.as_ref())
         .map_err(safe_error)?;
@@ -84,18 +87,18 @@ pub(super) async fn pair_node(request: PairRequest) -> Result<(), String> {
 
     let pairing = NodePairingClient::new(http, pairing_store);
     let progress = pairing
-        .start_or_resume(&config.pairing_profile(&captain_version()))
+        .start_or_resume(&config.pairing_profile(&request.captain_version))
         .await
         .map_err(safe_error)?;
     store.save(&config).map_err(safe_error)?;
-    wait_for_pairing(&pairing, &config, progress, request.no_browser).await
+    wait_for_pairing(&pairing, &config, progress, events).await
 }
 
 async fn wait_for_pairing(
     pairing: &NodePairingClient,
     config: &NodeLocalConfig,
     mut progress: NodePairingProgress,
-    no_browser: bool,
+    events: &dyn NodeEventSink,
 ) -> Result<(), String> {
     let mut approval_shown = false;
     loop {
@@ -107,19 +110,17 @@ async fn wait_for_pairing(
             } => {
                 if !approval_shown {
                     let approval = approval_url(&config.network.hub_url, approval_path)?;
-                    ui::section("Node pairing");
-                    ui::kv("Code", display_code);
-                    ui::kv("Approve", &approval);
-                    if !no_browser && !open_in_browser(&approval) {
-                        ui::hint("Open the approval URL from a browser signed into the Hub.");
-                    }
+                    events.emit(NodeOperatorEvent::Pairing {
+                        display_code: display_code.clone(),
+                        approval_url: approval,
+                    });
                     approval_shown = true;
                 }
             }
             NodePairingProgress::Paired { ref device_id, .. } => {
-                ui::success("This machine is paired as a Captain Node.");
-                ui::kv("Device", device_id);
-                ui::next_steps(&["Run `captain node run` on this machine."]);
+                events.emit(NodeOperatorEvent::Paired {
+                    device_id: device_id.clone(),
+                });
                 return Ok(());
             }
             NodePairingProgress::Denied { .. } => {
@@ -137,12 +138,12 @@ async fn wait_for_pairing(
 
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                ui::hint("Pairing remains durable; rerun the same command to resume.");
+                events.emit(NodeOperatorEvent::PairingResumable);
                 return Ok(());
             }
             _ = tokio::time::sleep(PAIRING_POLL_INTERVAL) => {}
         }
-        let Some(next) = poll_until_available(pairing).await? else {
+        let Some(next) = poll_until_available(pairing, events).await? else {
             return Ok(());
         };
         progress = next;
@@ -151,6 +152,7 @@ async fn wait_for_pairing(
 
 async fn poll_until_available(
     pairing: &NodePairingClient,
+    events: &dyn NodeEventSink,
 ) -> Result<Option<NodePairingProgress>, String> {
     loop {
         match pairing.poll().await {
@@ -160,7 +162,7 @@ async fn poll_until_available(
                 tracing::warn!(error_class = %error, "Node pairing poll will retry");
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
-                        ui::hint("Pairing remains durable; rerun the same command to resume.");
+                        events.emit(NodeOperatorEvent::PairingResumable);
                         return Ok(None);
                     }
                     _ = tokio::time::sleep(delay) => {}
@@ -213,8 +215,7 @@ fn local_platform() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::node::support::proxy_mode;
-    use captain_node::NodeProxyMode;
+    use crate::NodeProxyMode;
 
     #[test]
     fn approval_url_never_changes_the_configured_hub_origin() {

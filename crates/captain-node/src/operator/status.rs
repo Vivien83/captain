@@ -1,22 +1,19 @@
 use super::support::{node_root, proxy_name, safe_error, NODE_STATE_DIR};
-use crate::ui;
-use captain_node::{
+use crate::{
     NodeLocalConfig, NodeLocalConfigStore, NodePairingError, NodePairingProgress, NodePairingStore,
     NodeRailSnapshot, NodeRailStore, NodeRuntimeStatus, NodeRuntimeStatusStore,
 };
 use serde_json::json;
+use std::path::Path;
 
-pub(super) fn node_status(json_output: bool) -> Result<(), String> {
-    let node_root = node_root();
+pub fn node_status(home: &Path) -> Result<serde_json::Value, String> {
+    let node_root = node_root(home);
     if !node_root.join("config.toml").exists() {
-        return render_status(
-            json_output,
-            json!({
-                "configured": false,
-                "state": "unconfigured",
-                "runtime_active": false,
-            }),
-        );
+        return Ok(json!({
+            "configured": false,
+            "state": "unconfigured",
+            "runtime_active": false,
+        }));
     }
     let config_store = NodeLocalConfigStore::open(&node_root).map_err(safe_error)?;
     let config = config_store
@@ -80,34 +77,29 @@ pub(super) fn node_status(json_output: bool) -> Result<(), String> {
                 }
             }
         };
-    render_status(
-        json_output,
-        status_payload(
-            &config,
-            &state,
-            device_id.as_deref(),
-            rail.as_ref(),
-            runtime_active,
-            effective_allow_mutation,
-            runtime.as_ref(),
-        ),
-    )
+    Ok(status_payload(
+        &config,
+        &state,
+        device_id.as_deref(),
+        rail.as_ref(),
+        runtime_active,
+        effective_allow_mutation,
+        runtime.as_ref(),
+    ))
 }
 
-pub(super) fn reset_node(confirmed: bool) -> Result<(), String> {
+pub fn reset_node(home: &Path, confirmed: bool) -> Result<(), String> {
     if !confirmed {
         return Err("Node reset requires explicit confirmation with `--yes`".to_string());
     }
-    let state_root = node_root().join(NODE_STATE_DIR);
+    let state_root = node_root(home).join(NODE_STATE_DIR);
     if !state_root.exists() {
-        ui::success("No local Node credential state exists.");
         return Ok(());
     }
     NodePairingStore::open(state_root)
         .map_err(safe_error)?
         .reset()
         .map_err(safe_error)?;
-    ui::success("Local Node credentials and durable rail state were reset.");
     Ok(())
 }
 
@@ -164,50 +156,6 @@ fn authority_name(allow_mutation: bool) -> &'static str {
     }
 }
 
-fn render_status(json_output: bool, payload: serde_json::Value) -> Result<(), String> {
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&payload)
-                .map_err(|_| "The Node status could not be serialized".to_string())?
-        );
-        return Ok(());
-    }
-    ui::section("Local Node");
-    ui::kv("State", payload["state"].as_str().unwrap_or("unknown"));
-    if let Some(name) = payload["display_name"].as_str() {
-        ui::kv("Name", name);
-    }
-    if let Some(authority) = payload["requested_authority"].as_str() {
-        ui::kv("Requested authority", authority);
-    }
-    if let Some(authority) = payload["effective_authority"].as_str() {
-        ui::kv("Effective authority", authority);
-    }
-    if let Some(workspaces) = payload["workspaces"].as_array() {
-        ui::kv("Workspaces", &workspaces.len().to_string());
-    }
-    if let Some(rail) = payload["rail"].as_object() {
-        ui::kv(
-            "Pending",
-            &format!(
-                "{} out / {} in",
-                rail["pending_outbound"].as_u64().unwrap_or(0),
-                rail["pending_inbound"].as_u64().unwrap_or(0)
-            ),
-        );
-    }
-    if let Some(runtime) = payload["runtime"].as_object() {
-        if let Some(transport) = runtime["transport"].as_str() {
-            ui::kv("Transport", transport);
-        }
-        if let Some(error) = runtime["last_error_code"].as_str() {
-            ui::kv("Last runtime issue", error);
-        }
-    }
-    Ok(())
-}
-
 fn pairing_state_name(progress: Option<&NodePairingProgress>) -> &'static str {
     match progress {
         None => "unpaired",
@@ -229,8 +177,27 @@ fn paired_device_id(progress: Option<&NodePairingProgress>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use captain_node::{NodeBootstrapCapabilityState, NodeLocalWorkspace, NodeNetworkConfig};
+    use crate::{NodeBootstrapCapabilityState, NodeLocalWorkspace, NodeNetworkConfig};
     use captain_wire::NodeTransport;
+
+    #[test]
+    fn reset_requires_explicit_confirmation_even_without_existing_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = reset_node(temp.path(), false).unwrap_err();
+        assert!(error.contains("explicit confirmation"));
+        assert!(!temp.path().join("node").exists());
+    }
+
+    #[test]
+    fn unconfigured_status_contains_no_local_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let payload = node_status(temp.path()).unwrap();
+        assert_eq!(payload["configured"], false);
+        assert_eq!(payload["state"], "unconfigured");
+        assert!(!payload
+            .to_string()
+            .contains(temp.path().to_string_lossy().as_ref()));
+    }
 
     #[test]
     fn status_payload_never_contains_hub_or_workspace_paths() {

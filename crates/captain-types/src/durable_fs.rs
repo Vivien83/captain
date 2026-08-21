@@ -95,6 +95,68 @@ pub fn remove_file(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// Atomically move a file or directory and synchronize both directory entries.
+///
+/// Source and destination must be on the same filesystem. Existing
+/// destinations are rejected so recovery code never overwrites unrelated
+/// state while completing a pending migration.
+pub fn rename_noclobber(source: &Path, destination: &Path) -> io::Result<()> {
+    let source_parent = normalized_parent(source);
+    let destination_parent = normalized_parent(destination);
+    ensure_directory(destination_parent)?;
+    rename_noreplace(source, destination)?;
+    sync_directory(destination_parent)?;
+    if source_parent != destination_parent {
+        sync_directory(source_parent)?;
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
+    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "destination path contains NUL")
+    })?;
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        // Call the kernel directly so release binaries do not require a glibc
+        // new enough to export renameat2 as a public symbol.
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let result =
+        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn rename_noreplace(_source: &Path, _destination: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-clobber rename is unsupported on this platform",
+    ))
+}
+
 fn normalized_parent(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -185,6 +247,33 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with(".captain-write-")));
+    }
+
+    #[test]
+    fn durable_rename_moves_a_directory_without_clobbering() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("legacy");
+        let destination_parent = root.path().join("console/profiles");
+        let destination = destination_parent.join("profile-1");
+        create_dir_all(&source).unwrap();
+        atomic_write(&source.join("config.toml"), b"schema_version = 1\n").unwrap();
+
+        rename_noclobber(&source, &destination).unwrap();
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(destination.join("config.toml")).unwrap(),
+            b"schema_version = 1\n"
+        );
+
+        let replacement = root.path().join("replacement");
+        create_dir_all(&replacement).unwrap();
+        assert_eq!(
+            rename_noclobber(&replacement, &destination)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(replacement.exists());
     }
 
     #[test]

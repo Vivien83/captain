@@ -96,6 +96,41 @@ fn lease_and_offer_are_committed_together_and_ack_is_monotonic() {
 }
 
 #[test]
+fn acknowledgement_survives_a_wall_clock_rollback() {
+    let memory = memory_with_node();
+    let store = memory.hub_node_rail();
+    store
+        .enqueue_run(&run("run-1", "idem-1", RunEffect::ReadOnly, 10))
+        .unwrap();
+    store
+        .lease_next("node-1", "connection-1", 20, 1_000)
+        .unwrap()
+        .unwrap();
+
+    store.acknowledge_hub_sequence("node-1", 1, 19).unwrap();
+
+    let conn = memory.usage_conn();
+    let guard = conn.lock().unwrap();
+    let acked_at_ms: i64 = guard
+        .query_row(
+            "SELECT acked_at_ms FROM hub_node_outbox
+             WHERE device_id = 'node-1' AND sequence = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let cursor_updated_at_ms: i64 = guard
+        .query_row(
+            "SELECT updated_at_ms FROM hub_node_cursors WHERE device_id = 'node-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(acked_at_ms, 20);
+    assert_eq!(cursor_updated_at_ms, 20);
+}
+
+#[test]
 fn targeted_lease_offers_exact_run_without_reordering_or_duplication() {
     let memory = memory_with_node();
     let store = memory.hub_node_rail();

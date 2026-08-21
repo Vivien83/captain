@@ -2,7 +2,7 @@
 # Publish a complete Captain release from a maintainer workstation.
 #
 # This path intentionally does not depend on GitHub Actions. It validates the
-# five local CLI bundles and their SLSA provenance, builds and pushes each
+# fifteen local Full/Console/Node bundles and their SLSA provenance, builds and pushes each
 # Docker architecture sequentially, assembles the GHCR index, creates and
 # pushes the release tag, then creates or refreshes the GitHub Release.
 #
@@ -191,48 +191,80 @@ platforms=(
     x86_64-unknown-linux-gnu
     x86_64-pc-windows-msvc
 )
+components=(full console node)
+
+select_component_asset() {
+    local component="$1" platform="$2"
+    case "$component" in
+        full)
+            archive_prefix="captain"
+            manifest_name="manifest-$platform.json"
+            binary_name="captain"
+            ;;
+        console)
+            archive_prefix="captain-console"
+            manifest_name="manifest-console-$platform.json"
+            binary_name="captain-console"
+            ;;
+        node)
+            archive_prefix="captain-node"
+            manifest_name="manifest-node-$platform.json"
+            binary_name="captain-node"
+            ;;
+        *) fail "unsupported release component: $component" ;;
+    esac
+}
 
 assets=()
-for platform in "${platforms[@]}"; do
-    case "$platform" in
-        *-pc-windows-msvc) archive="$VERSION_DIR/captain-$platform.zip" ;;
-        *) archive="$VERSION_DIR/captain-$platform.tar.gz" ;;
-    esac
-    checksum="$archive.sha256"
-    manifest="$VERSION_DIR/manifest-$platform.json"
-    [ -f "$archive" ] || fail "missing archive: $archive"
-    [ -f "$checksum" ] || fail "missing checksum: $checksum"
-    [ -f "$manifest" ] || fail "missing platform manifest: $manifest"
-    expected_hash="$(cut -d ' ' -f 1 < "$checksum")"
-    actual_hash="$(sha256_file "$archive")"
-    [ "$actual_hash" = "$expected_hash" ] || fail "checksum mismatch: $archive"
-    jq -e \
-        --arg version "$VERSION" \
-        --arg platform "$platform" \
-        --arg archive "$(basename "$archive")" \
-        --arg sha256 "$expected_hash" \
-        '.version == $version and .platform == $platform and .archive == $archive and .sha256 == $sha256' \
-        "$manifest" >/dev/null || fail "platform manifest mismatch: $manifest"
-    case "$platform" in
-        *-pc-windows-msvc)
-            unzip -Z1 "$archive" | grep -Fx 'captain.exe' >/dev/null || fail "Windows bundle has no captain.exe"
-            unzip -Z1 "$archive" | grep -Fx 'VERSION' >/dev/null || fail "Windows bundle has no VERSION"
-            archive_version="$(unzip -p "$archive" VERSION)"
-            binary_magic="$(unzip -p "$archive" captain.exe | dd bs=2 count=1 2>/dev/null || true)"
-            [ "$binary_magic" = "MZ" ] || fail "Windows bundle does not contain a PE executable"
-            ;;
-        *)
-            archive_root="captain-$platform"
-            tar -tzf "$archive" | grep -Fx "$archive_root/captain" >/dev/null || fail "Unix bundle has no captain binary: $platform"
-            tar -tzf "$archive" | grep -Fx "$archive_root/VERSION" >/dev/null || fail "Unix bundle has no VERSION: $platform"
-            archive_version="$(tar -xOzf "$archive" "$archive_root/VERSION")"
-            ;;
-    esac
-    [ "$archive_version" = "$VERSION" ] || fail "embedded bundle version mismatch: $platform"
-    assets+=("$archive" "$checksum" "$manifest")
+for component in "${components[@]}"; do
+    for platform in "${platforms[@]}"; do
+        select_component_asset "$component" "$platform"
+        case "$platform" in
+            *-pc-windows-msvc) archive="$VERSION_DIR/$archive_prefix-$platform.zip" ;;
+            *) archive="$VERSION_DIR/$archive_prefix-$platform.tar.gz" ;;
+        esac
+        checksum="$archive.sha256"
+        manifest="$VERSION_DIR/$manifest_name"
+        [ -f "$archive" ] || fail "missing archive: $archive"
+        [ -f "$checksum" ] || fail "missing checksum: $checksum"
+        [ -f "$manifest" ] || fail "missing component manifest: $manifest"
+        expected_hash="$(cut -d ' ' -f 1 < "$checksum")"
+        actual_hash="$(sha256_file "$archive")"
+        [ "$actual_hash" = "$expected_hash" ] || fail "checksum mismatch: $archive"
+        jq -e \
+            --arg version "$VERSION" \
+            --arg component "$component" \
+            --arg platform "$platform" \
+            --arg archive "$(basename "$archive")" \
+            --arg sha256 "$expected_hash" \
+            '.version == $version and .component == $component and .platform == $platform and .archive == $archive and .sha256 == $sha256' \
+            "$manifest" >/dev/null || fail "component manifest mismatch: $manifest"
+        case "$platform" in
+            *-pc-windows-msvc)
+                unzip -Z1 "$archive" | grep -Fx "$binary_name.exe" >/dev/null \
+                    || fail "Windows $component bundle has no $binary_name.exe"
+                unzip -Z1 "$archive" | grep -Fx 'VERSION' >/dev/null \
+                    || fail "Windows $component bundle has no VERSION"
+                archive_version="$(unzip -p "$archive" VERSION)"
+                binary_magic="$(unzip -p "$archive" "$binary_name.exe" | dd bs=2 count=1 2>/dev/null || true)"
+                [ "$binary_magic" = "MZ" ] || fail "Windows $component bundle does not contain a PE executable"
+                ;;
+            *)
+                archive_root="$archive_prefix-$platform"
+                tar -tzf "$archive" | grep -Fx "$archive_root/$binary_name" >/dev/null \
+                    || fail "Unix $component bundle has no $binary_name: $platform"
+                tar -tzf "$archive" | grep -Fx "$archive_root/VERSION" >/dev/null \
+                    || fail "Unix $component bundle has no VERSION: $platform"
+                archive_version="$(tar -xOzf "$archive" "$archive_root/VERSION")"
+                ;;
+        esac
+        [ "$archive_version" = "$VERSION" ] \
+            || fail "embedded bundle version mismatch: $component / $platform"
+        assets+=("$archive" "$checksum" "$manifest")
+    done
 done
 
-for installer in install.sh install-local.sh install-git.sh install.ps1; do
+for installer in install.sh install-local.sh install-git.sh install.ps1 install-edition.sh install-edition.ps1; do
     path="$VERSION_DIR/$installer"
     [ -f "$path" ] || fail "missing installer: $path"
     assets+=("$path")
@@ -243,21 +275,39 @@ aggregate="$VERSION_DIR/manifest.json"
 jq -e \
     --arg version "$VERSION" \
     '.version == $version and
-     ([.artifacts[].platform] | sort) == [
-       "aarch64-apple-darwin",
-       "aarch64-unknown-linux-gnu",
-       "x86_64-apple-darwin",
-       "x86_64-pc-windows-msvc",
-       "x86_64-unknown-linux-gnu"
+     ([.artifacts[] | "\(.component)/\(.platform)"] | sort) == [
+       "console/aarch64-apple-darwin",
+       "console/aarch64-unknown-linux-gnu",
+       "console/x86_64-apple-darwin",
+       "console/x86_64-pc-windows-msvc",
+       "console/x86_64-unknown-linux-gnu",
+       "full/aarch64-apple-darwin",
+       "full/aarch64-unknown-linux-gnu",
+       "full/x86_64-apple-darwin",
+       "full/x86_64-pc-windows-msvc",
+       "full/x86_64-unknown-linux-gnu",
+       "node/aarch64-apple-darwin",
+       "node/aarch64-unknown-linux-gnu",
+       "node/x86_64-apple-darwin",
+       "node/x86_64-pc-windows-msvc",
+       "node/x86_64-unknown-linux-gnu"
      ]' \
-    "$aggregate" >/dev/null || fail "aggregate manifest does not describe five unique platforms"
+    "$aggregate" >/dev/null || fail "aggregate manifest does not describe fifteen component-platform artifacts"
 assets+=("$aggregate")
 
-for platform in "${platforms[@]}"; do
-    manifest="$VERSION_DIR/manifest-$platform.json"
-    expected_hash="$(jq -r '.sha256' "$manifest")"
-    aggregate_hash="$(jq -r --arg platform "$platform" '.artifacts[] | select(.platform == $platform) | .sha256' "$aggregate")"
-    [ "$aggregate_hash" = "$expected_hash" ] || fail "aggregate checksum mismatch for $platform"
+for component in "${components[@]}"; do
+    for platform in "${platforms[@]}"; do
+        select_component_asset "$component" "$platform"
+        manifest="$VERSION_DIR/$manifest_name"
+        expected_hash="$(jq -r '.sha256' "$manifest")"
+        aggregate_hash="$(jq -r \
+            --arg component "$component" \
+            --arg platform "$platform" \
+            '.artifacts[] | select(.component == $component and .platform == $platform) | .sha256' \
+            "$aggregate")"
+        [ "$aggregate_hash" = "$expected_hash" ] \
+            || fail "aggregate checksum mismatch for $component / $platform"
+    done
 done
 
 CAPTAIN_VERSION="$VERSION" \

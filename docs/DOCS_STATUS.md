@@ -4,6 +4,56 @@ DOC2 defines which documentation is allowed to describe the current Captain
 runtime contract. It exists to keep Captain aligned with its own system prompt,
 tool docs, CLI, API, and release gates.
 
+## Alpha 15 Release Contract
+
+Alpha 15 turns the distributed Alpha 14 protocol into three independently
+installable editions. Captain Full remains the only authority for its model,
+memory, sessions, projects, goals, channels, agents, automation, audit, tools,
+and durable work. Captain Console is a lightweight multi-Captain Client;
+Captain Node is an optional outbound local executor. Neither lightweight
+edition contains or silently starts a second Full runtime.
+
+Console profiles bind one exact Hub UUID, HTTPS origin, and native secret
+reference. Long-lived Client credentials live in the operating-system secret
+store. A legacy profile migrates only after write/read-back verification and
+atomic schema replacement; ambiguity or disagreement fails closed. Profiles
+remain isolated, authority switching is explicit, and a new Hub is activated
+only after its bootstrap succeeds.
+
+`captain-console` exposes `pair`, bounded live/local inventory, `use`, `rename`,
+private-loopback Web `open`, shared-session `tui`, and native proxy-secret
+management. The TUI restores and streams sessions without changing another
+surface's global active session. The gateway keeps the Hub bearer out of
+JavaScript and rejects foreign origins, cross-site fetches, alternate hosts,
+unexpected schemes, userinfo URLs, oversized bodies, and raw tool payloads.
+
+`captain-node` exposes pairing, foreground execution, redacted status,
+confirmed reset, proxy-secret management, and native service lifecycle.
+launchd, systemd user services, and Windows Service Control Manager all use the
+same worker, identity, durable rail, cooperative stop, and restart policy.
+Windows runs under the explicit current user for credential-store access and
+never falls back to `LocalSystem`.
+
+Node remains read-only by default and opens only outbound HTTPS 443. Its local
+`captain-node-tools` engine reapplies workspace, traversal, family, mutation,
+approval, timeout, output, and guarded-shell policy. Console and Node dependency
+trees exclude kernel, runtime, provider, memory, skills, channels, Wasmtime,
+ORT, and Python. Possible unacknowledged effects remain `uncertain` and are not
+replayed blindly.
+
+The release matrix contains Full, Console, and Node across five platforms: 15
+archives, 15 SHA-256 sidecars, 15 component/platform manifests, six installers,
+one aggregate manifest, one deterministic in-toto/SLSA v1 statement, and its
+sidecar, for exactly 54 host assets. Builds and Docker architectures remain
+strictly sequential and local.
+
+The Alpha 15 system smoke certifies fresh-install absence of Full state,
+cross-authority credential rejection, immediate revocation, shared-session
+restoration, WebSocket-to-HTTPS fallback, workspace confinement, crash/restart
+non-duplication, service definitions, Windows service compilation, and the
+negative dependency boundary. Mobile apps, application connectors,
+multi-primary memory, and Telegram machine tunnels remain deferred.
+
 ## Alpha 14 Published Contract
 
 Alpha 14 introduces one authoritative Hub, lightweight Clients, and optional
@@ -180,7 +230,32 @@ ambiguous cancellation or replay after restart.
 
 ## Current Public Release
 
-`v0.1.0-alpha.14` is the current public prerelease. It adds one authoritative
+`v0.1.0-alpha.15` is the current release contract. It publishes Captain Full,
+Captain Console, and Captain Node as distinct checksum-verified bundles, adds
+native Node services, a multi-Captain Console/TUI/Web gateway, native Client
+credential storage, and the complete Alpha 15 distributed certification.
+
+Its host contract contains exactly 54 files: 15 archives, 15 SHA-256 sidecars,
+15 component/platform manifests, six installers, one aggregate manifest, one
+deterministic in-toto/SLSA v1 provenance statement, and its SHA-256 sidecar.
+Host targets and Docker architectures are built strictly one at a time with
+disk/load checkpoints.
+
+The immutable names are:
+
+- release:
+  <https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.15>
+- image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15`
+- moving prerelease channel: `ghcr.io/vivien83/captain-agent-os:alpha`
+
+Source/tag/OCI digests and anonymous read-back receipts are not predicted by
+candidate documentation. They are added only after publication and successful
+verification of all 54 assets, both image platforms, attestations, and the
+zero-hosted-workflow invariant.
+
+## Previous Public Release: Alpha 14
+
+`v0.1.0-alpha.14` adds one authoritative
 Hub, lightweight Clients, outbound execution Nodes, durable pairing and
 delivery, explicit execution targets, enterprise proxy support, and a bounded
 service cold-boot readiness window while preserving standalone behavior. The
@@ -225,7 +300,7 @@ anonymous OCI inspection exposed both image platforms and both BuildKit
 attestations. The GitHub Actions API returned zero runs because the complete
 release was built and published locally and sequentially.
 
-## Previous Public Release
+## Earlier Public Release: Alpha 13
 
 `v0.1.0-alpha.13` is the previous public prerelease. Its verified public
 surfaces are source commit `6c05ae0c667e865a198764c1cd88c9050bd87db1`,
@@ -852,6 +927,8 @@ These files are maintained as current operator or runtime-facing references:
 - `docs/evidence/CAPSPEC1_REAL_CERTIFICATION_2026-07-18.md`
 - `docs/architecture.md`, `docs/security.md`, `docs/workflows.md`,
   `docs/agent-templates.md`
+- `docs/hub-clients-nodes.md`, `docs/HUB_CLIENT_NODE_PROTOCOL.md`,
+  `docs/release-provenance.md`
 - `docs/captain-tools/*.md`
 - `docs/deployment/github-vps-install.md`,
   `docs/deployment/vps-web-terminal.md`
@@ -943,17 +1020,17 @@ loader's conservative refusal of high-risk phrase matches is a policy choice,
 not proof that matched content is malicious or unmatched content is safe.
 Operator review of complete local source remains required.
 
-Long-tail channels, desktop packaging, and other non-core surfaces may exist in
-code or compatibility docs, but they must not be presented as active
-production-grade product paths unless the current plan explicitly reopens them.
-Current docs must label them as frozen, compatibility, historical, or outside
-the active release path.
+Long-tail channels, signed Desktop packaging, and other non-core surfaces may
+exist in code or compatibility docs, but they must not be presented as active
+production-grade product paths unless the current plan explicitly reopens
+them. Current docs must label them as frozen, compatibility, historical, or
+outside the active release path.
 
-The private checkout retains the old Tauri packaging references in
-`docs/desktop.md` and `docs/production-checklist.md`; both are excluded from the
-public source export. The active desktop experience is the CLI/TUI plus the
-authenticated Control web app; the active release artifact is the cross-platform Captain CLI
-bundle.
+The private checkout keeps `docs/desktop.md` as the current source-build
+contract for the lightweight Tauri wrapper and `docs/production-checklist.md`
+as a frozen historical packaging checklist. Neither implies a signed/notarized
+Desktop app in the public release. Active host artifacts are Captain Full,
+Captain Console, and Captain Node; Docker contains Captain Full.
 
 ## Active Product Contract
 
@@ -1081,9 +1158,9 @@ Building or deploying that site never changes the public source export,
 release bundles, or authenticated Control app; the local browser smoke proves
 the build, not the state of the separately deployed host.
 
-## Post-Alpha 14 Learning Incident Contract
+## Alpha 15 Learning Incident Contract
 
-The current development head after the immutable Alpha 14 publication
+The Alpha 15 runtime after the immutable Alpha 14 publication
 separates durable memory health from Workflow Learning health. A dead Learning
 job can still require operator attention, but Web, TUI, API, and Telegram now
 identify it as a workflow incident and explicitly state that durable memory is

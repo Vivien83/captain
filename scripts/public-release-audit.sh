@@ -86,6 +86,7 @@ required_files=(
   docs/repository-governance.md
   docs/hub-clients-nodes.md
   docs/HUB_CLIENT_NODE_PROTOCOL.md
+  docs/releases/v0.1.0-alpha.15.md
   docs/releases/v0.1.0-alpha.14.md
   docs/releases/v0.1.0-alpha.13.md
   docs/releases/v0.1.0-alpha.12.md
@@ -102,6 +103,8 @@ required_files=(
   docs/releases/v0.1.0-alpha.1.md
   scripts/check-markdown-links.mjs
   scripts/install.sh
+  scripts/install-edition.sh
+  scripts/install-edition.ps1
   scripts/install-vps-domain-test.sh
   scripts/install.ps1
   scripts/public-boundary-guard.sh
@@ -122,11 +125,11 @@ done
 pass "required public source files exist"
 
 for readme in README.md README.fr.md README.es.md README.zh.md; do
-  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14' \
+  grep -Fq 'https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.15' \
     "$ROOT_DIR/$readme" || fail "$readme does not link the immutable release"
-  grep -Fq 'releases/download/v0.1.0-alpha.14/install.sh' \
+  grep -Fq 'releases/download/v0.1.0-alpha.15/install.sh' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the release installer"
-  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14' \
+  grep -Fq 'ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15' \
     "$ROOT_DIR/$readme" || fail "$readme does not pin the immutable release image"
   if grep -Fq 'releases/latest/download/install.sh' "$ROOT_DIR/$readme"; then
     fail "$readme incorrectly uses GitHub latest for a prerelease"
@@ -135,18 +138,41 @@ for readme in README.md README.fr.md README.es.md README.zh.md; do
     fail "$readme still exposes the private development build"
   fi
 done
-grep -Fq '### 0.1.0-alpha.14' \
+grep -Fq '### 0.1.0-alpha.15' \
   "$ROOT_DIR/docs/captain-tools/runtime-changelog.md" \
   || fail "agent-facing changelog does not identify the release candidate"
+grep -Fq '## Install Captain Console' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "candidate release notes do not expose the standalone Console"
+grep -Fq '## Install Captain Node' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "candidate release notes do not expose the optional Node"
+grep -Fq '## Multi-Captain authority' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "candidate release notes do not pin explicit authority switching"
+grep -Fq 'exactly 54 host assets' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "candidate release notes do not pin the 54-asset contract"
+grep -Fq 'does not predict those values.' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "candidate release notes do not defer exact publication facts"
+if grep -Fq '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md"; then
+  fail "Alpha 15 release notes copied the Alpha 14 public source commit"
+fi
+if grep -Fq 'sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md"; then
+  fail "Alpha 15 release notes copied the Alpha 14 OCI digest"
+fi
 grep -Fq '## One Hub, shared work' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.14.md" \
-  || fail "candidate release notes do not expose the authoritative Hub"
+  || fail "historical Alpha 14 notes do not expose the authoritative Hub"
 grep -Fq '## Outbound execution Nodes' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.14.md" \
-  || fail "candidate release notes do not expose outbound Nodes"
+  || fail "historical Alpha 14 notes do not expose outbound Nodes"
 grep -Fq '## Durable pairing and execution' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.14.md" \
-  || fail "candidate release notes do not expose durable pairing"
+  || fail "historical Alpha 14 notes do not expose durable pairing"
 if grep -Fq '6c05ae0c667e865a198764c1cd88c9050bd87db1' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.14.md"; then
   fail "Alpha 14 release notes copied the Alpha 13 public source commit"

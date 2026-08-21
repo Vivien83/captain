@@ -1,5 +1,6 @@
 //! Crash-safe Node pairing orchestration.
 
+mod client_credentials;
 mod http;
 mod state;
 
@@ -17,7 +18,9 @@ use std::{
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
+use client_credentials::PersistedCredential;
 pub use state::{ClientPairingStore, NodePairingStore};
+#[cfg(feature = "node-runtime")]
 pub(crate) use state::{
     NodeStateBinding, NodeStateRoot, NODE_RAIL_SHM_FILE, NODE_RAIL_STATE_FILE, NODE_RAIL_WAL_FILE,
 };
@@ -178,6 +181,7 @@ impl ClientAccessSession {
         if role != DeviceRole::Client || approved_grants != DeviceGrant::default() {
             return Err(ClientPairingError::RoleMismatch);
         }
+        let credential = store.resolve_credential(&credential)?;
         drop(store);
         Ok(Self {
             http,
@@ -309,7 +313,10 @@ impl NodePairingClient {
                 let claim = profile.claim(sha256_hex(credential.as_bytes()));
                 let state = PersistedPairingState::new(
                     self.hub_sha256.clone(),
-                    PersistedPairingPhase::Prepared { credential, claim },
+                    PersistedPairingPhase::Prepared {
+                        credential: PersistedCredential::inline(credential),
+                        claim,
+                    },
                 );
                 self.store.save(&state)?;
                 state
@@ -320,6 +327,7 @@ impl NodePairingClient {
         match state.phase {
             PersistedPairingPhase::Prepared { credential, claim } => {
                 ensure_profile_matches(profile, &claim)?;
+                let credential = self.store.resolve_credential(&credential)?;
                 self.submit_claim(credential, claim).await
             }
             PersistedPairingPhase::AwaitingApproval { ref claim, .. } => {
@@ -430,9 +438,10 @@ impl NodePairingClient {
         else {
             return Err(NodePairingError::PairingNotApproved);
         };
+        let resolved_credential = self.store.resolve_credential(&credential)?;
         let mut request = DeviceCredentialExchange {
             device_id,
-            credential: credential.to_string(),
+            credential: resolved_credential.to_string(),
         };
         let response = self.http.exchange_credential(&request).await;
         request.credential.zeroize();
@@ -480,7 +489,7 @@ impl NodePairingClient {
         self.store.save(&PersistedPairingState::new(
             self.hub_sha256.clone(),
             PersistedPairingPhase::AwaitingApproval {
-                credential,
+                credential: PersistedCredential::inline(credential),
                 claim,
                 request_id: challenge.request_id,
                 display_code: challenge.display_code,
@@ -632,6 +641,18 @@ pub enum NodePairingError {
     StateCorrupt,
     #[error("device pairing state version is unsupported")]
     StateVersionUnsupported,
+    #[error("the local Client credential reference is invalid")]
+    InvalidCredentialReference,
+    #[error("the native Client credential store is unavailable")]
+    CredentialStoreUnavailable,
+    #[error("the native Client credential is unavailable")]
+    CredentialUnavailable,
+    #[error("the Client credential belongs to a different local profile")]
+    CredentialReferenceMismatch,
+    #[error("a different Client credential already exists for this local profile")]
+    LocalCredentialConflict,
+    #[error("the native Client credential could not be verified after storage")]
+    CredentialStoreVerificationFailed,
     #[error("device pairing state belongs to a different Hub")]
     HubIdentityMismatch,
     #[error("device state is still in use by the local runtime")]

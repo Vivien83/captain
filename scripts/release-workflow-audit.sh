@@ -13,6 +13,8 @@ PACKAGE_RELEASE="$ROOT_DIR/scripts/package-release.sh"
 LOCAL_PUBLISHER="$ROOT_DIR/scripts/publish-release-local.sh"
 RELEASE_PROVENANCE="$ROOT_DIR/scripts/release-provenance.sh"
 RELEASE_PROVENANCE_TEST="$ROOT_DIR/scripts/release-provenance-test.sh"
+LIGHTWEIGHT_RELEASE_TEST="$ROOT_DIR/scripts/lightweight-release-test.sh"
+INSTALL_EDITION="$ROOT_DIR/scripts/install-edition.sh"
 GITHUB_GOVERNANCE="$ROOT_DIR/scripts/github-governance.sh"
 GITHUB_DISCOVERABILITY="$ROOT_DIR/scripts/github-discoverability.sh"
 LOCAL_PR_GATE="$ROOT_DIR/scripts/local-pr-gate.sh"
@@ -123,6 +125,11 @@ require_literal "shared Unix packager" "bash scripts/package-release.sh"
 require_literal "compile-time version" 'CAPTAIN_BUILD_VERSION: ${{ github.ref_name }}'
 require_literal "Windows platform manifest" 'manifest-${{ matrix.target }}.json'
 require_literal "Windows installer asset" '            install.ps1'
+require_literal "Console Unix bundle asset" 'captain-console-${{ matrix.target }}.tar.gz'
+require_literal "Node Unix bundle asset" 'captain-node-${{ matrix.target }}.tar.gz'
+require_literal "Console Windows bundle asset" 'captain-console-${{ matrix.target }}.zip'
+require_literal "Node Windows bundle asset" 'captain-node-${{ matrix.target }}.zip'
+require_literal "lightweight edition installer asset" 'install-edition.ps1'
 require_literal "aggregate manifest" 'dist/release-assets/manifest-*.json > dist/release-assets/manifest.json'
 require_literal "installer asset" 'dist/releases/${{ github.ref_name }}/install.sh'
 require_literal "publish waits for Docker" "needs: [cli, docker]"
@@ -153,6 +160,7 @@ for target in \
     require_file_literal "local target $target" "$RELEASE_ALL" "$target"
 done
 
+require_file_literal "local publisher validates all three components" "$LOCAL_PUBLISHER" 'components=(full console node)'
 require_file_literal "local publisher validates five platforms" "$LOCAL_PUBLISHER" 'x86_64-pc-windows-msvc'
 require_file_literal "local publisher targets the isolated public image package" "$LOCAL_PUBLISHER" 'IMAGE="${CAPTAIN_IMAGE:-ghcr.io/$OWNER_LOWER/captain-agent-os}"'
 require_file_literal "local publisher isolates registry credentials" "$LOCAL_PUBLISHER" 'captain-docker-auth.XXXXXX'
@@ -185,11 +193,13 @@ require_file_literal "local publisher verifies amd64 image" "$LOCAL_PUBLISHER" '
 require_file_literal "local publisher verifies arm64 image" "$LOCAL_PUBLISHER" 'index("arm64")'
 require_file_literal "local publisher supports offline asset validation" "$LOCAL_PUBLISHER" 'CAPTAIN_VALIDATE_ONLY'
 require_file_literal "local publisher validates bundle versions" "$LOCAL_PUBLISHER" 'embedded bundle version mismatch'
-require_file_literal "local publisher validates Windows PE" "$LOCAL_PUBLISHER" 'Windows bundle does not contain a PE executable'
+require_file_literal "local publisher validates Windows PE" "$LOCAL_PUBLISHER" 'bundle does not contain a PE executable'
 require_file_literal "local publisher stages deterministic embeddings" "$LOCAL_PUBLISHER" 'scripts/prepare-docker-embedding-cache.sh'
 require_file_literal "local publisher generates host artifact provenance" "$LOCAL_PUBLISHER" 'scripts/release-provenance.sh'
 require_file_literal "local publisher uploads the provenance statement" "$LOCAL_PUBLISHER" 'provenance.intoto.jsonl'
-require_file_literal "local packager checks host capacity per target" "$RELEASE_ALL" 'release_host_checkpoint "after $target"'
+require_file_literal "local packager checks host capacity per component and target" "$RELEASE_ALL" 'release_host_checkpoint "after $component / $target"'
+require_file_literal "local packager builds three components sequentially" "$RELEASE_ALL" 'COMPONENTS="${CAPTAIN_RELEASE_COMPONENTS:-full console node}"'
+require_file_literal "provenance binds all three components" "$RELEASE_PROVENANCE" '"components": ["full", "console", "node"]'
 require_file_literal "provenance uses in-toto Statement v1" "$RELEASE_PROVENANCE" 'https://in-toto.io/Statement/v1'
 require_file_literal "provenance uses SLSA v1" "$RELEASE_PROVENANCE" 'https://slsa.dev/provenance/v1'
 require_file_literal "provenance binds Cargo.lock" "$RELEASE_PROVENANCE" '"uri": "file:Cargo.lock"'
@@ -228,12 +238,18 @@ require_file_literal "local packager executes embedded versions" "$RELEASE_ALL" 
 require_file_literal "local packager emulates Linux ARM64" "$RELEASE_ALL" 'qemu-aarch64-static'
 require_file_literal "local packager forwards custom output roots" "$RELEASE_ALL" 'CAPTAIN_DIST_DIR="${CAPTAIN_DIST_DIR:-dist/releases}"'
 require_file_literal "local packager honors the shared Cargo target root" "$RELEASE_ALL" 'TARGET_ROOT="${CARGO_TARGET_DIR:-target}"'
-require_file_literal "local packager resolves the host binary from the shared target root" "$RELEASE_ALL" 'BUILD_TARGET_BIN="$TARGET_ROOT/release/captain"'
+require_file_literal "local packager resolves each host binary from the shared target root" "$RELEASE_ALL" 'BUILD_TARGET_BIN="$TARGET_ROOT/release/$BINARY_NAME"'
 require_file_literal "local packager removes stale target binaries" "$RELEASE_ALL" 'rm -f "$BUILD_TARGET_BIN"'
 require_file_absent_literal "local packager avoids lossy build command substitutions" "$RELEASE_ALL" 'bin_path="$(build_target "$target" | tail -1)"'
 require_file_literal "local packager opens current Docker Desktop app" "$RELEASE_ALL" 'open -a "Docker Desktop"'
 require_file_literal "local packager retains legacy Docker app fallback" "$RELEASE_ALL" 'open -a Docker'
 require_file_literal "macOS bundle signing fails closed" "$PACKAGE_RELEASE" 'failed to verify $PLATFORM release signature'
+require_file_literal "macOS bundle preserves a valid linker signature" "$PACKAGE_RELEASE" 'if ! codesign --verify "$STAGE/$BINARY_NAME"'
+require_file_literal "lightweight installer requires checksums" "$INSTALL_EDITION" 'A SHA-256 sidecar is required'
+require_file_literal "lightweight installer restores the previous binary" "$INSTALL_EDITION" 'previous binary restored'
+require_file_literal "lightweight installer cleanup survives function scope" "$INSTALL_EDITION" 'trap cleanup_temp EXIT'
+require_file_literal "lightweight rollback fixture uses a Cargo-built binary" "$LIGHTWEIGHT_RELEASE_TEST" 'CAPTAIN_BIN_PATH="$ROOT_DIR/target/debug/captain-node"'
+require_file_absent_literal "lightweight rollback fixture avoids relocated Apple binaries" "$LIGHTWEIGHT_RELEASE_TEST" 'CAPTAIN_BIN_PATH=/bin/echo'
 require_file_literal "Windows preflight requires LLVM" "$RELEASE_ALL" 'command -v llvm-ar'
 require_file_literal "Windows preflight requires NASM" "$RELEASE_ALL" 'command -v nasm'
 require_file_literal "Windows release treats warnings as errors" "$RELEASE_ALL" 'RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"'
@@ -278,6 +294,8 @@ require_shell_syntax "$RELEASE_ALL_TEST"
 require_shell_syntax "$LOCAL_PUBLISHER"
 require_shell_syntax "$RELEASE_PROVENANCE"
 require_shell_syntax "$RELEASE_PROVENANCE_TEST"
+require_shell_syntax "$LIGHTWEIGHT_RELEASE_TEST"
+require_shell_syntax "$INSTALL_EDITION"
 require_shell_syntax "$GITHUB_GOVERNANCE"
 require_shell_syntax "$GITHUB_DISCOVERABILITY"
 require_shell_syntax "$LOCAL_PR_GATE"

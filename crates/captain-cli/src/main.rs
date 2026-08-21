@@ -12,6 +12,7 @@ mod cli_args_project;
 mod cli_root;
 mod cli_runtime;
 mod cli_support;
+mod client_profiles;
 mod commands;
 mod daemon_api;
 mod dotenv;

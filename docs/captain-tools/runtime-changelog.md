@@ -26,6 +26,49 @@ Decision rule:
 
 ## Versioned Entries
 
+### 0.1.0-alpha.15 — Multi-Captain Console and native execution Node
+
+Agent-facing changes:
+
+- `captain-console` is now a distinct lightweight Client. It pairs with,
+  inventories, selects, opens, and runs a TUI against several independent
+  Captain Full authorities without carrying a provider, agent loop, memory,
+  channels, Python, or a local Full daemon.
+- Each Console profile is bound to one exact Hub UUID and HTTPS origin. Its
+  credential lives in the native system secret store; legacy profile migration
+  is atomic and a conflict fails closed. Switching authority is explicit and
+  only occurs after the new Hub bootstrap succeeds.
+- The lightweight TUI restores and streams the Hub's durable sessions without
+  changing another surface's active-session pointer. Tool phases remain
+  visible, while raw input, output, origins, credentials, and paths are omitted.
+- The retained native Desktop wrapper uses the same Console manager and can
+  switch Captains from its system tray. Hub-delivered JavaScript cannot list or
+  select another local authority.
+- `captain-node` is now a separate executable with `pair`, `run`, `status`,
+  `reset`, proxy-secret management, and native `service` lifecycle commands.
+  launchd, systemd user services, and Windows Service Control Manager use the
+  same cooperative shutdown and durable rail.
+- The Node remains read-only by default, opens only outbound HTTPS, reapplies
+  local workspace/tool/mutation/approval guards, and never replays a possible
+  effect blindly. Its local engine no longer imports Captain Full runtime,
+  provider, memory, skills, channels, Wasmtime, ORT, or Python.
+- Hub acknowledgement timestamps are monotonic relative to the persisted
+  outbox and device cursor. A local clock rollback cannot invalidate or
+  partially apply the Node delivery handshake.
+- The release ships Full, Console, and Node for five targets as 15 distinct
+  archives. Checksums, component/platform manifests, six installers, aggregate
+  manifest, provenance, and its sidecar bring the host contract to 54 assets;
+  every target and Docker architecture is built locally and sequentially.
+- The final RustSec refresh upgrades the resolved HTTP/2 stack from vulnerable
+  `h2 0.4.13` to patched `h2 0.4.16` before publication.
+- Linux builds now compile the same durable no-clobber rename path as macOS
+  because `captain-types` declares `libc` on both supported Unix targets. The
+  kernel syscall is used directly so an older supported glibc does not need to
+  export `renameat2`.
+- Alpha 15 does not add application connectors, a mobile application,
+  multi-primary memory, or a Telegram machine tunnel. Those claims remain
+  outside the current runtime contract.
+
 ### 0.1.0-alpha.14 — One Hub, lightweight Clients, and execution Nodes
 
 Agent-facing changes:

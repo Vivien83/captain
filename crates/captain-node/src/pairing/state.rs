@@ -1,6 +1,11 @@
 //! Private, crash-safe persistence for one Node pairing identity.
 
-use super::{sha256_hex, valid_device_id_shape, NodePairingError, NodePairingProgress};
+#[cfg(test)]
+use super::client_credentials::ClientCredentialStore;
+use super::{
+    client_credentials::{CredentialPersistence, PersistedCredential},
+    sha256_hex, valid_device_id_shape, NodePairingError, NodePairingProgress,
+};
 use captain_types::durable_fs;
 use captain_wire::{
     DeviceGrant, DevicePairingClaim, DeviceRole, PairingChallenge, ProtocolVersion,
@@ -17,7 +22,8 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
-const PAIRING_STATE_SCHEMA_VERSION: u16 = 1;
+const LEGACY_PAIRING_STATE_SCHEMA_VERSION: u16 = 1;
+const NATIVE_CREDENTIAL_STATE_SCHEMA_VERSION: u16 = 2;
 pub(super) const PAIRING_STATE_FILE: &str = "pairing.json";
 pub(super) const PAIRING_LOCK_FILE: &str = "node.lock";
 pub(crate) const NODE_RAIL_STATE_FILE: &str = "rail.sqlite3";
@@ -27,22 +33,22 @@ const NODE_RESET_MARKER_FILE: &str = "reset.pending";
 const NODE_RESET_MARKER: &[u8] = b"captain-node-reset-v1\n";
 const MAX_PAIRING_STATE_BYTES: u64 = 512 * 1024;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct PersistedPairingState {
     schema_version: u16,
     pub(super) hub_sha256: String,
     pub(super) phase: PersistedPairingPhase,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(super) enum PersistedPairingPhase {
     Prepared {
-        credential: Zeroizing<String>,
+        credential: PersistedCredential,
         claim: DevicePairingClaim,
     },
     AwaitingApproval {
-        credential: Zeroizing<String>,
+        credential: PersistedCredential,
         claim: DevicePairingClaim,
         request_id: String,
         display_code: String,
@@ -52,7 +58,7 @@ pub(super) enum PersistedPairingPhase {
         protocol_version: ProtocolVersion,
     },
     Paired {
-        credential: Zeroizing<String>,
+        credential: PersistedCredential,
         device_id: String,
         protocol_version: ProtocolVersion,
         #[serde(default)]
@@ -78,20 +84,24 @@ pub(super) enum PersistedTerminalState {
 impl PersistedPairingState {
     pub(super) fn new(hub_sha256: String, phase: PersistedPairingPhase) -> Self {
         Self {
-            schema_version: PAIRING_STATE_SCHEMA_VERSION,
+            schema_version: LEGACY_PAIRING_STATE_SCHEMA_VERSION,
             hub_sha256,
             phase,
         }
     }
 
-    fn validate(&self) -> Result<(), NodePairingError> {
-        if self.schema_version != PAIRING_STATE_SCHEMA_VERSION {
+    fn validate_structure(&self) -> Result<(), NodePairingError> {
+        if !matches!(
+            self.schema_version,
+            LEGACY_PAIRING_STATE_SCHEMA_VERSION | NATIVE_CREDENTIAL_STATE_SCHEMA_VERSION
+        ) {
             return Err(NodePairingError::StateVersionUnsupported);
         }
         validate_raw_secret(&self.hub_sha256)?;
         match &self.phase {
             PersistedPairingPhase::Prepared { credential, claim } => {
-                validate_claim_binding(credential, claim)
+                credential.validate_shape()?;
+                claim.validate().map_err(|_| NodePairingError::StateCorrupt)
             }
             PersistedPairingPhase::AwaitingApproval {
                 credential,
@@ -103,7 +113,10 @@ impl PersistedPairingState {
                 approval_path,
                 protocol_version,
             } => {
-                validate_claim_binding(credential, claim)?;
+                credential.validate_shape()?;
+                claim
+                    .validate()
+                    .map_err(|_| NodePairingError::StateCorrupt)?;
                 let mut challenge = PairingChallenge {
                     request_id: request_id.clone(),
                     display_code: display_code.clone(),
@@ -125,7 +138,7 @@ impl PersistedPairingState {
                 approved_grants,
                 role,
             } => {
-                validate_raw_secret(credential)?;
+                credential.validate_shape()?;
                 if !valid_device_id_shape(device_id) {
                     return Err(NodePairingError::StateCorrupt);
                 }
@@ -141,6 +154,32 @@ impl PersistedPairingState {
                 Ok(())
             }
             PersistedPairingPhase::Terminal { request_id, .. } => validate_request_id(request_id),
+        }
+    }
+
+    fn credential(&self) -> Option<&PersistedCredential> {
+        match &self.phase {
+            PersistedPairingPhase::Prepared { credential, .. }
+            | PersistedPairingPhase::AwaitingApproval { credential, .. }
+            | PersistedPairingPhase::Paired { credential, .. } => Some(credential),
+            PersistedPairingPhase::Terminal { .. } => None,
+        }
+    }
+
+    fn credential_mut(&mut self) -> Option<&mut PersistedCredential> {
+        match &mut self.phase {
+            PersistedPairingPhase::Prepared { credential, .. }
+            | PersistedPairingPhase::AwaitingApproval { credential, .. }
+            | PersistedPairingPhase::Paired { credential, .. } => Some(credential),
+            PersistedPairingPhase::Terminal { .. } => None,
+        }
+    }
+
+    fn claim(&self) -> Option<&DevicePairingClaim> {
+        match &self.phase {
+            PersistedPairingPhase::Prepared { claim, .. }
+            | PersistedPairingPhase::AwaitingApproval { claim, .. } => Some(claim),
+            _ => None,
         }
     }
 
@@ -210,6 +249,7 @@ pub(crate) struct NodeStateRoot {
     lock_file: File,
 }
 
+#[cfg(feature = "node-runtime")]
 pub(crate) struct NodeStateBinding {
     pub(crate) root: Arc<NodeStateRoot>,
     pub(crate) hub_sha256: String,
@@ -232,16 +272,18 @@ impl Drop for NodeStateRoot {
 pub struct NodePairingStore {
     root: Arc<NodeStateRoot>,
     expected_role: DeviceRole,
+    credential_persistence: CredentialPersistence,
 }
 
 impl NodePairingStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, NodePairingError> {
-        Self::open_for_role(root, DeviceRole::Node)
+        Self::open_for_role(root, DeviceRole::Node, CredentialPersistence::Inline)
     }
 
     fn open_for_role(
         root: impl Into<PathBuf>,
         expected_role: DeviceRole,
+        credential_persistence: CredentialPersistence,
     ) -> Result<Self, NodePairingError> {
         let root = root.into();
         reject_unsafe_existing_path(&root, true)?;
@@ -267,13 +309,16 @@ impl NodePairingStore {
                 lock_file,
             }),
             expected_role,
+            credential_persistence,
         })
     }
 
+    #[cfg(any(feature = "node-runtime", test))]
     pub(crate) fn state_root_handle(&self) -> Arc<NodeStateRoot> {
         Arc::clone(&self.root)
     }
 
+    #[cfg(feature = "node-runtime")]
     pub(crate) fn rail_binding(&self) -> Result<NodeStateBinding, NodePairingError> {
         let state = self.load()?.ok_or(NodePairingError::PairingNotStarted)?;
         let PersistedPairingPhase::Paired {
@@ -319,20 +364,97 @@ impl NodePairingStore {
         secure_file(&state_path)?;
         let raw =
             Zeroizing::new(fs::read(&state_path).map_err(|_| NodePairingError::StateUnavailable)?);
-        let state: PersistedPairingState =
+        let mut state: PersistedPairingState =
             serde_json::from_slice(&raw).map_err(|_| NodePairingError::StateCorrupt)?;
-        state.validate()?;
+        state.validate_structure()?;
         if state.role() != self.expected_role {
             return Err(NodePairingError::RoleMismatch);
+        }
+        self.validate_persistence_schema(&state)?;
+        self.validate_credential_binding(&state)?;
+        if self.externalize_state(&mut state)? {
+            self.write_state(&state)?;
         }
         Ok(Some(state))
     }
 
     pub(super) fn save(&self, state: &PersistedPairingState) -> Result<(), NodePairingError> {
-        state.validate()?;
+        state.validate_structure()?;
         if state.role() != self.expected_role {
             return Err(NodePairingError::RoleMismatch);
         }
+        self.validate_credential_binding(state)?;
+        let mut persisted = state.clone();
+        self.externalize_state(&mut persisted)?;
+        self.write_state(&persisted)
+    }
+
+    pub(super) fn resolve_credential(
+        &self,
+        credential: &PersistedCredential,
+    ) -> Result<Zeroizing<String>, NodePairingError> {
+        self.credential_persistence.resolve(credential)
+    }
+
+    fn validate_credential_binding(
+        &self,
+        state: &PersistedPairingState,
+    ) -> Result<(), NodePairingError> {
+        let Some(credential) = state.credential() else {
+            return Ok(());
+        };
+        let resolved = self.resolve_credential(credential)?;
+        validate_raw_secret(&resolved)?;
+        if let Some(claim) = state.claim() {
+            validate_claim_binding(&resolved, claim)?;
+        }
+        Ok(())
+    }
+
+    fn validate_persistence_schema(
+        &self,
+        state: &PersistedPairingState,
+    ) -> Result<(), NodePairingError> {
+        let native_credential = state
+            .credential()
+            .is_some_and(PersistedCredential::is_native);
+        let valid = match (
+            self.credential_persistence.is_native(),
+            state.schema_version,
+            native_credential,
+        ) {
+            (false, LEGACY_PAIRING_STATE_SCHEMA_VERSION, false) => true,
+            (true, LEGACY_PAIRING_STATE_SCHEMA_VERSION, false) => true,
+            (true, NATIVE_CREDENTIAL_STATE_SCHEMA_VERSION, true) => true,
+            (true, NATIVE_CREDENTIAL_STATE_SCHEMA_VERSION, false) => state.credential().is_none(),
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(NodePairingError::StateCorrupt)
+        }
+    }
+
+    fn externalize_state(
+        &self,
+        state: &mut PersistedPairingState,
+    ) -> Result<bool, NodePairingError> {
+        if !self.credential_persistence.is_native() {
+            if state.schema_version != LEGACY_PAIRING_STATE_SCHEMA_VERSION {
+                return Err(NodePairingError::StateVersionUnsupported);
+            }
+            return Ok(false);
+        }
+        let mut changed = state.schema_version != NATIVE_CREDENTIAL_STATE_SCHEMA_VERSION;
+        if let Some(credential) = state.credential_mut() {
+            changed |= self.credential_persistence.externalize(credential)?;
+        }
+        state.schema_version = NATIVE_CREDENTIAL_STATE_SCHEMA_VERSION;
+        Ok(changed)
+    }
+
+    fn write_state(&self, state: &PersistedPairingState) -> Result<(), NodePairingError> {
         let raw =
             Zeroizing::new(serde_json::to_vec(state).map_err(|_| NodePairingError::StateCorrupt)?);
         if raw.len() > MAX_PAIRING_STATE_BYTES as usize {
@@ -341,7 +463,8 @@ impl NodePairingStore {
         let state_path = self.root.path().join(PAIRING_STATE_FILE);
         durable_fs::atomic_write(&state_path, &raw)
             .map_err(|_| NodePairingError::StateUnavailable)?;
-        secure_file(&state_path)
+        secure_file(&state_path)?;
+        Ok(())
     }
 
     pub fn status(&self) -> Result<Option<NodePairingProgress>, NodePairingError> {
@@ -357,15 +480,44 @@ impl NodePairingStore {
         durable_fs::atomic_write(&marker_path, NODE_RESET_MARKER)
             .map_err(|_| NodePairingError::StateUnavailable)?;
         secure_file(&marker_path)?;
-        complete_pending_reset(self.root.path())
+        complete_pending_reset(self.root.path())?;
+        self.credential_persistence.clear()
     }
 }
 
 pub struct ClientPairingStore(NodePairingStore);
 
 impl ClientPairingStore {
-    pub fn open(root: impl Into<PathBuf>) -> Result<Self, NodePairingError> {
-        NodePairingStore::open_for_role(root, DeviceRole::Client).map(Self)
+    pub fn open(
+        root: impl Into<PathBuf>,
+        credential_reference: impl Into<String>,
+    ) -> Result<Self, NodePairingError> {
+        NodePairingStore::open_for_role(
+            root,
+            DeviceRole::Client,
+            CredentialPersistence::native(credential_reference.into())?,
+        )
+        .map(Self)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_legacy_for_test(root: impl Into<PathBuf>) -> Result<Self, NodePairingError> {
+        NodePairingStore::open_for_role(root, DeviceRole::Client, CredentialPersistence::Inline)
+            .map(Self)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_with_store_for_test(
+        root: impl Into<PathBuf>,
+        credential_reference: impl Into<String>,
+        store: Arc<dyn ClientCredentialStore>,
+    ) -> Result<Self, NodePairingError> {
+        NodePairingStore::open_for_role(
+            root,
+            DeviceRole::Client,
+            CredentialPersistence::test_native(credential_reference.into(), store)?,
+        )
+        .map(Self)
     }
 
     pub fn status(&self) -> Result<Option<NodePairingProgress>, NodePairingError> {

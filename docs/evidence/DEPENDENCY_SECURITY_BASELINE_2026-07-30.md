@@ -16,6 +16,7 @@ release gate is `scripts/dependency-audit.sh`; `Cargo.lock` is the authority.
 | `imap-proto 0.10.2` future Rust rejection | `imap 3.0.0-alpha.15` pinned to the maintained `imap-proto 0.16.7` line |
 | `lexical-core 0.7.6` / RUSTSEC-2023-0086 | Removed with the obsolete IMAP parser chain |
 | `lru 0.12.5` / RUSTSEC-2026-0002 and RUSTSEC-2026-0253 | Ratatui stack upgraded to `ratatui 0.30.2`, `ratatui-core 0.1.2`, `ratatui-image 11.0.6`, and `ratatui-explorer 0.3.0`; the sole resolved LRU is fixed `lru 0.18.2` |
+| `h2 0.4.13` / RUSTSEC-2026-0258 | Lockfile refreshed to patched `h2 0.4.16` before Alpha 15 publication |
 
 Captain now accepts Ed25519 and ECDSA P-256 SSH private keys. RSA-only client
 keys and server host keys fail closed with an actionable message.

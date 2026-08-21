@@ -187,6 +187,7 @@ fn embedded_app_asset(path: &str) -> Option<&'static str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod control_app_asset_tests {
     use super::{
         embedded_app_asset, favicon_ico, APP_HTML, CONFIG_HTML, LOGO_PNG, MANIFEST_JSON,

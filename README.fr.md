@@ -59,15 +59,15 @@ authentifiée, Telegram ou Discord.
 ## Installation rapide
 
 Préversion publique early-access actuelle :
-[v0.1.0-alpha.14](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.14).
-Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14` ;
+[v0.1.0-alpha.15](https://github.com/Vivien83/captain/releases/tag/v0.1.0-alpha.15).
+Image Docker immuable : `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15` ;
 canal alpha mobile : `ghcr.io/vivien83/captain-agent-os:alpha`.
 
 ### macOS / Linux / VPS
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 bash
 ```
 
 Le dépôt officiel, les assets, les checksums et l'image sont publics. Aucun
@@ -87,10 +87,36 @@ corrompu ou insuffisamment protégé, puis vérifie une vraie lecture sémantiqu
 Si la réparation échoue, Captain ne se déclare pas prêt pour la production
 sans mémoire sémantique.
 
-Les releases couvrent `aarch64` et `x86_64` pour macOS et Linux, ainsi qu'un
-zip CLI `x86_64-pc-windows-msvc`. Chaque archive possède son fichier SHA-256
-et son manifeste de plateforme ; la release contient aussi le manifeste
-agrégé et les installateurs Unix.
+Captain Full, Captain Console et Captain Node sont chacun distribués pour
+`aarch64` et `x86_64` sur macOS/Linux, ainsi que pour
+`x86_64-pc-windows-msvc`. La release contient donc 15 archives, 15 sidecars
+SHA-256, 15 manifestes composant/plateforme, six installateurs, un manifeste
+agrégé et une provenance liée par checksum.
+
+### Console légère ou Nœud d'exécution
+
+Installez uniquement la Console multi-Captain, sans provider, mémoire,
+channels, boucle d'agent ni daemon Full local :
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=console CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-console pair --hub https://votre-captain.example
+captain-console tui
+```
+
+Le Nœud workspace sortant est une installation séparée et optionnelle :
+
+```bash
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install-edition.sh \
+  | CAPTAIN_EDITION=node CAPTAIN_VERSION=v0.1.0-alpha.15 bash
+captain-node pair --hub https://votre-captain.example --workspace "$PWD"
+captain-node service install
+```
+
+Les deux éditions vérifient le SHA-256 exact et restaurent l'ancien binaire si
+le probe de version échoue. Le Nœud est en lecture seule par défaut ; toute
+mutation exige un grant distinct du Hub.
 
 > **Signature de l'alpha :** les archives et checksums sont publiés, mais les
 > binaires macOS sont seulement signés ad hoc et ne sont pas notarisés par
@@ -103,8 +129,8 @@ agrégé et les installateurs Unix.
 ```bash
 export ANTHROPIC_API_KEY=...       # ou toute clé de provider supportée
 export TELEGRAM_BOT_TOKEN=...      # optionnel — voir ci-dessous
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 bash
 ```
 
@@ -129,8 +155,8 @@ sans démarrer le daemon tout de suite, pour que la vérification de
 disponibilité ci-dessous ne tourne pas avant que vous vous soyez connecté :
 
 ```bash
-curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.14/install.sh \
-  | CAPTAIN_VERSION=v0.1.0-alpha.14 CAPTAIN_PROFILE=vps \
+curl -fsSL https://github.com/Vivien83/captain/releases/download/v0.1.0-alpha.15/install.sh \
+  | CAPTAIN_VERSION=v0.1.0-alpha.15 CAPTAIN_PROFILE=vps \
     CAPTAIN_DOMAIN=agent.example.com CAPTAIN_YES=1 CAPTAIN_START=0 bash
 
 captain login codex        # affiche une URL + un code — ouvrez-la sur votre téléphone, pas besoin de navigateur local
@@ -147,7 +173,7 @@ docker run -d --name captain --restart unless-stopped \
   -p 50051:50051 \
   -v captain-data:/root/.captain \
   -e CAPTAIN_LISTEN=0.0.0.0:50051 \
-  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.14
+  ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15
 ```
 
 Le premier démarrage génère la clé API du daemon et la persiste — avec tout
@@ -163,8 +189,8 @@ l'espace PID, ni le mode privilégié. Pour lancer l'image immuable :
 
 ```bash
 git clone https://github.com/Vivien83/captain.git && cd captain
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose pull
-CAPTAIN_IMAGE_TAG=v0.1.0-alpha.14 docker compose up -d
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.15 docker compose pull
+CAPTAIN_IMAGE_TAG=v0.1.0-alpha.15 docker compose up -d
 ```
 
 Configurez le provider choisi après le premier démarrage. Tout accès à l'hôte
@@ -271,6 +297,7 @@ l'agent peut revisiter, annuler ou ordonner par dépendances.
 | [VPS Deployment](docs/deployment/github-vps-install.md) | Installs headless, reverse proxy, HTTPS |
 | [MCP](docs/captain-tools/mcp.md) | Serveurs d'outils externes et contrat de transport |
 | [Troubleshooting](docs/troubleshooting.md) | Problèmes courants et leurs correctifs |
+| [Notes de release 0.1.0-alpha.15](docs/releases/v0.1.0-alpha.15.md) | Console multi-Captain, services Node natifs et bundles légers distincts |
 | [Notes de release 0.1.0-alpha.14](docs/releases/v0.1.0-alpha.14.md) | Un Hub, des Clients légers, des Nœuds sortants et un travail distribué résistant aux crashs |
 | [Notes de release 0.1.0-alpha.13](docs/releases/v0.1.0-alpha.13.md) | Vérification adaptative, preuves résistantes aux crashs et mises à jour hôte renforcées |
 | [Notes de release 0.1.0-alpha.12](docs/releases/v0.1.0-alpha.12.md) | Live Runs durables, recherche fondée, artefacts vérifiés et domaines VPS gérés |
@@ -316,22 +343,22 @@ unique, rechargée à chaud à chaque changement.
 cargo test --workspace              # suite complète
 cargo build --release -p captain-cli
 scripts/release-readiness.sh         # gate locale complète de release
-CAPTAIN_VERSION=vX.Y.Z scripts/release-all.sh  # les 5 cibles CLI en local
+CAPTAIN_VERSION=vX.Y.Z scripts/release-all.sh  # les 15 bundles en local
 CAPTAIN_VERSION=vX.Y.Z scripts/publish-release-local.sh
 docker build --build-arg CAPTAIN_BUILD_VERSION=vX.Y.Z -t captain:vX.Y.Z .
 ```
 
-`release-all.sh` construit les deux bundles macOS, les deux bundles Linux et le
-bundle CLI Windows une cible à la fois ; le cross-build Windows utilise
-`cargo-xwin`, LLVM et NASM. Après une gate release propre,
-`publish-release-local.sh` valide 20 assets hôte, ajoute une attestation de
-provenance SLSA v1 et son checksum (22 assets envoyés), pousse la branche
+`release-all.sh` construit Full, Console et Node pour deux cibles macOS, deux
+cibles Linux et une cible Windows, strictement un composant/cible à la fois ;
+le cross-build Windows utilise `cargo-xwin`, LLVM et NASM. Après une gate
+release propre, `publish-release-local.sh` valide 52 assets hôte, ajoute une
+attestation de provenance SLSA v1 et son checksum (54 assets envoyés), pousse la branche
 courante, construit et pousse `linux/amd64` puis `linux/arm64`, et assemble
 ensuite l'index GHCR avant de publier le tag et la GitHub Release. L'image
 réutilise les deux binaires Linux vérifiés au lieu de recompiler Captain sous
 émulation. Avant l'assemblage, le publisher prépare depuis le cache Captain
 local du mainteneur un snapshot FastEmbed verrouillé par checksum dans
-`dist/docker/`, ignoré par Git. Il n'est ni committé ni ajouté aux 22 assets,
+`dist/docker/`, ignoré par Git. Il n'est ni committé ni ajouté aux 54 assets,
 et le build Docker le vérifie de nouveau sans dépendre d'un CDN de modèles
 actif. Le contrat et les limites de signature sont décrits dans
 [Provenance des releases](docs/release-provenance.md).

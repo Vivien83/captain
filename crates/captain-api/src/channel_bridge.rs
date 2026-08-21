@@ -4673,10 +4673,12 @@ mod tests {
 
         let long = super::telegram_stream_progress_text(Duration::from_secs(12 * 60));
         assert!(long.contains("environ 12 min"));
-        assert!(
-            super::TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS < 30,
-            "drafts expire after 30 seconds and must be refreshed sooner"
-        );
+        const {
+            assert!(
+                super::TELEGRAM_STREAM_PROGRESS_INTERVAL_SECS < 30,
+                "drafts expire after 30 seconds and must be refreshed sooner"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4811,11 +4813,12 @@ mod tests {
         assert!(forwarded.recv().await.is_none());
 
         assert_eq!(ids.lock().unwrap().len(), 2);
-        let pending = pending.lock().unwrap();
-        assert_eq!(pending.len(), 2);
-        assert!(pending.values().any(|entry| entry.options.is_empty()));
-        assert!(pending.values().any(|entry| entry.options.len() == 2));
-        drop(pending);
+        {
+            let pending = pending.lock().unwrap();
+            assert_eq!(pending.len(), 2);
+            assert!(pending.values().any(|entry| entry.options.is_empty()));
+            assert!(pending.values().any(|entry| entry.options.len() == 2));
+        }
 
         let requests = server.received_requests().await.expect("requests");
         let bodies = requests
