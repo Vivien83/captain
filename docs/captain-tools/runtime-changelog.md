@@ -68,6 +68,15 @@ Agent-facing changes:
 - Alpha 15 does not add application connectors, a mobile application,
   multi-primary memory, or a Telegram machine tunnel. Those claims remain
   outside the current runtime contract.
+- The public prerelease contains exactly 54 assets. Annotated tag object
+  `0cdc9f52090361821882acf68ff13d5cbc791570` dereferences to source commit
+  `73e3a14af4f1284c8ee084ee81cb567cb12d8293`; the immutable image and moving
+  `:alpha` channel share OCI index digest
+  `sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e`.
+  Anonymous GitHub and GHCR read-back verified every inventory boundary, both
+  Linux platforms and both attestations. GitHub reports zero Actions runs
+  because all host and container artifacts were built and published locally
+  and sequentially.
 
 ### 0.1.0-alpha.14 — One Hub, lightweight Clients, and execution Nodes
 

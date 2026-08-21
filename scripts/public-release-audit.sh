@@ -153,9 +153,18 @@ grep -Fq '## Multi-Captain authority' \
 grep -Fq 'exactly 54 host assets' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
   || fail "candidate release notes do not pin the 54-asset contract"
-grep -Fq 'does not predict those values.' \
+grep -Fq '73e3a14af4f1284c8ee084ee81cb567cb12d8293' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
-  || fail "candidate release notes do not defer exact publication facts"
+  || fail "release notes do not pin the Alpha 15 public source"
+grep -Fq '0cdc9f52090361821882acf68ff13d5cbc791570' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "release notes do not pin the Alpha 15 tag object"
+grep -Fq 'sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "release notes do not pin the Alpha 15 OCI index"
+grep -Fq 'GitHub reports zero Actions runs' \
+  "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md" \
+  || fail "release notes do not record the local-only publication"
 if grep -Fq '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f' \
   "$ROOT_DIR/docs/releases/v0.1.0-alpha.15.md"; then
   fail "Alpha 15 release notes copied the Alpha 14 public source commit"

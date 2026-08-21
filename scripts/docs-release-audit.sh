@@ -517,9 +517,21 @@ require_contains \
   docs/releases/v0.1.0-alpha.15.md \
   'exactly 54 host assets'
 require_contains \
-  "alpha.15 notes defer publication facts until verification" \
+  "alpha.15 notes pin live source provenance" \
   docs/releases/v0.1.0-alpha.15.md \
-  'does not predict those values.'
+  '73e3a14af4f1284c8ee084ee81cb567cb12d8293'
+require_contains \
+  "alpha.15 notes pin live tag provenance" \
+  docs/releases/v0.1.0-alpha.15.md \
+  '0cdc9f52090361821882acf68ff13d5cbc791570'
+require_contains \
+  "alpha.15 notes pin live OCI provenance" \
+  docs/releases/v0.1.0-alpha.15.md \
+  'sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e'
+require_contains \
+  "alpha.15 notes record zero hosted workflows" \
+  docs/releases/v0.1.0-alpha.15.md \
+  'GitHub reports zero Actions runs'
 require_not_contains \
   "alpha.15 notes do not copy alpha.14 source provenance" \
   docs/releases/v0.1.0-alpha.15.md \

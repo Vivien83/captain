@@ -248,10 +248,23 @@ The immutable names are:
 - image: `ghcr.io/vivien83/captain-agent-os:v0.1.0-alpha.15`
 - moving prerelease channel: `ghcr.io/vivien83/captain-agent-os:alpha`
 
-Source/tag/OCI digests and anonymous read-back receipts are not predicted by
-candidate documentation. They are added only after publication and successful
-verification of all 54 assets, both image platforms, attestations, and the
-zero-hosted-workflow invariant.
+The published source commit is
+`73e3a14af4f1284c8ee084ee81cb567cb12d8293`; annotated tag object
+`0cdc9f52090361821882acf68ff13d5cbc791570` dereferences exactly to it. The
+public prerelease is non-draft, contains exactly 54 uploaded assets, and exposes
+SHA-256 digests for each one. Its aggregate manifest digest is
+`b2da080bd561233089c165e9f729ed5b7fefc2bcd9827d303a53d377301155de` and
+its provenance digest is
+`50255accb61b2d853fee872d3d48f5abd0f4763fd03877cc2d90fbd8e57b5f5e`.
+
+The immutable image and moving `alpha` channel are byte-identical OCI indexes
+with digest
+`sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e`.
+Anonymous read-back verified Linux AMD64 and ARM64 manifests plus one
+provenance attestation for each platform. An unauthenticated GitHub download
+of `manifest.json` was byte-identical to the validated local artifact. GitHub
+reports zero Actions runs, preserving the local sequential publication
+contract.
 
 ## Previous Public Release: Alpha 14
 

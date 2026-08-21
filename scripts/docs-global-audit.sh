@@ -571,7 +571,14 @@ require_contains "alpha.15 notes expose the standalone Console" docs/releases/v0
 require_contains "alpha.15 notes expose the optional Node" docs/releases/v0.1.0-alpha.15.md "## Install Captain Node"
 require_contains "alpha.15 notes expose explicit authority switching" docs/releases/v0.1.0-alpha.15.md "## Multi-Captain authority"
 require_contains "alpha.15 notes pin the 54-asset contract" docs/releases/v0.1.0-alpha.15.md "exactly 54 host assets"
-require_contains "alpha.15 notes defer exact provenance until verification" docs/releases/v0.1.0-alpha.15.md "does not predict those values."
+require_contains "alpha.15 notes pin live source provenance" docs/releases/v0.1.0-alpha.15.md '73e3a14af4f1284c8ee084ee81cb567cb12d8293'
+require_contains "alpha.15 notes pin live tag provenance" docs/releases/v0.1.0-alpha.15.md '0cdc9f52090361821882acf68ff13d5cbc791570'
+require_contains "alpha.15 notes pin live OCI provenance" docs/releases/v0.1.0-alpha.15.md 'sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e'
+require_contains "alpha.15 notes record zero hosted workflows" docs/releases/v0.1.0-alpha.15.md 'GitHub reports zero Actions runs'
+require_contains "DOC2 records the published alpha.15 source" docs/DOCS_STATUS.md '73e3a14af4f1284c8ee084ee81cb567cb12d8293'
+require_contains "DOC2 records the published alpha.15 tag object" docs/DOCS_STATUS.md '0cdc9f52090361821882acf68ff13d5cbc791570'
+require_contains "DOC2 records the published alpha.15 multi-arch digest" docs/DOCS_STATUS.md 'sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e'
+require_contains "agent changelog records the published alpha.15 digest" docs/captain-tools/runtime-changelog.md 'sha256:5d9ebc262dac36773f0529d3c0a1b59151838e0ae41835665914b7634a94862e'
 require_not_contains "alpha.15 notes do not copy alpha.14 source provenance" docs/releases/v0.1.0-alpha.15.md '9618d5e7c4c53c68c87e5511a0ac3fc16ac9ec0f'
 require_not_contains "alpha.15 notes do not copy alpha.14 OCI provenance" docs/releases/v0.1.0-alpha.15.md 'sha256:dff3ee159e50acf380b6b2272e1a1611540f96a4314f736721a4fad0ac56be3d'
 require_contains "alpha.14 notes expose one authoritative Hub" docs/releases/v0.1.0-alpha.14.md "## One Hub, shared work"
